@@ -1,0 +1,13 @@
+# ローカルバックアップ・キャッシュ・認証情報（公開厳禁）
+.backups/
+backups_before_audit_fix/
+.cache.json
+.content_cache.json
+.gas-sync.json
+.clasprc.json
+.env
+
+# Python キャッシュ・テスト
+__pycache__/
+.pytest_cache/
+*.py[cod]
