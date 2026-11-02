@@ -36,6 +36,8 @@ PUBLIC_FILES = [
     "test_client.py",
     "verify_gas_manager.py",
     "publish_check.py",
+    "queue/README.md",
+    "queue/001_sample_テンプレート指示書.md",
 ]
 
 # 公開ファイル内に1件でも残っていたらNGとする禁止パターン
@@ -78,7 +80,7 @@ def main():
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".gas-sync.json"}
+    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".gas-sync.json"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")
