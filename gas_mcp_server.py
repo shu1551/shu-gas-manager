@@ -8,6 +8,7 @@ Google Apps Script (GAS) を AI から直接読み書き・ピンポイント差
 import sys
 import os
 import shlex
+import json
 from pathlib import Path
 
 # 自モジュールのパスを通す
@@ -725,6 +726,53 @@ def run_function(project: str, func_name: str, args: str = "", keep_runner: bool
 
 @mcp.tool()
 @safe_tool
+def benchmark_function(project: str, func_name: str, args: str = "", target_ms: int = 1000, iterations: int = 1, expected: str = "") -> str:
+    """任意の GAS サーバー関数を実行計測し、ミリ秒速度・期待値照合・ループ内API警告を判定するベンチマーク関所を実行します。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        func_name: 計測対象の関数名
+        args: 引数の JSON 文字列 (例: '[10, "test"]')
+        target_ms: 目標所要ミリ秒 (既定: 1000)
+        iterations: 試行回数 (既定: 1)
+        expected: 期待値 (文字列またはJSON)
+    """
+    client = get_client()
+    parsed_args = []
+    if args:
+        try:
+            val = json.loads(args)
+            parsed_args = val if isinstance(val, list) else [val]
+        except Exception:
+            parsed_args = [args]
+    exp_val = None
+    if expected:
+        try:
+            exp_val = json.loads(expected)
+        except Exception:
+            exp_val = expected
+    res = client.benchmark_function(project, func_name, args=parsed_args, target_ms=target_ms, iterations=iterations, expected=exp_val)
+    lines = [
+        f"=== GAS ベンチマーク関所: [{project}] -> {func_name} ===",
+        f"判定: [{res.get('verdict', 'FAILED')}] (スコア: {res.get('score', 0)}/100点)",
+        f"実行速度: 平均 {res.get('avg_ms', 0)}ms (最小 {res.get('min_ms', 0)}ms / 最大 {res.get('max_ms', 0)}ms) | 目標: {res.get('target_ms', target_ms)}ms 以内 ({res.get('iterations', 0)}回計測)"
+    ]
+    if res.get("expected_checked"):
+        lines.append(f"期待値照合: {'一致 (OK)' if res.get('expected_match') else '不一致 (NG)'}")
+    if "result" in res and res.get("status") == "success":
+        lines.append(f"戻り値: {json.dumps(res['result'], ensure_ascii=False)}")
+    if res.get("logs"):
+        lines.append("--- 実行ログ ---")
+        for lg in res["logs"]:
+            lines.append(f"  {lg}")
+    if res.get("prescriptions"):
+        lines.append("--- カイゼン処方箋 (Next Actions) ---")
+        for pr in res["prescriptions"]:
+            lines.append(f"  * {pr}")
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
 def clean_runner(project: str) -> str:
     """プロジェクト内に残った実行ランナー (__gm_exec_) および doGet フックを綺麗に除去します。
 
@@ -933,6 +981,26 @@ def diagnose(project: str) -> str:
         lines.append("  なし (全関数が参照されているかエントリーポイントです)")
     lines.append("")
 
+    # 4d. 未使用の関数引数
+    unused_params = diag.get("unused_params", [])
+    lines.append(f"[未使用の関数引数 (入力値無視の疑い)] ({len(unused_params)}件):")
+    if unused_params:
+        for up in unused_params:
+            lines.append(f"  - {up['file']}:{up['line']} 関数 '{up['function']}' の引数 '{up['param']}': {up.get('reason', '')}")
+    else:
+        lines.append("  なし (未参照の引数は検出されませんでした)")
+    lines.append("")
+
+    # 4e. フロントエンド・キャッシュ・DOM警告
+    fe_warns = diag.get("frontend_warnings", [])
+    lines.append(f"[フロントエンド・キャッシュ警告] ({len(fe_warns)}件):")
+    if fe_warns:
+        for fw in fe_warns:
+            lines.append(f"  - {fw['file']} 行 {fw['line']} [{fw['kind']}]: {fw['reason']}")
+    else:
+        lines.append("  なし (IndexedDBゾンビや同期描画ブロック等は検出されませんでした)")
+    lines.append("")
+
     # 5. エントリーポイント
     lines.append("[検出されたエントリーポイント]:")
     if diag["entry_points"]:
@@ -952,6 +1020,42 @@ def diagnose(project: str) -> str:
         if mf.get("webapp"):
             wa = mf["webapp"]
             lines.append(f"  - WebApp: access={wa.get('access', 'N/A')}, executeAs={wa.get('executeAs', 'N/A')}")
+
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def verify_frontend(project: str, filename: str = "Index", test_js: str = "") -> str:
+    """指定した HTML ファイル内の JavaScript ロジックを Node.js vm 模擬環境（インメモリ IndexedDB / DOM / RPC プロキシ）上で実機実行・検証します。
+    IndexedDB の保存・削除や、同期マージ処理が正しく動作しているか（ゾンビ化しないか）をテストできます。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        filename: 対象の HTML ファイル名 (既定: "Index")
+        test_js: 検証用に追加実行する非同期 JS 式/ブロック (例: "await saveToDB([{id:'1'}]); return (await loadFromDB()).length;")
+    """
+    client = get_client()
+    res = client.verify_frontend(project, filename=filename, test_js=test_js)
+
+    status_str = "[SUCCESS] 検証成功" if res.get("success") else "[FAILED] 検証失敗"
+    lines = [
+        f"=== フロントエンド実機シミュレーション: [{project}] ({res.get('file', filename)}) ===",
+        f"判定: {status_str}"
+    ]
+    if res.get("error"):
+        lines.append(f"エラー: {res['error']}")
+    if res.get("test_result") is not None:
+        lines.append(f"test_result: {res['test_result']}")
+    lines.append(f"IndexedDB レコード数: {res.get('db_records_count', 0)}件")
+    if res.get("rpc_calls"):
+        lines.append(f"google.script.run 呼出: {len(res['rpc_calls'])}件")
+        for c in res["rpc_calls"][:5]:
+            chain_str = ".".join([str(p[0]) if isinstance(p, list) else str(p) for p in c.get("chain", [])])
+            lines.append(f"  - {chain_str}({c.get('args', [])})")
+    if res.get("alerts"):
+        lines.append(f"alert 出力: {len(res['alerts'])}件: {res['alerts']}")
+    if res.get("confirms"):
+        lines.append(f"confirm 出力: {len(res['confirms'])}件: {res['confirms']}")
 
     return "\n".join(lines)
 
@@ -1085,6 +1189,24 @@ def gas(command: str) -> str:
         if len(parts) < 2:
             return "プロジェクト名またはIDを指定してください: diagnose <project>"
         return diagnose(parts[1])
+
+    if sub in ("verify-ui", "verify_frontend"):
+        if len(parts) < 2:
+            return "プロジェクト名を指定してください: verify-ui <project> [filename] [--test-js '...']"
+        project = parts[1]
+        fname = "Index"
+        t_js = ""
+        i = 2
+        while i < len(parts):
+            if parts[i] in ("--test-js", "--js") and i + 1 < len(parts):
+                t_js = parts[i + 1]
+                i += 2
+            elif not parts[i].startswith("-"):
+                fname = parts[i]
+                i += 1
+            else:
+                i += 1
+        return verify_frontend(project, filename=fname, test_js=t_js)
 
     if sub == "grep":
         if len(parts) < 3:
@@ -1362,6 +1484,32 @@ def gas(command: str) -> str:
             else:
                 i += 1
         return run_function(project, func_name, args=args_json, keep_runner=keep_runner, fast=fast_flag)
+
+    if sub in ("bench", "benchmark"):
+        if len(parts) < 3:
+            return "引数が不足しています: bench <project> <func_name> [args] [--target-ms <ms>] [--expected <val>]"
+        project = parts[1]
+        func_name = parts[2]
+        args_str = ""
+        target_ms = 1000
+        expected_str = ""
+        i = 3
+        while i < len(parts):
+            if parts[i] == "--target-ms" and i + 1 < len(parts):
+                try:
+                    target_ms = int(parts[i + 1])
+                except ValueError:
+                    pass
+                i += 2
+            elif parts[i] == "--expected" and i + 1 < len(parts):
+                expected_str = parts[i + 1]
+                i += 2
+            elif not args_str and not parts[i].startswith("-"):
+                args_str = parts[i]
+                i += 1
+            else:
+                i += 1
+        return benchmark_function(project, func_name, args=args_str, target_ms=target_ms, expected=expected_str)
 
     if sub == "clean-runner":
         if len(parts) < 2:

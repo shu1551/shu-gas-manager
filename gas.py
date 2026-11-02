@@ -238,6 +238,16 @@ def main():
     run_p.add_argument("--keep-runner", action="store_true", help="実行ランナーを削除せず残す")
     run_p.add_argument("--fast", action="store_true", help="キャッシュ優先＆ランナー常駐による超高速実行（約0.3秒）")
 
+    # 9f-2. bench (benchmark)
+    bench_p = subparsers.add_parser("bench", aliases=["benchmark"], help="GAS関数の実機ベンチマーク計測＆健康診断（100点満点採点・カイゼン処方箋）")
+    bench_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    bench_p.add_argument("func_name", help="ベンチマーク対象のGAS関数名")
+    bench_p.add_argument("args_json", nargs="?", default="", help="関数引数（JSON配列または文字列）")
+    bench_p.add_argument("-t", "--target-ms", type=int, default=1000, help="合格ラインの目標ミリ秒 (デフォルト: 1000)")
+    bench_p.add_argument("-n", "--iterations", type=int, default=1, help="計測反復回数 (デフォルト: 1)")
+    bench_p.add_argument("-e", "--expected", default="", help="期待する戻り値（指定時は一致検証を実施）")
+    bench_p.add_argument("--no-fast", action="store_true", help="高速モードを無効化")
+
     # 9g. clean-runner
     cr_p = subparsers.add_parser("clean-runner", help="プロジェクト内の実行ランナー (__gm_exec_) および doGet フックを除去")
     cr_p.add_argument("project", help="プロジェクト名またはスクリプトID")
@@ -278,6 +288,12 @@ def main():
     web_p.add_argument("-k", "--key", default="", help="秘密キー")
     web_p.add_argument("--auth", action="store_true", help="OAuth Bearer トークンを付与")
     web_p.add_argument("--dev", action="store_true", help="最新 HEAD デプロイを優先し Bearer 認証で直接呼び出し")
+
+    # 12. verify-ui
+    vui_p = subparsers.add_parser("verify-ui", help="HTML フロントエンド JavaScript 実機シミュレーション")
+    vui_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    vui_p.add_argument("file", nargs="?", default="Index", help="対象 HTML ファイル名 (既定: Index)")
+    vui_p.add_argument("--test-js", default="", help="検証用に追加実行する非同期 JS 式/ブロック")
 
     args = parser.parse_args()
     if not args.command:
@@ -414,6 +430,24 @@ def main():
                 print("  なし (全関数が参照されているかエントリーポイントです)")
             print()
 
+            unused_params = diag.get("unused_params", [])
+            print(f"[未使用の関数引数 (入力値無視の疑い)] ({len(unused_params)}件):")
+            if unused_params:
+                for up in unused_params:
+                    print(f"  - {up['file']}:{up['line']} 関数 '{up['function']}' の引数 '{up['param']}': {up.get('reason', '')}")
+            else:
+                print("  なし (未参照の引数は検出されませんでした)")
+            print()
+
+            fe_warns = diag.get("frontend_warnings", [])
+            print(f"[フロントエンド・キャッシュ警告] ({len(fe_warns)}件):")
+            if fe_warns:
+                for fw in fe_warns:
+                    print(f"  - {fw['file']} 行 {fw['line']} [{fw['kind']}]: {fw['reason']}")
+            else:
+                print("  なし (IndexedDBゾンビや同期描画ブロック等は検出されませんでした)")
+            print()
+
             print("[検出されたエントリーポイント]:")
             if diag["entry_points"]:
                 for ep_name, locs in diag["entry_points"].items():
@@ -431,6 +465,26 @@ def main():
                 if mf.get("webapp"):
                     wa = mf["webapp"]
                     print(f"  - WebApp: access={wa.get('access', 'N/A')}, executeAs={wa.get('executeAs', 'N/A')}")
+
+        elif args.command in ("verify-ui", "verify_frontend"):
+            res = client.verify_frontend(args.project, filename=args.file, test_js=args.test_js)
+            status_tag = "[SUCCESS]" if res.get("success") else "[FAILED]"
+            print(f"=== フロントエンド実機シミュレーション: [{args.project}] ({res.get('file', args.file)}) ===")
+            print(f"判定: {status_tag}")
+            if res.get("error"):
+                print(f"エラー: {res['error']}")
+            if res.get("test_result") is not None:
+                print(f"test_result: {res['test_result']}")
+            print(f"IndexedDB レコード数: {res.get('db_records_count', 0)}件")
+            if res.get("rpc_calls"):
+                print(f"google.script.run 呼出: {len(res['rpc_calls'])}件")
+                for c in res["rpc_calls"][:5]:
+                    chain_str = ".".join([str(p[0]) if isinstance(p, list) else str(p) for p in c.get("chain", [])])
+                    print(f"  - {chain_str}({c.get('args', [])})")
+            if res.get("alerts"):
+                print(f"alert 出力: {len(res['alerts'])}件: {res['alerts']}")
+            if res.get("confirms"):
+                print(f"confirm 出力: {len(res['confirms'])}件: {res['confirms']}")
 
         elif args.command == "grep":
             res = client.search_code(args.project, args.pattern, regex=args.regex, filename=args.file, exclude=args.exclude, max_hits=args.max_hits)
@@ -664,6 +718,36 @@ def main():
                     print(f"  {lg}")
             if res.get("error"):
                 print(f"エラー: {res['error']}")
+
+        elif args.command in ("bench", "benchmark"):
+            parsed_args = []
+            if args.args_json:
+                try:
+                    val = json.loads(args.args_json)
+                    parsed_args = val if isinstance(val, list) else [val]
+                except Exception:
+                    parsed_args = [args.args_json]
+            res = client.benchmark_function(
+                args.project, args.func_name, args=parsed_args,
+                target_ms=args.target_ms, iterations=args.iterations,
+                expected=args.expected if args.expected != "" else None,
+                fast=not args.no_fast
+            )
+            print(f"=== GAS ベンチマーク関所: [{args.project}] -> {args.func_name} ===")
+            print(f"判定: [{res.get('verdict', 'FAILED')}] (スコア: {res.get('score', 0)}/100点)")
+            print(f"実行速度: 平均 {res.get('avg_ms', 0)}ms (最小 {res.get('min_ms', 0)}ms / 最大 {res.get('max_ms', 0)}ms) | 目標: {res.get('target_ms', args.target_ms)}ms 以内 ({res.get('iterations', 0)}回計測)")
+            if res.get("expected_checked"):
+                print(f"期待値照合: {'一致 (OK)' if res.get('expected_match') else '不一致 (NG)'}")
+            if "result" in res and res.get("status") == "success":
+                print(f"戻り値: {json.dumps(res['result'], ensure_ascii=False)}")
+            if res.get("logs"):
+                print("--- 実行ログ ---")
+                for lg in res["logs"]:
+                    print(f"  {lg}")
+            if res.get("prescriptions"):
+                print("--- カイゼン処方箋 (Next Actions) ---")
+                for pr in res["prescriptions"]:
+                    print(f"  * {pr}")
 
         elif args.command == "clean-runner":
             res = client.clean_runner(args.project)

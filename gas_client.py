@@ -2546,7 +2546,8 @@ class GasClient:
                 if f.get("type") == "SERVER_JS":
                     if target_file is None:
                         target_file = f
-                    if "__gm_exec_" in f.get("source", ""):
+                    f_src = f.get("source", "")
+                    if "function __gm_exec_" in f_src and "return __gm_exec_(" in f_src:
                         already_installed = True
                         break
 
@@ -2624,6 +2625,9 @@ class GasClient:
             hook_snippet = " if (arguments[0] && arguments[0].parameter && arguments[0].parameter.__gm_run) return __gm_exec_(arguments[0]); "
             if doget_file and doget_span:
                 src = doget_file["source"]
+                if "function __gm_exec_(" in src:
+                    fn_idx = src.find("function __gm_exec_(")
+                    src = src[:fn_idx].rstrip() + "\n"
                 brace_idx = src.find("{", doget_span[0])
                 if brace_idx != -1:
                     doget_file["source"] = src[:brace_idx + 1] + hook_snippet + src[brace_idx + 1:] + runner_code
@@ -2675,7 +2679,7 @@ class GasClient:
                     self._cache_data["deployments"][sid].pop("runner_installed", None)
                     self._save_cache()
                 fresh_content = self.get_content(sid, use_cache=False)
-                if any("__gm_exec_" in f.get("source", "") for f in fresh_content.get("files", [])):
+                if any("function __gm_exec_" in f.get("source", "") and "return __gm_exec_(" in f.get("source", "") for f in fresh_content.get("files", [])):
                     return data
                 return self.run_function(sid, func_name, args=args_list, keep_runner=keep_runner, fast=False, timeout=timeout)
 
@@ -2693,6 +2697,135 @@ class GasClient:
                         self._save_cache()
                 except Exception:
                     pass
+
+    def benchmark_function(self, script_id, func_name, args=None, target_ms=1000, iterations=1, expected=None, fast=True, keep_runner=True, timeout=30):
+        """GAS関数の実機ベンチマーク計測＆健康診断による自律カイゼン関所（100点満点採点・処方箋生成）"""
+        if not func_name:
+            raise ValueError("ベンチマーク対象の関数名を指定してください。")
+
+        sid = self.resolve_script_id(script_id)
+        iters = max(1, min(int(iterations or 1), 10))
+        target_ms = max(1, int(target_ms or 1000))
+
+        has_expected = expected is not None and expected != ""
+        expected_val = expected
+        if isinstance(expected, str) and expected != "":
+            try:
+                expected_val = json.loads(expected)
+            except Exception:
+                expected_val = expected
+
+        durations = []
+        last_res = {}
+        logs = []
+        exec_error = None
+
+        for _ in range(iters):
+            res = self.run_function(sid, func_name, args=args, keep_runner=keep_runner, fast=fast, timeout=timeout)
+            last_res = res if isinstance(res, dict) else {"status": "error", "error": str(res)}
+            if last_res.get("status") != "success":
+                exec_error = last_res.get("error") or "Unknown execution error"
+                logs = last_res.get("logs", [])
+                break
+            durations.append(float(last_res.get("duration_ms", 0)))
+            logs = last_res.get("logs", [])
+
+        diag = self.diagnose(sid)
+        perf_warnings = diag.get("performance_warnings", [])
+
+        # 対象関数の定義範囲 (file, start_line, end_line) を特定し、その関数内のボトルネック警告のみを抽出
+        func_spans = []
+        for f_info in self.list_functions(sid):
+            for fn in f_info.get("functions", []):
+                if fn.get("name") == func_name:
+                    func_spans.append((f_info.get("file"), fn.get("start_line", 0), fn.get("end_line", 999999)))
+
+        if func_spans:
+            relevant_perf = [
+                pw for pw in perf_warnings
+                if any(pw.get("file") == f_name and s_line <= pw.get("line", 0) <= e_line for f_name, s_line, e_line in func_spans)
+            ]
+        else:
+            relevant_perf = list(perf_warnings)
+
+        syntax_errs = diag.get("syntax_errors", [])
+
+        prescriptions = []
+        actual_result = last_res.get("result")
+
+        if exec_error:
+            verdict = "FAILED"
+            score = 0
+            stack_str = f" (Stack: {last_res.get('stack')})" if last_res.get("stack") else ""
+            prescriptions.append(f"[実行エラー] {exec_error}{stack_str} -> 例外原因を特定し patch_function で修正してください。")
+            avg_ms = min_ms = max_ms = 0.0
+            expected_match = False
+        else:
+            avg_ms = round(sum(durations) / len(durations), 2) if durations else 0.0
+            min_ms = round(min(durations), 2) if durations else 0.0
+            max_ms = round(max(durations), 2) if durations else 0.0
+
+            expected_match = True
+            if has_expected:
+                expected_match = (actual_result == expected_val)
+
+            if not expected_match:
+                verdict = "FAILED"
+                score = 0
+                prescriptions.append(
+                    f"[戻り値不一致] 期待値: {json.dumps(expected_val, ensure_ascii=False)} / 実際: {json.dumps(actual_result, ensure_ascii=False)} -> ロジックの境界値・計算式を見直してください。"
+                )
+            else:
+                score = 100
+                if avg_ms > target_ms:
+                    over_ratio = (avg_ms - target_ms) / max(1.0, float(target_ms))
+                    penalty = min(45, max(15, int(over_ratio * 25) + 15))
+                    score -= penalty
+                    prescriptions.append(
+                        f"[速度超過] 平均 {avg_ms}ms が目標 {target_ms}ms を超過しています。メモリ2次元配列一括処理 (getValues/setValues)・UrlFetchApp.fetchAll並列化・CacheService導入で高速化してください。"
+                    )
+
+                if relevant_perf:
+                    score -= min(45, len(relevant_perf) * 15)
+                    for pw in relevant_perf:
+                        recipe = pw.get("recipe") or pw.get("reason", "")
+                        prescriptions.append(
+                            f"[ボトルネック警告] {pw['file']} 行 {pw['line']} ({pw['api']}): {recipe}"
+                        )
+
+                dup_fn_names = {df.get("name") for df in diag.get("duplicate_functions", [])}
+                func_issues = len(syntax_errs) + (1 if func_name in dup_fn_names else 0)
+                if func_issues > 0:
+                    score -= min(20, func_issues * 10)
+                    prescriptions.append(
+                        f"[構造警告] 構文エラーまたは対象関数 '{func_name}' の重複定義が検出されました。diagnose の詳細を確認してください。"
+                    )
+
+                score = max(5, score)
+                verdict = "PASS" if (score == 100 and avg_ms <= target_ms and not relevant_perf and func_issues == 0) else "NEEDS_IMPROVEMENT"
+
+        if verdict == "PASS":
+            prescriptions.append("すべての関所（実行成功・目標速度クリア・ボトルネック警告0件）を突破しました！自律カイゼンループを完了できます。")
+
+        return {
+            "status": "success" if not exec_error else "error",
+            "verdict": verdict,
+            "score": score,
+            "function": func_name,
+            "iterations": len(durations),
+            "avg_ms": avg_ms,
+            "min_ms": min_ms,
+            "max_ms": max_ms,
+            "target_ms": target_ms,
+            "result": actual_result,
+            "expected_checked": has_expected,
+            "expected_match": expected_match,
+            "logs": logs,
+            "error": exec_error,
+            "performance_warnings": relevant_perf,
+            "issues_count": diag.get("issues_count", 0),
+            "prescriptions": prescriptions
+        }
 
     def clean_runner(self, script_id):
         """プロジェクト内の実行ランナー (__gm_exec_) および doGet フックを除去"""
@@ -2713,6 +2846,28 @@ class GasClient:
             span = self._find_function_span(src_text, "__gm_exec_")
             if span:
                 src_text = src_text[:span[0]].rstrip() + "\n\n" + src_text[span[1]:].lstrip()
+
+            # トークナイザ状態に依存しないブレース対応フォールバック除去
+            while "function __gm_exec_(" in src_text:
+                fn_idx = src_text.find("function __gm_exec_(")
+                b_open = src_text.find("{", fn_idx)
+                if b_open == -1:
+                    break
+                depth = 0
+                b_close = -1
+                for k in range(b_open, len(src_text)):
+                    if src_text[k] == "{":
+                        depth += 1
+                    elif src_text[k] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            b_close = k + 1
+                            break
+                if b_close != -1:
+                    src_text = src_text[:fn_idx].rstrip() + "\n\n" + src_text[b_close:].lstrip()
+                else:
+                    src_text = src_text[:fn_idx].rstrip() + "\n"
+                    break
 
             # 2. スタブ doGet の除去（スタブ型）
             stub_pat = r"function\s+doGet\s*\(e\)\s*\{\s*if\s*\(e\s*&&\s*e\.parameter\s*&&\s*e\.parameter\.__gm_run\)\s*return\s+__gm_exec_\(e\);(?:\s*return\s+ContentService\.createTextOutput\([^)]*\);)?\s*\}\n*"
@@ -3218,17 +3373,36 @@ class GasClient:
                     while pos < len(masked):
                         while pos < len(masked) and masked[pos].isspace():
                             pos += 1
-                        if pos >= len(masked) or masked[pos] != '.':
+                        if pos >= len(masked):
                             break
-                        pos += 1  # '.' をスキップ
-                        while pos < len(masked) and masked[pos].isspace():
-                            pos += 1
-                        id_m = re.match(r"[A-Za-z0-9_$]+", masked[pos:])
-                        if not id_m:
+                        sep = masked[pos]
+                        if sep == '.':
+                            pos += 1  # '.' をスキップ
+                            while pos < len(masked) and masked[pos].isspace():
+                                pos += 1
+                            id_m = re.match(r"[A-Za-z0-9_$]+", masked[pos:])
+                            if not id_m:
+                                break
+                            method_name = id_m.group(0)
+                            curr_fn_pos = pos
+                            pos += id_m.end()
+                        elif sep == '[':
+                            pos += 1  # '[' をスキップ
+                            while pos < len(masked) and masked[pos].isspace():
+                                pos += 1
+                            id_m = re.match(r"[A-Za-z0-9_$]+", masked[pos:])
+                            if not id_m:
+                                break
+                            var_name = id_m.group(0)
+                            curr_fn_pos = pos
+                            pos += id_m.end()
+                            while pos < len(masked) and masked[pos].isspace():
+                                pos += 1
+                            if pos < len(masked) and masked[pos] == ']':
+                                pos += 1
+                            method_name = f"__DYNAMIC_VAR__:{var_name}"
+                        else:
                             break
-                        method_name = id_m.group(0)
-                        curr_fn_pos = pos
-                        pos += id_m.end()
 
                         # メソッド呼び出しの丸括弧をスキップ＆引数個数カウント
                         while pos < len(masked) and masked[pos].isspace():
@@ -3261,32 +3435,53 @@ class GasClient:
                             fn_pos = curr_fn_pos
                             break
 
-                    if called_fn:
+                    candidate_fns = []
+                    dyn_var_name = None
+                    if called_fn and called_fn.startswith("__DYNAMIC_VAR__:"):
+                        dyn_var_name = called_fn.split(":", 1)[1]
+                        assign_pat = re.compile(rf"\b{re.escape(dyn_var_name)}\s*=[^;\n]+")
+                        for am in assign_pat.finditer(script_content):
+                            found_str = re.findall(r"(?:(?<![=!<>])=|\?|:|\|\|)\s*['\"]([A-Za-z0-9_$]+)['\"]", am.group(0))
+                            candidate_fns.extend(found_str)
+                        candidate_fns = list(dict.fromkeys(candidate_fns))
+                        if not candidate_fns:
+                            call_line = script_content.count('\n', 0, fn_pos) + 1 + line_offset
+                            broken_rpc_calls.append({
+                                "file": fname,
+                                "line": call_line,
+                                "target_function": f"[{dyn_var_name}]",
+                                "reason": f"動的RPC呼び出し [{dyn_var_name}] の候補関数を特定できませんでした"
+                            })
+                    elif called_fn:
+                        candidate_fns = [called_fn]
+
+                    for cfn in candidate_fns:
                         call_line = script_content.count('\n', 0, fn_pos) + 1 + line_offset
-                        if called_fn not in defined_server_functions:
+                        reason_suffix = f"（動的呼出 [{dyn_var_name}] 候補）" if dyn_var_name else ""
+                        if cfn not in defined_server_functions:
                             broken_rpc_calls.append({
                                 "file": fname,
                                 "line": call_line,
-                                "target_function": called_fn,
-                                "reason": "サーバー側に関数定義が存在しません"
+                                "target_function": cfn,
+                                "reason": f"サーバー側に関数定義が存在しません{reason_suffix}"
                             })
-                        elif called_fn.endswith("_"):
+                        elif cfn.endswith("_"):
                             broken_rpc_calls.append({
                                 "file": fname,
                                 "line": call_line,
-                                "target_function": called_fn,
-                                "reason": "プライベート関数（末尾 '_'）は google.script.run から呼び出せません"
+                                "target_function": cfn,
+                                "reason": f"プライベート関数（末尾 '_'）は google.script.run から呼び出せません{reason_suffix}"
                             })
-                        elif called_fn in server_fn_arity:
-                            min_a, max_a = server_fn_arity[called_fn]
+                        elif cfn in server_fn_arity:
+                            min_a, max_a = server_fn_arity[cfn]
                             if call_args_count < min_a or call_args_count > max_a:
                                 rpc_arity_warnings.append({
                                     "file": fname,
                                     "line": call_line,
-                                    "target_function": called_fn,
+                                    "target_function": cfn,
                                     "expected": f"{min_a}〜{max_a}" if min_a != max_a else str(min_a),
                                     "actual": call_args_count,
-                                    "reason": f"引数の個数がサーバー関数定義と一致していません（定義: {min_a}〜{max_a}個、呼出: {call_args_count}個）"
+                                    "reason": f"引数の個数がサーバー関数定義と一致していません（定義: {min_a}〜{max_a}個、呼出: {call_args_count}個）{reason_suffix}"
                                 })
 
         # 4. HtmlService テンプレートリンク切れ検出
@@ -3385,7 +3580,11 @@ class GasClient:
 
         # 5c. ループ内の重い GAS API 呼び出し検出 (performance_warnings)
         performance_warnings = []
-        heavy_api_pat = re.compile(r"\b(UrlFetchApp\.fetch|\.getValue\(|\.setValue\(|SpreadsheetApp\.openBy[A-Za-z0-9_]*|DriveApp\.[A-Za-z0-9_]+|GmailApp\.sendEmail|PropertiesService\.get[A-Za-z0-9_]*)")
+        seen_perf_keys = set()
+        heavy_api_pat = re.compile(
+            r"\b(UrlFetchApp\.fetch\b(?!All)|SpreadsheetApp\.openBy[A-Za-z0-9_]*|DriveApp\.[A-Za-z0-9_]+|GmailApp\.(?:sendEmail|getThreadById|getMessageById|search)\b|PropertiesService\.(?:get|set)[A-Za-z0-9_]*|CacheService\.(?:get|put)[A-Za-z0-9_]*|Utilities\.base64Encode\b)"
+            r"|(\.(?:getValue|setValue|appendRow|getBackground|setBackground|insertRow[A-Za-z0-9_]*|deleteRow|getAttachments|getPlainBody|getBytes|getRawContent|getMessages|moveToTrash)\s*\()"
+        )
 
         for f in files:
             if f.get("type") != "SERVER_JS":
@@ -3401,16 +3600,99 @@ class GasClient:
                 seg = source[s:e]
                 for lm in loop_pat.finditer(seg):
                     loop_start = s + lm.start()
-                    loop_end = min(len(source), loop_start + 500)
-                    sub_src = source[loop_start:loop_end]
+                    p_open = source.find('(', loop_start)
+                    if p_open == -1:
+                        continue
+                    paren_depth = 0
+                    p_close = -1
+                    cur = p_open
+                    while cur < len(source):
+                        ch = masked[cur]
+                        if ch == '(':
+                            paren_depth += 1
+                        elif ch == ')':
+                            paren_depth -= 1
+                            if paren_depth == 0:
+                                p_close = cur
+                                break
+                        cur += 1
+                    if p_close == -1:
+                        continue
+
+                    m_kw = lm.group(0)
+                    if "for" in m_kw or "while" in m_kw:
+                        nxt = p_close + 1
+                        while nxt < len(source) and source[nxt].isspace():
+                            nxt += 1
+                        if nxt < len(source) and source[nxt] == '{':
+                            brace_depth = 0
+                            b_cur = nxt
+                            b_close = -1
+                            while b_cur < len(source):
+                                b_ch = masked[b_cur]
+                                if b_ch == '{':
+                                    brace_depth += 1
+                                elif b_ch == '}':
+                                    brace_depth -= 1
+                                    if brace_depth == 0:
+                                        b_close = b_cur
+                                        break
+                                b_cur += 1
+                            loop_end = b_close if b_close != -1 else min(len(source), nxt + 500)
+                        else:
+                            eol = source.find(';', nxt)
+                            loop_end = eol if eol != -1 else min(len(source), nxt + 200)
+                    else:
+                        loop_end = p_close
+
+                    sub_src = source[loop_start:loop_end + 1]
+                    sub_masked = masked[loop_start:loop_end + 1]
+                    has_early_break = bool(re.search(r"\bbreak\s*;", sub_masked))
+
                     for api_m in heavy_api_pat.finditer(sub_src):
-                        api_name = api_m.group(1).rstrip("(")
+                        raw_hit = api_m.group(1) or api_m.group(2) or ""
+                        api_name = raw_hit.rstrip("(").strip()
+                        api_pos_in_sub = api_m.start()
+
+                        # .getPlainBody の直前に ? '' : がある場合はフォールバックなので除外
+                        if "getPlainBody" in api_name:
+                            preceding_code = sub_src[max(0, api_pos_in_sub - 30):api_pos_in_sub]
+                            if re.search(r"\?\s*['\"]{2}\s*:\s*", preceding_code):
+                                continue
+
+                        # .getAttachments でループ内に break がある場合、またはスレッド一覧ではなく単一スレッドの messages に対する詳細・エクスポート展開の場合は除外
+                        if "getAttachments" in api_name:
+                            if has_early_break:
+                                continue
+                            before_loop = source[max(0, loop_start - 30):loop_start].strip()
+                            if before_loop.endswith(("messages", "msgs", "details")):
+                                continue
+
                         api_line = source.count('\n', 0, loop_start + api_m.start()) + 1
+                        dedup_key = (fname, api_line, api_name)
+                        if dedup_key in seen_perf_keys:
+                            continue
+                        seen_perf_keys.add(dedup_key)
+
+                        if "UrlFetchApp.fetch" in api_name:
+                            recipe = "ループ内の直列HTTP通信は極端に低速です。リクエスト配列を組んで UrlFetchApp.fetchAll(requests) で並列一括送信してください"
+                        elif api_name.startswith((".getValue", ".setValue", ".appendRow", ".getBackground", ".setBackground", ".insertRow", ".deleteRow")):
+                            recipe = "1セル・1行ずつのシート操作は6分実行制限超過の主因です。getValues() / setValues() で2次元メモリ配列として一括処理してください"
+                        elif any(k in api_name for k in ("getAttachments", "getMessages")):
+                            recipe = "ループ内でのメール・添付ファイル個別取得は低速です。getMessagesForThreads 等のバッチ取得や最新メッセージのみの判定に絞ってください"
+                        elif any(k in api_name for k in ("getPlainBody", "getBytes", "base64Encode")):
+                            recipe = "ループ内での本文テキスト変換や添付バイナリのBase64エンコードはメモリ肥大化・表示遅延の主因です。一覧・詳細初期表示ではメタデータのみ返し、オンデマンド取得にしてください"
+                        elif "PropertiesService" in api_name or "CacheService" in api_name:
+                            recipe = "ループ内のプロパティ/キャッシュ個別操作は低速です。ループ外で1回取得するか getProperties() / getAll() で一括処理してください"
+                        else:
+                            recipe = "ループ内での同期GAS API呼び出しは6分実行制限超過やクォータ枯渇の原因になります（ループ外での事前取得またはバッチ処理化を推奨）"
+
                         performance_warnings.append({
                             "file": fname,
                             "line": api_line,
                             "api": api_name,
-                            "reason": "ループ内での同期GAS API呼び出しは6分実行制限超過やクォータ枯渇の原因になります"
+                            "reason": recipe,
+                            "recipe": recipe
                         })
 
         # 5d. 未使用トップレベル関数の検出 (unused_functions)
@@ -3434,8 +3716,136 @@ class GasClient:
                         "line": loc["line"]
                     })
 
+        # 5e. サーバー関数の「未使用引数」検出 (unused_params)
+        unused_params = []
+        for f in files:
+            if f.get("type") != "SERVER_JS":
+                continue
+            fname = f.get("name", "")
+            source = f.get("source", "")
+
+            for fn_item in self._extract_functions_from_js(source, 0):
+                fn_name = fn_item["name"]
+                if fn_name not in top_level_map or fn_name in exempt_entry_points:
+                    continue
+                span = self._find_function_span(source, fn_name)
+                if not span:
+                    continue
+                fn_src = source[span[0]:span[1]]
+                m_params = re.search(r"function\s+" + re.escape(fn_name) + r"\s*\(([^)]*)\)", fn_src)
+                if m_params:
+                    params_str = (m_params.group(1) or "").strip()
+                else:
+                    m_params = re.search(r"(?:const|let|var)\s+" + re.escape(fn_name) + r"\s*=\s*(?:async\s*)?(?:function\s*\(([^)]*)\)|\(([^)]*)\)\s*=>)", fn_src)
+                    if m_params:
+                        g1 = m_params.group(1)
+                        g2 = m_params.group(2) if m_params.lastindex and m_params.lastindex >= 2 else None
+                        params_str = (g1 or g2 or "").strip()
+                    else:
+                        continue
+                if not params_str:
+                    continue
+
+                body_brace_idx = fn_src.find('{')
+                if body_brace_idx == -1:
+                    continue
+                body_src = fn_src[body_brace_idx + 1 : -1]
+                b_tokens, _ = self._tokenize_js(body_src)
+
+                for raw_p in re.split(r",(?![^()]*\))", params_str):
+                    raw_p = raw_p.strip()
+                    if not raw_p or raw_p.startswith("..."):
+                        continue
+                    p_name = raw_p.split("=")[0].strip()
+                    if not re.match(r"^[A-Za-z0-9_$]+$", p_name) or p_name.startswith("_") or p_name == "e":
+                        continue
+
+                    pat_p = re.compile(rf"\b{re.escape(p_name)}\b")
+                    is_used = any(bmode == 'CODE' and pat_p.search(body_src[bs:be]) for bs, be, bmode in b_tokens)
+                    if not is_used:
+                        unused_params.append({
+                            "file": fname,
+                            "line": fn_item["start_line"],
+                            "function": fn_name,
+                            "param": p_name,
+                            "reason": f"引数 '{p_name}' が関数内で一度も使用されていません（UIからの入力値が無視されている可能性があります）"
+                        })
+
+        # 5f. フロントエンド・キャッシュ・DOM 罠の静的検出 (frontend_warnings)
+        frontend_warnings = []
+        for f in files:
+            if f.get("type") != "HTML":
+                continue
+            fname = f.get("name", "")
+            source = f.get("source", "")
+
+            script_blocks = []
+            defined_client_fns = set()
+            for m in re.finditer(r'(<script[^>]*>)([\s\S]*?)(</script>)', source, re.IGNORECASE):
+                if not self._is_js_script_tag(m.group(1)):
+                    continue
+                s_content = m.group(2)
+                s_start = m.start(2)
+                script_blocks.append((s_start, s_content))
+                for fn_m in re.finditer(r"\b(?:async\s+)?function\s+([A-Za-z0-9_$]+)\b", s_content):
+                    defined_client_fns.add(fn_m.group(1))
+                for var_fn_m in re.finditer(r"\b(?:const|let|var|window)\s*\.?\s*([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:function|\([^)]*\)\s*=>)", s_content):
+                    defined_client_fns.add(var_fn_m.group(1))
+
+            # 1. IndexedDB 警告 (put のみで clear/delete なし)
+            has_store = any(".objectStore(" in sc for _, sc in script_blocks)
+            has_put = any(".put(" in sc for _, sc in script_blocks)
+            has_clear_or_del = any(".clear(" in sc or ".delete(" in sc for _, sc in script_blocks)
+            if has_store and has_put and not has_clear_or_del:
+                put_m = re.search(r"\.put\s*\(", source)
+                line_no = source.count('\n', 0, put_m.start()) + 1 if put_m else 1
+                frontend_warnings.append({
+                    "file": fname,
+                    "line": line_no,
+                    "kind": "indexeddb_no_clear_or_delete",
+                    "reason": "IndexedDB に put のみで clear/delete がありません。削除したデータがキャッシュに残り続け復活する原因になります"
+                })
+
+            # 2. Iframe document.write 警告
+            doc_write_pat = re.compile(r"(?:contentWindow\.document|contentDocument|\bdoc)\s*\.\s*write\s*\(")
+            for s_start, s_content in script_blocks:
+                for dw_m in doc_write_pat.finditer(s_content):
+                    dw_line = source.count('\n', 0, s_start + dw_m.start()) + 1
+                    frontend_warnings.append({
+                        "file": fname,
+                        "line": dw_line,
+                        "kind": "iframe_document_write",
+                        "reason": "iframe への document.write はメインスレッドを同期ブロックし表示がもたつきます。iframe.srcdoc の使用を推奨します"
+                    })
+
+            # 3. HTML インラインイベントハンドラ未定義関数呼び出し
+            builtin_handlers = {
+                "alert", "confirm", "prompt", "setTimeout", "clearTimeout",
+                "encodeURIComponent", "decodeURIComponent", "parseInt", "parseFloat",
+                "console", "location", "history", "event", "Boolean", "Number", "String"
+            }
+            inline_pat = re.compile(r"""\bon(?:click|change|input|submit|mouseenter|mouseleave|keyup|keydown)\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+            for im in inline_pat.finditer(source):
+                handler_code = im.group(1).strip()
+                call_matches = re.findall(r"(?:^|[;{}]|\b(?:return|void)\s+)\s*([A-Za-z0-9_$]+)\s*\(", handler_code)
+                for called_fn in call_matches:
+                    if called_fn in builtin_handlers:
+                        continue
+                    if called_fn not in defined_client_fns:
+                        im_line = source.count('\n', 0, im.start()) + 1
+                        frontend_warnings.append({
+                            "file": fname,
+                            "line": im_line,
+                            "kind": "broken_inline_handler",
+                            "reason": f"HTML イベント属性から未定義のフロント関数 '{called_fn}' が呼ばれています"
+                        })
+
         # 6. サマリー作成
-        issues_count = len(syntax_errors) + len(duplicate_functions) + len(broken_rpc_calls) + len(broken_html_templates) + len(duplicate_globals)
+        issues_count = (
+            len(syntax_errors) + len(duplicate_functions) + len(broken_rpc_calls)
+            + len(broken_html_templates) + len(duplicate_globals) + len(rpc_arity_warnings)
+            + len(performance_warnings) + len(unused_params) + len(frontend_warnings)
+        )
         status = "healthy" if issues_count == 0 else "warning"
 
         return {
@@ -3451,10 +3861,375 @@ class GasClient:
             "broken_html_templates": broken_html_templates,
             "rpc_arity_warnings": rpc_arity_warnings,
             "performance_warnings": performance_warnings,
+            "unused_params": unused_params,
+            "frontend_warnings": frontend_warnings,
             "unused_functions": unused_functions,
             "entry_points": entry_points,
             "manifest": manifest_info
         }
+
+    def verify_frontend(self, script_id, filename="Index", test_js="", timeout=10):
+        """指定した HTML ファイル内の JavaScript ロジックを Node.js vm 模擬環境（インメモリ IndexedDB / DOM / RPC プロキシ）上で実機実行・検証する
+
+        Args:
+            script_id: プロジェクト名またはスクリプトID
+            filename: 対象の HTML ファイル名 (既定: "Index")
+            test_js: 検証用に追加実行する非同期 JS 式/ブロック (例: "await saveToDB([{id:'1'}]); return (await loadFromDB()).length;")
+            timeout: タイムアウト秒数 (既定: 10)
+
+        Returns:
+            dict: {
+                "success": bool,
+                "error": str | None,
+                "rpc_calls": list,
+                "db_records_count": int,
+                "alerts": list,
+                "confirms": list,
+                "test_result": any,
+                "file": str
+            }
+        """
+        sid = self.resolve_script_id(script_id)
+        content = self.get_content(sid)
+        files = content.get("files", [])
+
+        target_file = None
+        base_target = os.path.splitext(filename)[0].lower()
+        for f in files:
+            if f.get("type") == "HTML":
+                fname = f.get("name", "")
+                if fname.lower() == base_target or os.path.splitext(fname)[0].lower() == base_target:
+                    target_file = f
+                    break
+
+        if not target_file:
+            raise ValueError(f"HTML ファイル '{filename}' が見つかりません。")
+
+        source = target_file.get("source", "")
+        script_parts = []
+        for m in re.finditer(r'(<script[^>]*>)([\s\S]*?)(</script>)', source, re.IGNORECASE):
+            if self._is_js_script_tag(m.group(1)):
+                script_parts.append(m.group(2))
+
+        combined_js = "\n;\n".join(script_parts)
+
+        node_runner = r"""
+const fs = require('fs');
+const vm = require('vm');
+
+let payload;
+try {
+  payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+} catch (e) {
+  console.log(JSON.stringify({ success: false, error: 'Payload parse error: ' + e.message }));
+  process.exit(0);
+}
+
+const htmlJs = payload.html_js || '';
+const testJs = payload.test_js || '';
+
+const dbStores = {};
+function getStoreMap(name) {
+  if (!dbStores[name]) dbStores[name] = new Map();
+  return dbStores[name];
+}
+
+const mockIndexedDB = {
+  open: function(name, version) {
+    const req = { onsuccess: null, onupgradeneeded: null, onerror: null, result: null };
+    setTimeout(() => {
+      const db = {
+        transaction: function(storeName, mode) {
+          const sNames = Array.isArray(storeName) ? storeName : [storeName];
+          return {
+            objectStore: function(targetName) {
+              const map = getStoreMap(targetName || sNames[0]);
+              return {
+                put: function(val) {
+                  const key = (val && val.id !== undefined) ? val.id : JSON.stringify(val);
+                  map.set(key, JSON.parse(JSON.stringify(val)));
+                  return {};
+                },
+                add: function(val) {
+                  const key = (val && val.id !== undefined) ? val.id : JSON.stringify(val);
+                  map.set(key, JSON.parse(JSON.stringify(val)));
+                  return {};
+                },
+                get: function(key) {
+                  const r = { onsuccess: null, result: undefined };
+                  setTimeout(() => {
+                    const item = map.get(key);
+                    r.result = item !== undefined ? JSON.parse(JSON.stringify(item)) : undefined;
+                    if (r.onsuccess) r.onsuccess({ target: r });
+                  }, 0);
+                  return r;
+                },
+                getAll: function() {
+                  const r = { onsuccess: null, result: [] };
+                  setTimeout(() => {
+                    r.result = Array.from(map.values()).map(v => JSON.parse(JSON.stringify(v)));
+                    if (r.onsuccess) r.onsuccess({ target: r });
+                  }, 0);
+                  return r;
+                },
+                delete: function(key) {
+                  map.delete(key);
+                  return {};
+                },
+                clear: function() {
+                  map.clear();
+                  return {};
+                }
+              };
+            }
+          };
+        },
+        createObjectStore: function(name, options) {
+          getStoreMap(name);
+          return {};
+        }
+      };
+      req.result = db;
+      if (req.onupgradeneeded) req.onupgradeneeded({ target: { result: db } });
+      if (req.onsuccess) req.onsuccess({ target: { result: db } });
+    }, 0);
+    return req;
+  }
+};
+
+const mockLocalStorage = {
+  _data: {},
+  getItem: function(k) { return this._data[k] !== undefined ? this._data[k] : null; },
+  setItem: function(k, v) { this._data[k] = String(v); },
+  removeItem: function(k) { delete this._data[k]; },
+  clear: function() { this._data = {}; }
+};
+
+const rpcCalls = [];
+const alerts = [];
+const confirms = [];
+
+function makeProxy(chain) {
+  const fn = function(...args) {
+    rpcCalls.push({ chain: chain, args: args });
+    return Promise.resolve({ success: true });
+  };
+  return new Proxy(fn, {
+    get: function(target, prop) {
+      if (typeof prop !== 'string') return target[prop];
+      if (prop === 'withSuccessHandler' || prop === 'withFailureHandler' || prop === 'withUserObject') {
+        return function(handler) {
+          if (prop === 'withSuccessHandler' && typeof handler === 'function') {
+            setTimeout(() => { try { handler({ success: true }); } catch(e){} }, 0);
+          }
+          return makeProxy(chain.concat([[prop, 'fn']]));
+        };
+      }
+      return makeProxy(chain.concat([prop]));
+    }
+  });
+}
+
+const mockDoc = {
+  getElementById: function(id) {
+    return {
+      id: id,
+      style: {},
+      dataset: {},
+      classList: {
+        toggle: () => {},
+        add: () => {},
+        remove: () => {},
+        contains: () => false
+      },
+      value: '',
+      innerText: '',
+      innerHTML: '',
+      files: [],
+      appendChild: () => {},
+      removeChild: () => {},
+      scrollTo: () => {},
+      addEventListener: () => {}
+    };
+  },
+  createElement: function(tag) {
+    return {
+      tagName: String(tag).toUpperCase(),
+      style: {},
+      dataset: {},
+      classList: { toggle: () => {}, add: () => {}, remove: () => {} },
+      appendChild: () => {},
+      removeChild: () => {},
+      setAttribute: () => {},
+      getAttribute: () => null,
+      onload: null,
+      contentWindow: {
+        document: {
+          open: () => {},
+          write: () => {},
+          close: () => {},
+          body: { scrollHeight: 100 }
+        }
+      }
+    };
+  },
+  body: {
+    appendChild: () => {},
+    removeChild: () => {}
+  },
+  addEventListener: () => {}
+};
+
+class MockWorker {
+  constructor() {}
+  postMessage() {}
+  terminate() {}
+}
+
+const sandbox = {
+  indexedDB: mockIndexedDB,
+  localStorage: mockLocalStorage,
+  document: mockDoc,
+  window: null,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  Worker: MockWorker,
+  URL: { createObjectURL: () => 'blob:mock', revokeObjectURL: () => {} },
+  Blob: class { constructor() {} },
+  alert: (msg) => alerts.push(String(msg)),
+  confirm: (msg) => { confirms.push(String(msg)); return true; },
+  prompt: () => null,
+  setTimeout: setTimeout,
+  clearTimeout: clearTimeout,
+  setInterval: setInterval,
+  clearInterval: clearInterval,
+  console: {
+    log: () => {},
+    error: () => {},
+    warn: () => {},
+    info: () => {}
+  },
+  google: { script: { run: makeProxy([]) } },
+  atob: (s) => Buffer.from(s, 'base64').toString('binary'),
+  btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+  escape: escape,
+  unescape: unescape,
+  encodeURIComponent: encodeURIComponent,
+  decodeURIComponent: decodeURIComponent,
+  parseInt: parseInt,
+  parseFloat: parseFloat,
+  isNaN: isNaN,
+  isFinite: isFinite,
+  Date: Date,
+  Math: Math,
+  JSON: JSON,
+  Promise: Promise,
+  Set: Set,
+  Map: Map,
+  Array: Array,
+  Object: Object,
+  String: String,
+  Number: Number,
+  Boolean: Boolean,
+  RegExp: RegExp,
+  Error: Error,
+  TypeError: TypeError,
+  RangeError: RangeError
+};
+sandbox.window = sandbox;
+sandbox.self = sandbox;
+
+(async () => {
+  try {
+    const context = vm.createContext(sandbox);
+
+    if (htmlJs.trim()) {
+      const script = new vm.Script(htmlJs, { filename: 'inline_html_script.js' });
+      script.runInContext(context);
+    }
+
+    let testResult = null;
+    if (testJs.trim()) {
+      const wrappedTest = '(async () => {\n' + testJs + '\n})()';
+      const testScript = new vm.Script(wrappedTest, { filename: 'test_script.js' });
+      testResult = await testScript.runInContext(context);
+    }
+
+    let totalDbCount = 0;
+    for (const s in dbStores) {
+      totalDbCount += dbStores[s].size;
+    }
+
+    console.log(JSON.stringify({
+      success: true,
+      error: null,
+      rpc_calls: rpcCalls.map(c => ({ chain: c.chain, args: c.args })),
+      db_records_count: totalDbCount,
+      alerts: alerts,
+      confirms: confirms,
+      test_result: testResult !== undefined ? testResult : null
+    }));
+  } catch (err) {
+    console.log(JSON.stringify({
+      success: false,
+      error: (err && err.message) ? err.message : String(err),
+      rpc_calls: rpcCalls.map(c => ({ chain: c.chain, args: c.args })),
+      db_records_count: 0,
+      alerts: alerts,
+      confirms: confirms,
+      test_result: null
+    }));
+  }
+})();
+"""
+        payload = json.dumps({"html_js": combined_js, "test_js": test_js}, ensure_ascii=False)
+        try:
+            p = subprocess.run(
+                ["node", "-e", node_runner],
+                input=payload,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                timeout=timeout
+            )
+            if p.returncode != 0 and not p.stdout.strip():
+                return {
+                    "success": False,
+                    "error": f"Node.js 実行エラー (code {p.returncode}): {p.stderr.strip()}",
+                    "rpc_calls": [],
+                    "db_records_count": 0,
+                    "alerts": [],
+                    "confirms": [],
+                    "test_result": None,
+                    "file": target_file.get("name", "")
+                }
+            out_json = json.loads(p.stdout.strip())
+            out_json["file"] = target_file.get("name", "")
+            return out_json
+        except FileNotFoundError:
+            raise RuntimeError("Node.js が見つかりません。Node.js をインストールしてください。")
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": f"実行タイムアウト ({timeout}秒を超過しました)",
+                "rpc_calls": [],
+                "db_records_count": 0,
+                "alerts": [],
+                "confirms": [],
+                "test_result": None,
+                "file": target_file.get("name", "")
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"検証実行例外: {str(e)}",
+                "rpc_calls": [],
+                "db_records_count": 0,
+                "alerts": [],
+                "confirms": [],
+                "test_result": None,
+                "file": target_file.get("name", "")
+            }
 
     @classmethod
     def check_setup(cls, clasprc_path=None, open_browser=False):

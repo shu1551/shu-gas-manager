@@ -126,6 +126,9 @@ py gas.py deploy "MyProject" -d "本番リリース"
 # 10. Webアプリ直接呼び出し（--dev を付けると再デプロイ不要で最新HEADを実行）
 py gas.py webapp "MyProject" -p "action=status"
 py gas.py webapp "MyProject" -p "action=status" --dev
+
+# 11. HTML フロントエンド実機シミュレーション（インメモリ IndexedDB / DOM / RPC 環境で検証）
+py gas.py verify-ui "MyProject" Index --test-js "await saveToDB([{id:'1'}]); return (await loadFromDB()).length;"
 ```
 
 ---
@@ -165,6 +168,7 @@ FastMCP による MCP サーバー（`gas_mcp_server.py`）を提供していま
 | `deploy` | 新バージョン作成と本番 Web アプリ更新（未デプロイ時は新規デプロイ自動作成・404時自動救済） |
 | `call_webapp` | GAS Webアプリ（doGet/doPost）直接呼び出し（プロジェクト名指定・`dev=True` 最新HEAD実行対応） |
 | `add_channel` | Qクイック等の登録チャンネル管理 API 直撃追加 |
+| `verify_frontend` | **HTML 内 JavaScript 実機シミュレーション**（インメモリ IndexedDB / DOM / google.script.run スパイ環境で保存・削除・再読込ライフサイクルを検証） |
 
 ---
 

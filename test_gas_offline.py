@@ -2385,3 +2385,251 @@ def test_mcp_gas_gateway_full_subcommands_and_flags(mock_client):
         m3 = gas_mcp_server.gas("replace-func myproj Code fn 'function fn(){}' --dry-run")
         assert "[DRY-RUN]" in m3
         mock_client.replace_function.assert_called_once_with("myproj", "Code", "fn", "function fn(){}", force=False, dry_run=True, deploy=False)
+
+
+def test_benchmark_function_pass_and_needs_improvement_and_failed(mock_client):
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    # 1. ループ内 getValue がある低速コード -> NEEDS_IMPROVEMENT ＆ 処方箋生成
+    slow_files = [
+        {
+            "name": "SheetWorker",
+            "type": "SERVER_JS",
+            "source": (
+                "function sumSheet() {\n"
+                "  var s = SpreadsheetApp.getActiveSheet();\n"
+                "  var total = 0;\n"
+                "  for (var i = 1; i <= 100; i++) {\n"
+                "    total += s.getRange(i, 1).getValue();\n"
+                "  }\n"
+                "  return total;\n"
+                "}\n"
+            )
+        }
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": slow_files})
+    mock_client.run_function = MagicMock(return_value={
+        "status": "success",
+        "function": "sumSheet",
+        "result": 5050,
+        "logs": ["[LOG] done"],
+        "duration_ms": 1800
+    })
+
+    b1 = mock_client.benchmark_function("dummy_id", "sumSheet", target_ms=500, expected=5050)
+    assert b1["verdict"] == "NEEDS_IMPROVEMENT"
+    assert b1["score"] < 100
+    assert b1["expected_match"] is True
+    assert any("getValues()" in p for p in b1["prescriptions"])
+    assert any("速度超過" in p for p in b1["prescriptions"])
+
+    # 2. 配列一括化＋UrlFetchApp.fetchAll に改修した高速コード -> PASS (100点)
+    fast_files = [
+        {
+            "name": "SheetWorker",
+            "type": "SERVER_JS",
+            "source": (
+                "function sumSheet() {\n"
+                "  var vals = SpreadsheetApp.getActiveSheet().getDataRange().getValues();\n"
+                "  var reqs = vals.map(function(r){ return {url: 'https://example.com/' + r[0]}; });\n"
+                "  UrlFetchApp.fetchAll(reqs);\n"
+                "  return 5050;\n"
+                "}\n"
+            )
+        }
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": fast_files})
+    mock_client.run_function = MagicMock(return_value={
+        "status": "success",
+        "function": "sumSheet",
+        "result": 5050,
+        "logs": [],
+        "duration_ms": 120
+    })
+
+    b2 = mock_client.benchmark_function("dummy_id", "sumSheet", target_ms=500, expected=5050)
+    assert b2["verdict"] == "PASS"
+    assert b2["score"] == 100
+    assert len(b2["performance_warnings"]) == 0
+
+    # 3. 期待値不一致 -> FAILED (0点)
+    b3 = mock_client.benchmark_function("dummy_id", "sumSheet", target_ms=500, expected=9999)
+    assert b3["verdict"] == "FAILED"
+    assert b3["score"] == 0
+    assert b3["expected_match"] is False
+
+    # 4. MCP benchmark_function ＆ gas("bench ...") 統合コマンド検証
+    with patch("gas_mcp_server.get_client", return_value=mock_client):
+        mcp_out = gas_mcp_server.gas("bench dummy_id sumSheet --target-ms 500 --expected 5050")
+        assert "[PASS] (スコア: 100/100点)" in mcp_out
+        assert "120.0ms" in mcp_out
+
+
+
+def test_diagnose_105_dynamic_rpc_and_heavy_apis_and_frontend_warnings(mock_client):
+    server_js = """
+    function deleteMessage(id) {
+        return id;
+    }
+    function restoreMessage(id) {
+        return id;
+    }
+    function replyToEmail(threadId, toAddress, subjectText, bodyText) {
+        return bodyText;
+    }
+    function heavyLoop(threads) {
+        threads.forEach(t => {
+            const atts = t.getAttachments();
+            const pb = t.getPlainBody();
+            const b64 = Utilities.base64Encode("abc");
+        });
+    }
+    """
+    html_code = """
+    <html><body>
+    <button onclick="nonExistentFunc()">Click</button>
+    <script>
+    function runDynamicRpc(id, actionType) {
+        const gasMethod = (actionType === 'delete') ? 'deleteMessage' : 'restoreMessage';
+        google.script.run.withFailureHandler(() => {})[gasMethod](id, null, true);
+    }
+    function renderIframe() {
+        doc.write("<div>test</div>");
+    }
+    async function saveToDB(items) {
+        const db = await openDB();
+        const tx = db.transaction('store', 'readwrite');
+        items.forEach(i => tx.objectStore('store').put(i));
+    }
+    </script>
+    </body></html>
+    """
+    files = [
+        {"name": "appsscript", "type": "JSON", "source": "{}"},
+        {"name": "コード", "type": "SERVER_JS", "source": server_js},
+        {"name": "Index", "type": "HTML", "source": html_code}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": files})
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+
+    diag = mock_client.diagnose("dummy_id")
+
+    assert diag["status"] == "warning"
+    assert diag["issues_count"] > 0
+
+    assert len(diag["broken_rpc_calls"]) == 0
+    assert len(diag["rpc_arity_warnings"]) == 2
+    arity_fns = [ra["target_function"] for ra in diag["rpc_arity_warnings"]]
+    assert "deleteMessage" in arity_fns
+    assert "restoreMessage" in arity_fns
+
+    perf_apis = [pw["api"] for pw in diag["performance_warnings"]]
+    assert any("getAttachments" in a for a in perf_apis)
+    assert any("getPlainBody" in a for a in perf_apis)
+    assert any("base64Encode" in a for a in perf_apis)
+
+    unused_p_names = [up["param"] for up in diag["unused_params"]]
+    assert "toAddress" in unused_p_names
+    assert "subjectText" in unused_p_names
+
+    fe_kinds = [fw["kind"] for fw in diag["frontend_warnings"]]
+    assert "indexeddb_no_clear_or_delete" in fe_kinds
+    assert "iframe_document_write" in fe_kinds
+    assert "broken_inline_handler" in fe_kinds
+
+
+def test_diagnose_105_2_loop_boundary_and_guarded_apis_no_false_positives(mock_client):
+    server_js = """
+    function replyToEmail(threadId, attachmentFiles) {
+        if (attachmentFiles && attachmentFiles.length > 0) {
+            const mapped = attachmentFiles.map(att => {
+                return { name: att.name, size: att.size };
+            });
+        }
+        // ループの外（後ろ）にある thread.getMessages() は誤爆しないこと
+        const thread = GmailApp.getThreadById(threadId);
+        const msgs = thread.getMessages();
+        return msgs.length;
+    }
+
+    function checkAttachments(msgs) {
+        for (let j = 0; j < msgs.length; j++) {
+            const m = msgs[j];
+            // break 付きの早期終了ループ内の getAttachments は誤爆しないこと
+            const atts = m.getAttachments();
+            if (atts.length > 0) {
+                break;
+            }
+        }
+    }
+
+    function fallbackBody(msg) {
+        // body ? '' : msg.getPlainBody() のフォールバックは誤爆しないこと
+        const body = msg.getBody();
+        const plain = body ? '' : msg.getPlainBody();
+        return plain;
+    }
+    """
+    files = [
+        {"name": "appsscript", "type": "JSON", "source": "{}"},
+        {"name": "コード", "type": "SERVER_JS", "source": server_js}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": files})
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+
+    diag = mock_client.diagnose("dummy_id")
+    perf_apis = [pw["api"] for pw in diag["performance_warnings"]]
+    assert not any("getMessages" in a for a in perf_apis)
+    assert not any("getAttachments" in a for a in perf_apis)
+    assert not any("getPlainBody" in a for a in perf_apis)
+    assert len(diag["performance_warnings"]) == 0
+
+
+def test_verify_frontend_indexeddb_lifecycle(mock_client):
+    broken_html = """
+    <html><body><script>
+    function openDB() {
+        return new Promise(resolve => {
+            const req = indexedDB.open('test_db', 1);
+            req.onsuccess = e => resolve(e.target.result);
+        });
+    }
+    async function saveToDB(items) {
+        const db = await openDB();
+        const tx = db.transaction('store', 'readwrite');
+        items.forEach(i => tx.objectStore('store').put(i));
+    }
+    async function loadFromDB() {
+        const db = await openDB();
+        return new Promise(resolve => {
+            const req = db.transaction('store', 'readonly').objectStore('store').getAll();
+            req.onsuccess = e => resolve(e.target.result);
+        });
+    }
+    </script></body></html>
+    """
+    mock_client.get_content = MagicMock(return_value={"files": [{"name": "Index", "type": "HTML", "source": broken_html}]})
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+
+    test_js_check = """
+    await saveToDB([{id:'1'}, {id:'2'}]);
+    await saveToDB([{id:'1'}]);
+    const r = await loadFromDB();
+    if (r.length !== 1) {
+        throw new Error('Zombie records detected: count=' + r.length);
+    }
+    return r.length;
+    """
+    res_broken = mock_client.verify_frontend("dummy_id", "Index", test_js=test_js_check)
+    assert res_broken["success"] is False
+    assert "Zombie records detected" in res_broken["error"]
+
+    fixed_html = broken_html.replace(
+        "items.forEach(i => tx.objectStore('store').put(i));",
+        "const st = tx.objectStore('store'); st.clear(); items.forEach(i => st.put(i));"
+    )
+    mock_client.get_content = MagicMock(return_value={"files": [{"name": "Index", "type": "HTML", "source": fixed_html}]})
+
+    res_fixed = mock_client.verify_frontend("dummy_id", "Index", test_js=test_js_check)
+    assert res_fixed["success"] is True
+    assert res_fixed["test_result"] == 1
+    assert res_fixed["db_records_count"] == 1
