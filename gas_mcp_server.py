@@ -1377,6 +1377,37 @@ def ledger(
 
 @mcp.tool()
 @safe_tool
+
+@mcp.tool()
+@safe_tool
+def design_skin(
+    project: str,
+    filename: str = "Index",
+    preset: str = "linear",
+    deploy: bool = False
+) -> str:
+    """HTMLファイルにプロ仕様のSaaS級6大視覚レイヤー（CSS変数・タイポグラフィ・8pxグリッド・多層シャドウ・半透明サーフェス）を0秒で一撃注入・着せ替えします。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        filename: 対象HTMLファイル名 (デフォルト: Index)
+        preset: デザインプリセット ("linear" / "glass" / "notion" / "emerald")
+        deploy: 反映後に本番Webアプリを自動デプロイするか (デフォルト: False)
+    """
+    client = get_client()
+    res = client.design_skin(project, filename=filename, preset=preset, deploy=deploy)
+    if not res.get("success"):
+        return f"[ERROR] デザイン着せ替え失敗: {res.get('error')}"
+    
+    dep_str = " (本番Webアプリへ自動デプロイ完了)" if res.get("deployed") else ""
+    return (
+        f"=== 🎨 GAS デザイン着せ替え (design-skin): [{res.get('project')}] ===\n"
+        f"プリセット: {res.get('preset_name')} ({res.get('preset')})\n"
+        f"特徴: {res.get('desc')}\n"
+        f"反映ファイル: {res.get('filename')}.html (置換箇所: {res.get('patches_applied')}箇所){dep_str}\n"
+        f"状態: 正常反映 (6大視覚レイヤー完全注入完了)"
+    )
+
 def gas(command: str) -> str:
     """ガスマネージャー (GAS Manager) 統合コマンド窓口。
     CLI と同じコマンド形式（例: 'files MyProject', 'outline MyProject', 'patch-func MyProject main myFunc old new' 等）で
@@ -1971,6 +2002,27 @@ def gas(command: str) -> str:
         proj = parts[1]
         fn = parts[2] if len(parts) > 2 else "Index"
         return ledger(project=proj, filename=fn)
+
+    
+    if sub == "skin":
+        if len(parts) < 2:
+            return "プロジェクトを指定してください: skin <project> [preset] [filename] [--deploy]"
+        proj = parts[1]
+        pst = "linear"
+        fn = "Index"
+        dep = False
+        i = 2
+        while i < len(parts):
+            if parts[i] in ("--deploy", "-d"):
+                dep = True
+                i += 1
+            elif parts[i] in ("linear", "glass", "notion", "emerald", "saas", "apple", "minimal", "fintech", "stripe"):
+                pst = parts[i]
+                i += 1
+            else:
+                fn = parts[i]
+                i += 1
+        return design_skin(project=proj, filename=fn, preset=pst, deploy=dep)
 
     return f"不明なコマンドです: '{sub}'。'help' で使い方を確認してください。"
 

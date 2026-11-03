@@ -344,6 +344,14 @@ def main():
     ldg_p.add_argument("project", help="プロジェクト名またはスクリプトID")
     ldg_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
 
+    # skin (デザイン着せ替え)
+    skin_p = subparsers.add_parser("skin", help="HTMLにプロ仕様のSaaS級6大視覚レイヤー（CSS変数）を一撃注入・着せ替え")
+    skin_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    skin_p.add_argument("preset", nargs="?", default="linear", help="プリセット (linear, glass, notion, emerald)")
+    skin_p.add_argument("--file", "-f", default="Index", help="対象HTMLファイル名 (デフォルト: Index)")
+    skin_p.add_argument("--deploy", "-d", action="store_true", help="反映後に本番Webアプリを自動デプロイ")
+
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -969,6 +977,19 @@ def main():
                     st = "✅" if c["passed"] else "❌"
                     print(f"  {st} {c['title']}")
                     print(f"     判定理由: {c['detail']}")
+
+        elif args.command == "skin":
+            res = client.design_skin(args.project, filename=args.file, preset=args.preset, deploy=args.deploy)
+            if not res.get("success"):
+                print(f"[ERROR] デザイン着せ替え失敗: {res.get('error')}")
+                sys.exit(1)
+            dep_str = " (本番Webアプリへ自動デプロイ完了)" if res.get("deployed") else ""
+            print(f"=== 🎨 GAS デザイン着せ替え (skin): [{res.get('project')}] ===")
+            print(f"プリセット: {res.get('preset_name')} ({res.get('preset')})")
+            print(f"特徴: {res.get('desc')}")
+            print(f"反映ファイル: {res.get('filename')}.html (置換箇所: {res.get('patches_applied')}箇所){dep_str}")
+            print("状態: 正常反映 (6大視覚レイヤー完全注入完了)")
+
         elif args.command == "webapp":
             res = client.call_webapp(args.url, params=args.params, body=args.body, method=args.method, key=args.key, use_auth=args.auth, dev=args.dev)
             print(res)

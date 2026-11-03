@@ -5846,3 +5846,344 @@ function doGet() {{
             "passed_requirements": len([c for c in checklist if c["passed"]]),
             "checklist": checklist
         }
+
+
+    def design_skin(self, project: str, filename: str = "Index", preset: str = "linear", deploy: bool = False) -> dict:
+        """
+        HTMLファイルにプロ仕様のSaaS級6大視覚レイヤー（CSS変数・タイポグラフィ・8pxグリッド・多層シャドウ・半透明サーフェス）を0秒で一撃注入・着せ替えします。
+        """
+        sid = self.resolve_script_id(project)
+        content = self.get_content(sid)
+        files = content.get('files', []) if isinstance(content, dict) else []
+        
+        target_file = None
+        clean_name = filename.replace(".html", "").replace(".HTML", "")
+        for f in files:
+            fname = f.get("name", "")
+            ftype = f.get("type", "")
+            if ftype == "HTML" and (fname.lower() == clean_name.lower() or fname.lower() == filename.lower()):
+                target_file = f
+                break
+        if not target_file:
+            for f in files:
+                if f.get("type") == "HTML":
+                    target_file = f
+                    break
+        if not target_file:
+            return {"success": False, "error": f"プロジェクト内に HTML ファイルが見つかりません: {filename}"}
+        
+        target_fname = target_file.get("name", "")
+        html_src = target_file.get("source", "")
+        preset_key = preset.lower().strip()
+        if preset_key in ("saas", "modern"): preset_key = "linear"
+        if preset_key in ("apple", "acrylic"): preset_key = "glass"
+        if preset_key in ("minimal", "clean"): preset_key = "notion"
+        if preset_key in ("fintech", "stripe", "supabase"): preset_key = "emerald"
+
+        PRESETS = {
+            "linear": {
+                "name": "Linear / Modern SaaS",
+                "desc": "スレート系ダーク＆ライト・洗練タイポグラフィ・多層ソフトシャドウ・半透明ボーダー",
+                "dark_body": """
+            /* --- 1. タイポグラフィ階層 (Typography Hierarchy) --- */
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --text-sub: #64748b;
+
+            /* --- 2. 背景・半透明サーフェス (Subtle Surface & Elevation) --- */
+            --bg-body: #0b0f19;
+            --surface: rgba(30, 41, 59, 0.7);
+            --surface-hover: rgba(51, 65, 85, 0.8);
+            --card-bg: rgba(15, 23, 42, 0.65);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(255, 255, 255, 0.16);
+            --border-focus: #38bdf8;
+
+            /* --- 3. プライマリ＆アクセント (Color & Identity) --- */
+            --primary: #3b82f6;
+            --primary-glow: rgba(59, 130, 246, 0.35);
+            --accent: #38bdf8;
+
+            /* --- 4. 空気感のある多層ソフトシャドウ (Soft Layered Shadows) --- */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.15);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.25), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
+            --shadow-float: 0 12px 24px -4px rgba(0, 0, 0, 0.4), 0 4px 8px -2px rgba(0, 0, 0, 0.25);
+            --shadow: rgba(0, 0, 0, 0.4);
+
+            /* --- 5. 8pxグリッド余白＆角丸秩序 (Spacing & Border Radius) --- */
+            --space-unit: 8px;
+            --card-padding: 14px 18px;
+            --card-gap: 8px;
+            --radius-container: 12px;
+            --radius-card: 8px;
+            --radius-btn: 6px;
+            --radius-badge: 9999px;
+
+            /* --- 6. マイクロインタラクション (Micro-interactions) --- */
+            --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            --hover-lift: translateY(-1px);
+
+            /* --- 既存互換エイリアス --- */
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: var(--bg-body);
+""",
+                "light_body": """
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --text-main: #0f172a;
+            --text-muted: #475569;
+            --text-sub: #94a3b8;
+            --bg-body: #f8fafc;
+            --surface: rgba(255, 255, 255, 0.8);
+            --surface-hover: rgba(255, 255, 255, 0.95);
+            --card-bg: rgba(255, 255, 255, 0.7);
+            --card-border: rgba(0, 0, 0, 0.08);
+            --border: rgba(0, 0, 0, 0.08);
+            --border-hover: rgba(0, 0, 0, 0.16);
+            --border-focus: #0284c7;
+            --primary: #2563eb;
+            --primary-glow: rgba(37, 99, 235, 0.2);
+            --accent: #0284c7;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+            --shadow-float: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+            --shadow: rgba(0, 0, 0, 0.08);
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: var(--bg-body);
+"""
+            },
+            "glass": {
+                "name": "Apple / Acrylic Glass",
+                "desc": "上質なフロストガラス・ブラー表現・エレガントな半透明パレット",
+                "dark_body": """
+            --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+            --text-main: #ffffff;
+            --text-muted: rgba(235, 235, 245, 0.6);
+            --text-sub: rgba(235, 235, 245, 0.38);
+            --bg-body: #000000;
+            --surface: rgba(30, 30, 32, 0.65);
+            --surface-hover: rgba(45, 45, 50, 0.75);
+            --card-bg: rgba(24, 24, 26, 0.55);
+            --card-border: rgba(255, 255, 255, 0.12);
+            --border: rgba(255, 255, 255, 0.12);
+            --border-hover: rgba(255, 255, 255, 0.24);
+            --border-focus: #2997ff;
+            --primary: #2997ff;
+            --primary-glow: rgba(41, 151, 255, 0.3);
+            --accent: #5e5ce6;
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
+            --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+            --shadow-float: 0 16px 36px rgba(0, 0, 0, 0.5);
+            --shadow: rgba(0, 0, 0, 0.4);
+            --glass-blur: 20px;
+            --space-unit: 8px;
+            --card-padding: 16px 20px;
+            --card-gap: 10px;
+            --radius-container: 16px;
+            --radius-card: 12px;
+            --radius-btn: 8px;
+            --radius-badge: 9999px;
+            --transition-fast: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+            --hover-lift: translateY(-2px);
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: rgba(0, 0, 0, 0.8);
+""",
+                "light_body": """
+            --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+            --text-main: #1d1d1f;
+            --text-muted: #86868b;
+            --text-sub: #a1a1a6;
+            --bg-body: #f5f5f7;
+            --surface: rgba(255, 255, 255, 0.7);
+            --surface-hover: rgba(255, 255, 255, 0.85);
+            --card-bg: rgba(255, 255, 255, 0.6);
+            --card-border: rgba(0, 0, 0, 0.08);
+            --border: rgba(0, 0, 0, 0.08);
+            --border-hover: rgba(0, 0, 0, 0.18);
+            --border-focus: #0071e3;
+            --primary: #0071e3;
+            --primary-glow: rgba(0, 113, 227, 0.2);
+            --accent: #5856d6;
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.06);
+            --shadow-float: 0 16px 32px rgba(0, 0, 0, 0.08);
+            --shadow: rgba(0, 0, 0, 0.06);
+            --glass-blur: 20px;
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: rgba(245, 245, 247, 0.8);
+"""
+            },
+            "notion": {
+                "name": "Notion / Minimal Clean",
+                "desc": "知的なモノトーン・削ぎ落とされた端正なレイアウト・紙のような質感",
+                "dark_body": """
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --text-main: #e6e6e6;
+            --text-muted: #9b9b9b;
+            --text-sub: #6f6f6f;
+            --bg-body: #191919;
+            --surface: #202020;
+            --surface-hover: #2a2a2a;
+            --card-bg: #202020;
+            --card-border: rgba(255, 255, 255, 0.09);
+            --border: rgba(255, 255, 255, 0.09);
+            --border-hover: rgba(255, 255, 255, 0.2);
+            --border-focus: #ffffff;
+            --primary: #ffffff;
+            --primary-glow: rgba(255, 255, 255, 0.2);
+            --accent: #e16259;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 3px 6px rgba(0, 0, 0, 0.3);
+            --shadow-float: 0 8px 16px rgba(0, 0, 0, 0.4);
+            --shadow: rgba(0, 0, 0, 0.3);
+            --space-unit: 8px;
+            --card-padding: 12px 16px;
+            --card-gap: 6px;
+            --radius-container: 8px;
+            --radius-card: 6px;
+            --radius-btn: 4px;
+            --radius-badge: 4px;
+            --transition-fast: all 0.12s ease-in-out;
+            --hover-lift: translateY(-1px);
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: var(--bg-body);
+""",
+                "light_body": """
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --text-main: #37352f;
+            --text-muted: #787774;
+            --text-sub: #9b9a97;
+            --bg-body: #ffffff;
+            --surface: #f7f6f3;
+            --surface-hover: #efeee9;
+            --card-bg: #ffffff;
+            --card-border: rgba(55, 53, 47, 0.09);
+            --border: rgba(55, 53, 47, 0.09);
+            --border-hover: rgba(55, 53, 47, 0.2);
+            --border-focus: #37352f;
+            --primary: #37352f;
+            --primary-glow: rgba(55, 53, 47, 0.15);
+            --accent: #eb5757;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.06);
+            --shadow-float: 0 6px 12px rgba(0, 0, 0, 0.08);
+            --shadow: rgba(0, 0, 0, 0.04);
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: var(--bg-body);
+"""
+            },
+            "emerald": {
+                "name": "Supabase / Emerald Fintech",
+                "desc": "知的なディープダーク・洗練されたエメラルドグリーンアクセント",
+                "dark_body": """
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --text-main: #ededed;
+            --text-muted: #8c8c8c;
+            --text-sub: #595959;
+            --bg-body: #121212;
+            --surface: #1a1a1a;
+            --surface-hover: #242424;
+            --card-bg: #171717;
+            --card-border: #262626;
+            --border: #262626;
+            --border-hover: #404040;
+            --border-focus: #10b981;
+            --primary: #10b981;
+            --primary-glow: rgba(16, 185, 129, 0.3);
+            --accent: #34d399;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+            --shadow-float: 0 12px 20px rgba(0, 0, 0, 0.5);
+            --shadow: rgba(0, 0, 0, 0.4);
+            --space-unit: 8px;
+            --card-padding: 14px 18px;
+            --card-gap: 8px;
+            --radius-container: 10px;
+            --radius-card: 8px;
+            --radius-btn: 6px;
+            --radius-badge: 9999px;
+            --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            --hover-lift: translateY(-1px);
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: var(--bg-body);
+""",
+                "light_body": """
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --text-main: #171717;
+            --text-muted: #737373;
+            --text-sub: #a3a3a3;
+            --bg-body: #fafafa;
+            --surface: #ffffff;
+            --surface-hover: #f5f5f5;
+            --card-bg: #ffffff;
+            --card-border: #e5e5e5;
+            --border: #e5e5e5;
+            --border-hover: #d4d4d4;
+            --border-focus: #059669;
+            --primary: #059669;
+            --primary-glow: rgba(5, 150, 105, 0.2);
+            --accent: #10b981;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08);
+            --shadow-float: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow: rgba(0, 0, 0, 0.05);
+            --bg: var(--bg-body);
+            --text: var(--text-main);
+            --header-bg: var(--bg-body);
+"""
+            }
+        }
+
+        selected = PRESETS.get(preset_key, PRESETS["linear"])
+        patches = []
+
+        # 1. :root ブロックの置換
+        match_root = re.search(r':root\s*\{([^}]+)\}', html_src)
+        if match_root:
+            old_root = match_root.group(0)
+            new_root = f":root {{{selected['dark_body']}\n        }}"
+            patches.append({"target": old_root, "replacement": new_root})
+        else:
+            match_style = re.search(r'<style[^>]*>', html_src, re.IGNORECASE)
+            if match_style:
+                old_style = match_style.group(0)
+                new_style = f"{old_style}\n        :root {{{selected['dark_body']}\n        }}\n"
+                patches.append({"target": old_style, "replacement": new_style})
+
+        # 2. ライトテーマブロック ([data-theme="light"] または body.light-mode) の置換
+        match_light = re.search(r'(\[data-theme=["\']light["\']\]|body\.light-mode)\s*\{([^}]+)\}', html_src)
+        if match_light:
+            old_light = match_light.group(0)
+            selector = match_light.group(1)
+            new_light = f"{selector} {{{selected['light_body']}\n        }}"
+            patches.append({"target": old_light, "replacement": new_light})
+        elif match_root and selected.get("light_body"):
+            new_light_block = f'\n\n        [data-theme="light"] {{{selected["light_body"]}\n        }}'
+            if patches:
+                patches[0]["replacement"] = patches[0]["replacement"] + new_light_block
+
+        if not patches:
+            return {"success": False, "error": "HTML内に <style> または :root タグが見つかりませんでした"}
+
+        res = self.patch_code(script_id=sid, filename=target_fname, patches=json.dumps(patches), deploy=deploy)
+        if res.get("status") != "success" and not res.get("success"):
+            return res
+
+        return {
+            "success": True,
+            "project": project,
+            "filename": target_fname,
+            "preset": preset_key,
+            "preset_name": selected["name"],
+            "desc": selected["desc"],
+            "deployed": deploy,
+            "patches_applied": len(patches)
+        }

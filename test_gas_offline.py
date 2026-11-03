@@ -2913,3 +2913,97 @@ def test_build_ledger_offline(mock_client):
     assert res["score"] == 100
     assert res["grade"] == "GOLD"
     assert res["passed_requirements"] == 7
+
+
+
+def test_design_skin_presets_and_injection(mock_client):
+    """skin コマンドの全プリセット適用と6大視覚レイヤーCSS変数注入の検証"""
+    base_html = """<!DOCTYPE html>
+    <html>
+      <head>
+        <style>
+          :root {
+            --bg: #000;
+            --text: #fff;
+          }
+          [data-theme="light"] {
+            --bg: #fff;
+            --text: #000;
+          }
+        </style>
+      </head>
+      <body><h1>App</h1></body>
+    </html>
+    """
+    sample_content = {
+        "files": [
+            {"name": "appsscript", "type": "JSON", "source": "{}"},
+            {"name": "Index", "type": "HTML", "source": base_html}
+        ]
+    }
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    mock_client.get_content = MagicMock(return_value=sample_content)
+    mock_client.patch_code = MagicMock(return_value={"success": True})
+
+    # 1. linear プリセット
+    res_linear = mock_client.design_skin("dummy_id", preset="linear")
+    assert res_linear["success"] is True
+    assert res_linear["preset"] == "linear"
+    assert "Linear" in res_linear["preset_name"]
+
+    # patch_code への引数検証
+    called_kwargs = mock_client.patch_code.call_args[1]
+    import json
+    patches = json.loads(called_kwargs["patches"])
+    assert len(patches) == 2  # :root と [data-theme="light"]
+    # 6大視覚レイヤーのキーワード検証
+    root_replacement = patches[0]["replacement"]
+    assert "--font-sans" in root_replacement
+    assert "--surface" in root_replacement
+    assert "--shadow-float" in root_replacement
+    assert "--radius-container" in root_replacement
+    assert "--transition-fast" in root_replacement
+
+    # 2. glass プリセット
+    res_glass = mock_client.design_skin("dummy_id", preset="glass")
+    assert res_glass["success"] is True
+    assert res_glass["preset"] == "glass"
+    assert "--glass-blur" in json.loads(mock_client.patch_code.call_args[1]["patches"])[0]["replacement"]
+
+    # 3. notion プリセット
+    res_notion = mock_client.design_skin("dummy_id", preset="notion")
+    assert res_notion["success"] is True
+    assert res_notion["preset"] == "notion"
+
+    # 4. emerald プリセット
+    res_emerald = mock_client.design_skin("dummy_id", preset="emerald")
+    assert res_emerald["success"] is True
+    assert res_emerald["preset"] == "emerald"
+    assert "#10b981" in json.loads(mock_client.patch_code.call_args[1]["patches"])[0]["replacement"]
+
+
+def test_design_skin_no_root_fallback(mock_client):
+    """既存 :root が無いHTMLでも <style> の直後に自動生成されることを検証"""
+    raw_html = """<!DOCTYPE html>
+    <html>
+      <head>
+        <style>
+          body { margin: 0; }
+        </style>
+      </head>
+      <body>Hello</body>
+    </html>"""
+    content = {
+        "files": [
+            {"name": "Index", "type": "HTML", "source": raw_html}
+        ]
+    }
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    mock_client.get_content = MagicMock(return_value=content)
+    mock_client.patch_code = MagicMock(return_value={"success": True})
+
+    res = mock_client.design_skin("dummy_id", preset="linear")
+    assert res["success"] is True
+    patches = json.loads(mock_client.patch_code.call_args[1]["patches"])
+    assert len(patches) >= 1
+    assert ":root" in patches[0]["replacement"]
