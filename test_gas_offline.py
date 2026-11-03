@@ -826,12 +826,16 @@ def test_patch_and_replace_with_auto_deploy(mock_client):
         "description": "Auto deployed via GasClient"
     })
 
-    # patch_code with deploy=True
-    res_patch = mock_client.patch_code("dummy_id", "code", "var a = 1;", "var a = 2;", deploy=True)
+    # patch_code with deploy=True, verify=True
+    mock_client.verify_frontend = MagicMock(return_value={"status": "success", "indexeddb_count": 5})
+    res_patch = mock_client.patch_code("dummy_id", "code", "var a = 1;", "var a = 2;", deploy=True, verify=True)
     assert res_patch["status"] == "success"
     assert "deployment" in res_patch
     assert res_patch["deployment"]["versionNumber"] == 42
+    assert "verify" in res_patch
+    assert res_patch["verify"]["status"] == "success"
     mock_client.deploy.assert_called_once()
+    mock_client.verify_frontend.assert_called_once()
 
     # replace_function with deploy=True
     mock_client.deploy.reset_mock()
@@ -2633,3 +2637,279 @@ def test_verify_frontend_indexeddb_lifecycle(mock_client):
     assert res_fixed["success"] is True
     assert res_fixed["test_result"] == 1
     assert res_fixed["db_records_count"] == 1
+
+
+def test_patch_code_with_dev_mode_and_cache_ttl(mock_client):
+    content = {
+        "files": [
+            {"name": "Index", "type": "HTML", "source": "<div>hello</div>"}
+        ]
+    }
+    mock_client.get_content = MagicMock(return_value=content)
+    mock_client._put_content = MagicMock()
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    mock_client.resolve_webapp_url = MagicMock(return_value="https://script.google.com/macros/s/dummy_id/dev")
+    mock_client.deploy = MagicMock()
+
+    # patch_code with dev=True (deploy は呼ばれず、dev_url が返ること)
+    res = mock_client.patch_code("dummy_id", "Index", "<div>hello</div>", "<div>world</div>", dev=True)
+    assert res["status"] == "success"
+    assert res.get("dev_mode") is True
+    assert res.get("dev_url") == "https://script.google.com/macros/s/dummy_id/dev"
+    mock_client.deploy.assert_not_called()
+    mock_client.resolve_webapp_url.assert_called_once_with("dummy_id", dev=True)
+
+
+def test_inspect_ui_offline_and_mcp_command(mock_client):
+    content = {
+        "files": [
+            {
+                "name": "Index",
+                "type": "HTML",
+                "source": "<html><body><h1 style='color:#ffffff;background:#000000;'>OK Title</h1></body></html>"
+            }
+        ]
+    }
+    mock_client.get_content = MagicMock(return_value=content)
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+
+    # 実機 Playwright の inspect_ui を直接実行テスト
+    res = mock_client.inspect_ui("dummy_id", filename="Index", theme="white", screenshot=False, check_contrast=True)
+    assert res["success"] is True
+    assert res["contrast_passed"] is True
+    assert res["total_elements_checked"] >= 1
+    assert len(res["dangers"]) == 0
+
+    # gas_mcp_server 経由のコマンド呼び出し
+    with patch("gas_mcp_server.get_client", return_value=mock_client):
+        out = gas_mcp_server.gas("inspect-ui dummy_id Index --theme dark")
+        assert "inspect_ui" in out
+        assert "[PASS]" in out
+
+
+def test_xray_offline_and_mcp_command(mock_client):
+    content = {
+        "files": [
+            {
+                "name": "Index",
+                "type": "HTML",
+                "source": """<!DOCTYPE html>
+<html>
+<body>
+  <button id="sendBtn" onclick="handleClick()">送信</button>
+  <button id="deadBtn">未実装</button>
+  <script>
+    function handleClick() {
+      google.script.run.withSuccessHandler(res => console.log(res)).serverApiFunc();
+    }
+  </script>
+</body>
+</html>"""
+            },
+            {
+                "name": "Code",
+                "type": "SERVER_JS",
+                "source": """function doGet() {
+  return HtmlService.createHtmlOutputFromFile('Index');
+}
+
+function serverApiFunc() {
+  return "OK";
+}
+
+function unusedServerFunc() {
+  return "Dead";
+}
+"""
+            }
+        ]
+    }
+    mock_client.get_content = MagicMock(return_value=content)
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+
+    res = mock_client.xray("dummy_id", filename="Index")
+    assert res["status"] == "healthy"
+    assert len(res["ghost_rpcs"]) == 0
+    assert len(res["dead_server_functions"]) == 1
+    assert res["dead_server_functions"][0]["name"] == "unusedServerFunc"
+    assert len(res["ui_call_paths"]) == 2
+    assert res["ui_call_paths"][0]["front_handler"] == "handleClick"
+    assert res["ui_call_paths"][0]["rpc_calls"] == ["serverApiFunc"]
+    assert res["ui_call_paths"][1]["front_handler"] == "(none)"
+    assert "レントゲン解析" in res["markdown_report"]
+
+    with patch("gas_mcp_server.get_client", return_value=mock_client):
+        # MCP ツール関数 xray
+        out = gas_mcp_server.xray("dummy_id")
+        assert "serverApiFunc" in out
+        assert "unusedServerFunc" in out
+
+        # gas() コマンドディスパッチャ
+        out_gas = gas_mcp_server.gas("xray dummy_id")
+        assert "serverApiFunc" in out_gas
+
+
+def test_clone_web_offline(mock_client):
+    mock_html = "<html><head><title>Test Tool</title></head><body><h1>Hello</h1></body></html>"
+    with patch("requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.text = mock_html
+        mock_resp.status_code = 200
+        mock_resp.apparent_encoding = "utf-8"
+        mock_get.return_value = mock_resp
+
+        mock_client.create_project = MagicMock(return_value={"scriptId": "new_sid", "title": "Test Tool"})
+        mock_client.resolve_script_id = MagicMock(side_effect=ValueError("Not found"))
+        mock_client._put_content = MagicMock()
+        mock_client.deploy = MagicMock(return_value={"webAppUrl": "https://script.google.com/macros/s/new_sid/exec"})
+        mock_client.xray = MagicMock(return_value={"markdown_report": "🟢 [HEALTHY]"})
+
+        res = mock_client.clone_web("https://example.com/tool", project_name="Test Tool", deploy=True)
+        assert res["status"] == "success"
+        assert res["script_id"] == "new_sid"
+        assert res["webapp_url"] == "https://script.google.com/macros/s/new_sid/exec"
+        mock_client.create_project.assert_called_once_with("Test Tool")
+        mock_client._put_content.assert_called_once()
+        mock_client.deploy.assert_called_once()
+
+
+def test_clean_dead_offline(mock_client):
+    mock_client.xray = MagicMock(return_value={
+        "dead_server_functions": [
+            {"name": "deadFn", "file": "Code", "line": 5}
+        ],
+        "markdown_report": "🟢 [HEALTHY]"
+    })
+    content = {
+        "files": [
+            {
+                "name": "Code",
+                "type": "SERVER_JS",
+                "source": "function liveFn() {\n  return 1;\n}\n\nfunction deadFn() {\n  return 2;\n}\n"
+            }
+        ]
+    }
+    mock_client.get_content = MagicMock(return_value=content)
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    mock_client._save_backup = MagicMock(return_value="backup/path")
+    mock_client._put_content = MagicMock()
+    mock_client._validate_syntax = MagicMock(return_value="valid")
+
+    # dry-run テスト
+    res_dry = mock_client.clean_dead("dummy_id", dry_run=True)
+    assert res_dry["status"] == "dry_run"
+    assert res_dry["deleted_count"] == 1
+    mock_client._put_content.assert_not_called()
+
+    # 本番削除テスト
+    res = mock_client.clean_dead("dummy_id", dry_run=False)
+    assert res["status"] == "success"
+    assert res["deleted_count"] == 1
+    mock_client._put_content.assert_called_once()
+
+
+def test_trace_rpc_offline(mock_client, tmp_path):
+    """REA trace_rpc のオフライン検証"""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+      <body>
+        <script>
+          window.addEventListener('load', () => {
+            google.script.run.withSuccessHandler(res => {
+              document.body.setAttribute('data-loaded', 'true');
+            }).getUserInfo();
+          });
+        </script>
+      </body>
+    </html>
+    """
+    mock_file = tmp_path / "mock.json"
+    res = mock_client.trace_rpc(
+        filename=str(tmp_path / "index.html"),
+        duration_sec=0.5,
+        mock_data={"getUserInfo": {"user": "test_user"}},
+        save_mock=True,
+        mock_file=str(mock_file)
+    )
+    # playwright があればキャプチャ成功
+    if res.get("success"):
+        assert res["total_captured"] >= 1
+        assert "getUserInfo" in res["unique_rpcs"]
+        assert mock_file.exists()
+
+
+def test_diff_behavior_offline(mock_client):
+    """REA diff_behavior の破壊的変更検知検証"""
+    # ベース: 旧バージョン
+    base_content = {
+        "files": [
+            {"name": "Code", "type": "SERVER_JS", "source": "function deleteMsg(id) {}\nfunction getList(cnt) {}"},
+            {"name": "Index", "type": "HTML", "source": "<script>google.script.run.deleteMsg(1); google.script.run.getList(10);</script>"}
+        ]
+    }
+    # 現在: deleteMsg が削除され、getList の必須引数が 1 -> 2 に増加
+    curr_content = {
+        "files": [
+            {"name": "Code", "type": "SERVER_JS", "source": "function getList(cnt, mode) {}"},
+            {"name": "Index", "type": "HTML", "source": "<script>google.script.run.deleteMsg(1); google.script.run.getList(10);</script>"}
+        ]
+    }
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    mock_client.get_content = MagicMock(return_value=curr_content)
+    mock_client.get_version_content = MagicMock(return_value=base_content)
+
+    res = mock_client.diff_behavior("dummy_id", base_version=1)
+    assert res["success"] is True
+    assert res["status"] == "BREAKING"
+    assert res["breaking_count"] >= 1
+    # 削除関数呼び出しと引数不足の検知確認
+    types = [b["type"] for b in res["breaking_changes"]]
+    assert "REMOVED_FUNCTION_CALLED" in types or "INSUFFICIENT_ARGUMENTS" in types
+
+
+def test_build_ledger_offline(mock_client):
+    """REA build_ledger のモダン要件採点検証"""
+    modern_content = {
+        "files": [
+            {
+                "name": "Code",
+                "type": "SERVER_JS",
+                "source": "function doGet() {}\nfunction getData() {\n  try {\n    return { success: true };\n  } catch(e) {\n    return { error: e.message };\n  }\n}"
+            },
+            {
+                "name": "Index",
+                "type": "HTML",
+                "source": """
+                <!DOCTYPE html>
+                <html>
+                  <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <style>
+                      :root { --bg: #fff; }
+                      body.dark-mode { --bg: #000; }
+                      @media (max-width: 600px) { body { font-size: 14px; } }
+                    </style>
+                  </head>
+                  <body>
+                    <span id="syncBadge">同期中</span>
+                    <script>
+                      const req = indexedDB.open('test_db', 1);
+                      function load() {
+                        google.script.run.withSuccessHandler(r => {}).withFailureHandler(e => {}).getData();
+                      }
+                    </script>
+                  </body>
+                </html>
+                """
+            }
+        ]
+    }
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    mock_client.get_content = MagicMock(return_value=modern_content)
+
+    res = mock_client.build_ledger("dummy_id")
+    assert res["success"] is True
+    assert res["score"] == 100
+    assert res["grade"] == "GOLD"
+    assert res["passed_requirements"] == 7

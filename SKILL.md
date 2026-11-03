@@ -7,7 +7,13 @@ description: Google Apps Script (GAS) のプロジェクトを clasp やブラ�
 
 Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp pull/push` を使わず）、`gas-manager` の MCP ツールで Google Apps Script API をメモリ直撃して操作する。
 
-## 1. 最速・最短手数の基本原則
+## 1. 最速・最短手数の基本原則（初動遅延の完全撲滅・最短2ターン完結）
+
+**【超重要】通常のコード改修・UI調整は「最短2ターン」で完結させます。**
+- **ターン 1**: `outline` / `get_function` / `get_file` で修正対象をピンポイント取得（余計なファイル閲覧や長考は禁止）。
+- **ターン 2**: `patch_function` または `patch_code`（＋`deploy=True`）で一撃反映。
+- **報告**: 完了報告は成否と変更箇所を3〜5行以内で即座に返却。
+- **不要な重量級ツールの連打厳禁**: 指示されていない `inspect_ui`、`verify_frontend`、`diagnose`、`ledger` などの重いツールを勝手に回すことは全面禁止。
 
 1. **全文取得（`get_file` 全文）より先に構造把握（`outline` / `grep`）**:
    - いきなり長いファイル全文を読まず、まず `gas("outline <project>")`（または `list_functions`）や `gas("grep <project> <keyword>")`（または `search_code`）で対象ファイルと関数名・行番号を特定する。
@@ -20,18 +26,9 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
    - 再デプロイせずに最新 HEAD コードの `doGet` / `doPost` を試すときは `call_webapp(url="<project>", dev=True)` を使う。
 4. **任意のサーバー関数の単体リモート実行・ログ回収（`run_function` / `run`）**:
    - 新しく書いた関数やロジックを実機テストしたいときは、`run_function(project, func_name, args)`（CLI: `py gas.py run <project> <func_name> '[引数]'`）を使う。GCP設定不要で V8 ランタイム上の戻り値・`console.log` / `Logger.log`・例外スタックトレースを直接回収できる。
-5. **改修前後の深層健康診断（`diagnose`）とフロント実機シミュレーション（`verify_frontend`）**:
-   - 改修後は `diagnose(project)` を 1 回撃ち、以下の項目を一括裏取りする：
-     1. 全ファイル構文検査（Node.js `vm.Script` 一括バッチ検査）
-     2. マニフェスト（`appsscript.json`）構文・設定検査
-     3. トップレベル関数名・グローバル変数（`const`/`let`/`class`）の重複衝突
-     4. HTML `google.script.run` の未定義サーバー関数呼び出し・末尾 `_` エラー・動的ブラケット呼出・引数個数ミスマッチ警告
-     5. `HtmlService` テンプレートファイル欠落（リンク切れ）
-     6. ループ内の重い GAS API 呼び出し（`getAttachments`・`getPlainBody`・`base64Encode`・1セル操作等）
-     7. サーバー関数の未使用引数（UI入力値の無視バグ）
-     8. フロントエンド・キャッシュ・DOM警告（IndexedDB put のみのゾンビキャッシュ、iframe `document.write` 同期描画ブロック、未定義インラインイベント）
-   - **HTML / クライアント JS を改修した際の必須関所**:
-     - 単なる静的構文チェックだけでなく、`verify_frontend(project, filename="Index", test_js="...")`（CLI: `py gas.py verify-ui <project> [file] --test-js "..."`）を実行し、インメモリ IndexedDB / DOM / RPC 環境上でデータの保存・削除・再読込ライフサイクルが破綻せず正しく永続化・パージされることを必ず実機検証する。
+5. **深層健康診断（`diagnose`）とフロント実機シミュレーション（`verify_frontend`）は必要時・指示時のみ**:
+   - 通常のピンポイント修正・UI/CSS調整では、`patch_code` / `patch_function` に内蔵された「自動構文検査」だけで十分安全に完了します（毎回の診断実行は遅延の原因となるため不要）。
+   - 大規模な改修後や全体的な不具合調査、または「健康診断して」「フロントをテストして」と明示指示された時のみ、`diagnose(project)` や `verify_frontend(project)` を実行してください。
 6. **ローカルフォルダ双方向同期（`pull` / `push` / `sync_status`）**:
    - Git管理やVSCode編集を行いたい場合は、双方向同期コマンドを使う。
    - `pull(project, local_dir)`（CLI: `py gas.py pull <project> [dir]`）: クラウドの全コードを `.gs` / `.html` / `appsscript.json` としてローカルへ書き出す。
@@ -49,6 +46,10 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 - **ターン 3（実機テスト・健康診断・本番デプロイ）**:
   - 関数単体テスト・ベンチマーク関所: `benchmark_function(project="...", func_name="...", args="[...]")`
   - 健康診断: `diagnose(project="...")`
+  - 死にコード一括削除 (レントゲン解析で検出された孤立関数を自動安全削除): `clean_dead(project="...", dry_run=False)` / CLI: `py gas.py clean-dead <project> [--dry-run]`
+  - Webクローン化 (外部Webページを解析し自立型GAS Webアプリとしてクローン・デプロイ): `clone_web(url="...", project="...")` / CLI: `py gas.py clone-web <url> [project]`
+  - レントゲン解析 (E2Eコールパス・幽霊関数・死にコード検知): `xray(project="...", filename="Index")` / CLI: `py gas.py xray <project>`
+
   - 本番反映: `deploy(project="...", description="...")`
 
 ### 万一のロールバック（ローカル退避 ＆ Googleクラウド版履歴の二重保険）
@@ -80,3 +81,106 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 3. **自律カイゼン反復（人間への途中確認不要）**:
    - 判定が `[FAILED]`（実行例外・期待値不一致）または `[NEEDS_IMPROVEMENT]`（目標速度超過・ループ内APIボトルネック警告あり）の場合は、出力された **「カイゼン処方箋 (Next Actions)」** に従って直ちに `patch_function` で修正し、再度 `benchmark_function` を叩く。
    - 判定が **`[PASS] (スコア: 100/100点)`** に到達するまで自律的にループを回し切り、合格した実測ミリ秒とスコアを添えて完了報告する。
+
+
+## 5. UI/CSS改修の爆速一撃モード（最速・最短手数の原則）
+
+フロントエンド（HTML/CSS/JS）の改善・見た目のブラッシュアップを行う際は、多段の対話往復や重い検査の連打を排し、以下の**「爆速一撃モード」**で完走する：
+
+1. **`dry_run` スキップと `deploy=True` の一撃同時直撃**:
+   - `patch_code` には「自動バックアップ」と「構文自動検査」が備わっているため、UI/CSS修正では `dry_run` を挟まず初手から `patch_code(project, filename, patches=..., deploy=True)` を実行する。
+   - `verify=True`（フロント実機シミュレーション）や `inspect_ui`（Chromiumレンダリング）は普段は不要（明示指示された時のみ使用）。パッチ適用・自動デプロイのみを1回のツール呼び出しで最速（1〜2秒）で完結させる。
+2. **特定済みプロジェクトの点呼ゼロ秒化**:
+   - 会話セッション内で一度特定したプロジェクトは、プロジェクトID一覧（`list_projects`）やファイル一覧（`list_files`）の再取得を一切スキップし、0秒で該当ファイル・対象セレクタへ直撃する。
+3. **「作って即提示」スタイル（手戻りゼロの最速プロトタイピング）**:
+   - 方針が見えた時点で直ちにコード反映＆デプロイまで済ませ、「最新バージョンを実機（ブラウザ）で見ていただきながら微調整する」型で進め、人間の待ち時間を最小化する。
+
+
+## 6. 参考画像からのデザイン一撃着せ替えプロトコル（0秒インポート）
+
+ユーザーから「こんなデザインにして」「この画像の雰囲気を取り入れて」とスクショ画像が提示された際は、以下の最速プロトコルで直ちに実機反映する：
+
+1. **視覚パラメータの0秒逆算**:
+   - 提示画像から以下のデザイン値を即座に抽出・数値化する：
+     - 背景色（アプリ全体 `--bg-body` / コンテナ `--bg-container` / テーブル領域 `--table-area-bg`）
+     - カード色・枠線（`--card-bg`, `--card-border`）
+     - カード角丸・すき間（`--card-radius: Xpx`, `--card-gap: Ypx`）
+     - ホバー色・枠線（`--card-hover-bg`, `--card-hover-border`）
+     - 選択行アクティブ枠（`--card-selected-bg`, `--card-selected-border`）
+     - テキスト階層（主文字色 `--text-main` / 補足文字色 `--text-muted`）
+2. **CSS変数（`:root` / `body.dark-mode`）の一撃置換**:
+   - 構造コードは一切触らず、先頭のCSS変数ブロックのみをピンポイントで置換する。
+   - `patch_code(project, "Index", patches=..., deploy=True)`（または `dev=True`）を一発発火。
+3. **即座の実機提示**:
+   - パッチ完了後、3行以内で「反映したデザインパラメータ」を伝え、ブラウザのリロードを促して実物で確認いただく。
+
+
+## 7. Webアプリ特化「プロのデザイン鑑識眼（見る目）」の6大解剖掟
+
+参考画像やUIデザインの要望を受けた際、表面的な色合わせだけの「素人AI実装」を厳禁とし、プロのWebデザイナーの視点から以下の**6大視覚レイヤー**へ強制分解して読み解き、洗練されたSaaSクオリティ（Linear/Notion/Stripe級）へと昇華させる：
+
+1. **タイポグラフィの階層秩序（Typography Hierarchy）**:
+   - 主役（件名・タイトル）: `font-weight: 500〜600`、明瞭な主文字色（`#0f172a` / `#f8fafc`）。
+   - 準主役（差出人・タグ）: `font-weight: 500`、中間のコントラスト。
+   - 脇役（日付・付随メタ）: 控えめな文字色（`--text-muted`）、フォントサイズ 11.5〜12px、微小な字間（`letter-spacing: 0.02em`）。
+   - ※単調な原色黒（#000000）を排し、品のあるスレート系タイポグラフィで視線を自然に誘導する。
+2. **余白の呼吸とリズム（Spacing & 8px Grid）**:
+   - 窮屈さを消すカード内パディング（左右 14〜16px、上下 10〜12px）。
+   - アイテム同士の美しい隙間（`border-spacing: 0 8px` / `gap: 8px`）。
+   - 8pxの倍数を基調とした秩序あるスペーシングにより、情報密度と見やすさを両立する。
+3. **微細ボーダーと半透明サーフェス（Subtle Borders & Elevation）**:
+   - パキッとした無骨な不透明線を排し、背景に溶け込む半透明ボーダー（ダークモード: `rgba(255, 255, 255, 0.08)`、ライトモード: `#e2e8f0`）を採用。
+   - 外枠コンテナとカード背景の明度差をわずか 5〜8% に抑え、落ち着いた上質感を演出する。
+4. **繊細な陰影と空気感（Soft Shadows）**:
+   - ベタっとした濃い黒影を厳禁とし、空気感のある繊細な多層シャドウを敷く：
+     `box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.02);`
+5. **角丸の調和秩序（Border Radius Hierarchy）**:
+   - 外枠コンテナ: `12px`
+   - アイテム行・カード: `8px`
+   - ボタン・入力ボックス: `6px`
+   - バッジ・タグ: `4px` または `9999px`（完全カプセル型）
+   - 要素の面積に合わせた自然な丸みのグラデーションを守る。
+6. **マイクロインタラクション（Micro-interactions）**:
+   - 静止画のような瞬間切り替えを排し、`transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);` でしっとり追従。
+   - ホバー時にカードがほんのり 1px 浮遊する `transform: translateY(-1px);`。
+   - 選択アクティブ時は、鮮やかなスカイブルー枠（`border: 2px solid #38bdf8`）と微弱なハイライトで直感的な操作感を実現する。
+
+## 8. 実機画面監査とコントラスト自動監査（inspect-ui: 明示指示時のみ）
+
+**【重要・速度最優先の掟】`inspect_ui`（Playwright実機レンダリング・全ボタン踏破・コントラスト監査）は重量級ツールです。通常のコード修正・UI改修時に勝手に実行することは厳禁とします。「画面を確認して」「コントラストをチェックして」「スクショを撮って」とユーザーから明示指示された時のみ実行してください。**
+
+1. **指示があった場合の実行方法**:
+   - `gas("inspect-ui <project> [file] [--theme <theme>] [--all-themes]")`
+   - Playwright による Chromium ヘッドレス実機レンダリングにより、以下を自動検証する：
+     - **WCAG 2.1 コントラスト監査**: 文字色・背景色のコントラスト比を計算し、視認性不具合を検出。
+     - **全ボタン踏破・画面遷移**: 画面内のボタンクリックと表示変化を追跡。
+     - **スクリーンショット撮影**: 実画面の画像を保存し、ユーザーへ提示。
+
+
+## 9. REA思想の高度解析武器群 (trace-rpc, diff-behavior, ledger 等: 明示指示時のみ)
+
+※以下の高度解析ツール群は、通常のコード改修時には呼び出さず、ユーザーから調査・解析・大掃除・移行を明示指示された時のみ使用します（AIによる勝手な自動実行を厳禁）。
+
+1. **`trace_rpc`（実行時RPC通信スパイ ＆ 完全オフラインモック生成）**:
+   - `gas("trace-rpc <project_or_url> [file] [--duration <sec>]")`
+   - 実機ブラウザでアプリを操作中、`google.script.run` でやり取りされた通信を記録し、ローカルモックを作成。
+
+2. **`diff_behavior`（破壊的変更・スキーマ不整合検知）**:
+   - `gas("diff-behavior <project> [--target <target_id>] [--version <ver>]")`
+   - コード変更による「振る舞いの変化・破壊的変更」を静的AST解析で監査。大規模リファクタリング時に使用。
+
+3. **`ledger`（モダンGAS再構築・健全性義務台帳）**:
+   - `gas("ledger <project> [file]")`
+   - Webアプリとして備えるべき必須要件の充足状況をチェックリスト化し、スコアを算出。
+
+4. **`clean_dead`（死にコード一括削除）**:
+   - `gas("clean-dead <project>")`
+   - 画面から使われていない孤立サーバー関数を一括安全削除。
+
+5. **`clone_web`（Webサイトクローン化）**:
+   - `gas("clone-web <url>")`
+   - 外部Webページを解析し自立型GAS Webアプリとしてクローン・デプロイ。
+
+6. **`xray`（深層レントゲン解析）**:
+   - `gas("xray <project>")`
+   - E2Eコールパス、未定義RPC、死にコードを可視化。

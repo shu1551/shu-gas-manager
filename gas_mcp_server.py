@@ -7,6 +7,7 @@ Google Apps Script (GAS) を AI から直接読み書き・ピンポイント差
 
 import sys
 import os
+import re
 import shlex
 import json
 from pathlib import Path
@@ -141,11 +142,12 @@ def list_functions(project: str, filename: str = "") -> str:
 
 @mcp.tool()
 @safe_tool
-def patch_code(project: str, filename: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False) -> str:
+def patch_code(project: str, filename: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False, verify: bool = False, dev: bool = False) -> str:
     """ファイル内の特定コード文字列を置換し、Google クラウドへ反映します。
     置換前に自動バックアップと Node.js vm による構文検査を実施します。
     patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
     deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    verify=True を指定すると、反映直後にフロントエンド実機シミュレーション（verify_frontend）まで一括実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -157,14 +159,32 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
         dry_run: クラウドへの反映を行わず差分のみ確認するか (デフォルト: False)
         patches: 複数ペアの一括置換を行う場合の JSON 文字列 (デフォルト: "")
         deploy: 反映完了後に本番Webアプリを自動デプロイするか (デフォルト: False)
+        verify: 反映完了後にフロントエンド実機シミュレーションを一括実行するか (デフォルト: False)
     """
     client = get_client()
-    res = client.patch_code(project, filename, target=target, replacement=replacement, replace_all=replace_all, force=force, dry_run=dry_run, patches=patches if patches else None, deploy=deploy)
+    kwargs = dict(
+        target=target, replacement=replacement, replace_all=replace_all,
+        force=force, dry_run=dry_run, patches=patches if patches else None, deploy=deploy
+    )
+    if verify:
+        kwargs["verify"] = True
+    if dev:
+        kwargs["dev"] = True
+    res = client.patch_code(project, filename, **kwargs)
     diff_out = f"\n--- 差分 (Diff) ---\n{res['diff']}" if res.get("diff") else ""
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
         dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+    elif res.get("dev_mode"):
+        dep_msg = f"\nHEAD即時反映 (dev): {res.get('dev_url', 'N/A')} (バージョン採番スキップ・高速完了)"
+    verify_msg = ""
+    if res.get("verify"):
+        v = res["verify"]
+        if v.get("status") == "success":
+            verify_msg = f"\nフロント検証: [SUCCESS] 検証成功 (IndexedDB: {v.get('indexeddb_count', 0)}件)"
+        else:
+            verify_msg = f"\nフロント検証: [WARN] {v.get('message', '検証警告あり')}"
 
     if res.get("status") == "dry_run":
         return (
@@ -182,6 +202,7 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
         f"事前バックアップ: {res['backup_file']}"
         f"{diff_out}"
         f"{dep_msg}"
+        f"{verify_msg}"
     )
 
 @mcp.tool()
@@ -1061,6 +1082,159 @@ def verify_frontend(project: str, filename: str = "Index", test_js: str = "") ->
 
 @mcp.tool()
 @safe_tool
+def inspect_ui(
+    project: str = "",
+    filename: str = "Index",
+    url: str = "",
+    theme: str = "",
+    all_themes: bool = False,
+    actions_json: str = "",
+    screenshot: bool = True,
+    check_contrast: bool = True,
+    check_axe: bool = True,
+    baseline: str = "",
+    device: str = "desktop",
+    width: int = 1280,
+    height: int = 800
+) -> str:
+    """GAS Webアプリの実機画面をヘッドレスブラウザでレンダリングし、
+    スクリーンショット撮影（目視裏取り）、WCAG コントラスト比、axe-core 総合品質、および画像差分（Visual Regression）を自動監査します。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        filename: 対象の HTML ファイル名 (既定: "Index")
+        url: WebアプリのURL (省略時はGASソースをモック展開してローカル実機レンダリング)
+        theme: テーマ指定 ("white", "dark", "green" 等)
+        all_themes: True の場合、代表3テーマ (white / dark / green) を一括撮影・監査
+        actions_json: 操作リストのJSON文字列 (例: '[{"click":"#btnSettings"}]')
+        screenshot: スクリーンショットを撮影するか (既定: True)
+        check_contrast: WCAG コントラスト比の自動監査を行うか (既定: True)
+        check_axe: Google/MS標準 axe-core によるプロ級アクセシビリティ自動監査を行うか (既定: True)
+        baseline: 比較元の基準スクリーンショット画像パス (指定時は画像差分・変化率を自動判定)
+        width: ビューポート幅 (既定: 1280)
+        height: ビューポート高さ (既定: 800)
+    """
+    client = get_client()
+    actions = None
+    if actions_json and actions_json.strip():
+        import ast
+        try:
+            actions = json.loads(actions_json)
+        except Exception:
+            try:
+                actions = ast.literal_eval(actions_json)
+            except Exception:
+                actions = [{"eval": actions_json.strip()}]
+        if isinstance(actions, dict):
+            actions = [actions]
+
+    res = client.inspect_ui(
+        script_id=project or None,
+        filename=filename,
+        url=url or None,
+        theme=theme or None,
+        all_themes=all_themes,
+        actions=actions,
+        screenshot=screenshot,
+        check_contrast=check_contrast,
+        check_axe=check_axe,
+        baseline_screenshot=baseline or None,
+        width=width,
+        height=height
+    )
+
+    lines = [
+        f"=== GAS Webアプリ実機画面監査 (inspect_ui): [{project or url}] ===",
+        f"総合判定: {'[PASS] 合格' if res.get('contrast_passed') else '[WARNING] コントラスト不適合あり'}",
+        f"検査対象要素数: {res.get('total_elements_checked', 0)}件",
+        f"テストテーマ: {', '.join(res.get('themes_tested', []))}"
+    ]
+
+    dangers = res.get("dangers", [])
+    warnings = res.get("warnings", [])
+
+    if dangers:
+        lines.append(f"\n【重大な視認性不具合 (不可視・コントラスト比 2.5:1 未満)】: {len(dangers)}件")
+        for d in dangers[:5]:
+            lines.append(f"  - [{d.get('theme', 'default')}] {d.get('selector')}: \"{d.get('text')}\" (比率 {d.get('ratio')}:1, 文字 {d.get('fg')} / 背景 {d.get('bg')})")
+
+    if warnings:
+        lines.append(f"\n【軽微なコントラスト警告 (4.5:1 未満)】: {len(warnings)}件")
+        for w in warnings[:5]:
+            lines.append(f"  - [{w.get('theme', 'default')}] {w.get('selector')}: \"{w.get('text')}\" (比率 {w.get('ratio')}:1, 文字 {w.get('fg')} / 背景 {w.get('bg')})")
+
+    axe_violations = res.get("axe_violations", [])
+    if axe_violations:
+        lines.append(f"\n【axe-core アクセシビリティ・UI品質警告 ({len(axe_violations)}件)】:")
+        for av in axe_violations[:5]:
+            lines.append(f"  - [{av.get('theme')}] {av.get('id')} ({av.get('impact')}): {av.get('help')} ({av.get('nodes_count')}要素)")
+
+    v_diff = res.get("visual_diff")
+    if v_diff:
+        if v_diff.get("has_diff"):
+            lines.append(f"\n【画像差分 (Visual Diff 検知)】: 差分率 {v_diff.get('diff_ratio_pct')}% ({v_diff.get('diff_pixels'):,} px)")
+            if v_diff.get("diff_image"):
+                lines.append(f"  - 差分ヒートマップ: {v_diff.get('diff_image')}")
+        else:
+            lines.append("\n【画像差分 (Visual Diff)】: 差分なし (完全一致)")
+
+    if res.get("screenshots"):
+        lines.append(f"\n【実機スクリーンショット物証 ({len(res['screenshots'])}枚)】:")
+        for s in res["screenshots"]:
+            lines.append(f"  - {s}")
+
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def clean_dead(project: str, dry_run: bool = False, deploy: bool = False) -> str:
+    """レントゲン解析で検出された孤立した死にコード（どのUIからもサーバー内部からも呼ばれていない関数）を一括で安全に自動削除します。
+    事前バックアップ保存、構文チェック、削除後レントゲン再検査を全自動で行います。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        dry_run: 削除を実行せず、差分（diff）プレビューのみを表示するかどうか（デフォルト: False）
+        deploy: 削除後に自動で新バージョンをデプロイするかどうか（デフォルト: False）
+    """
+    client = get_client()
+    res = client.clean_dead(project, dry_run=dry_run, deploy=deploy)
+    return res["markdown_report"]
+
+
+@mcp.tool()
+@safe_tool
+def clone_web(url: str, project: str = "", deploy: bool = True) -> str:
+    """指定した外部 Web ページ（ツールやサイト）を解析し、CSS/JS/画像をバンドルした自立型 GAS Web アプリとして自動作成・デプロイします。
+    デプロイ直後に自動でレントゲン解析（xray）を実行し、クローン後のアプリの健全性を報告します。
+
+    Args:
+        url: クローン元の Web ページ URL
+        project: 作成する GAS プロジェクト名（省略時はページの title を使用）
+        deploy: 自動で本番デプロイを行い Web アプリ URL を発行するかどうか（デフォルト: True）
+    """
+    client = get_client()
+    res = client.clone_web(url, project_name=project or None, deploy=deploy)
+    return res["markdown_report"]
+
+
+@mcp.tool()
+@safe_tool
+def xray(project: str, filename: str = "Index") -> str:
+    """指定した GAS プロジェクトのフロントエンド（HTML）とバックエンド（SERVER_JS）を深層リバースエンジニアリング（レントゲン解析）します。
+    UI要素から発火するイベント、フロントJS関数、裏で叩かれるGAS API（google.script.run）のE2Eコールパスを完全マッピングし、
+    未定義RPC（本番クラッシュ確定）、孤立した死にコード、未実装UI、IndexedDB/ストレージキーを1秒で暴きます。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        filename: 対象のHTMLファイル名（拡張子なし、デフォルト: Index）
+    """
+    client = get_client()
+    res = client.xray(project, filename=filename)
+    return res["markdown_report"]
+
+
+@mcp.tool()
+@safe_tool
 def setup_check(open_browser: bool = False) -> str:
     """ガスマネージャーの動作環境（Node.js・認証情報・Google API 疎通状態）を点検し、案内を返却します。
     セットアップ未完了の場合は必要な手順（clasp 導入・API 有効化）を自動案内します。
@@ -1084,6 +1258,121 @@ def setup_check(open_browser: bool = False) -> str:
         lines.append("【状態 / 手順】")
         for st in res["steps"]:
             lines.append(f"  {st}")
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def trace_rpc(
+    target: str,
+    filename: str = "Index",
+    duration: float = 5.0,
+    actions: str = "",
+    mock_file: str = ""
+) -> str:
+    """REA observe_web_execution 思想:
+    GAS Webアプリの実行時 RPC 通信 (google.script.run) を自動スパイ＆キャプチャ。
+    引数、戻り値、所要時間を全件記録し、ローカル完全オフラインテスト用 mock fixtures を自動生成します。
+
+    Args:
+        target: プロジェクト名、スクリプトID、またはWebアプリURL
+        filename: 対象HTMLファイル名 (デフォルト: Index)
+        duration: 観測待機秒数 (デフォルト: 5.0秒)
+        actions: 実行操作JSON (例: '[{"click": "#btn"}]')
+        mock_file: モック保存ファイル名 (省略時は .mocks/{id}_mock.json)
+    """
+    client = get_client()
+    acts = None
+    if actions:
+        import json
+        try:
+            acts = json.loads(actions)
+        except Exception:
+            pass
+    url = target if target.startswith("http") else None
+    pid = None if url else target
+    res = client.trace_rpc(pid, filename=filename, url=url, duration_sec=duration, actions=acts, mock_file=mock_file or None)
+    if not res.get("success"):
+        return f"[ERROR] {res.get('error')}"
+    lines = [
+        f"=== 🕵️ GAS 実行時RPC通信スパイ (trace_rpc): [{res['target']}] ===",
+        f"キャプチャ総数: {res['total_captured']}件 | ユニークRPC: {len(res['unique_rpcs'])}種類 ({', '.join(res['unique_rpcs']) if res['unique_rpcs'] else 'なし'})"
+    ]
+    if res.get("mock_file"):
+        lines.append(f"モックファイル保存: {res['mock_file']} ({res.get('mock_count', 0)}件保存)")
+    if res.get("traces"):
+        lines.append("\n--- 📡 RPC 通信履歴 ---")
+        for t in res["traces"]:
+            status = f"{t.get('duration_ms', 0)}ms" if not t.get("error") else f"ERR: {t.get('error')}"
+            src = f"[{t.get('source', '')}]"
+            lines.append(f"  {src:<8} {t.get('rpc')}({t.get('args', [])}) -> {status}")
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def diff_behavior(
+    project: str,
+    target: str = "",
+    version: int = None,
+    filename: str = "Index"
+) -> str:
+    """REA find_changed_behavior 思想:
+    GASプロジェクトのコード変更による「振る舞いの変化・破壊的変更」を自動監査。
+    引数不足や削除関数のフロント呼び出し（即死バグ）をデプロイ前に100%事前ブロックします。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        target: 比較対象の別プロジェクトID (省略時は直近バックアップまたは指定バージョン)
+        version: 比較対象の過去バージョン番号
+        filename: 対象HTMLファイル名 (デフォルト: Index)
+    """
+    client = get_client()
+    res = client.diff_behavior(project, base_version=version, target_script_id=target or None, filename=filename)
+    if not res.get("success"):
+        return f"[ERROR] {res.get('error')}"
+    status_icon = "🟢 [PASS] 安全" if res["status"] == "PASS" else ("🔴 [BREAKING] 破壊的変更あり" if res["status"] == "BREAKING" else "🟡 [WARNING] 警告あり")
+    lines = [
+        f"=== 🔍 振る舞い差分・破壊的変更監査 (diff_behavior): [{res['script_id']}] ===",
+        f"判定: {status_icon}",
+        f"破壊的変更: {res['breaking_count']}件 | 警告: {res['warning_count']}件 | 安全な変更: {res['safe_count']}件"
+    ]
+    if res.get("breaking_changes"):
+        lines.append("\n🚨 【重大な破壊的変更 (デプロイ事故の危険)】:")
+        for b in res["breaking_changes"]:
+            lines.append(f"  - {b['message']}")
+    if res.get("safe_changes"):
+        lines.append("\n✨ 【安全な変更】:")
+        for s in res["safe_changes"]:
+            lines.append(f"  - {s['message']}")
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def ledger(
+    project: str,
+    filename: str = "Index"
+) -> str:
+    """REA build_reconstruction_obligation_ledger 思想:
+    GAS Webアプリの「モダン再構築・健全性義務台帳」を自動生成。
+    IndexedDBキャッシュ、ダークモード、レスポンシブ、オプティミスティックUIなど必須7大要件の充足率を自動採点します。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        filename: 対象HTMLファイル名 (デフォルト: Index)
+    """
+    client = get_client()
+    res = client.build_ledger(project, filename=filename)
+    if not res.get("success"):
+        return f"[ERROR] {res.get('error')}"
+    grade_icons = {"GOLD": "🥇 [GOLD]", "SILVER": "🥈 [SILVER]", "BRONZE": "🥉 [BRONZE]", "NEEDS_MODERNIZATION": "⚠️ [要改善]"}
+    lines = [
+        f"=== 📋 モダンGAS再構築・健全性義務台帳 (ledger): [{res['script_id']}] ===",
+        f"総合スコア: {res['score']}% {grade_icons.get(res['grade'], '')}",
+        f"達成要件: {res['passed_requirements']}/{res['total_requirements']} 項目クリア\n"
+    ]
+    for c in res["checklist"]:
+        st = "✅" if c["passed"] else "❌"
+        lines.append(f"  {st} {c['title']}")
+        lines.append(f"     判定理由: {c['detail']}")
     return "\n".join(lines)
 
 @mcp.tool()
@@ -1153,6 +1442,7 @@ def gas(command: str) -> str:
             "  deploy <project> [description]    - 本番Webアプリ更新デプロイ\n"
             "  deployments <project>             - デプロイ一覧（deps でも可）\n"
             "  webapp <url_or_p> [params] [--dev]- Webアプリ呼び出し（中継機モード）\n"
+            "  inspect-ui <p_or_url> [f] [--all] - Webアプリ実機画面撮影＆コントラスト監査（screenshot）\n"
         )
 
     if sub == "setup":
@@ -1185,6 +1475,28 @@ def gas(command: str) -> str:
                 i += 1
         return list_functions(project, filename=fname)
 
+    if sub in ("clean-dead", "clean_dead", "cleandead"):
+        if len(parts) < 2:
+            return "プロジェクト名を指定してください: clean-dead <project> [--dry-run] [--deploy]"
+        p_name = parts[1]
+        is_dry = "--dry-run" in parts
+        do_dep = "--deploy" in parts
+        return clean_dead(project=p_name, dry_run=is_dry, deploy=do_dep)
+
+    if sub in ("clone-web", "clone_web", "clone"):
+        if len(parts) < 2:
+            return "クローン元の URL を指定してください: clone-web <url> [project_name] [--no-deploy]"
+        target_url = parts[1]
+        p_name = parts[2] if len(parts) > 2 and not parts[2].startswith("--") else ""
+        do_deploy = "--no-deploy" not in parts
+        return clone_web(url=target_url, project=p_name, deploy=do_deploy)
+
+    if sub in ("xray", "x-ray", "blueprint"):
+        if len(parts) < 2:
+            return "プロジェクト名を指定してください: xray <project> [filename]"
+        fname = parts[2] if len(parts) > 2 else "Index"
+        return xray(parts[1], filename=fname)
+
     if sub in ("diagnose", "diag"):
         if len(parts) < 2:
             return "プロジェクト名またはIDを指定してください: diagnose <project>"
@@ -1207,6 +1519,42 @@ def gas(command: str) -> str:
             else:
                 i += 1
         return verify_frontend(project, filename=fname, test_js=t_js)
+
+    if sub in ("inspect-ui", "inspect_ui", "screenshot"):
+        if len(parts) < 2:
+            return "プロジェクト名またはURLを指定してください: inspect-ui <project_or_url> [filename] [--all-themes] [--theme <theme>] [--actions '<json>']"
+        target_arg = parts[1]
+        p_name = "" if re.match(r"^https?://", target_arg, re.IGNORECASE) else target_arg
+        u_str = target_arg if re.match(r"^https?://", target_arg, re.IGNORECASE) else ""
+        fname = "Index"
+        th = ""
+        all_th = False
+        acts_json = ""
+        c_axe = True
+        base_img = ""
+        i = 2
+        while i < len(parts):
+            if parts[i] in ("--all-themes", "--all"):
+                all_th = True
+                i += 1
+            elif parts[i] in ("--no-axe",):
+                c_axe = False
+                i += 1
+            elif parts[i] in ("--baseline", "--diff") and i + 1 < len(parts):
+                base_img = parts[i + 1]
+                i += 2
+            elif parts[i] in ("--theme", "-t") and i + 1 < len(parts):
+                th = parts[i + 1]
+                i += 2
+            elif parts[i] in ("--actions", "--act") and i + 1 < len(parts):
+                acts_json = parts[i + 1]
+                i += 2
+            elif not parts[i].startswith("-"):
+                fname = parts[i]
+                i += 1
+            else:
+                i += 1
+        return inspect_ui(project=p_name, filename=fname, url=u_str, theme=th, all_themes=all_th, actions_json=acts_json, check_axe=c_axe, baseline=base_img)
 
     if sub == "grep":
         if len(parts) < 3:
@@ -1256,13 +1604,15 @@ def gas(command: str) -> str:
     if sub == "patch":
         non_flags = [p for p in parts[1:] if not p.startswith("-")]
         if len(non_flags) < 4:
-            return "引数が不足しています: patch <project> <filename> <target> <replacement> [-a] [--force] [--dry-run] [--deploy]"
+            return "引数が不足しています: patch <project> <filename> <target> <replacement> [-a] [--force] [--dry-run] [--deploy] [--verify] [--dev]"
         return patch_code(
             non_flags[0], non_flags[1], non_flags[2], non_flags[3],
             replace_all=("-a" in parts or "--all" in parts),
             force=("--force" in parts),
             dry_run=("--dry-run" in parts),
-            deploy=("--deploy" in parts)
+            deploy=("--deploy" in parts),
+            verify=("--verify" in parts),
+            dev=("--dev" in parts)
         )
 
     if sub == "patch-func":
@@ -1581,6 +1931,46 @@ def gas(command: str) -> str:
             else:
                 i += 1
         return call_webapp(url_or_proj, params=params, dev=dev_flag)
+
+    if sub == "trace-rpc":
+        if len(parts) < 2:
+            return "プロジェクト名またはURLを指定してください: trace-rpc <target> [filename] [--duration <sec>]"
+        tgt = parts[1]
+        fn = parts[2] if len(parts) > 2 and not parts[2].startswith("-") else "Index"
+        dur = 5.0
+        i = 2
+        while i < len(parts):
+            if parts[i] in ("--duration", "-d") and i + 1 < len(parts):
+                dur = float(parts[i+1])
+                i += 2
+            else:
+                i += 1
+        return trace_rpc(target=tgt, filename=fn, duration=dur)
+
+    if sub == "diff-behavior":
+        if len(parts) < 2:
+            return "プロジェクト名を指定してください: diff-behavior <project> [--target <target_id>] [--version <ver>]"
+        proj = parts[1]
+        tgt = ""
+        ver = None
+        i = 2
+        while i < len(parts):
+            if parts[i] in ("--target", "-t") and i + 1 < len(parts):
+                tgt = parts[i+1]
+                i += 2
+            elif parts[i] in ("--version", "-v") and i + 1 < len(parts):
+                ver = int(parts[i+1])
+                i += 2
+            else:
+                i += 1
+        return diff_behavior(project=proj, target=tgt, version=ver)
+
+    if sub == "ledger":
+        if len(parts) < 2:
+            return "プロジェクト名を指定してください: ledger <project> [filename]"
+        proj = parts[1]
+        fn = parts[2] if len(parts) > 2 else "Index"
+        return ledger(project=proj, filename=fn)
 
     return f"不明なコマンドです: '{sub}'。'help' で使い方を確認してください。"
 

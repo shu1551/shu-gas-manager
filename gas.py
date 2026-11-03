@@ -295,6 +295,55 @@ def main():
     vui_p.add_argument("file", nargs="?", default="Index", help="対象 HTML ファイル名 (既定: Index)")
     vui_p.add_argument("--test-js", default="", help="検証用に追加実行する非同期 JS 式/ブロック")
 
+    # REAキラー機能群 (第1弾〜第7弾)
+    # 1. clean-dead
+    cd_p = subparsers.add_parser("clean-dead", aliases=["clean"], help="死にコード（孤立サーバー関数）自動一括削除＆安全バックアップ")
+    cd_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    cd_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
+    cd_p.add_argument("--deploy", action="store_true", help="削除完了後に自動本番デプロイ")
+
+    # 2. clone-web
+    cw_p = subparsers.add_parser("clone-web", aliases=["clone"], help="外部WebサイトのHTML/CSS/JSを自動吸い出し・新規GAS化＆即時デプロイ")
+    cw_p.add_argument("url", help="クローン対象の外部WebサイトURL")
+    cw_p.add_argument("--title", "-t", default="", help="作成するGASプロジェクト名 (省略時はページタイトル)")
+    cw_p.add_argument("--deploy", action="store_true", default=True, help="クローン完了後に自動デプロイ (デフォルト: 有効)")
+
+    # 3. xray
+    xr_p = subparsers.add_parser("xray", aliases=["x-ray"], help="深層レントゲン解析（UI要素 ➔ フロントJS ➔ GAS APIコールパス、死にコード、未定義RPC検知）")
+    xr_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    xr_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
+
+    # 4. inspect-ui
+    insp_p = subparsers.add_parser("inspect-ui", help="Webアプリ実機画面レンダリング・全ボタン踏破・WCAGコントラスト自動監査")
+    insp_p.add_argument("target", help="プロジェクト名、スクリプトID、またはWebアプリURL")
+    insp_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
+    insp_p.add_argument("--all-themes", action="store_true", help="全3テーマ (white/dark/green) 一括監査")
+    insp_p.add_argument("--theme", "-t", default="", help="テーマ指定 (例: dark, green)")
+    insp_p.add_argument("--actions", default="", help="追加操作リストJSON")
+    insp_p.add_argument("--no-screenshot", action="store_true", help="スクリーンショット保存を無効化")
+    insp_p.add_argument("--no-contrast", action="store_true", help="コントラスト監査を無効化")
+    insp_p.add_argument("--device", choices=["desktop", "mobile", "both"], default="desktop", help="対象デバイス")
+
+    # 5. trace-rpc
+    trc_p = subparsers.add_parser("trace-rpc", help="実行時RPC通信スパイ＆ローカルモック自動生成")
+    trc_p.add_argument("target", help="プロジェクト名、スクリプトID、またはWebアプリURL")
+    trc_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
+    trc_p.add_argument("--duration", "-d", type=float, default=5.0, help="観測秒数 (デフォルト: 5.0秒)")
+    trc_p.add_argument("--actions", default="", help="実行操作JSON")
+    trc_p.add_argument("--mock-file", default="", help="モック保存ファイル名")
+
+    # 6. diff-behavior
+    dfb_p = subparsers.add_parser("diff-behavior", help="破壊的変更・スキーマ不整合検知")
+    dfb_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    dfb_p.add_argument("--target", "-t", default="", help="比較対象の別プロジェクトID")
+    dfb_p.add_argument("--version", "-v", type=int, default=None, help="比較対象の過去バージョン番号")
+    dfb_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
+
+    # 7. ledger
+    ldg_p = subparsers.add_parser("ledger", help="モダンGAS再構築・健全性義務台帳")
+    ldg_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    ldg_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -797,6 +846,129 @@ def main():
             if res.get("webAppUrl"):
                 print(f"URL: {res['webAppUrl']}")
 
+        elif args.command in ("clean-dead", "clean"):
+            res = client.clean_dead(args.project, filename=args.file, deploy=args.deploy)
+            print(f"=== 🧹 死にコード削除完了: [{res.get('script_id')}] ===")
+            print(f"削除件数: {res.get('cleaned_count', 0)}件 ({', '.join(res.get('cleaned_functions', [])) if res.get('cleaned_functions') else 'なし'})")
+            if res.get("backup_file"):
+                print(f"バックアップ: {res['backup_file']}")
+            if res.get("deployment"):
+                print(f"Webアプリデプロイ: Version {res['deployment'].get('versionNumber')}")
+            else:
+                print("Webアプリ更新: 未デプロイ（コード反映のみ）")
+            if res.get("post_xray"):
+                print("\n--- 🩻 削除後レントゲン検査 ---")
+                print(res["post_xray"].get("markdown_report", ""))
+
+        elif args.command in ("clone-web", "clone"):
+            res = client.clone_web(args.url, title=args.title or None, deploy=args.deploy)
+            if not res.get("success"):
+                print(f"[ERROR] {res.get('error')}")
+            else:
+                print(f"=== 🌐 Webクローン＆GAS化完了: [{res.get('title')}] ===")
+                print(f"新規プロジェクトID: {res.get('script_id')}")
+                if res.get("deployment"):
+                    print(f"本番WebアプリURL: {res['deployment'].get('webAppUrl')}")
+                if res.get("xray"):
+                    print("\n--- 🩻 即時レントゲン照射結果 ---")
+                    print(res["xray"].get("markdown_report", ""))
+
+        elif args.command in ("xray", "x-ray"):
+            res = client.xray(args.project, filename=args.file)
+            print(res.get("markdown_report", ""))
+
+        elif args.command == "inspect-ui":
+            is_url = bool(args.target.startswith("http"))
+            acts = None
+            if args.actions:
+                import json
+                try:
+                    acts = json.loads(args.actions)
+                except Exception:
+                    pass
+            url = args.target if is_url else None
+            pid = None if is_url else args.target
+            res = client.inspect_ui(
+                script_id=pid,
+                filename=args.file,
+                url=url,
+                theme=args.theme or None,
+                all_themes=args.all_themes,
+                actions=acts,
+                screenshot=not args.no_screenshot,
+                check_contrast=not args.no_contrast,
+                device=args.device
+            )
+            print(f"=== GAS Webアプリ実機画面監査 (inspect_ui): [{args.target}] ===")
+            st_text = "[PASS] 合格" if res.get("contrast_passed") else "[WARNING] コントラスト不適合あり"
+            print(f"総合判定: {st_text}")
+            print(f"検査対象要素数: {res.get('total_elements_checked', 0)}件")
+            print(f"テストテーマ: {', '.join(res.get('themes_tested', []))}")
+            if res.get("dangers"):
+                print(f"\n【重大な視認性不具合 (不可視・コントラスト比 2.5:1 未満)】: {len(res['dangers'])}件")
+                for d in res["dangers"]:
+                    print(f"  - [{d.get('theme')}] {d.get('selector')}: \"{d.get('text')}\" (比率 {d.get('ratio')}:1, 文字 {d.get('fg')} / 背景 {d.get('bg')})")
+            if res.get("warnings"):
+                print(f"\n【軽微なコントラスト警告 (4.5:1 未満)】: {len(res['warnings'])}件")
+                for w in res["warnings"]:
+                    print(f"  - [{w.get('theme')}] {w.get('selector')}: \"{w.get('text')}\" (比率 {w.get('ratio')}:1, 文字 {w.get('fg')} / 背景 {w.get('bg')})")
+
+        elif args.command == "trace-rpc":
+            acts = None
+            if args.actions:
+                import json
+                try:
+                    acts = json.loads(args.actions)
+                except Exception:
+                    pass
+            url = args.target if args.target.startswith("http") else None
+            pid = None if url else args.target
+            res = client.trace_rpc(pid, filename=args.file, url=url, duration_sec=args.duration, actions=acts, mock_file=args.mock_file or None)
+            if not res.get("success"):
+                print(f"[ERROR] {res.get('error')}")
+            else:
+                print(f"=== 🕵️ GAS 実行時RPC通信スパイ (trace_rpc): [{res['target']}] ===")
+                print(f"キャプチャ総数: {res['total_captured']}件 | ユニークRPC: {len(res['unique_rpcs'])}種類 ({', '.join(res['unique_rpcs']) if res['unique_rpcs'] else 'なし'})")
+                if res.get("mock_file"):
+                    print(f"モックファイル保存: {res['mock_file']} ({res.get('mock_count', 0)}件保存)")
+                if res.get("traces"):
+                    print("\n--- 📡 RPC 通信履歴 ---")
+                    for t in res["traces"]:
+                        status = f"{t.get('duration_ms', 0)}ms" if not t.get("error") else f"ERR: {t.get('error')}"
+                        src = f"[{t.get('source', '')}]"
+                        print(f"  {src:<8} {t.get('rpc')}({t.get('args', [])}) -> {status}")
+
+        elif args.command == "diff-behavior":
+            res = client.diff_behavior(args.project, base_version=args.version, target_script_id=args.target or None, filename=args.file)
+            if not res.get("success"):
+                print(f"[ERROR] {res.get('error')}")
+            else:
+                status_icon = "🟢 [PASS] 安全" if res["status"] == "PASS" else ("🔴 [BREAKING] 破壊的変更あり" if res["status"] == "BREAKING" else "🟡 [WARNING] 警告あり")
+                print(f"=== 🔍 振る舞い差分・破壊的変更監査 (diff_behavior): [{res['script_id']}] ===")
+                print(f"判定: {status_icon}")
+                print(f"破壊的変更: {res['breaking_count']}件 | 警告: {res['warning_count']}件 | 安全な変更: {res['safe_count']}件")
+                if res.get("breaking_changes"):
+                    print("\n🚨 【重大な破壊的変更 (デプロイ事故の危険)】:")
+                    for b in res["breaking_changes"]:
+                        print(f"  - {b['message']}")
+                if res.get("safe_changes"):
+                    print("\n✨ 【安全な変更】:")
+                    for s in res["safe_changes"]:
+                        print(f"  - {s['message']}")
+
+        elif args.command == "ledger":
+            res = client.build_ledger(args.project, filename=args.file)
+            if not res.get("success"):
+                print(f"[ERROR] {res.get('error')}")
+            else:
+                grade_icons = {"GOLD": "🥇 [GOLD]", "SILVER": "🥈 [SILVER]", "BRONZE": "🥉 [BRONZE]", "NEEDS_MODERNIZATION": "⚠️ [要改善]"}
+                print(f"=== 📋 モダンGAS再構築・健全性義務台帳 (ledger): [{res['script_id']}] ===")
+                print(f"総合スコア: {res['score']}% {grade_icons.get(res['grade'], '')}")
+                print(f"達成要件: {res['passed_requirements']}/{res['total_requirements']} 項目クリア\n")
+                for c in res["checklist"]:
+                    st = "✅" if c["passed"] else "❌"
+                    print(f"  {st} {c['title']}")
+                    print(f"     判定理由: {c['detail']}")
         elif args.command == "webapp":
             res = client.call_webapp(args.url, params=args.params, body=args.body, method=args.method, key=args.key, use_auth=args.auth, dev=args.dev)
             print(res)

@@ -11,3 +11,5 @@ backups_before_audit_fix/
 __pycache__/
 .pytest_cache/
 *.py[cod]
+.mocks/
+screenshots/

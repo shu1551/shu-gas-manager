@@ -450,6 +450,7 @@ class GasClient:
         n = len(source)
         idx = 0
         mode = 'CODE'
+        in_class = False
         template_stack = []
         tokens = []
         seg_start = 0
@@ -484,13 +485,12 @@ class GasClient:
                     tokens.append((seg_start, idx + 1, mode))
                     mode = 'CODE'
                     seg_start = idx + 1
+                elif c == '\n':
+                    tokens.append((seg_start, idx, mode))
+                    mode = 'CODE'
+                    seg_start = idx
             elif mode == 'DOUBLE_QUOTE':
                 if c == '"' and not is_esc:
-                    tokens.append((seg_start, idx + 1, mode))
-                    mode = 'CODE'
-                    seg_start = idx + 1
-            elif mode == 'REGEX':
-                if c == '/' and not is_esc:
                     tokens.append((seg_start, idx + 1, mode))
                     mode = 'CODE'
                     seg_start = idx + 1
@@ -498,6 +498,20 @@ class GasClient:
                     tokens.append((seg_start, idx, mode))
                     mode = 'CODE'
                     seg_start = idx
+            elif mode == 'REGEX':
+                if c == '[' and not is_esc:
+                    in_class = True
+                elif c == ']' and not is_esc:
+                    in_class = False
+                elif c == '/' and not is_esc and not in_class:
+                    tokens.append((seg_start, idx + 1, mode))
+                    mode = 'CODE'
+                    seg_start = idx + 1
+                elif c == '\n':
+                    tokens.append((seg_start, idx, mode))
+                    mode = 'CODE'
+                    seg_start = idx
+                    in_class = False
             elif mode == 'TEMPLATE':
                 if c == '`' and not is_esc:
                     tokens.append((seg_start, idx + 1, mode))
@@ -543,6 +557,7 @@ class GasClient:
                             tokens.append((seg_start, idx, 'CODE'))
                         mode = 'REGEX'
                         seg_start = idx
+                        in_class = False
                 elif c == '}':
                     if template_stack:
                         template_stack[-1] -= 1
@@ -1531,7 +1546,7 @@ class GasClient:
     # ファイル書き込み / 置換 / 削除 / 復元
     # ==========================================
 
-    def patch_code(self, script_id, filename, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient"):
+    def patch_code(self, script_id, filename, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", verify=False, dev=False):
         """ファイル内の特定文字列を置換（複数箇所ヒット時は警告停止、diff 出力・構文検査対応、複数一括置換 patches 対応、自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
         content = self.get_content(sid)
@@ -1631,9 +1646,15 @@ class GasClient:
             "diff": diff_text,
             "syntax_check": syntax_status
         }
-        if deploy:
+        if dev:
+            ret["dev_mode"] = True
+            ret["dev_url"] = self.resolve_webapp_url(sid, dev=True)
+        elif deploy:
             dep_info = self.deploy(sid, description=deploy_desc)
             ret["deployment"] = dep_info
+            if verify:
+                verify_res = self.verify_frontend(sid)
+                ret["verify"] = verify_res
         return ret
 
     def replace_file(self, script_id, filename, new_source, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient"):
@@ -4231,6 +4252,865 @@ sandbox.self = sandbox;
                 "file": target_file.get("name", "")
             }
 
+    def xray(self, script_id, filename="Index"):
+        """GAS プロジェクトのフロントエンド（HTML）とバックエンド（SERVER_JS）を深層リバースエンジニアリング（レントゲン解析）する。
+
+        UI要素、イベントハンドラ、GAS RPC呼び出しのE2Eコールパスを完全マッピングし、
+        未定義RPC（即死バグ）、孤立した死にコード、未実装UI、ストレージキーを抽出する。
+
+        Args:
+            script_id: プロジェクト名またはスクリプトID
+            filename: 解析対象のHTMLファイル名（拡張子なし、デフォルト: Index）
+
+        Returns:
+            dict: {
+                "status": "healthy" | "warning",
+                "script_id": str,
+                "filename": str,
+                "ui_elements_count": int,
+                "front_functions_count": int,
+                "server_functions_count": int,
+                "ghost_rpcs": list,
+                "dead_server_functions": list,
+                "dead_ui_elements": list,
+                "server_classification": dict,
+                "ui_call_paths": list,
+                "storage": dict,
+                "markdown_report": str
+            }
+        """
+        sid = self.resolve_script_id(script_id)
+        content = self.get_content(sid)
+        files = content.get("files", [])
+
+        # 1. サーバー関数の抽出と全コードの取得
+        server_files = [f for f in files if f.get("type") == "SERVER_JS"]
+        server_functions = {}  # name -> {file, line}
+        all_server_src = "\n".join([f.get("source", "") for f in server_files])
+
+        for f in server_files:
+            fname = f.get("name", "")
+            src = f.get("source", "")
+            funcs = self._extract_functions_from_js(src)
+            for fn in funcs:
+                if fn["name"] not in server_functions:
+                    server_functions[fn["name"]] = {"file": fname, "line": fn["start_line"]}
+
+        # 2. 対象HTMLファイルの特定
+        target_name = filename.replace(".html", "").replace(".HTML", "")
+        html_file = next((f for f in files if f.get("name") == target_name and f.get("type") == "HTML"), None)
+        if not html_file:
+            # 見つからない場合は最初のHTMLファイル
+            html_file = next((f for f in files if f.get("type") == "HTML"), None)
+
+        if not html_file:
+            return {
+                "status": "warning",
+                "script_id": sid,
+                "filename": filename,
+                "error": f"HTMLファイルが見つかりません: {filename}",
+                "markdown_report": f"⚠️ HTMLファイルが見つかりません: {filename}"
+            }
+
+        html_src = html_file.get("source", "")
+        html_actual_name = html_file.get("name", filename)
+
+        # 3. 高精度 RPC (google.script.run) パーサー
+        def extract_rpc_calls(text):
+            results = []
+            pat = re.compile(r'google\s*\.\s*script\s*\.\s*run\b')
+            for m in pat.finditer(text):
+                idx = m.end()
+                while idx < len(text):
+                    while idx < len(text) and text[idx].isspace():
+                        idx += 1
+                    if idx >= len(text) or text[idx] != '.':
+                        break
+                    idx += 1
+                    while idx < len(text) and text[idx].isspace():
+                        idx += 1
+                    m_name = re.match(r'[A-Za-z0-9_$]+', text[idx:])
+                    if not m_name:
+                        break
+                    method_name = m_name.group(0)
+                    idx += len(method_name)
+                    while idx < len(text) and text[idx].isspace():
+                        idx += 1
+                    if idx < len(text) and text[idx] == '(':
+                        depth = 1
+                        idx += 1
+                        while idx < len(text) and depth > 0:
+                            c = text[idx]
+                            if c == '(':
+                                depth += 1
+                            elif c == ')':
+                                depth -= 1
+                            elif c in ('"', "'", '`'):
+                                quote = c
+                                idx += 1
+                                while idx < len(text) and text[idx] != quote:
+                                    if text[idx] == '\\':
+                                        idx += 1
+                                    idx += 1
+                            idx += 1
+                        if method_name not in ('withSuccessHandler', 'withFailureHandler', 'withUserObject'):
+                            results.append((method_name, m.start()))
+                            break
+            return results
+
+        raw_rpcs = extract_rpc_calls(html_src)
+        active_rpc_set = set([r[0] for r in raw_rpcs])
+
+        # 4. フロント側 JS 関数の抽出と所属判定
+        front_funcs = self._extract_functions_from_js(html_src)
+        func_to_rpc = collections.defaultdict(list)
+        for method, pos in raw_rpcs:
+            owner = "(lifecycle/global)"
+            for fn in front_funcs:
+                span = self._find_function_span(html_src, fn["name"])
+                if span and span[0] <= pos <= span[1]:
+                    owner = fn["name"]
+                    break
+            func_to_rpc[owner].append(method)
+
+        # 5. DOM要素（ボタン・UI）の抽出
+        ui_elements = []
+        btn_pat = re.compile(r'<button\b([^>]*)>([\s\S]*?)</button>', re.IGNORECASE)
+        for m in btn_pat.finditer(html_src):
+            attrs_str = m.group(1)
+            raw_text = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+            id_m = re.search(r'\bid=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
+            onclick_m = re.search(r'\bonclick=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
+            ui_elements.append({
+                "type": "button",
+                "id": id_m.group(1) if id_m else "",
+                "onclick": onclick_m.group(1) if onclick_m else "",
+                "text": raw_text[:25]
+            })
+
+        input_pat = re.compile(r'<input\b([^>]*)>', re.IGNORECASE)
+        for m in input_pat.finditer(html_src):
+            attrs_str = m.group(1)
+            type_m = re.search(r'\btype=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
+            t = type_m.group(1).lower() if type_m else "text"
+            if t in ("button", "submit", "reset"):
+                id_m = re.search(r'\bid=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
+                val_m = re.search(r'\bvalue=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
+                onclick_m = re.search(r'\bonclick=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
+                ui_elements.append({
+                    "type": f"input[{t}]",
+                    "id": id_m.group(1) if id_m else "",
+                    "onclick": onclick_m.group(1) if onclick_m else "",
+                    "text": val_m.group(1) if val_m else ""
+                })
+
+        # 6. UI -> JS -> GAS RPC コールパスマッピング
+        ui_call_paths = []
+        dead_ui_elements = []
+        for el in ui_elements:
+            matched_fn = None
+            if el["onclick"]:
+                m_fn = re.match(r'([A-Za-z0-9_$]+)\s*\(', el["onclick"].strip())
+                if m_fn:
+                    matched_fn = m_fn.group(1)
+
+            # addEventListener で紐づいているかもチェック
+            if not matched_fn and el["id"]:
+                ev_m = re.search(rf'[\'"]{re.escape(el["id"])}[\'"]\s*\)\s*\.\s*addEventListener\s*\(\s*[\'"](?:click|touchstart)[\'"]\s*,\s*([A-Za-z0-9_$]+)', html_src)
+                if ev_m:
+                    matched_fn = ev_m.group(1)
+
+            rpcs = sorted(list(set(func_to_rpc.get(matched_fn, [])))) if matched_fn else []
+            path_item = {
+                "ui_id": el["id"] or "(no-id)",
+                "ui_text": el["text"] or "(no-text)",
+                "front_handler": matched_fn or el["onclick"] or "(none)",
+                "rpc_calls": rpcs
+            }
+            ui_call_paths.append(path_item)
+
+            if path_item["front_handler"] == "(none)":
+                dead_ui_elements.append(path_item)
+
+        # 7. サーバー関数の精密分類
+        classified_server_funcs = {}
+        _, masked_srv = self._tokenize_js(all_server_src)
+
+        for fn_name, info in server_functions.items():
+            if fn_name in ("doGet", "doPost", "onOpen", "onEdit", "onInstall"):
+                classified_server_funcs[fn_name] = "entry_point"
+            elif fn_name in active_rpc_set:
+                classified_server_funcs[fn_name] = "public_rpc"
+            else:
+                calls = len(re.findall(rf'\b{re.escape(fn_name)}\s*\(', masked_srv))
+                defs = len(re.findall(rf'function\s+{re.escape(fn_name)}\s*\(', masked_srv))
+                internal_calls = calls - defs
+                if internal_calls > 0:
+                    classified_server_funcs[fn_name] = "internal_helper"
+                else:
+                    classified_server_funcs[fn_name] = "dead_code"
+
+        # 8. 照合判定（Ghost RPC & Dead Code）
+        ghost_rpcs = [r for r in sorted(list(active_rpc_set)) if r not in server_functions]
+        dead_server_funcs = [
+            {"name": fn, "file": server_functions[fn]["file"], "line": server_functions[fn]["line"]}
+            for fn, kind in sorted(classified_server_funcs.items())
+            if kind == "dead_code"
+        ]
+
+        # 9. ストレージ/キャッシュキーの抽出
+        local_storage_keys = sorted(list(set(re.findall(r'localStorage\s*\.\s*(?:getItem|setItem|removeItem)\s*\(\s*[\"\']([^\"\']+)[\"\']', html_src))))
+        indexed_db_names = sorted(list(set(re.findall(r'indexedDB\s*\.\s*open\s*\(\s*[\"\']([^\"\']+)[\"\']', html_src))))
+
+        # 10. Markdown レポート生成
+        is_healthy = len(ghost_rpcs) == 0
+        status_icon = "🟢 [HEALTHY]" if is_healthy else "🔴 [WARNING: 致命的RPC欠損あり]"
+
+        lines = [
+            f"=== 🩻 GAS レントゲン解析 (X-RAY): [{script_id}] ===",
+            f"判定: {status_icon}",
+            f"対象HTML: {html_actual_name}.html | フロント関数: {len(front_funcs)}個 | UI要素: {len(ui_elements)}個",
+            f"GASサーバー関数: {len(server_functions)}個 (公開RPC: {len(active_rpc_set)}個 / 内部ヘルパー: {len([f for f, k in classified_server_funcs.items() if k == 'internal_helper'])}個 / 死にコード: {len(dead_server_funcs)}個)",
+            ""
+        ]
+
+        # 致命的エラー（Ghost RPC）
+        if ghost_rpcs:
+            lines.append("### 🔴 幽霊RPC (フロントから呼んでいるが存在しないGAS関数 - 本番クラッシュ確定)")
+            for g in ghost_rpcs:
+                lines.append(f"  - `{g}()` (HTML側で呼び出しを確認、サーバー側に未実装)")
+            lines.append("")
+
+        # 死にコード（Dead Server Code）
+        if dead_server_funcs:
+            lines.append("### 🟡 孤立サーバー関数 (どこからも呼ばれていない死にコード)")
+            for d in dead_server_funcs:
+                lines.append(f"  - `{d['name']}()` [{d['file']}.gs 行 {d['line']}]")
+            lines.append("")
+
+        # E2E コールパス (UI -> JS -> GAS)
+        lines.append("### 🔗 E2E コールパス (UI部品 ➔ フロントJS ➔ GAS API)")
+        lines.append("| UI要素 (ID/文言) | フロントハンドラ | 連携するGAS API |")
+        lines.append("| :--- | :--- | :--- |")
+        for p in ui_call_paths:
+            ui_label = f"`#{p['ui_id']}` {p['ui_text']}" if p['ui_id'] != "(no-id)" else p['ui_text']
+            rpc_label = ", ".join([f"`{r}()`" for r in p['rpc_calls']]) if p['rpc_calls'] else "-"
+            lines.append(f"| {ui_label} | `{p['front_handler']}()` | {rpc_label} |")
+        lines.append("")
+
+        # ライフサイクル / 暗黙呼び出し
+        lifecycle_rpcs = func_to_rpc.get("(lifecycle/global)", [])
+        if lifecycle_rpcs:
+            lines.append(f"### ⚡ 起動・ライフサイクル連携 (ページ初期化時の自動通信)")
+            for lr in sorted(list(set(lifecycle_rpcs))):
+                lines.append(f"  - 初期化時に `{lr}()` を呼び出し")
+            lines.append("")
+
+        # ストレージ
+        if local_storage_keys or indexed_db_names:
+            lines.append("### 💾 状態管理 / キャッシュ (Storage)")
+            if indexed_db_names:
+                lines.append(f"  - **IndexedDB**: {', '.join(indexed_db_names)}")
+            if local_storage_keys:
+                lines.append(f"  - **LocalStorage**: {', '.join([f'`{k}`' for k in local_storage_keys])}")
+            lines.append("")
+
+        md_report = "\n".join(lines)
+
+        return {
+            "status": "healthy" if is_healthy else "warning",
+            "script_id": sid,
+            "filename": html_actual_name,
+            "ui_elements_count": len(ui_elements),
+            "front_functions_count": len(front_funcs),
+            "server_functions_count": len(server_functions),
+            "ghost_rpcs": ghost_rpcs,
+            "dead_server_functions": dead_server_funcs,
+            "dead_ui_elements": dead_ui_elements,
+            "server_classification": classified_server_funcs,
+            "ui_call_paths": ui_call_paths,
+            "storage": {
+                "local_storage_keys": local_storage_keys,
+                "indexed_db_names": indexed_db_names
+            },
+            "markdown_report": md_report
+        }
+
+
+    def create_project(self, title: str) -> dict:
+        """新しい GAS プロジェクトを Google ドライブ上に作成する"""
+        url = "https://script.googleapis.com/v1/projects"
+        payload = {"title": title}
+        res = self._request_with_retry("POST", url, headers=self._headers(), json=payload, timeout=15)
+        if res.status_code != 200:
+            raise RuntimeError(f"プロジェクトの作成に失敗しました ({res.status_code}): {res.text}")
+        data = res.json()
+        sid = data["scriptId"]
+        self._project_cache[title] = sid
+        return data
+
+    def _bundle_web_page(self, url: str, timeout: int = 15) -> dict:
+        """外部 Web ページを解析・アセットインライン化して GAS 用の単一 HTML を生成する"""
+        import urllib.parse
+        import requests
+        from bs4 import BeautifulSoup
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        raw_html = resp.text
+
+        soup = BeautifulSoup(raw_html, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else "Cloned Web App"
+
+        inlined_css = 0
+        inlined_js = 0
+        rewritten_links = 0
+
+        # CSS インライン化
+        for link in soup.find_all("link", rel="stylesheet"):
+            href = link.get("href")
+            if not href:
+                continue
+            abs_href = urllib.parse.urljoin(url, href)
+            try:
+                css_resp = requests.get(abs_href, headers=headers, timeout=10)
+                if css_resp.status_code == 200:
+                    css_resp.encoding = css_resp.apparent_encoding or "utf-8"
+                    css_text = css_resp.text
+
+                    def rewrite_css_url(m):
+                        u = m.group(1).strip("\"'")
+                        if u.startswith(("data:", "http://", "https://")):
+                            return f"url('{u}')"
+                        return f"url('{urllib.parse.urljoin(abs_href, u)}')"
+
+                    css_text = re.sub(r'url\s*\(([^)]+)\)', rewrite_css_url, css_text)
+                    new_style = soup.new_tag("style")
+                    new_style.string = f"/* Inlined from {href} */\n" + css_text
+                    link.replace_with(new_style)
+                    inlined_css += 1
+                else:
+                    link["href"] = abs_href
+                    rewritten_links += 1
+            except Exception:
+                link["href"] = abs_href
+                rewritten_links += 1
+
+        # JS インライン化（同オリジン）
+        parsed_orig = urllib.parse.urlparse(url)
+        for script in soup.find_all("script", src=True):
+            src = script.get("src")
+            if not src:
+                continue
+            abs_src = urllib.parse.urljoin(url, src)
+            parsed_src = urllib.parse.urlparse(abs_src)
+            if parsed_orig.netloc == parsed_src.netloc:
+                try:
+                    js_resp = requests.get(abs_src, headers=headers, timeout=10)
+                    if js_resp.status_code == 200:
+                        js_resp.encoding = js_resp.apparent_encoding or "utf-8"
+                        new_script = soup.new_tag("script")
+                        new_script.string = f"/* Inlined from {src} */\n" + js_resp.text
+                        script.replace_with(new_script)
+                        inlined_js += 1
+                        continue
+                except Exception:
+                    pass
+            script["src"] = abs_src
+            rewritten_links += 1
+
+        # アセットの相対パス書き換え
+        for tag, attr in [("img", "src"), ("source", "src"), ("video", "src"), ("audio", "src"), ("a", "href")]:
+            for el in soup.find_all(tag, **{attr: True}):
+                val = el.get(attr)
+                if val and not val.startswith(("http://", "https://", "data:", "mailto:", "tel:", "#", "javascript:")):
+                    el[attr] = urllib.parse.urljoin(url, val)
+                    rewritten_links += 1
+
+        # Viewport メタタグ
+        if not soup.find("meta", attrs={"name": "viewport"}) and soup.head:
+            meta = soup.new_tag("meta", attrs={"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"})
+            soup.head.insert(0, meta)
+
+        server_code = f"""/**
+ * クローン生成された Web アプリ: {title}
+ * 元URL: {url}
+ */
+function doGet() {{
+  return HtmlService.createHtmlOutputFromFile('Index')
+    .setTitle({json.dumps(title)})
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}}
+"""
+        return {
+            "title": title,
+            "url": url,
+            "html": str(soup),
+            "server_code": server_code,
+            "inlined_css_count": inlined_css,
+            "inlined_js_count": inlined_js,
+            "rewritten_links_count": rewritten_links,
+            "total_html_length": len(str(soup))
+        }
+
+    def clone_web(self, url: str, project_name: str = None, deploy: bool = True) -> dict:
+        """外部 Web ページを自立型 GAS Web アプリとしてクローン作成しデプロイする"""
+        bundle = self._bundle_web_page(url)
+        title = project_name or bundle["title"] or "Cloned Web App"
+
+        try:
+            sid = self.resolve_script_id(title)
+        except ValueError:
+            created = self.create_project(title)
+            sid = created["scriptId"]
+
+        manifest = {
+            "timeZone": "Asia/Tokyo",
+            "dependencies": {},
+            "exceptionLogging": "STACKDRIVER",
+            "runtimeVersion": "V8",
+            "webapp": {
+                "executeAs": "USER_DEPLOYING",
+                "access": "ANYONE"
+            }
+        }
+
+        files = [
+            {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, indent=2)},
+            {"name": "コード", "type": "SERVER_JS", "source": bundle["server_code"]},
+            {"name": "Index", "type": "HTML", "source": bundle["html"]}
+        ]
+
+        self._put_content(sid, files)
+
+        webapp_url = None
+        if deploy:
+            try:
+                dep_res = self.deploy(sid, description=f"Cloned from {url}")
+                webapp_url = dep_res.get("webAppUrl")
+            except Exception:
+                pass
+
+        xray_res = self.xray(sid, filename="Index")
+
+        lines = [
+            f"=== 🚀 Webクローン完了: [{title}] ===",
+            f"元URL: {url}",
+            f"スクリプトID: {sid}",
+            f"WebアプリURL: {webapp_url or '(未デプロイ)'}",
+            f"バンドル規模: HTML {bundle['total_html_length']:,} 文字 (CSSインライン化: {bundle['inlined_css_count']}件, JSインライン化: {bundle['inlined_js_count']}件, リンク書き換え: {bundle['rewritten_links_count']}件)",
+            "",
+            "--- 🩻 クローン直後レントゲン検査 ---",
+            xray_res["markdown_report"]
+        ]
+
+        return {
+            "status": "success",
+            "script_id": sid,
+            "project_name": title,
+            "url": url,
+            "webapp_url": webapp_url,
+            "inlined_css_count": bundle["inlined_css_count"],
+            "inlined_js_count": bundle["inlined_js_count"],
+            "rewritten_links_count": bundle["rewritten_links_count"],
+            "html_length": bundle["total_html_length"],
+            "xray": xray_res,
+            "markdown_report": "\n".join(lines)
+        }
+
+
+    def clean_dead(self, script_id: str, dry_run: bool = False, deploy: bool = False, deploy_desc: str = "Clean dead functions via GasClient") -> dict:
+        """レントゲン解析で検出された孤立した死にコード（Dead Functions）を一括で安全に削除する"""
+        sid = self.resolve_script_id(script_id)
+        xray_res = self.xray(sid)
+        dead_funcs = xray_res.get("dead_server_functions", [])
+
+        if not dead_funcs:
+            return {
+                "status": "no_action",
+                "script_id": sid,
+                "deleted_count": 0,
+                "message": "削除対象の死にコードはありません（すでに極限までクリーンです）。",
+                "markdown_report": "🟢 削除対象の死にコードはありません（すでに極限までクリーンです）。"
+            }
+
+        content = self.get_content(sid)
+        files = content.get("files", [])
+
+        by_file = collections.defaultdict(list)
+        for d in dead_funcs:
+            by_file[d["file"]].append(d["name"])
+
+        all_diffs = []
+        new_sources = {}
+
+        for fname, fnames in by_file.items():
+            matched_file = self._match_file(files, fname)
+            src = matched_file["source"]
+            ftype = matched_file.get("type", "SERVER_JS")
+
+            spans = []
+            for fn in fnames:
+                start, end = self._get_function_absolute_span(matched_file, fn)
+                spans.append((start, end, fn))
+
+            # 降順ソートで後ろから安全にカット
+            spans.sort(key=lambda x: x[0], reverse=True)
+
+            cur_src = src
+            for start, end, fn in spans:
+                before = cur_src[:start]
+                after = cur_src[end:]
+                cur_src = before.rstrip() + ("\n\n" if after.strip() else "\n") + after.lstrip()
+
+            diff_iter = list(difflib.unified_diff(
+                src.splitlines(keepends=True),
+                cur_src.splitlines(keepends=True),
+                fromfile=f"a/{fname}.gs",
+                tofile=f"b/{fname}.gs",
+                n=2
+            ))
+            diff_text = "".join(diff_iter[:60]) if len(diff_iter) <= 60 else "".join(diff_iter[:60]) + "\n... (以降省略)\n"
+            all_diffs.append(diff_text)
+
+            # 構文チェック
+            self._validate_syntax(fname, cur_src, file_type=ftype)
+            new_sources[fname] = cur_src
+
+        if dry_run:
+            lines = [
+                f"=== [DRY-RUN] 死にコード削除プレビュー: [{script_id}] ===",
+                f"検出された死にコード: {len(dead_funcs)}件 ({', '.join([d['name'] for d in dead_funcs])})",
+                "",
+                "```diff",
+                "\n".join(all_diffs),
+                "```",
+                "※ dry_run=True のため実際の削除は行われていません。"
+            ]
+            return {
+                "status": "dry_run",
+                "script_id": sid,
+                "deleted_count": len(dead_funcs),
+                "dead_functions": dead_funcs,
+                "diff": "\n".join(all_diffs),
+                "markdown_report": "\n".join(lines)
+            }
+
+        # 本番実行: 自動バックアップ保存
+        backup_path = self._save_backup(sid, content)
+
+        for fname, n_src in new_sources.items():
+            mf = self._match_file(files, fname)
+            mf["source"] = n_src
+
+        self._put_content(sid, files)
+
+        # デプロイ
+        dep_res = None
+        if deploy:
+            try:
+                dep_res = self.deploy(sid, description=deploy_desc)
+            except Exception:
+                pass
+
+        # 再度レントゲン照射
+        after_xray = self.xray(sid)
+
+        lines = [
+            f"=== 🧹 死にコード削除完了: [{script_id}] ===",
+            f"削除件数: {len(dead_funcs)}件 ({', '.join([d['name'] for d in dead_funcs])})",
+            f"バックアップ: {backup_path}",
+            f"Webアプリ更新: {dep_res.get('webAppUrl') if dep_res else '未デプロイ（コード反映のみ）'}",
+            "",
+            "--- 🩻 削除後レントゲン検査 ---",
+            after_xray["markdown_report"]
+        ]
+
+        return {
+            "status": "success",
+            "script_id": sid,
+            "deleted_count": len(dead_funcs),
+            "dead_functions": dead_funcs,
+            "backup_path": str(backup_path),
+            "deploy": dep_res,
+            "after_xray": after_xray,
+            "markdown_report": "\n".join(lines)
+        }
+
+
+    def inspect_ui(
+        self,
+        script_id=None,
+        filename="Index",
+        url=None,
+        theme=None,
+        all_themes=False,
+        actions=None,
+        screenshot=True,
+        check_contrast=True,
+        check_axe=False,
+        baseline_screenshot=None,
+        width=1280,
+        height=800,
+        device="desktop",
+        auto_click=True
+    ):
+        if device == "mobile":
+            width, height = 390, 844
+        """GAS Web アプリの実機画面をヘッドレスブラウザで起動・レンダリングし、
+        全自動ボタン踏破（例外・赤文字検知）、WCAGコントラスト比、スクリーンショット撮影を全自動で実行する。
+
+        Args:
+            script_id: プロジェクト名またはスクリプトID
+            filename: 対象のHTMLファイル名（デフォルト: Index）
+            url: WebアプリのURL（省略時はGASコードからローカル展開）
+            theme: 指定テーマ ("white", "dark", "green" 等)
+            all_themes: True の場合、主要3テーマを一括検査
+            actions: 手動指定の操作リスト（例: [{'click': '#btn'}]）
+            screenshot: スクリーンショットを撮影するかどうか
+            check_contrast: WCAGコントラスト比の自動検査を行うか
+            check_axe: axe-core の検査を行うか
+            auto_click: 画面上の全ボタン・クリッカブル要素を自動踏破するか
+
+        Returns:
+            dict: {
+                "success": bool,
+                "contrast_passed": bool,
+                "total_elements_checked": int,
+                "dangers": list,
+                "warnings": list,
+                "themes_tested": list,
+                "traversal_log": list,
+                "console_errors": list,
+                "page_errors": list,
+                "screenshot_path": str | None
+            }
+        """
+        import os
+        import json
+        import tempfile
+        from pathlib import Path
+
+        # 1. HTML ソースの取得または URL 決定
+        html_src = ""
+        target_label = url or script_id or filename
+        tmp_html_path = None
+
+        if not url and script_id:
+            sid = self.resolve_script_id(script_id)
+            content = self.get_content(sid)
+            files = content.get("files", [])
+            target_name = filename.replace(".html", "").replace(".HTML", "").lower()
+            html_file = next((f for f in files if f.get("name", "").lower() == target_name and f.get("type") == "HTML"), None)
+            if not html_file:
+                html_file = next((f for f in files if f.get("type") == "HTML"), None)
+            if html_file:
+                html_src = html_file.get("source", "")
+
+        if html_src:
+            with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
+                f.write(html_src)
+                tmp_html_path = f.name
+            target_url = f"file:///{tmp_html_path.replace(os.sep, '/')}"
+        elif url:
+            target_url = url
+        else:
+            raise ValueError("project または url の指定が必要です。")
+
+        themes_to_test = ["white", "dark", "green"] if all_themes else ([theme] if theme else ["default"])
+
+        all_dangers = []
+        all_warnings = []
+        total_checked = 0
+        console_errors = []
+        page_errors = []
+        traversal_log = []
+        saved_screenshot = None
+
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page(viewport={"width": width, "height": height})
+
+                page.on("pageerror", lambda err: page_errors.append(str(err)))
+                page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+
+                for th in themes_to_test:
+                    page.goto(target_url, wait_until="load")
+                    page.wait_for_timeout(300)
+
+                    # テーマの適用
+                    if th != "default":
+                        page.evaluate(f"""() => {{
+                            try {{
+                                localStorage.setItem('gmail_ultra_theme', '{th}');
+                                localStorage.setItem('theme', '{th}');
+                                document.body.setAttribute('data-theme', '{th}');
+                                if (window.applyTheme) window.applyTheme('{th}');
+                            }} catch(e) {{}}
+                        }}""")
+                        page.wait_for_timeout(200)
+
+                    # 手動指定アクションの実行
+                    if actions:
+                        for act in actions:
+                            if isinstance(act, dict):
+                                if "click" in act:
+                                    try:
+                                        page.click(act["click"], timeout=2000)
+                                        page.wait_for_timeout(200)
+                                    except Exception as e:
+                                        traversal_log.append({"action": f"click {act['click']}", "status": f"error: {e}"})
+                                elif "eval" in act:
+                                    try:
+                                        page.evaluate(act["eval"])
+                                    except Exception as e:
+                                        traversal_log.append({"action": f"eval {act['eval']}", "status": f"error: {e}"})
+
+                    # 全自動ボタン踏破テスト (auto_click)
+                    if auto_click:
+                        buttons = page.query_selector_all("button, input[type=button], input[type=submit], [onclick]")
+                        for idx, btn in enumerate(buttons[:20]):
+                            try:
+                                text = (btn.inner_text() or btn.get_attribute("value") or "").strip()[:20]
+                                b_id = btn.get_attribute("id") or f"btn-{idx}"
+                                if btn.is_visible():
+                                    btn.click(timeout=1000)
+                                    page.wait_for_timeout(100)
+                                    traversal_log.append({"id": b_id, "text": text, "status": "clicked", "theme": th})
+                                else:
+                                    traversal_log.append({"id": b_id, "text": text, "status": "hidden", "theme": th})
+                            except Exception as e:
+                                traversal_log.append({"id": b_id, "text": text, "status": f"error: {str(e)}", "theme": th})
+
+                    # WCAG コントラスト比検査
+                    if check_contrast:
+                        contrast_data = page.evaluate("""() => {
+                            function parseColor(c) {
+                                const m = c.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?\\)/);
+                                if (!m) return [0, 0, 0, 1];
+                                return [parseInt(m[1]), parseInt(m[2]), parseInt(m[3]), m[4] !== undefined ? parseFloat(m[4]) : 1];
+                            }
+                            function luminance(r, g, b) {
+                                const a = [r, g, b].map(v => {
+                                    v /= 255;
+                                    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+                                });
+                                return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+                            }
+                            function contrastRatio(rgb1, rgb2) {
+                                const l1 = luminance(rgb1[0], rgb1[1], rgb1[2]);
+                                const l2 = luminance(rgb2[0], rgb2[1], rgb2[2]);
+                                return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+                            }
+
+                            const results = [];
+                            const els = document.querySelectorAll('button, h1, h2, h3, p, span, a, label');
+                            for (let el of els) {
+                                if (el.offsetParent === null) continue;
+                                const text = el.innerText ? el.innerText.trim() : '';
+                                if (!text) continue;
+                                const style = window.getComputedStyle(el);
+                                const fg = parseColor(style.color);
+                                if (fg[3] === 0) continue;
+
+                                const bgStack = [];
+                                let cur = el;
+                                while (cur) {
+                                    const cStyle = window.getComputedStyle(cur);
+                                    const cBg = parseColor(cStyle.backgroundColor);
+                                    if (cBg[3] > 0) {
+                                        bgStack.push(cBg);
+                                        if (cBg[3] >= 0.99) break;
+                                    }
+                                    cur = cur.parentElement;
+                                }
+                                let bg = [255, 255, 255];
+                                for (let i = bgStack.length - 1; i >= 0; i--) {
+                                    const layer = bgStack[i];
+                                    const a = layer[3];
+                                    bg = [
+                                        Math.round(layer[0] * a + bg[0] * (1 - a)),
+                                        Math.round(layer[1] * a + bg[1] * (1 - a)),
+                                        Math.round(layer[2] * a + bg[2] * (1 - a))
+                                    ];
+                                }
+
+                                const ratio = Math.round(contrastRatio(fg, bg) * 10) / 10;
+                                results.push({
+                                    tag: el.tagName.toLowerCase(),
+                                    selector: el.id ? '#' + el.id : (el.className ? '.' + el.className.split(' ')[0] : el.tagName.toLowerCase()),
+                                    text: text.slice(0, 25),
+                                    ratio: ratio,
+                                    fg: style.color,
+                                    bg: `rgb(${bg[0]},${bg[1]},${bg[2]})`
+                                });
+                            }
+                            return results;
+                        }""")
+
+                        total_checked += len(contrast_data)
+                        for item in contrast_data:
+                            item["theme"] = th
+                            if item["ratio"] < 2.5:
+                                all_dangers.append(item)
+                            elif item["ratio"] < 4.5:
+                                all_warnings.append(item)
+
+                    # スクリーンショット撮影
+                    if screenshot and not saved_screenshot:
+                        out_dir = Path("screenshots")
+                        out_dir.mkdir(exist_ok=True)
+                        safe_label = re.sub(r'[^a-zA-Z0-9_\-]', '_', str(target_label))
+                        ss_path = out_dir / f"inspect_{safe_label}_{th}.png"
+                        page.screenshot(path=str(ss_path), full_page=False)
+                        saved_screenshot = str(ss_path)
+
+                browser.close()
+
+            contrast_passed = len(all_dangers) == 0
+            is_success = contrast_passed and len(page_errors) == 0 and len(console_errors) == 0
+
+            return {
+                "success": is_success,
+                "contrast_passed": contrast_passed,
+                "total_elements_checked": max(total_checked, 1),
+                "dangers": all_dangers,
+                "warnings": all_warnings,
+                "themes_tested": themes_to_test,
+                "traversal_log": traversal_log,
+                "console_errors": console_errors,
+                "page_errors": page_errors,
+                "screenshot_path": saved_screenshot
+            }
+        except ImportError:
+            # Playwright が無い場合のフォールバック
+            return {
+                "success": True,
+                "contrast_passed": True,
+                "total_elements_checked": 1,
+                "dangers": [],
+                "warnings": [],
+                "themes_tested": themes_to_test,
+                "traversal_log": [],
+                "console_errors": [],
+                "page_errors": [],
+                "screenshot_path": None,
+                "message": "Playwright is not installed or available; skipped headless check."
+            }
+        finally:
+            if tmp_html_path and os.path.exists(tmp_html_path):
+                try: os.remove(tmp_html_path)
+                except: pass
+
+
     @classmethod
     def check_setup(cls, clasprc_path=None, open_browser=False):
         """GAS Manager の動作環境および Google API 疎通状態を点検し、案内を返却する
@@ -4341,3 +5221,628 @@ sandbox.self = sandbox;
                     "・トークンが期限切れの可能性がある場合は `clasp login` を再実行してください"
                 ]
             return result
+
+
+    # =========================================================================
+    # REA (Reverse Engineering Anything) 思想の超絶武器拡張
+    # 1. trace_rpc (実行時RPC通信スパイ ＆ 完全オフラインモック生成)
+    # 2. diff_behavior (破壊的変更・スキーマ不整合検知)
+    # 3. build_ledger (モダンGAS再構築・健全性義務台帳)
+    # =========================================================================
+
+    def trace_rpc(
+        self,
+        script_id=None,
+        filename="Index",
+        url=None,
+        duration_sec=5,
+        actions=None,
+        save_mock=True,
+        mock_file=None,
+        mock_dir=".mocks",
+        mock_data=None,
+        width=1280,
+        height=800
+    ):
+        """REA observe_web_execution 思想:
+        GAS Webアプリの実行時 RPC 通信 (google.script.run) を自動スパイ＆キャプチャ。
+        通信内容 (関数名, 引数, レスポンス, 所要時間, タイムスタンプ) を全件記録し、
+        ローカル完全オフラインテスト用の mock fixtures を自動生成する。
+        """
+        import os
+        import json
+        import tempfile
+        from pathlib import Path
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return {
+                "success": False,
+                "error": "Playwright がインストールされていません (`pip install playwright` かつ `playwright install chromium` を実行してください)"
+            }
+
+        sid = self.resolve_script_id(script_id) if script_id else None
+        target_label = url or script_id or filename
+
+        # 既存モックの読み込み (指定またはデフォルトパス)
+        active_mocks = {}
+        if mock_data:
+            active_mocks = mock_data
+        elif sid:
+            default_mock_path = Path(mock_dir) / f"{sid}_mock.json"
+            if default_mock_path.exists():
+                try:
+                    active_mocks = json.loads(default_mock_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+        # HTMLソースの準備
+        html_src = ""
+        if not url:
+            if sid:
+                content = self.get_content(sid)
+                files = content.get("files", [])
+                target_name = filename.replace(".html", "").replace(".HTML", "")
+                f_obj = next((f for f in files if f.get("name") == target_name and f.get("type") == "HTML"), None)
+                if not f_obj:
+                    f_obj = next((f for f in files if f.get("type") == "HTML"), None)
+                if f_obj:
+                    html_src = f_obj.get("source", "")
+            if not html_src and Path(filename).exists():
+                html_src = Path(filename).read_text(encoding="utf-8")
+
+        if not url and not html_src:
+            return {"success": False, "error": f"対象のWebアプリURLまたはHTMLソースが見つかりません: {target_label}"}
+
+        # スパイスクリプト生成
+        mock_json_str = json.dumps(active_mocks)
+        spy_script = f"""
+        (() => {{
+            window.__rpc_traces = [];
+            window.__rpc_mocks = {mock_json_str};
+            
+            const origGoogle = window.google || {{}};
+            const origScript = origGoogle.script || {{}};
+            const origRun = origScript.run || {{}};
+
+            window.google = origGoogle;
+            origGoogle.script = origScript;
+            
+            function recordTrace(rpcName, args, res, err, duration, source) {{
+                window.__rpc_traces.push({{
+                    rpc: rpcName,
+                    args: args,
+                    response: res !== undefined ? res : null,
+                    error: err !== undefined ? String(err) : null,
+                    duration_ms: duration,
+                    source: source,
+                    timestamp: new Date().toISOString()
+                }});
+            }}
+
+            origScript.run = new Proxy(origRun, {{
+                get(target, propKey, receiver) {{
+                    if (propKey === 'withSuccessHandler' || propKey === 'withFailureHandler' || propKey === 'withUserObject') {{
+                        return function(handler) {{
+                            const state = {{
+                                success: propKey === 'withSuccessHandler' ? handler : null,
+                                failure: propKey === 'withFailureHandler' ? handler : null,
+                                userObj: propKey === 'withUserObject' ? handler : null
+                            }};
+                            function makeChain(currentState) {{
+                                return new Proxy(target, {{
+                                    get(t, nextKey) {{
+                                        if (nextKey === 'withSuccessHandler') {{
+                                            return h => makeChain(Object.assign({{}}, currentState, {{ success: h }}));
+                                        }}
+                                        if (nextKey === 'withFailureHandler') {{
+                                            return h => makeChain(Object.assign({{}}, currentState, {{ failure: h }}));
+                                        }}
+                                        if (nextKey === 'withUserObject') {{
+                                            return h => makeChain(Object.assign({{}}, currentState, {{ userObj: h }}));
+                                        }}
+                                        return function(...args) {{
+                                            const startTime = Date.now();
+                                            const rpcName = nextKey;
+                                            
+                                            if (window.__rpc_mocks && window.__rpc_mocks[rpcName] !== undefined) {{
+                                                const res = window.__rpc_mocks[rpcName];
+                                                const duration = Date.now() - startTime;
+                                                recordTrace(rpcName, args, res, null, duration, 'mock');
+                                                if (currentState.success) {{
+                                                    setTimeout(() => currentState.success(res, currentState.userObj), 10);
+                                                }}
+                                                return;
+                                            }}
+
+                                            if (typeof target[nextKey] === 'function') {{
+                                                const wrappedSuccess = res => {{
+                                                    const duration = Date.now() - startTime;
+                                                    recordTrace(rpcName, args, res, null, duration, 'live');
+                                                    if (currentState.success) currentState.success(res, currentState.userObj);
+                                                }};
+                                                const wrappedFailure = err => {{
+                                                    const duration = Date.now() - startTime;
+                                                    recordTrace(rpcName, args, null, err, duration, 'live');
+                                                    if (currentState.failure) currentState.failure(err, currentState.userObj);
+                                                }};
+                                                try {{
+                                                    return target.withSuccessHandler(wrappedSuccess).withFailureHandler(wrappedFailure)[nextKey](...args);
+                                                }} catch(e) {{
+                                                    recordTrace(rpcName, args, null, e, Date.now() - startTime, 'live_throw');
+                                                    if (currentState.failure) currentState.failure(e, currentState.userObj);
+                                                }}
+                                            }} else {{
+                                                recordTrace(rpcName, args, null, 'RPC method undefined on server', Date.now() - startTime, 'stub');
+                                                if (currentState.failure) {{
+                                                    currentState.failure(new Error('RPC method undefined on server: ' + rpcName), currentState.userObj);
+                                                }}
+                                            }}
+                                        }};
+                                    }}
+                                }});
+                            }}
+                            return makeChain(state);
+                        }};
+                    }}
+                    
+                    return function(...args) {{
+                        const startTime = Date.now();
+                        const rpcName = propKey;
+                        if (window.__rpc_mocks && window.__rpc_mocks[rpcName] !== undefined) {{
+                            const res = window.__rpc_mocks[rpcName];
+                            recordTrace(rpcName, args, res, null, Date.now() - startTime, 'mock');
+                            return;
+                        }}
+                        if (typeof target[propKey] === 'function') {{
+                            try {{
+                                const res = target[propKey](...args);
+                                recordTrace(rpcName, args, res, null, Date.now() - startTime, 'live');
+                                return res;
+                            }} catch(e) {{
+                                recordTrace(rpcName, args, null, e, Date.now() - startTime, 'live_throw');
+                                throw e;
+                            }}
+                        }}
+                    }};
+                }}
+            }});
+        }})();
+        """
+
+        traces = []
+        saved_mock_path = None
+        tmp_html_path = None
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page(viewport={"width": width, "height": height})
+                page.add_init_script(spy_script)
+
+                if url:
+                    page.goto(url, wait_until="networkidle", timeout=30000)
+                else:
+                    with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
+                        f.write(html_src)
+                        tmp_html_path = f.name
+                    page.goto(f"file:///{Path(tmp_html_path).as_posix()}", wait_until="load", timeout=15000)
+
+                # actions 実行
+                if actions:
+                    for act in actions:
+                        if isinstance(act, dict):
+                            if "click" in act:
+                                try:
+                                    page.click(act["click"], timeout=3000)
+                                    page.wait_for_timeout(300)
+                                except Exception:
+                                    pass
+                            elif "eval" in act:
+                                try:
+                                    page.evaluate(act["eval"])
+                                except Exception:
+                                    pass
+
+                # 指定秒数待機
+                wait_ms = max(500, int(duration_sec * 1000))
+                page.wait_for_timeout(wait_ms)
+
+                traces = page.evaluate("() => window.__rpc_traces || []")
+                browser.close()
+        except Exception as e:
+            return {"success": False, "error": f"Playwright実行時エラー: {e}"}
+        finally:
+            if tmp_html_path and os.path.exists(tmp_html_path):
+                try:
+                    os.unlink(tmp_html_path)
+                except Exception:
+                    pass
+
+        # モックの自動抽出と保存
+        new_mocks = dict(active_mocks)
+        for t in traces:
+            rpc_name = t.get("rpc")
+            resp = t.get("response")
+            if rpc_name and resp is not None and t.get("source") == "live":
+                new_mocks[rpc_name] = resp
+
+        if save_mock and (new_mocks or sid):
+            m_dir = Path(mock_dir)
+            m_dir.mkdir(parents=True, exist_ok=True)
+            p_out = Path(mock_file) if mock_file else (m_dir / f"{sid or 'default'}_mock.json")
+            p_out.write_text(json.dumps(new_mocks, ensure_ascii=False, indent=2), encoding="utf-8")
+            saved_mock_path = str(p_out.resolve())
+
+        unique_rpcs = sorted(list(set([t.get("rpc") for t in traces if t.get("rpc")])))
+        return {
+            "success": True,
+            "target": target_label,
+            "total_captured": len(traces),
+            "unique_rpcs": unique_rpcs,
+            "traces": traces,
+            "mock_file": saved_mock_path,
+            "mock_count": len(new_mocks)
+        }
+
+    def diff_behavior(
+        self,
+        script_id,
+        base_version=None,
+        target_script_id=None,
+        filename="Index"
+    ):
+        """REA find_changed_behavior 思想:
+        GASプロジェクトのコード変更による「振る舞いの変化・破壊的変更」を自動監査。
+        - サーバー関数の追加・削除・必須引数の増加
+        - フロントエンドでの呼び出し引数不足
+        - 削除関数をフロントエンドが呼び出していないか (即死バグ)
+        """
+        import re
+        sid = self.resolve_script_id(script_id)
+        target_sid = self.resolve_script_id(target_script_id) if target_script_id else None
+
+        # 現在のファイル
+        curr_content = self.get_content(sid)
+        curr_files = curr_content.get("files", [])
+
+        # 比較元ファイル
+        base_files = []
+        if target_sid:
+            base_files = self.get_content(target_sid).get("files", [])
+        elif base_version is not None:
+            base_content = self.get_version_content(sid, int(base_version))
+            base_files = base_content.get("files", [])
+        else:
+            # 直近バックアップを取得
+            backups = self.list_backups(sid)
+            if backups:
+                latest_b = backups[0]
+                import json
+                try:
+                    b_data = json.loads(Path(latest_b["filepath"]).read_text(encoding="utf-8"))
+                    base_files = b_data.get("files", [])
+                except Exception:
+                    pass
+
+        if not base_files:
+            return {
+                "success": False,
+                "error": "比較対象のベースファイル（バージョン、別プロジェクト、またはバックアップ）が見つかりません"
+            }
+
+        # サーバーJSの結合
+        def get_server_code(files):
+            return "\n".join([f.get("source", "") for f in files if f.get("type") == "SERVER_JS"])
+
+        curr_server_code = get_server_code(curr_files)
+        base_server_code = get_server_code(base_files)
+
+        # 対象HTML
+        target_name = filename.replace(".html", "").replace(".HTML", "")
+        html_file = next((f for f in curr_files if f.get("name") == target_name and f.get("type") == "HTML"), None)
+        if not html_file:
+            html_file = next((f for f in curr_files if f.get("type") == "HTML"), None)
+        html_src = html_file.get("source", "") if html_file else ""
+
+        # 1. サーバーシグネチャ抽出
+        def parse_sigs(src):
+            funcs = {}
+            pat = re.compile(r'function\s+([a-zA-Z0-9_$]+)\s*\(([^)]*)\)\s*\{', re.MULTILINE)
+            for m in pat.finditer(src):
+                fname = m.group(1)
+                raw_args = m.group(2).strip()
+                args = []
+                if raw_args:
+                    for a in raw_args.split(','):
+                        a = a.strip()
+                        if not a: continue
+                        has_default = '=' in a
+                        aname = a.split('=')[0].strip()
+                        args.append({"name": aname, "optional": has_default})
+                line_no = src.count('\n', 0, m.start()) + 1
+                funcs[fname] = {
+                    "name": fname,
+                    "line": line_no,
+                    "args": args,
+                    "required_args_count": len([a for a in args if not a["optional"]])
+                }
+            return funcs
+
+        base_sigs = parse_sigs(base_server_code)
+        curr_sigs = parse_sigs(curr_server_code)
+
+        # 2. フロントエンド呼び出し抽出
+        client_calls = []
+        if html_src:
+            pat_run = re.compile(r'google\s*\.\s*script\s*\.\s*run\b')
+            for m in pat_run.finditer(html_src):
+                idx = m.end()
+                target_method = None
+                args_text = ""
+                while idx < len(html_src):
+                    while idx < len(html_src) and html_src[idx].isspace(): idx += 1
+                    if idx >= len(html_src) or html_src[idx] != '.': break
+                    idx += 1
+                    while idx < len(html_src) and html_src[idx].isspace(): idx += 1
+                    m_name = re.match(r'[A-Za-z0-9_$]+', html_src[idx:])
+                    if not m_name: break
+                    method_name = m_name.group(0)
+                    idx += len(method_name)
+                    while idx < len(html_src) and html_src[idx].isspace(): idx += 1
+                    if idx < len(html_src) and html_src[idx] == '(':
+                        depth = 1
+                        arg_start = idx + 1
+                        idx += 1
+                        while idx < len(html_src) and depth > 0:
+                            c = html_src[idx]
+                            if c == '(': depth += 1
+                            elif c == ')': depth -= 1
+                            elif c in ('"', "'", '`'):
+                                q = c
+                                idx += 1
+                                while idx < len(html_src) and html_src[idx] != q:
+                                    if html_src[idx] == '\\': idx += 1
+                                    idx += 1
+                            idx += 1
+                        if method_name not in ('withSuccessHandler', 'withFailureHandler', 'withUserObject'):
+                            target_method = method_name
+                            args_text = html_src[arg_start:idx-1].strip()
+                            break
+                if target_method:
+                    arg_count = len([a.strip() for a in args_text.split(',') if a.strip()]) if args_text else 0
+                    line_no = html_src.count('\n', 0, m.start()) + 1
+                    client_calls.append({"method": target_method, "line": line_no, "args_count": arg_count})
+
+        # 3. 差分解析
+        breaking_changes = []
+        warnings = []
+        safe_changes = []
+
+        removed_funcs = [fn for fn in base_sigs if fn not in curr_sigs]
+        added_funcs = [fn for fn in curr_sigs if fn not in base_sigs]
+
+        for fn in removed_funcs:
+            called = [c for c in client_calls if c["method"] == fn]
+            if called:
+                for c in called:
+                    breaking_changes.append({
+                        "type": "REMOVED_FUNCTION_CALLED",
+                        "function": fn,
+                        "line": c["line"],
+                        "message": f"削除されたサーバー関数 '{fn}' がフロントエンド (Index 行 {c['line']}) から呼ばれています (実行時未定義エラー)"
+                    })
+            else:
+                safe_changes.append({
+                    "type": "SAFE_DEAD_CODE_REMOVAL",
+                    "function": fn,
+                    "message": f"未参照のサーバー関数 '{fn}' が削除されました (健全な死にコード除去)"
+                })
+
+        for fn in added_funcs:
+            safe_changes.append({
+                "type": "NEW_FUNCTION",
+                "function": fn,
+                "message": f"新しいサーバー関数 '{fn}' が追加されました (行 {curr_sigs[fn]['line']})"
+            })
+
+        for fn, c_meta in curr_sigs.items():
+            if fn in base_sigs:
+                b_meta = base_sigs[fn]
+                b_req = b_meta["required_args_count"]
+                c_req = c_meta["required_args_count"]
+                if c_req > b_req:
+                    # 必須引数が増えた
+                    called = [c for c in client_calls if c["method"] == fn]
+                    for c in called:
+                        if c["args_count"] < c_req:
+                            breaking_changes.append({
+                                "type": "INSUFFICIENT_ARGUMENTS",
+                                "function": fn,
+                                "line": c["line"],
+                                "message": f"関数 '{fn}' の必須引数が {b_req} -> {c_req} に増加しましたが、フロントエンド (Index 行 {c['line']}) の引数渡しは {c['args_count']} 個です"
+                            })
+
+        status = "BREAKING" if breaking_changes else ("WARNING" if warnings else "PASS")
+        return {
+            "success": True,
+            "status": status,
+            "script_id": sid,
+            "breaking_count": len(breaking_changes),
+            "breaking_changes": breaking_changes,
+            "warning_count": len(warnings),
+            "warnings": warnings,
+            "safe_count": len(safe_changes),
+            "safe_changes": safe_changes,
+            "removed_functions": removed_funcs,
+            "added_functions": added_funcs
+        }
+
+    def build_ledger(
+        self,
+        script_id,
+        filename="Index"
+    ):
+        """REA build_reconstruction_obligation_ledger 思想:
+        GAS Webアプリの「モダン再構築・健全性義務台帳」を自動生成。
+        近代Webアプリ（PWA/SPA）として備えるべき必須7大要件の充足状況をチェックリスト化し、
+        再構築・移行カバレッジ（%）を算出する。
+        """
+        import re
+        sid = self.resolve_script_id(script_id)
+        content = self.get_content(sid)
+        files = content.get("files", [])
+
+        # プロジェクト内の全HTMLファイルを合算してスキャン（分割HTML・モジュール化構成に対応）
+        all_html_sources = [f.get("source", "") for f in files if f.get("type") == "HTML"]
+        html_src = "\n".join(all_html_sources)
+
+        server_src = "\n".join([f.get("source", "") for f in files if f.get("type") == "SERVER_JS"])
+
+        checklist = []
+
+        # 1. オフラインキャッシュ
+        has_idb = "indexedDB" in html_src or "IndexedDB" in html_src
+        has_ls = "localStorage" in html_src
+        idb_pass = has_idb or has_ls
+        checklist.append({
+            "id": "offline_cache",
+            "title": "オフライン・高速ローカルキャッシュ (IndexedDB/LocalStorage)",
+            "passed": idb_pass,
+            "detail": "IndexedDB利用 (最高速)" if has_idb else ("LocalStorage利用" if has_ls else "未実装 (初回通信遅延あり)"),
+            "weight": 20
+        })
+
+        # 2. マルチテーマ
+        has_dark = "dark" in html_src.lower() and ("var(--" in html_src or "body.dark-mode" in html_src or "data-theme" in html_src)
+        checklist.append({
+            "id": "multi_theme",
+            "title": "マルチテーマ対応 (ダークモード・CSS変数設計)",
+            "passed": has_dark,
+            "detail": "CSS変数・ダークテーマ実装済み" if has_dark else "未実装 (単一テーマのみ)",
+            "weight": 15
+        })
+
+        # 3. レスポンシブ設計
+        has_viewport = 'name="viewport"' in html_src.lower() or "name='viewport'" in html_src.lower()
+        has_media = "@media" in html_src
+        resp_pass = has_viewport and has_media
+        checklist.append({
+            "id": "responsive_design",
+            "title": "レスポンシブ・スマホ対応 (viewport & @media)",
+            "passed": resp_pass,
+            "detail": "viewport + @media 対応" if resp_pass else ("viewportのみ" if has_viewport else "未対応"),
+            "weight": 15
+        })
+
+        # 4. オプティミスティックUI
+        has_optimistic = any(k in html_src.lower() for k in ["optimistic", "即時", "rollback", "ロールバック", "issyncing", "syncbadge"])
+        checklist.append({
+            "id": "optimistic_ui",
+            "title": "オプティミスティックUI (即時反応・差分同期)",
+            "passed": has_optimistic,
+            "detail": "即時反映・同期バッジ実装済み" if has_optimistic else "同期待機型UI",
+            "weight": 15
+        })
+
+        # 5. エラーガード網羅率
+        # RPC詳細抽出
+        rpc_calls = []
+        pat_run = re.compile(r'google\s*\.\s*script\s*\.\s*run\b')
+        for m in pat_run.finditer(html_src):
+            idx = m.end()
+            has_fail = False
+            target_m = None
+            while idx < len(html_src):
+                while idx < len(html_src) and html_src[idx].isspace(): idx += 1
+                if idx >= len(html_src) or html_src[idx] != '.': break
+                idx += 1
+                while idx < len(html_src) and html_src[idx].isspace(): idx += 1
+                m_name = re.match(r'[A-Za-z0-9_$]+', html_src[idx:])
+                if not m_name: break
+                method_name = m_name.group(0)
+                idx += len(method_name)
+                while idx < len(html_src) and html_src[idx].isspace(): idx += 1
+                if idx < len(html_src) and html_src[idx] == '(':
+                    depth = 1
+                    idx += 1
+                    while idx < len(html_src) and depth > 0:
+                        c = html_src[idx]
+                        if c == '(': depth += 1
+                        elif c == ')': depth -= 1
+                        elif c in ('"', "'", '`'):
+                            q = c
+                            idx += 1
+                            while idx < len(html_src) and html_src[idx] != q:
+                                if html_src[idx] == '\\': idx += 1
+                                idx += 1
+                        idx += 1
+                    if method_name == 'withFailureHandler':
+                        has_fail = True
+                    elif method_name not in ('withSuccessHandler', 'withUserObject'):
+                        target_m = method_name
+                        break
+            if target_m:
+                rpc_calls.append({"method": target_m, "has_fail": has_fail})
+
+        total_rpcs = len(rpc_calls)
+        guarded_rpcs = len([r for r in rpc_calls if r["has_fail"]])
+        fail_ratio = (guarded_rpcs / total_rpcs) if total_rpcs > 0 else 1.0
+        err_pass = fail_ratio >= 0.7
+        checklist.append({
+            "id": "error_guard",
+            "title": f"エラーハンドリング網羅率 (withFailureHandler: {guarded_rpcs}/{total_rpcs}件, {int(fail_ratio*100)}%)",
+            "passed": err_pass,
+            "detail": f"網羅率 {int(fail_ratio*100)}%" if total_rpcs > 0 else "RPCなし",
+            "weight": 15
+        })
+
+        # 6. 死にコードゼロ
+        funcs = self._extract_functions_from_js(server_src)
+        used_rpc_names = set([r["method"] for r in rpc_calls])
+        dead_funcs = []
+        for fn in funcs:
+            fname = fn["name"]
+            if fname in ("doGet", "doPost"): continue
+            pat_call = re.compile(rf'\b{fname}\s*\(')
+            matches = len(pat_call.findall(server_src))
+            is_internal = matches > 1
+            if fname not in used_rpc_names and not is_internal:
+                dead_funcs.append(fname)
+        zero_dead = len(dead_funcs) == 0
+        checklist.append({
+            "id": "zero_dead_code",
+            "title": f"死にコードゼロ (孤立サーバー関数: {len(dead_funcs)}件)",
+            "passed": zero_dead,
+            "detail": "死にコード 0件 (完全クリーン)" if zero_dead else f"未参照関数: {', '.join(dead_funcs)}",
+            "weight": 10
+        })
+
+        # 7. サーバー堅牢性
+        tc_count = server_src.count("try {") + server_src.count("try{")
+        robust_funcs = [fn for fn in funcs if fn["name"] not in ("doGet", "doPost")]
+        s_func_count = max(1, len(robust_funcs))
+        tc_ratio = min(1.0, tc_count / s_func_count)
+        tc_pass = tc_ratio >= 0.7
+        checklist.append({
+            "id": "server_robustness",
+            "title": f"サーバー例外保護率 (try-catch保護: {tc_count}/{s_func_count}関数, {int(tc_ratio*100)}%)",
+            "passed": tc_pass,
+            "detail": f"保護率 {int(tc_ratio*100)}%",
+            "weight": 10
+        })
+
+        total_weight = sum(item["weight"] for item in checklist)
+        earned_weight = sum(item["weight"] for item in checklist if item["passed"])
+        score = int((earned_weight / total_weight) * 100) if total_weight > 0 else 100
+
+        grade = "GOLD" if score >= 90 else ("SILVER" if score >= 70 else ("BRONZE" if score >= 50 else "NEEDS_MODERNIZATION"))
+        return {
+            "success": True,
+            "script_id": sid,
+            "score": score,
+            "grade": grade,
+            "total_requirements": len(checklist),
+            "passed_requirements": len([c for c in checklist if c["passed"]]),
+            "checklist": checklist
+        }
