@@ -1,9 +1,9 @@
 # ガスマネージャー (gas-manager)
 
-Google Apps Script (GAS) のプロジェクトを `clasp push/pull` やブラウザ画面を使わず、AI（Claude / Gemini）・Python・CLI から**メモリ直結・爆速・安全に読み書き・関数スコープ置換・複数ファイル一括更新・深層健康診断・関数リモート実行・本番バージョン比較・デプロイ**するための統合管理ツール（FastMCP サーバー ＆ CLI）です。
+Google Apps Script (GAS) のプロジェクトを `clasp push/pull` やブラウザ画面を使わず、AI（Claude / Gemini）・Python・CLI から**メモリ直結で高速・安全に読み書き・関数スコープ置換・複数ファイル一括更新・深層健康診断・関数リモート実行・本番バージョン比較・デプロイ**するための統合管理ツール（FastMCP サーバー ＆ CLI）です。
 
 📖 **背景・設計思想の記事（Qiita）**:
-- [claspでやるのが馬鹿らしくなってきた ── Python MCPでGASを直撃したら、修正が爆速になってコードの質まで上がった話](https://qiita.com/shu15511551/items/228dfa134c76e15ab1a8)
+- [claspでやるのが馬鹿らしくなってきた ── Python MCPでGASを直撃したら、修正が迅速になってコードの質まで上がった話](https://qiita.com/shu15511551/items/228dfa134c76e15ab1a8)
 
 ---
 
@@ -52,14 +52,14 @@ py gas.py setup --open
 
 ---
 
-## 🚀 主な特徴（なぜ爆速・高品質なのか）
+## 🚀 主な特徴（設計と品質管理）
 
 1. **ローカルファイル不要・Google Apps Script API 直結（0.2秒キャッシュ応答）**:
    - `~/.clasprc.json` の OAuth2 認証トークンを利用して直接 REST API を実行（`requests.Session` の HTTP Keep-Alive 接続）。
    - ローカルディスクに作業ファイルを一切書き出さず、クラウド上の GAS をメモリ上で直接読み書きします。
    - プロジェクト一覧・コンテンツ・デプロイURL・構文検査結果の永続キャッシュにより、連続操作時は **0.2秒台** で応答します。
 2. **関数スコープ限定パッチ (`patch_function`) ＆ 複数ファイル1回通信アトミック更新 (`batch_patch`)**:
-   - 特定の関数ブロック内だけにスコープを絞って安全に差分置換する `patch_function`（他関数の同名コードとの衝突を100%回避）、関数丸ごと置換 `replace_function`、関数追加 `add_function`、関数削除 `delete_function` を完備。
+   - 特定の関数ブロック内だけにスコープを絞って安全に差分置換する `patch_function`（他関数の同名コードとの衝突を回避）、関数丸ごと置換 `replace_function`、関数追加 `add_function`、関数削除 `delete_function` を完備。
    - サーバー（`.gs`）とフロント（`.html`）など複数ファイル・複数箇所の修正をメモリ上で合成し、一括構文検査を通した上で**1回のAPI通信でアトミックに反映する `batch_patch`** を搭載。
 3. **GCP設定不要の「GAS関数リモート実行＆ログ・エラートレース回収 (`run` / `run_function`)」**:
    - 面倒な GCP Execution API 設定を一切行わずに、任意のサーバー関数を引数付きでリモート実行し、**戻り値・`console.log` / `Logger.log` の出力・例外発生時の行番号付きスタックトレース**を直接手元に回収できます。
@@ -74,7 +74,7 @@ py gas.py setup --open
      - `appsscript.json`（マニフェスト）の構文・設定検査および**未使用関数（デッドコード候補）**の洗い出し
 5. **二重のロールバック安全網（ローカル退避 `.backups/` ＆ Googleクラウド版履歴 `versions`）**:
    - 全ての書き込み直前にローカルの `.backups/` へ自動スナップショット退避（`diff` / `restore` で即比較・復元）。
-   - さらに Google クラウド上の過去バージョン履歴（`versions`）を直接参照し、**「いま稼働中の本番バージョンと現在の最新コード（HEAD）の差分」をデプロイ前に一撃表示する `diff-prod`（`diff_version`）** や、クラウド過去版からの直接ロールバック（`restore-version`）を完備しています。
+   - さらに Google クラウド上の過去バージョン履歴（`versions`）を直接参照し、**「いま稼働中の本番バージョンと現在の最新コード（HEAD）の差分」をデプロイ前に直接表示する `diff-prod`（`diff_version`）** や、クラウド過去版からの直接ロールバック（`restore-version`）を完備しています。
 
 ---
 
@@ -139,7 +139,7 @@ FastMCP による MCP サーバー（`gas_mcp_server.py`）を提供していま
 
 | ツール名 | 説明 |
 | :--- | :--- |
-| `gas(command)` | **【統合窓口】** CLI と同じコマンド形式（`files`, `outline`, `diagnose`, `get`, `grep`, `deps`, `versions`, `diff`, `diff-prod`, `run`, `patch-func` 等）を一撃実行 |
+| `gas(command)` | **【統合窓口】** CLI と同じコマンド形式（`files`, `outline`, `diagnose`, `get`, `grep`, `deps`, `versions`, `diff`, `diff-prod`, `run`, `patch-func` 等）を実行 |
 | `setup_check` | 動作環境（Node.js・認証情報・Google API 疎通状態）の点検と導入案内 |
 | `diagnose` | 深層健康診断（一括高速構文検査・関数/変数グローバル衝突・RPC/プライベート関数/引数検査・テンプレート欠落・ループ内API警告・未使用関数） |
 | `list_projects` | Google Drive 上の GAS プロジェクト一覧取得 |
@@ -148,7 +148,7 @@ FastMCP による MCP サーバー（`gas_mcp_server.py`）を提供していま
 | `get_file` | ファイル全文または指定行範囲（`start_line`, `end_line`）のコード取得 |
 | `get_function` | 特定関数の定義ブロック抽出（テンプレート文字列・HTML `<script>` 対応） |
 | `patch_function` | **特定関数のスコープ内限定**での安全なピンポイント差分置換（Excel の `patch_procedure` 相当） |
-| `replace_function` | 関数定義ブロック丸ごと置換（Excel の `replace_procedure` 相当・一撃デプロイ対応） |
+| `replace_function` | 関数定義ブロック丸ごと置換（Excel の `replace_procedure` 相当・自動デプロイ対応） |
 | `add_function` | 新規関数の安全な追加（同名関数の重複防止ガード・構文検査付き） |
 | `delete_function` | 指定関数の定義ブロック削除（構文検査・自動バックアップ付き） |
 | `batch_patch` | **複数ファイル・複数関数の1回通信アトミック一括更新**（一括構文検査・トランザクション保護） |

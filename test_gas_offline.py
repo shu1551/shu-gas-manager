@@ -3457,3 +3457,94 @@ def test_108_4_cleanup_old_backups_preserves_backups_within_24h(mock_client, tmp
     # 2. 24時間より古い 35 個は最新 30 個に絞られ、古い 5 個が削除されていること
     remaining_older = [f for f in created_older if f.exists()]
     assert len(remaining_older) == 30
+
+
+
+def test_109_1_xray_scans_multiple_html_files_for_rpcs(mock_client):
+    """指示書109-1: 複数HTMLファイルに分かれたプロジェクトで、別ファイルのRPC呼び出しを誤爆（死にコード判定）しない"""
+    mock_client.resolve_script_id = MagicMock(return_value="mock_sid")
+
+    # index.html (メイン画面・RPC呼び出しなし) と script.html (分割JSコンポーネント・RPC呼び出しあり)
+    mock_files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": """
+function doGet(e) {
+  return HtmlService.createTemplateFromFile('index').evaluate();
+}
+
+function fetchUserEmails(count) {
+  return ["mail1", "mail2"];
+}
+"""
+        },
+        {
+            "name": "index",
+            "type": "HTML",
+            "source": """
+<!DOCTYPE html>
+<html>
+<head><?!= include('script'); ?></head>
+<body><h1>Dashboard</h1></body>
+</html>
+"""
+        },
+        {
+            "name": "script",
+            "type": "HTML",
+            "source": """
+<script>
+function loadData() {
+  google.script.run
+    .withSuccessHandler(function(res) { console.log(res); })
+    .fetchUserEmails(10);
+}
+</script>
+"""
+        }
+    ]
+
+    mock_client.get_content = MagicMock(return_value={"files": mock_files})
+
+    res = mock_client.xray("mock_sid")
+    # 1. script.html 側の RPC呼び出しが認識されていること
+    assert res["server_classification"].get("fetchUserEmails") == "public_rpc"
+    # 2. fetchUserEmails が死にコード（dead_server_functions）に誤爆判定されていないこと
+    dead_names = [d["name"] for d in res["dead_server_functions"]]
+    assert "fetchUserEmails" not in dead_names
+    # 3. 死にコードが 0 件であること
+    assert len(res["dead_server_functions"]) == 0
+
+
+def test_109_2_xray_treats_include_as_entry_point(mock_client):
+    """指示書109-2: GAS標準のテンプレート展開関数 include が死にコードに誤爆判定されない"""
+    mock_client.resolve_script_id = MagicMock(return_value="mock_sid")
+
+    mock_files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": """
+function doGet() {
+  return HtmlService.createTemplateFromFile('Index').evaluate();
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+"""
+        },
+        {
+            "name": "Index",
+            "type": "HTML",
+            "source": "<html><body><?!= include('css'); ?></body></html>"
+        }
+    ]
+
+    mock_client.get_content = MagicMock(return_value={"files": mock_files})
+
+    res = mock_client.xray("mock_sid")
+    dead_names = [d["name"] for d in res["dead_server_functions"]]
+    assert "include" not in dead_names
+    assert len(res["dead_server_functions"]) == 0

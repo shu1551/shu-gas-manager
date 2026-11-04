@@ -23,7 +23,7 @@ import hashlib
 class GasClient:
     STANDARD_ENTRY_POINTS = (
         "doGet", "doPost", "onOpen", "onEdit", "onInstall",
-        "onSelectionChange", "onFormSubmit", "onChange", "authorize", "authorizeForge"
+        "onSelectionChange", "onFormSubmit", "onChange", "authorize", "authorizeForge", "include"
     )
 
     def __init__(self, clasprc_path=None, backup_dir=None, cache_file=None):
@@ -2408,83 +2408,9 @@ class GasClient:
         }
 
     # ==========================================
-    # チャンネル追加 / Webアプリ呼び出し
+    # Webアプリ呼び出し
     # ==========================================
 
-    def resolve_youtube_channel_id(self, channel_input):
-        """YouTube の URL またはハンドルからチャンネルID (UC...) を解決"""
-        channel_input = channel_input.strip()
-        if re.match(r"^UC[A-Za-z0-9_-]{22}$", channel_input):
-            return channel_input, ""
-
-        if channel_input.startswith("@"):
-            target_url = f"https://www.youtube.com/{channel_input}"
-        else:
-            m_uc = re.search(r"/channel/(UC[A-Za-z0-9_-]{22})", channel_input)
-            if m_uc:
-                return m_uc.group(1), ""
-
-            m_custom = re.search(r"youtube\.com/(@[A-Za-z0-9_.-]+)", channel_input)
-            target_url = channel_input if not m_custom else f"https://www.youtube.com/{m_custom.group(1)}"
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8"
-        }
-        res = self._request_with_retry("GET", target_url, headers=headers, timeout=10)
-        if res.status_code != 200:
-            raise RuntimeError(f"YouTube ページの取得に失敗しました ({res.status_code})")
-
-        html = res.text
-        m_id = re.search(r'itemprop="channelId"\s+content="(UC[A-Za-z0-9_-]{22})"', html)
-        if not m_id:
-            m_id = re.search(r'"channelId":"(UC[A-Za-z0-9_-]{22})"', html)
-        if not m_id:
-            m_id = re.search(r'data-channel-id="(UC[A-Za-z0-9_-]{22})"', html)
-
-        if not m_id:
-            raise ValueError(f"チャンネルIDを特定できませんでした: {channel_input}")
-
-        cid = m_id.group(1)
-        m_title = re.search(r'<meta\s+name="title"\s+content="([^"]+)"', html)
-        if not m_title:
-            m_title = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html)
-        cname = m_title.group(1).replace(" - YouTube", "").strip() if m_title else ""
-
-        return cid, cname
-
-    def add_qquick_channel(self, script_id, channel_input, channel_name=""):
-        """Qクイック等の登録チャンネル管理 API を呼び出してチャンネルを追加"""
-        sid = self.resolve_script_id(script_id)
-        cid, auto_name = self.resolve_youtube_channel_id(channel_input)
-        final_name = channel_name if channel_name else auto_name
-
-        web_url = self.resolve_webapp_url(sid)
-
-        params = {"add": cid}
-        if final_name:
-            params["name"] = final_name
-
-        res = self._request_with_retry("GET", web_url, params=params, timeout=15, allow_redirects=True)
-        if res.status_code != 200:
-            raise RuntimeError(f"API 呼び出しに失敗しました ({res.status_code}): {res.text}")
-
-        try:
-            res_data = res.json()
-        except Exception:
-            res_data = {"raw": res.text}
-
-        action = res_data.get("action", "")
-        status = "already_exists" if action == "already_exists" else "success"
-
-        return {
-            "status": status,
-            "channelId": cid,
-            "channelName": final_name or res_data.get("name", ""),
-            "totalChannels": res_data.get("total"),
-            "webAppUrl": web_url,
-            "rawResponse": res_data
-        }
 
     def call_webapp(self, url, params=None, body=None, method="GET", key=None, timeout=15, use_auth=False, dev=False):
         """GAS Web アプリ（doGet/doPost）を直接呼び出し（中継機モード / dev=True で最新HEAD直撃）
@@ -4382,24 +4308,36 @@ sandbox.self = sandbox;
                         "has_customfunction": has_customfunction
                     }
 
-        # 2. 対象HTMLファイルの特定
-        target_name = filename.replace(".html", "").replace(".HTML", "")
-        html_file = next((f for f in files if f.get("name") == target_name and f.get("type") == "HTML"), None)
-        if not html_file:
-            # 見つからない場合は最初のHTMLファイル
-            html_file = next((f for f in files if f.get("type") == "HTML"), None)
-
-        if not html_file:
+        # 2. 対象HTMLファイルの特定（未指定時や該当ファイルが存在しない場合はプロジェクト内の全HTMLファイルを走査）
+        all_html_files = [f for f in files if f.get("type") == "HTML"]
+        if not all_html_files:
             return {
                 "status": "warning",
                 "script_id": sid,
-                "filename": filename,
-                "error": f"HTMLファイルが見つかりません: {filename}",
-                "markdown_report": f"⚠️ HTMLファイルが見つかりません: {filename}"
+                "filename": filename or "(all)",
+                "error": f"HTMLファイルが存在しません",
+                "markdown_report": f"⚠️ HTMLファイルが存在しません"
             }
 
-        html_src = html_file.get("source", "")
-        html_actual_name = html_file.get("name", filename)
+        target_name = filename.replace(".html", "").replace(".HTML", "").strip() if filename else ""
+        matched_html = None
+        if target_name and target_name.lower() != "index":
+            matched_html = next((f for f in all_html_files if f.get("name", "").lower() == target_name.lower()), None)
+            if not matched_html:
+                return {
+                    "status": "warning",
+                    "script_id": sid,
+                    "filename": filename,
+                    "error": f"指定されたHTMLファイルが見つかりません: {filename}",
+                    "markdown_report": f"⚠️ 指定されたHTMLファイルが見つかりません: {filename}"
+                }
+
+        if matched_html:
+            scan_html_files = [matched_html]
+            html_actual_name = matched_html.get("name", filename)
+        else:
+            scan_html_files = all_html_files
+            html_actual_name = "(全HTML統合)"
 
         # 3. 高精度 RPC (google.script.run) パーサー
         def extract_rpc_calls(text):
@@ -4444,55 +4382,65 @@ sandbox.self = sandbox;
                             break
             return results
 
-        raw_rpcs = extract_rpc_calls(html_src)
-        active_rpc_set = set([r[0] for r in raw_rpcs])
-
-        # 4. フロント側 JS 関数の抽出と所属判定
-        front_funcs = self._extract_functions_from_js(html_src)
-        func_to_rpc = collections.defaultdict(list)
-        for method, pos in raw_rpcs:
-            owner = "(lifecycle/global)"
-            for fn in front_funcs:
-                span = self._find_function_span(html_src, fn["name"])
-                if span and span[0] <= pos <= span[1]:
-                    owner = fn["name"]
-                    break
-            func_to_rpc[owner].append(method)
-
-        # 5. DOM要素（ボタン・UI）の抽出
+        raw_rpcs = []
         ui_elements = []
-        btn_pat = re.compile(r'<button\b([^>]*)>([\s\S]*?)</button>', re.IGNORECASE)
-        for m in btn_pat.finditer(html_src):
-            attrs_str = m.group(1)
-            raw_text = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-            id_m = re.search(r'\bid=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
-            onclick_m = re.search(r'\bonclick=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
-            ui_elements.append({
-                "type": "button",
-                "id": id_m.group(1) if id_m else "",
-                "onclick": onclick_m.group(1) if onclick_m else "",
-                "text": raw_text[:25]
-            })
+        front_funcs = []
+        func_to_rpc = collections.defaultdict(list)
+        btn_pat = re.compile(r"<button\b([^>]*)>([\s\S]*?)</button>", re.IGNORECASE)
+        input_pat = re.compile(r"<input\b([^>]*)>", re.IGNORECASE)
 
-        input_pat = re.compile(r'<input\b([^>]*)>', re.IGNORECASE)
-        for m in input_pat.finditer(html_src):
-            attrs_str = m.group(1)
-            type_m = re.search(r'\btype=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
-            t = type_m.group(1).lower() if type_m else "text"
-            if t in ("button", "submit", "reset"):
-                id_m = re.search(r'\bid=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
-                val_m = re.search(r'\bvalue=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
-                onclick_m = re.search(r'\bonclick=[\"\']([^\"\']+)[\"\']', attrs_str, re.IGNORECASE)
+        for hf in scan_html_files:
+            h_src = hf.get("source", "")
+            h_rpcs = extract_rpc_calls(h_src)
+            raw_rpcs.extend(h_rpcs)
+
+            h_front_funcs = self._extract_functions_from_js(h_src)
+            front_funcs.extend(h_front_funcs)
+            for method, pos in h_rpcs:
+                owner = "(lifecycle/global)"
+                for fn in h_front_funcs:
+                    span = self._find_function_span(h_src, fn["name"])
+                    if span and span[0] <= pos <= span[1]:
+                        owner = fn["name"]
+                        break
+                func_to_rpc[owner].append(method)
+
+            for m in btn_pat.finditer(h_src):
+                attrs_str = m.group(1)
+                raw_text = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+                id_m = re.search(r"""\bid=["']([^"']+)["']""", attrs_str, re.IGNORECASE)
+                onclick_m = re.search(r"""\bonclick=["']([^"']+)["']""", attrs_str, re.IGNORECASE)
                 ui_elements.append({
-                    "type": f"input[{t}]",
+                    "type": "button",
+                    "file": hf.get("name", ""),
                     "id": id_m.group(1) if id_m else "",
                     "onclick": onclick_m.group(1) if onclick_m else "",
-                    "text": val_m.group(1) if val_m else ""
+                    "text": raw_text[:25]
                 })
+
+            for m in input_pat.finditer(h_src):
+                attrs_str = m.group(1)
+                type_m = re.search(r"""\btype=["']([^"']+)["']""", attrs_str, re.IGNORECASE)
+                t = type_m.group(1).lower() if type_m else "text"
+                if t in ("button", "submit", "reset"):
+                    id_m = re.search(r"""\bid=["']([^"']+)["']""", attrs_str, re.IGNORECASE)
+                    val_m = re.search(r"""\bvalue=["']([^"']+)["']""", attrs_str, re.IGNORECASE)
+                    onclick_m = re.search(r"""\bonclick=["']([^"']+)["']""", attrs_str, re.IGNORECASE)
+                    ui_elements.append({
+                        "type": f"input[{t}]",
+                        "file": hf.get("name", ""),
+                        "id": id_m.group(1) if id_m else "",
+                        "onclick": onclick_m.group(1) if onclick_m else "",
+                        "text": val_m.group(1) if val_m else ""
+                    })
+
+        active_rpc_set = set([r[0] for r in raw_rpcs])
 
         # 6. UI -> JS -> GAS RPC コールパスマッピング
         ui_call_paths = []
         dead_ui_elements = []
+        combined_html_src = "\n".join(hf.get("source", "") for hf in scan_html_files)
+        html_src = combined_html_src
         for el in ui_elements:
             matched_fn = None
             if el["onclick"]:
@@ -4502,7 +4450,8 @@ sandbox.self = sandbox;
 
             # addEventListener で紐づいているかもチェック
             if not matched_fn and el["id"]:
-                ev_m = re.search(rf'[\'"]{re.escape(el["id"])}[\'"]\s*\)\s*\.\s*addEventListener\s*\(\s*[\'"](?:click|touchstart)[\'"]\s*,\s*([A-Za-z0-9_$]+)', html_src)
+                ev_pat = re.compile(r"""['"][^'"]*""" + re.escape(el["id"]) + r"""['"]\s*\)\s*\.\s*addEventListener\s*\(\s*['"](?:click|touchstart)['"]\s*,\s*([A-Za-z0-9_$]+)""")
+                ev_m = ev_pat.search(combined_html_src)
                 if ev_m:
                     matched_fn = ev_m.group(1)
 
@@ -6417,3 +6366,11 @@ function doGet() {{
             "deployed": deploy,
             "patches_applied": len(patches)
         }
+
+# ローカル拡張（Qクイック専用機能等）が存在する場合はメソッドをアタッチ
+try:
+    import gas_local_extras
+    GasClient.resolve_youtube_channel_id = gas_local_extras.resolve_youtube_channel_id
+    GasClient.add_qquick_channel = gas_local_extras.add_qquick_channel
+except ImportError:
+    pass

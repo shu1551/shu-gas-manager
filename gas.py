@@ -23,6 +23,11 @@ import unicodedata
 
 # 自モジュールの読み込み
 sys.path.insert(0, str(Path(__file__).parent))
+try:
+    import gas_local_extras
+except ImportError:
+    gas_local_extras = None
+
 from gas_client import GasClient
 
 def _str_width(s):
@@ -273,11 +278,9 @@ def main():
     st_p.add_argument("project", nargs="?", default="", help="プロジェクト名またはスクリプトID（省略時は .gas-sync.json を使用）")
     st_p.add_argument("local_dir", nargs="?", default=".", help="対象ローカルフォルダ（デフォルト: カレント）")
 
-    # 10. add-channel
-    ch_p = subparsers.add_parser("add-channel", help="Qクイック等へチャンネル追加")
-    ch_p.add_argument("project", help="プロジェクト名またはスクリプトID")
-    ch_p.add_argument("channel", help="チャンネルIDまたはURL")
-    ch_p.add_argument("-n", "--name", default="", help="チャンネル名")
+    # 10. ローカル拡張 CLI (add-channel等、gas_local_extras が存在する場合のみ登録)
+    if gas_local_extras and hasattr(gas_local_extras, "register_cli"):
+        gas_local_extras.register_cli(subparsers)
 
     # 11. webapp
     web_p = subparsers.add_parser("webapp", help="Webアプリ直接呼び出し")
@@ -349,7 +352,7 @@ def main():
     ldg_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
 
     # skin (デザイン着せ替え)
-    skin_p = subparsers.add_parser("skin", help="HTMLにプロ仕様のSaaS級6大視覚レイヤー（CSS変数）を一撃注入・着せ替え")
+    skin_p = subparsers.add_parser("skin", help="HTMLにデザインプリセット（CSS変数）を注入・着せ替え")
     skin_p.add_argument("project", help="プロジェクト名またはスクリプトID")
     skin_p.add_argument("preset", nargs="?", default="linear", help="プリセット (linear, glass, notion, emerald)")
     skin_p.add_argument("--file", "-f", default="Index", help="対象HTMLファイル名 (デフォルト: Index)")
@@ -828,7 +831,7 @@ def main():
         elif args.command == "push":
             res = client.push(args.project, local_dir=args.local_dir, force=args.force, dry_run=args.dry_run, delete_missing=args.delete_missing, deploy=args.deploy, deploy_desc=args.desc)
             if res.get("status") == "no_changes":
-                print("差分はありません（ローカルとクラウドは完全に一致しています）")
+                print("差分はありません（ローカルとクラウドは一致しています）")
             else:
                 prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
                 print(f"{prefix} プッシュ完了: {len(res.get('changed_files', []))}ファイル変更 ({', '.join(res.get('changed_files', []))})")
@@ -852,11 +855,8 @@ def main():
                 print("\n--- 差分 (Diff) ---")
                 print(res["diff"])
 
-        elif args.command == "add-channel":
-            res = client.add_qquick_channel(args.project, args.channel, channel_name=args.name)
-            print(f"[{res['status'].upper()}] チャンネル: {res.get('channelName', '')} ({res.get('channelId', '')})")
-            if res.get("webAppUrl"):
-                print(f"URL: {res['webAppUrl']}")
+        elif gas_local_extras and hasattr(gas_local_extras, "handle_cli") and gas_local_extras.handle_cli(args, client):
+            pass
 
         elif args.command in ("clean-dead", "clean"):
             dry_run = not args.apply
@@ -973,7 +973,7 @@ def main():
             print(f"プリセット: {res.get('preset_name')} ({res.get('preset')})")
             print(f"特徴: {res.get('desc')}")
             print(f"反映ファイル: {res.get('filename')}.html (置換箇所: {res.get('patches_applied')}箇所){dep_str}")
-            print("状態: 正常反映 (6大視覚レイヤー完全注入完了)")
+            print("状態: 正常反映 (視覚レイヤーの反映完了)")
 
         elif args.command == "webapp":
             res = client.call_webapp(args.url, params=args.params, body=args.body, method=args.method, key=args.key, use_auth=args.auth, dev=args.dev)

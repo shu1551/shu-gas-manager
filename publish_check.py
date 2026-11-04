@@ -74,6 +74,21 @@ def main():
                 print(f"  [NG] {fname}:{line_no} に禁止パターン ({reason}): 「{m.group(0)}」")
                 bad += 1
 
+
+    # 2b. 誇張の語・強すぎる言葉の禁止検査 (指示書109)
+    STRONG_WORDS = ["怪物", "爆速", "極限", "100%", "完全", "絶対", "根絶", "撲滅", "SaaS級", "最高峰", "一撃"]
+    STRONG_TARGET_FILES = ["SKILL.md", "README.md", "gas_mcp_server.py", "gas.py"]
+    for fname in STRONG_TARGET_FILES:
+        fpath = HERE / fname
+        if not fpath.is_file():
+            continue
+        text = fpath.read_text(encoding="utf-8", errors="replace")
+        for word in STRONG_WORDS:
+            for m in re.finditer(re.escape(word), text):
+                line_no = text.count("\n", 0, m.start()) + 1
+                print(f"  [NG] {fname}:{line_no} に誇張の禁止語: 「{m.group(0)}」")
+                bad += 1
+
     # 3. .gitignore の保護対象確認 ＆ ホワイトリスト外ファイル混入検査
     gitignore_text = (HERE / ".gitignore").read_text(encoding="utf-8", errors="replace") if (HERE / ".gitignore").is_file() else ""
     for must_ignore in (".backups/", ".cache.json", ".content_cache.json", ".gas-sync.json", ".clasprc.json"):
@@ -81,7 +96,7 @@ def main():
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".gas-sync.json", ".mocks", "screenshots"}
+    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".gas-sync.json", ".mocks", "screenshots", "gas_local_extras.py"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")

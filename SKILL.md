@@ -1,24 +1,24 @@
 ---
 name: gas-manager
-description: Google Apps Script (GAS) のプロジェクトを clasp やブラウザを使わず、MCP サーバー gas-manager（または CLI gas.py）で直接・爆速・安全に読み書き・関数スコープ置換・複数ファイル一括更新・深層健康診断・リモート関数実行・実機ベンチマーク関所・本番バージョン比較・デプロイするときのスキル。「GASを直して」「Webアプリを更新して」「スクリプトを診断して」「GASの関数をテスト実行して」「高速なGASを作って」など Google Apps Script の話が出たら使う。
+description: Google Apps Script (GAS) のプロジェクトを clasp やブラウザを使わず、MCP サーバー gas-manager（または CLI gas.py）で直接・高速・安全に読み書き・関数スコープ置換・複数ファイル一括更新・深層健康診断・リモート関数実行・実機ベンチマーク関所・本番バージョン比較・デプロイするときのスキル。「GASを直して」「Webアプリを更新して」「スクリプトを診断して」「GASの関数をテスト実行して」「高速なGASを作って」など Google Apps Script の話が出たら使う。
 ---
 
 # ガスマネージャー (`gas-manager`) 操作スキル
 
 Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp pull/push` を使わず）、`gas-manager` の MCP ツールで Google Apps Script API をメモリ直撃して操作する。
 
-## 1. 最速・最短手数の基本原則（初動遅延の完全撲滅・最短2ターン完結）
+## 1. 最速・最短手数の基本原則（初動遅延の排除・最短2ターン完結）
 
 **【超重要】通常のコード改修・UI調整は「最短2ターン」で完結させます。**
 - **ターン 1**: `outline` / `get_function` / `get_file` で修正対象をピンポイント取得（余計なファイル閲覧や長考は禁止）。
-- **ターン 2**: `patch_function` または `patch_code`（＋`deploy=True`）で一撃反映。
+- **ターン 2**: `patch_function` または `patch_code`（＋`deploy=True`）で反映。
 - **報告**: 完了報告は成否と変更箇所を3〜5行以内で即座に返却。
 - **不要な重量級ツールの連打厳禁**: 指示されていない `inspect_ui`、`verify_frontend`、`diagnose`、`ledger` などの重いツールを勝手に回すことは全面禁止。
 
 1. **全文取得（`get_file` 全文）より先に構造把握（`outline` / `grep`）**:
    - いきなり長いファイル全文を読まず、まず `gas("outline <project>")`（または `list_functions`）や `gas("grep <project> <keyword>")`（または `search_code`）で対象ファイルと関数名・行番号を特定する。
 2. **関数スコープ限定パッチ（`patch_function`）と複数ファイル一括更新（`batch_patch`）の徹底**:
-   - 1つの関数内の一部を直すときは、ファイル全体の `patch_code` よりも、対象関数内だけにスコープを絞る **`patch_function(project, filename, func_name, target, replacement)`** を優先する（他関数にある同名変数や `return res;` との衝突を100%回避できる）。
+   - 1つの関数内の一部を直すときは、ファイル全体の `patch_code` よりも、対象関数内だけにスコープを絞る **`patch_function(project, filename, func_name, target, replacement)`** を優先する（他関数にある同名変数や `return res;` との衝突を回避できる）。
    - 関数全体を書き換えるときは `replace_function`、新規関数追加は `add_function`、不要関数削除は `delete_function` を使う。
    - サーバー（`.gs`）とフロント（`.html`）など**複数ファイルを同時に直すときは `batch_patch(project, operations)`** を使い、1回のAPI通信・1回のバックアップ・一括構文検査でアトミックに反映する（逐次呼び出しによる通信ロスと半端な更新を防止）。
 3. **デプロイ前の本番差分確認（`diff_version` / `diff-prod`）と `--dev` 検証**:
@@ -52,13 +52,13 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 - 直前のローカル退避との差分・復元: `diff_backup(project="...")` / `restore_backup(project="...", backup_file="...")`
 - Googleクラウド上の過去バージョン一覧・差分・復元: `list_versions(project="...")` / `diff_version(project="...", version_number=...)` / `restore_version(project="...", version_number=...)`
 
-## 3. 「怪物GAS」の極限設計4大鉄則（最初からこの水準で組むこと）
+## 3. 大量データ・高速GAS設計の4大原則
 
-素朴なループ処理や1セル操作を厳禁とし、初手から以下の極限アーキテクチャで実装する：
+素朴なループ処理や1セル操作を厳禁とし、初手から以下の設計原則で実装する：
 
 1. **シート操作のメモリ2次元配列一括化**:
-   - ループ内での `.getValue()` / `.setValue()` / `.appendRow()` / `.getBackground()` 連打は絶対厳禁。
-   - 必ず `getDataRange().getValues()` で2次元配列としてメモリへ一括取得し、メモリ上で高速計算・フィルタリングを行った上で、`sheet.getRange(startRow, startCol, arr.length, arr[0].length).setValues(arr)` で一撃代入する。
+   - ループ内での `.getValue()` / `.setValue()` / `.appendRow()` / `.getBackground()` 連打は厳禁。
+   - 必ず `getDataRange().getValues()` で2次元配列としてメモリへ一括取得し、メモリ上で高速計算・フィルタリングを行った上で、`sheet.getRange(startRow, startCol, arr.length, arr[0].length).setValues(arr)` で一括代入する。
 2. **外部HTTP通信の `UrlFetchApp.fetchAll` 並列一括化**:
    - ループ内での直列 `UrlFetchApp.fetch(url)` 連打は厳禁。
    - リクエスト配列 `const reqs = urls.map(u => ({ url: u, muteHttpExceptions: true }));` を組み立て、`UrlFetchApp.fetchAll(reqs)` で並列一括送信する（数10件の通信を1秒台に短縮）。
@@ -81,11 +81,11 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
    - 判定が **`[PASS] (100点)`** に到達するまで自律ループを回し合格ミリ秒を報告。
    - bench の後はランナーを外してから deploy（deploy が自動で外す）。
 
-## 5. UI/CSS改修の爆速一撃モード（最速・最短手数の原則）
+## 5. UI/CSS改修の手順（最速・最短手数の原則）
 
-フロントエンド（HTML/CSS/JS）の改善・見た目のブラッシュアップを行う際は、多段の対話往復や重い検査の連打を排し、以下の**「爆速一撃モード」**で完走する：
+フロントエンド（HTML/CSS/JS）の改善・見た目のブラッシュアップを行う際は、多段の対話往復や重い検査の連打を排し、以下の手順で完走する：
 
-1. **`dry_run` スキップと `deploy=True` の一撃同時直撃**:
+1. **`deploy=True` の同時反映**:
    - `patch_code` には「自動バックアップ」と「構文自動検査」が備わっているため、UI/CSS修正では `dry_run` を挟まず初手から `patch_code(project, filename, patches=..., deploy=True)` を実行する。
    - `verify=True`（フロント実機シミュレーション）や `inspect_ui`（Chromiumレンダリング）は普段は不要（明示指示された時のみ使用）。パッチ適用・自動デプロイのみを1回のツール呼び出しで最速（1〜2秒）で完結させる。
 2. **特定済みプロジェクトの点呼ゼロ秒化**:
@@ -93,19 +93,19 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 3. **「作って即提示」スタイル（手戻りゼロの最速プロトタイピング）**:
    - 方針が見えた時点で直ちにコード反映＆デプロイまで済ませ、「最新バージョンを実機（ブラウザ）で見ていただきながら微調整する」型で進め、人間の待ち時間を最小化する。
 
-## 6. プロ仕様デザイン一撃着せ替え (skin: 0秒でSaaS級昇華)
+## 6. デザイン着せ替え (skin: CSS変数プリセット注入)
 
-デザインの刷新や「見た目を整えて」「SaaS風にして」「ダークモードにして」といった要望を受けた際、AIによる曖昧な手書きCSSやプロンプト長考を厳禁とし、**専用ツール `skin` で0秒一撃注入**する：
+デザインの刷新や「見た目を整えて」「SaaS風にして」「ダークモードにして」といった要望を受けた際、AIによる曖昧な手書きCSSやプロンプト長考を厳禁とし、**専用ツール `skin` で注入**する：
 
-1. **プリセット一撃直撃**:
+1. **プリセットの適用**:
    - `gas("skin <project> [preset] [--deploy]")` (CLI: `py gas.py skin <project> [preset] [--deploy]`)
    - プリセット:
      - `linear` (デフォルト): Linear風スレートダーク＆ライト、洗練タイポグラフィ、多層ソフトシャドウ、半透明ボーダー
      - `glass`: Apple風アクリルガラス、フロストブラー、高品位エレガント
      - `notion`: Notion風知的モノトーン、端正な紙のようなレイアウト
      - `emerald`: Supabase/Stripe風ディープダーク、知的なエメラルドグリーンアクセント
-2. **6大視覚レイヤーの完全内蔵**:
-   - タイポグラフィ階層・8pxグリッド・半透明サーフェス＆ボーダー・空気感のある多層シャドウ・角丸秩序・マイクロインタラクションが確定ロジックで自動注入され、一瞬で最高峰のSaaSクオリティへ昇華する。
+2. **6大視覚レイヤーの構成**:
+   - タイポグラフィ階層・8pxグリッド・半透明サーフェス＆ボーダー・空気感のある多層シャドウ・角丸秩序・マイクロインタラクションが確定ロジックで自動注入され、整ったUIスタイルへ統一する。
 
 ## 7. 実機画面監査とコントラスト自動監査（inspect-ui: 明示指示時のみ）
 
@@ -122,7 +122,7 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 
 ※以下の高度解析ツール群は、通常のコード改修時には呼び出さず、ユーザーから調査・解析・大掃除・移行を明示指示された時のみ使用します（AIによる勝手な自動実行を厳禁）。
 
-1. **`trace_rpc`（実行時RPC通信スパイ ＆ 完全オフラインモック生成）**:
+1. **`trace_rpc`（実行時RPC通信スパイ ＆ オフラインモック生成）**:
    - `gas("trace-rpc <project_or_url> [file] [--duration <sec>]")`
    - 実機ブラウザでアプリを操作中、`google.script.run` でやり取りされた通信を記録し、ローカルモックを作成。
 

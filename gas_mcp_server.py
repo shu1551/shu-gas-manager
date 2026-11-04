@@ -17,6 +17,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from mcp.server.fastmcp import FastMCP
+try:
+    import gas_local_extras
+except ImportError:
+    gas_local_extras = None
+
 from gas_client import GasClient
 
 import functools
@@ -146,13 +151,13 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
     """ファイル内の特定コード文字列を置換し、Google クラウドへ反映します。
     置換前に自動バックアップと Node.js vm による構文検査を実施します。
     patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
-    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
     verify=True を指定すると、反映直後にフロントエンド実機シミュレーション（verify_frontend）まで一括実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
         filename: ファイル名
-        target: 置換前の既存コード文字列（完全一致）
+        target: 置換前の既存コード文字列（一致する文字列）
         replacement: 置換後の新しいコード文字列
         replace_all: 複数箇所の一括置換を許可するか (デフォルト: False)
         force: 構文エラーを無視して強制反映するか (デフォルト: False)
@@ -210,7 +215,7 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
 def replace_file(project: str, filename: str, new_source: str, force: bool = False, dry_run: bool = False, deploy: bool = False) -> str:
     """指定ファイルの中身を丸ごと置き換え、Google クラウドへ反映します。
     反映前に自動バックアップと構文検査を実施します。
-    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -389,30 +394,25 @@ def list_deployments(project: str) -> str:
         lines.append(line_item)
     return "\n".join(lines)
 
-@mcp.tool()
-@safe_tool
-def add_channel(project: str, channel: str, channel_name: str = "") -> str:
-    """Qクイック等の登録チャンネル管理用 API を呼び出し、即座にチャンネルを追加します。
+# ローカル拡張（Qクイック専用等）が存在する場合のみ add_channel ツールを登録
+if gas_local_extras and hasattr(gas_local_extras, "register_mcp"):
+    @mcp.tool()
+    @safe_tool
+    def add_channel(project: str, channel: str, channel_name: str = "") -> str:
+        """Qクイック等の登録チャンネル管理用 API を呼び出し、即座にチャンネルを追加します。
 
-    Args:
-        project: プロジェクト名またはスクリプトID (例: 'Qクイック NEXT')
-        channel: チャンネルID (UC...) または YouTube URL
-        channel_name: チャンネル名（省略時は自動取得）
-    """
-    client = get_client()
-    res = client.add_qquick_channel(project, channel, channel_name=channel_name)
-    if res["status"] == "already_exists":
-        return f"[INFO] チャンネル {res['channelId']} は既に登録されています。\nURL: {res.get('webAppUrl', '')}"
-    
-    total_str = f"\n現在の登録総数: {res['totalChannels']}件" if res.get("totalChannels") else ""
-    name_str = f"\nチャンネル名: {res['channelName']}" if res.get("channelName") else ""
-    return (
-        f"[SUCCESS] チャンネル即時追加完了！（デプロイ不要・即座に反映）\n"
-        f"チャンネルID: {res['channelId']}"
-        f"{name_str}"
-        f"{total_str}\n"
-        f"WebアプリURL: {res.get('webAppUrl', '')}"
-    )
+        Args:
+            project: プロジェクト名またはスクリプトID (例: 'Qクイック NEXT')
+            channel: チャンネルID (UC...) または YouTube URL
+            channel_name: チャンネル名（省略時は自動取得）
+        """
+        client = get_client()
+        res = gas_local_extras.add_qquick_channel(client, project, channel, channel_name=channel_name)
+        if res.get("status") == "already_exists":
+            return f"[INFO] チャンネル {res['channelId']} は既に登録されています。\nURL: {res.get('webAppUrl', '')}"
+        name_str = f"\nチャンネル名: {res['channelName']}" if res.get("channelName") else ""
+        total_str = f"\n現在の登録総数: {res['totalChannels']}件" if res.get("totalChannels") else ""
+        return f"[SUCCESS] チャンネル追加完了\nチャンネルID: {res['channelId']}{name_str}{total_str}\nURL: {res.get('webAppUrl', '')}"
 
 @mcp.tool()
 @safe_tool
@@ -420,7 +420,7 @@ def patch_function(project: str, filename: str, func_name: str, target: str = ""
     """指定ファイル内の特定関数スコープ内に限定してコード置換を行います（他関数にある同一コードの誤爆を物理的に防止）。
     置換前の自動バックアップ、構文検査、diff 出力を完備しています。
     patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
-    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -465,7 +465,7 @@ def patch_function(project: str, filename: str, func_name: str, target: str = ""
 def add_function(project: str, filename: str, code: str, force: bool = False, dry_run: bool = False, deploy: bool = False) -> str:
     """指定ファイルに新しい関数を追加します（既存関数との重複チェック付き）。
     HTMLファイルの場合は末尾の <script> タグ内へ安全に挿入されます。
-    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -503,7 +503,7 @@ def add_function(project: str, filename: str, code: str, force: bool = False, dr
 @safe_tool
 def delete_function(project: str, filename: str, func_name: str, force: bool = False, dry_run: bool = False, deploy: bool = False) -> str:
     """指定ファイルから特定の関数を削除し、空行をスマートに整理します。
-    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -584,7 +584,7 @@ def batch_patch(project: str, operations: str, force: bool = False, dry_run: boo
 def replace_function(project: str, filename: str, func_name: str, code: str, force: bool = False, dry_run: bool = False, deploy: bool = False) -> str:
     """指定ファイル内の特定関数定義ブロックを丸ごと置換します（Excel の replace_procedure 相当）。
     置換前の自動バックアップ、構文検査、diff 出力を完備しています。
-    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -676,7 +676,7 @@ def diff_version(project: str, version_number: int = None, filename: str = "") -
     changed = res.get("changed_files", [])
     target_v = res.get("target_version", "HEAD")
     if not changed:
-        return f"Version {target_v} と現在の最新HEADコードに差分はありません（完全一致）。"
+        return f"Version {target_v} と現在の最新HEADコードに差分はありません（一致）。"
     return f"=== Version {target_v} と最新HEADコードの差分 ({len(changed)}ファイル変更: {', '.join(changed)}) ===\n{res['diff']}"
 
 @mcp.tool()
@@ -684,7 +684,7 @@ def diff_version(project: str, version_number: int = None, filename: str = "") -
 def restore_version(project: str, version_number: int, filename: str = "", deploy: bool = False) -> str:
     """クラウド上の不変バージョン（スナップショット）からプロジェクト全体または特定ファイルを復元します。
     復元直前の状態はローカル安全スナップショットとして自動退避されます。
-    deploy=True を指定すると、復元直後に本番Webアプリの更新デプロイまで一撃で実行します。
+    deploy=True を指定すると、復元直後に本番Webアプリの更新デプロイまで同時に実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -843,7 +843,7 @@ def push_project(project: str = "", local_dir: str = ".", force: bool = False, d
     client = get_client()
     res = client.push(project, local_dir=local_dir, force=force, dry_run=dry_run, delete_missing=delete_missing, deploy=deploy, deploy_desc=desc)
     if res.get("status") == "no_changes":
-        return "差分はありません（ローカルとクラウドは完全に一致しています）。"
+        return "差分はありません（ローカルとクラウドは一致しています）。"
 
     prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
     lines = [
@@ -1176,7 +1176,7 @@ def inspect_ui(
             if v_diff.get("diff_image"):
                 lines.append(f"  - 差分ヒートマップ: {v_diff.get('diff_image')}")
         else:
-            lines.append("\n【画像差分 (Visual Diff)】: 差分なし (完全一致)")
+            lines.append("\n【画像差分 (Visual Diff)】: 差分なし (一致)")
 
     if res.get("screenshots"):
         lines.append(f"\n【実機スクリーンショット物証 ({len(res['screenshots'])}枚)】:")
@@ -1225,7 +1225,7 @@ def clone_web(url: str, project: str = "", deploy: bool = False, access: str = "
 @safe_tool
 def xray(project: str, filename: str = "Index") -> str:
     """指定した GAS プロジェクトのフロントエンド（HTML）とバックエンド（SERVER_JS）を深層リバースエンジニアリング（レントゲン解析）します。
-    UI要素から発火するイベント、フロントJS関数、裏で叩かれるGAS API（google.script.run）のE2Eコールパスを完全マッピングし、
+    UI要素から発火するイベント、フロントJS関数、裏で叩かれるGAS API（google.script.run）のE2Eコールパスをマッピングし、
     未定義RPC（本番クラッシュ確定）、孤立した死にコード、未実装UI、IndexedDB/ストレージキーを1秒で暴きます。
 
     Args:
@@ -1275,7 +1275,7 @@ def trace_rpc(
 ) -> str:
     """REA observe_web_execution 思想:
     GAS Webアプリの実行時 RPC 通信 (google.script.run) を自動スパイ＆キャプチャ。
-    引数、戻り値、所要時間を全件記録し、ローカル完全オフラインテスト用 mock fixtures を自動生成します。
+    引数、戻り値、所要時間を全件記録し、ローカルオフラインテスト用 mock fixtures を自動生成します。
 
     Args:
         target: プロジェクト名、スクリプトID、またはWebアプリURL
@@ -1321,7 +1321,7 @@ def diff_behavior(
 ) -> str:
     """REA find_changed_behavior 思想:
     GASプロジェクトのコード変更による「振る舞いの変化・破壊的変更」を自動監査。
-    引数不足や削除関数のフロント呼び出し（即死バグ）をデプロイ前に100%事前ブロックします。
+    引数不足や削除関数のフロント呼び出しをデプロイ前に事前検知・ブロックします。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -1390,7 +1390,7 @@ def design_skin(
     preset: str = "linear",
     deploy: bool = False
 ) -> str:
-    """HTMLファイルにプロ仕様のSaaS級6大視覚レイヤー（CSS変数・タイポグラフィ・8pxグリッド・多層シャドウ・半透明サーフェス）を0秒で一撃注入・着せ替えします。
+    """HTMLファイルにデザインプリセット（CSS変数・タイポグラフィ・グリッド・シャドウ）を反映・着せ替えします。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -1409,13 +1409,13 @@ def design_skin(
         f"プリセット: {res.get('preset_name')} ({res.get('preset')})\n"
         f"特徴: {res.get('desc')}\n"
         f"反映ファイル: {res.get('filename')}.html (置換箇所: {res.get('patches_applied')}箇所){dep_str}\n"
-        f"状態: 正常反映 (6大視覚レイヤー完全注入完了)"
+        f"状態: 正常反映 (視覚レイヤーの反映完了)"
     )
 
 def gas(command: str) -> str:
     """ガスマネージャー (GAS Manager) 統合コマンド窓口。
     CLI と同じコマンド形式（例: 'files MyProject', 'outline MyProject', 'patch-func MyProject main myFunc old new' 等）で
-    一撃で GAS 操作を実行します。
+    コマンドで GAS 操作を実行します。
 
     利用可能コマンド:
       - help
@@ -1757,11 +1757,19 @@ def gas(command: str) -> str:
         return delete_file(non_flags[0], non_flags[1])
 
     if sub == "add-channel":
+        if not gas_local_extras or not hasattr(gas_local_extras, "add_qquick_channel"):
+            return "add-channel は利用できません（gas_local_extras が未導入です）"
         non_flags = [p for p in parts[1:] if not p.startswith("-")]
         if len(non_flags) < 2:
             return "引数が不足しています: add-channel <project> <channel_id_or_url> [channel_name]"
         ch_name = non_flags[2] if len(non_flags) >= 3 else ""
-        return add_channel(non_flags[0], non_flags[1], channel_name=ch_name)
+        client = get_client()
+        res = gas_local_extras.add_qquick_channel(client, non_flags[0], non_flags[1], channel_name=ch_name)
+        if res.get("status") == "already_exists":
+            return f"[INFO] チャンネル {res['channelId']} は既に登録されています。\nURL: {res.get('webAppUrl', '')}"
+        name_str = f"\nチャンネル名: {res['channelName']}" if res.get("channelName") else ""
+        total_str = f"\n現在の登録総数: {res['totalChannels']}件" if res.get("totalChannels") else ""
+        return f"[SUCCESS] チャンネル追加完了\nチャンネルID: {res['channelId']}{name_str}{total_str}\nURL: {res.get('webAppUrl', '')}"
 
     if sub == "backups":
         if len(parts) < 2:

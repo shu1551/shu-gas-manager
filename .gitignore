@@ -13,3 +13,6 @@ __pycache__/
 *.py[cod]
 .mocks/
 screenshots/
+
+# ローカル固有拡張
+gas_local_extras.py
