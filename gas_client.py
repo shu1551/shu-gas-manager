@@ -2143,6 +2143,19 @@ class GasClient:
         if changed:
             self._save_cache()
 
+    @staticmethod
+    def _pick_latest_deployment(deployments):
+        """版つきデプロイのうち、いちばん新しい版を指している入口を選ぶ（無ければ None）。
+
+        API の一覧の並びは作った順で、先頭は古い入口のことがある。先頭を選ぶと、
+        使っている新しい入口が古い版のまま残る（2026-11-05 G-クイック-マイドライブで実際に起きた）。
+        同じ版を指す入口が複数あれば、更新日時の新しい方を選ぶ。
+        """
+        versioned = [d for d in deployments if d.get("deploymentConfig", {}).get("versionNumber")]
+        if not versioned:
+            return None
+        return max(versioned, key=lambda d: (int(d["deploymentConfig"]["versionNumber"]), d.get("updateTime", "")))
+
     def get_deployments(self, script_id, use_cache=True):
         """プロジェクトのデプロイ一覧を取得（TTL 300秒のメモリ＆ディスクキャッシュ対応）"""
         sid = self.resolve_script_id(script_id)
@@ -2314,11 +2327,7 @@ class GasClient:
                 web_url = cached_dep.get("url", "")
             else:
                 deployments = self.get_deployments(sid)
-                target_dep = None
-                for d in deployments:
-                    if "versionNumber" in d.get("deploymentConfig", {}):
-                        target_dep = d
-                        break
+                target_dep = self._pick_latest_deployment(deployments)
 
                 if target_dep:
                     dep_id = target_dep["deploymentId"]
@@ -2377,13 +2386,7 @@ class GasClient:
                 del self._cache_data["deployments"][sid]
                 self._save_cache()
             deployments = self.get_deployments(sid)
-            target_dep = None
-            for d in deployments:
-                if "versionNumber" in d.get("deploymentConfig", {}):
-                    target_dep = d
-                    break
-            if not target_dep and deployments:
-                target_dep = deployments[-1]
+            target_dep = self._pick_latest_deployment(deployments)
             if target_dep:
                 dep_id = target_dep["deploymentId"]
                 web_url = ""

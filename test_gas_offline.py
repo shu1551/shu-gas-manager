@@ -3548,3 +3548,15 @@ function include(filename) {
     dead_names = [d["name"] for d in res["dead_server_functions"]]
     assert "include" not in dead_names
     assert len(res["dead_server_functions"]) == 0
+
+
+def test_pick_latest_deployment_prefers_newest_version():
+    from gas_client import GasClient
+    deps = [
+        {"deploymentId": "HEAD", "deploymentConfig": {}},
+        {"deploymentId": "old7", "deploymentConfig": {"versionNumber": 7}, "updateTime": "2026-04-15T19:00:00Z"},
+        {"deploymentId": "new16", "deploymentConfig": {"versionNumber": 16}, "updateTime": "2026-05-10T04:00:00Z"},
+        {"deploymentId": "mid15", "deploymentConfig": {"versionNumber": 15}, "updateTime": "2026-04-16T22:00:00Z"},
+    ]
+    assert GasClient._pick_latest_deployment(deps)["deploymentId"] == "new16"
+    assert GasClient._pick_latest_deployment([{"deploymentId": "HEAD", "deploymentConfig": {}}]) is None
