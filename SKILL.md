@@ -77,8 +77,9 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 1. **実装・改修**: `patch_function` / `add_function` で対象関数を実装する。
 2. **実機ベンチマーク関所**: `benchmark_function(project="...", func_name="...", args="[...]", target_ms=500, expected="...")` を実行する。
 3. **自律カイゼン反復（人間への途中確認不要）**:
-   - 判定が `[FAILED]`（実行例外・期待値不一致）または `[NEEDS_IMPROVEMENT]`（目標速度超過・ループ内APIボトルネック警告あり）の場合は、出力された **「カイゼン処方箋 (Next Actions)」** に従って直ちに `patch_function` で修正し、再度 `benchmark_function` を叩く。
-   - 判定が **`[PASS] (スコア: 100/100点)`** に到達するまで自律的にループを回し切り、合格した実測ミリ秒とスコアを添えて完了報告する。
+   - 判定が `[FAILED]` または `[NEEDS_IMPROVEMENT]` の場合は出力された **「カイゼン処方箋」** に従い `patch_function` で修正し再試行。
+   - 判定が **`[PASS] (100点)`** に到達するまで自律ループを回し合格ミリ秒を報告。
+   - bench の後はランナーを外してから deploy（deploy が自動で外す）。
 
 
 ## 5. UI/CSS改修の爆速一撃モード（最速・最短手数の原則）

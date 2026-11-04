@@ -3134,3 +3134,192 @@ def test_clone_web_defaults_myself_and_no_deploy(mock_client):
     manifest_file = next(f for f in put_files if f["name"] == "appsscript")
     manifest_data = json.loads(manifest_file["source"])
     assert manifest_data["webapp"]["access"] == "MYSELF"
+
+
+# --- 107: ランナーと認証トークンの穴を塞ぐテスト ---
+
+def test_107_1_deploy_cleans_runner_before_versioning(mock_client):
+    """指示書107-1: deploy() は HEAD に __gm_exec_ が残っていれば版を作る前に clean_runner で取り除く"""
+    runner_code = "function doGet(e) { return __gm_exec_(e); }\nfunction __gm_exec_(e) { return 1; }"
+    files = [
+        {"name": "appsscript", "type": "JSON", "source": "{}"},
+        {"name": "コード", "type": "SERVER_JS", "source": runner_code}
+    ]
+    mock_client.resolve_script_id = MagicMock(return_value="mock_id_107")
+    mock_client.create_version = MagicMock(return_value=1)
+    mock_client.get_deployments = MagicMock(return_value=[{"deploymentId": "dep1", "deploymentConfig": {"versionNumber": 1}}])
+    mock_client._request_with_retry = MagicMock(return_value=MagicMock(status_code=200, json=lambda: {"deploymentId": "dep1"}))
+
+    cleaned = False
+    def fake_get_content(sid, use_cache=True):
+        nonlocal cleaned
+        if cleaned:
+            return {"files": [{"name": "コード", "type": "SERVER_JS", "source": "function doGet(e) { return 1; }"}]}
+        return {"files": [{"name": "コード", "type": "SERVER_JS", "source": runner_code}]}
+
+    def fake_clean_runner(sid):
+        nonlocal cleaned
+        cleaned = True
+
+    mock_client.get_content = MagicMock(side_effect=fake_get_content)
+    mock_client.clean_runner = MagicMock(side_effect=fake_clean_runner)
+
+    res = mock_client.deploy("mock_id_107")
+    mock_client.clean_runner.assert_called_once_with("mock_id_107")
+    assert mock_client.create_version.called
+
+
+def test_107_2_runner_allows_only_project_functions(mock_client):
+    """指示書107-2: ランナーに許可一覧が埋め込まれ、eval などの未許可関数実行は ok: false になる"""
+    server_code = "function myAllowedFunc() { return 42; }"
+    files = [
+        {"name": "コード", "type": "SERVER_JS", "source": server_code}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": files})
+    mock_client.resolve_script_id = MagicMock(return_value="mock_id_107")
+    mock_client.resolve_webapp_url = MagicMock(return_value="https://script.google.com/test")
+    mock_client._save_backup = MagicMock()
+    mock_client._put_content = MagicMock()
+
+    # run_function を実行して差し込まれるコードを採取
+    mock_client.call_webapp = MagicMock(return_value={"data": {"ok": True}})
+    mock_client.run_function("mock_id_107", "myAllowedFunc")
+
+    put_files = mock_client._put_content.call_args_list[0][0][1]
+    injected_js = next(f["source"] for f in put_files if "function __gm_exec_" in f["source"])
+
+    assert 'var allowed = ["myAllowedFunc"];' in injected_js
+    assert "allowed.indexOf(fnName) === -1" in injected_js
+
+    # Node.js で実際に eval を渡して ok:false になることを検証
+    import subprocess
+    node_test_script = f"""
+    const ContentService = {{ MimeType: {{ JSON: 'json' }}, createTextOutput: str => ({{ setMimeType: () => JSON.parse(str) }}) }};
+    const Logger = {{ log: () => {{}} }};
+    {injected_js}
+    const res = __gm_exec_({{ parameter: {{ __gm_run: 'eval', __gm_args: '["1+1"]' }} }});
+    if (res.ok === false && res.error.includes('許可されていません')) {{
+        process.exit(0);
+    }} else {{
+        process.exit(1);
+    }}
+    """
+    proc = subprocess.run(["node", "-e", node_test_script], capture_output=True, text=True)
+    assert proc.returncode == 0, f"Node.js runner test failed: {proc.stderr}"
+
+
+def test_107_3_benchmark_function_defaults_keep_runner_false(mock_client):
+    """指示書107-3: benchmark_function の既定でランナーを残さない (keep_runner=False)"""
+    import inspect
+    sig = inspect.signature(mock_client.benchmark_function)
+    assert sig.parameters["keep_runner"].default is False
+    assert sig.parameters["fast"].default is False
+
+
+def test_107_4_call_webapp_token_destination_restriction(mock_client):
+    """指示書107-4: call_webapp で use_auth=True のとき、script.google.com 以外は例外になり送信されない"""
+    mock_client._request_with_retry = MagicMock()
+
+    # 1. 外部ホストへの use_auth ➔ 例外
+    with pytest.raises(ValueError) as exc1:
+        mock_client.call_webapp("https://evil.example.com/x", use_auth=True)
+    assert "認証つきで呼べるのは Apps Script の Web アプリだけです" in str(exc1.value)
+    mock_client._request_with_retry.assert_not_called()
+
+    # 2. http:// (平文) ➔ 例外
+    with pytest.raises(ValueError) as exc2:
+        mock_client.call_webapp("http://script.google.com/macros/s/xxx/exec", use_auth=True)
+    assert "認証つきで呼べるのは Apps Script の Web アプリだけです" in str(exc2.value)
+    mock_client._request_with_retry.assert_not_called()
+
+    # 3. 正当な https://script.google.com/ ➔ 送信される
+    mock_resp = MagicMock(status_code=200, headers={"Content-Type": "application/json"}, text='{"ok":true}', json=lambda: {"ok": True})
+    mock_client._request_with_retry.return_value = mock_resp
+    res = mock_client.call_webapp("https://script.google.com/macros/s/xxx/exec", use_auth=True)
+    assert mock_client._request_with_retry.called
+
+
+def test_107_5_restore_backup_mismatched_script_id_protection(mock_client, tmp_path):
+    """指示書107-5: 別の scriptId の控えを restore_backup すると例外になり _put_content が呼ばれない"""
+    mock_client.resolve_script_id = MagicMock(return_value="TARGET_PROJECT_12345")
+    mock_client._put_content = MagicMock()
+
+    # 別プロジェクトのバックアップファイルを作成
+    wrong_backup = tmp_path / "backup_OTHERPROJECT_20261104_120000.json"
+    wrong_backup.write_text(json.dumps({"files": [{"name": "Code", "type": "SERVER_JS", "source": "function x(){}"}]}), encoding="utf-8")
+
+    # force=False ➔ 例外
+    with pytest.raises(ValueError) as exc:
+        mock_client.restore_backup("TARGET_PROJECT_12345", str(wrong_backup), force=False)
+    assert "この控えは別のプロジェクトのものです" in str(exc.value)
+    mock_client._put_content.assert_not_called()
+
+    # force=True ➔ 復元可能
+    mock_client.get_content = MagicMock(return_value={"files": []})
+    mock_client._save_backup = MagicMock(return_value="safety.json")
+    res = mock_client.restore_backup("TARGET_PROJECT_12345", str(wrong_backup), force=True)
+    assert res["status"] == "success"
+    mock_client._put_content.assert_called_once()
+
+
+def test_107_6_writing_methods_use_cache_false(mock_client):
+    """指示書107-6: 書き込む手が get_content(sid, use_cache=False) で取り直していることを検証"""
+    mock_client.resolve_script_id = MagicMock(return_value="mock_sid")
+    mock_client._save_backup = MagicMock(return_value="backup.json")
+    mock_client._put_content = MagicMock()
+    mock_client._validate_syntax = MagicMock(return_value="valid")
+
+    recorded_calls = []
+    base_files = [{"name": "Code", "type": "SERVER_JS", "source": "function myFunc() { return 1; }"}]
+
+    def fake_get_content(sid, use_cache=True):
+        recorded_calls.append(use_cache)
+        return {"files": copy.deepcopy(base_files)}
+
+    import copy
+    mock_client.get_content = MagicMock(side_effect=fake_get_content)
+
+    # 1. patch_code
+    recorded_calls.clear()
+    mock_client.patch_code("mock_sid", "Code", target="return 1;", replacement="return 2;")
+    assert recorded_calls == [False]
+
+    # 2. patch_function
+    recorded_calls.clear()
+    mock_client.patch_function("mock_sid", "Code", "myFunc", target="return 1;", replacement="return 3;")
+    assert recorded_calls == [False]
+
+    # 3. replace_function
+    recorded_calls.clear()
+    mock_client.replace_function("mock_sid", "Code", "myFunc", code="function myFunc() { return 4; }")
+    assert recorded_calls == [False]
+
+    # 4. add_function
+    recorded_calls.clear()
+    mock_client.add_function("mock_sid", "Code", code="function newFunc() { return 5; }")
+    assert recorded_calls == [False]
+
+    # 5. delete_function
+    recorded_calls.clear()
+    mock_client.delete_function("mock_sid", "Code", "myFunc")
+    assert recorded_calls == [False]
+
+    # 6. batch_patch
+    recorded_calls.clear()
+    mock_client.batch_patch("mock_sid", operations=[{"file": "Code", "type": "patch", "target": "return 1;", "replacement": "return 6;"}])
+    assert recorded_calls == [False]
+
+    # 7. replace_file
+    recorded_calls.clear()
+    mock_client.replace_file("mock_sid", "Code", new_source="function myFunc() { return 7; }")
+    assert recorded_calls == [False]
+
+    # 8. add_file
+    recorded_calls.clear()
+    mock_client.add_file("mock_sid", "NewFile", file_type="SERVER_JS", source="function a(){}")
+    assert recorded_calls == [False]
+
+    # 9. delete_file
+    recorded_calls.clear()
+    mock_client.delete_file("mock_sid", "Code")
+    assert recorded_calls == [False]

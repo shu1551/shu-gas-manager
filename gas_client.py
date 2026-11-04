@@ -809,7 +809,7 @@ class GasClient:
     def replace_function(self, script_id, filename, func_name, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient"):
         """指定ファイル内の特定関数定義ブロックを丸ごと置換（Excel の replace_procedure 相当）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
 
         matched_file = self._match_file(files, filename)
@@ -867,7 +867,7 @@ class GasClient:
     def patch_function(self, script_id, filename, func_name, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient"):
         """関数定義スコープ内限定のコード置換（他関数に影響を与えずにピンポイント置換）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
         matched_file = self._match_file(files, filename)
         source = matched_file.get("source", "")
@@ -975,7 +975,7 @@ class GasClient:
     def add_function(self, script_id, filename, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient"):
         """指定ファイルに関数を追加（既存関数との重複チェック付き）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
         matched_file = self._match_file(files, filename)
         source = matched_file.get("source", "")
@@ -1047,7 +1047,7 @@ class GasClient:
     def delete_function(self, script_id, filename, func_name, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient"):
         """指定ファイルから関数を削除"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
         matched_file = self._match_file(files, filename)
         source = matched_file.get("source", "")
@@ -1103,7 +1103,7 @@ class GasClient:
     def batch_patch(self, script_id, operations, force=False, dry_run=False, deploy=False, deploy_desc="Batch deployed via GasClient"):
         """複数ファイル・複数関数の修正をメモリ上で一括合成し、1回通信でアトミック反映"""
         sid = self.resolve_script_id(script_id)
-        orig_content = copy.deepcopy(self.get_content(sid))
+        orig_content = copy.deepcopy(self.get_content(sid, use_cache=False))
         content = copy.deepcopy(orig_content)
         files = content.get("files", [])
 
@@ -1554,7 +1554,7 @@ class GasClient:
     def patch_code(self, script_id, filename, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", verify=False, dev=False):
         """ファイル内の特定文字列を置換（複数箇所ヒット時は警告停止、diff 出力・構文検査対応、複数一括置換 patches 対応、自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
 
         matched_file = self._match_file(files, filename)
@@ -1665,7 +1665,7 @@ class GasClient:
     def replace_file(self, script_id, filename, new_source, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient"):
         """ファイルの中身を丸ごと置き換え（自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
 
         matched_file = self._match_file(files, filename)
@@ -1717,7 +1717,7 @@ class GasClient:
     def add_file(self, script_id, filename, file_type, source="", force=False):
         """新規ファイルを追加"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
 
         base_name = os.path.splitext(filename)[0]
@@ -1759,7 +1759,7 @@ class GasClient:
     def delete_file(self, script_id, filename):
         """ファイルを削除"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid)
+        content = self.get_content(sid, use_cache=False)
         files = content.get("files", [])
 
         matched = self._match_file(files, filename)
@@ -1800,7 +1800,7 @@ class GasClient:
                 pass
         return results
 
-    def restore_backup(self, script_id, backup_file, filename=""):
+    def restore_backup(self, script_id, backup_file, filename="", force=False):
         """バックアップから復元（復元直前の安全スナップショット退避付き）"""
         sid = self.resolve_script_id(script_id)
         target_path = Path(backup_file)
@@ -1810,11 +1810,20 @@ class GasClient:
         if not target_path.exists():
             raise FileNotFoundError(f"バックアップファイルが見つかりません: {target_path}")
 
+        # 控えの持ち主（scriptId 先頭 12 字）を照合
+        target_name = target_path.name
+        match_bak = re.match(r"^backup_([A-Za-z0-9_-]{12})_", target_name)
+        if match_bak:
+            bak_sid_prefix = match_bak.group(1)
+            target_sid_prefix = sid[:12]
+            if bak_sid_prefix != target_sid_prefix and not force:
+                raise ValueError(f"この控えは別のプロジェクトのものです (控え: {bak_sid_prefix}, 戻し先: {target_sid_prefix})。強制復元する場合は force=True を指定してください。")
+
         with open(target_path, "r", encoding="utf-8") as f:
             bak_content = json.load(f)
         bak_files = bak_content.get("files", [])
 
-        current_content = self.get_content(sid)
+        current_content = self.get_content(sid, use_cache=False)
         safety_backup = self._save_backup(sid, current_content)
 
         if not filename:
@@ -2268,6 +2277,22 @@ class GasClient:
         """新バージョンを作成し、既存の Web アプリデプロイを更新（再デプロイ）"""
         sid = self.resolve_script_id(script_id)
 
+        # HEAD を取りたてで確認し、ランナーが残っていれば事前に自動クリーンアップ
+        head_content = self.get_content(sid, use_cache=False)
+        has_runner = any(
+            ("__gm_exec_" in f.get("source", "") or "__gm_run" in f.get("source", ""))
+            for f in head_content.get("files", [])
+        )
+        if has_runner:
+            self.clean_runner(sid)
+            head_content = self.get_content(sid, use_cache=False)
+            has_runner_after = any(
+                ("__gm_exec_" in f.get("source", "") or "__gm_run" in f.get("source", ""))
+                for f in head_content.get("files", [])
+            )
+            if has_runner_after:
+                raise RuntimeError("ランナー (__gm_exec_) の除去に失敗したため、本番デプロイを中断しました。安全のため手動で clean-runner を実行してください。")
+
         dep_id = deployment_id
         web_url = ""
 
@@ -2494,6 +2519,9 @@ class GasClient:
         if key:
             req_params["key"] = key
 
+        if use_auth:
+            if not (url.startswith("https://script.google.com/") or url.startswith("https://script.googleusercontent.com/")):
+                raise ValueError("認証つきで呼べるのは Apps Script の Web アプリだけです (https://script.google.com/ または https://script.googleusercontent.com/)")
         headers = self._headers() if use_auth else {}
 
         method = method.upper()
@@ -2537,8 +2565,6 @@ class GasClient:
     def run_function(self, script_id, func_name, args=None, keep_runner=False, cleanup=None, fast=False, timeout=30):
         if cleanup is not None:
             keep_runner = not cleanup
-        if fast:
-            keep_runner = True
         """任意のGAS関数をリモート実行し、ログ（Logger.log）と戻り値・エラートレースを回収"""
         if not func_name:
             raise ValueError("実行対象の関数名を指定してください。")
@@ -2580,6 +2606,15 @@ class GasClient:
             if not target_file:
                 raise RuntimeError(f"プロジェクト [{sid}] に SERVER_JS ファイルが存在しません。")
 
+        # 許可関数リストの抽出（差し込み時点のプロジェクト内定義済み関数のみ）
+        allowed_fns = []
+        for f in files:
+            if f.get("type") == "SERVER_JS":
+                extracted = self._extract_functions_from_js(f.get("source", ""))
+                allowed_fns.extend([fn["name"] for fn in extracted])
+        allowed_fns = sorted(list(set(allowed_fns)))
+        allowed_json = json.dumps(allowed_fns)
+
         runner_code = (
             "\n\nfunction __gm_exec_(e) {\n"
             "  var t0 = new Date().getTime();\n"
@@ -2606,6 +2641,15 @@ class GasClient:
             "    var fnName = e.parameter.__gm_run;\n"
             "    var rawArgs = e.parameter.__gm_args;\n"
             "    var parsedArgs = rawArgs ? JSON.parse(rawArgs) : [];\n"
+            f"    var allowed = {allowed_json};\n"
+            "    if (allowed.indexOf(fnName) === -1) {\n"
+            "      return ContentService.createTextOutput(JSON.stringify({\n"
+            "        ok: false,\n"
+            "        error: \"関数 '\" + fnName + \"' の実行は許可されていません（プロジェクト内の定義済み関数のみ実行可能です）。\",\n"
+            "        logs: logs,\n"
+            "        elapsed_ms: new Date().getTime() - t0\n"
+            "      })).setMimeType(ContentService.MimeType.JSON);\n"
+            "    }\n"
             "    var fn = this[fnName];\n"
             "    if (typeof fn !== 'function') {\n"
             "      return ContentService.createTextOutput(JSON.stringify({\n"
@@ -2721,10 +2765,14 @@ class GasClient:
                     if sid in self._cache_data.get("deployments", {}):
                         self._cache_data["deployments"][sid].pop("runner_installed", None)
                         self._save_cache()
-                except Exception:
-                    pass
+                except Exception as ex:
+                    warn_msg = f"ランナーが残っています。py gas.py clean-runner {script_id} で外してください"
+                    if isinstance(data, dict):
+                        data["warning"] = warn_msg
+                        data["runner_cleaned"] = False
+                    print(f"⚠️ {warn_msg} ({ex})")
 
-    def benchmark_function(self, script_id, func_name, args=None, target_ms=1000, iterations=1, expected=None, fast=True, keep_runner=True, timeout=30):
+    def benchmark_function(self, script_id, func_name, args=None, target_ms=1000, iterations=1, expected=None, fast=False, keep_runner=False, timeout=30):
         """GAS関数の実機ベンチマーク計測＆健康診断による自律カイゼン関所（100点満点採点・処方箋生成）"""
         if not func_name:
             raise ValueError("ベンチマーク対象の関数名を指定してください。")
@@ -3122,7 +3170,7 @@ class GasClient:
                 "diff": st["diff"]
             }
 
-        current_content = self.get_content(sid)
+        current_content = self.get_content(sid, use_cache=False)
         curr_files = current_content.get("files", [])
 
         ignore_dirs = {".git", "node_modules", "__pycache__", ".backups", ".pytest_cache"}

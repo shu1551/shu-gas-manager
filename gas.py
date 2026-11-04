@@ -876,7 +876,6 @@ def main():
             is_url = bool(args.target.startswith("http"))
             acts = None
             if args.actions:
-                import json
                 try:
                     acts = json.loads(args.actions)
                 except Exception:
@@ -911,7 +910,6 @@ def main():
         elif args.command == "trace-rpc":
             acts = None
             if args.actions:
-                import json
                 try:
                     acts = json.loads(args.actions)
                 except Exception:
