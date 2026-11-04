@@ -1187,34 +1187,38 @@ def inspect_ui(
 
 @mcp.tool()
 @safe_tool
-def clean_dead(project: str, dry_run: bool = False, deploy: bool = False) -> str:
-    """レントゲン解析で検出された孤立した死にコード（どのUIからもサーバー内部からも呼ばれていない関数）を一括で安全に自動削除します。
-    事前バックアップ保存、構文チェック、削除後レントゲン再検査を全自動で行います。
+def clean_dead(project: str, dry_run: bool = True, names: str = "", force: bool = False, deploy: bool = False) -> str:
+    """レントゲン解析で検出された孤立死にコードを名指しで安全に削除します。
+    ※ dry_run=True が既定です。先に dry_run で確認し、消す関数名を names に渡して dry_run=False で実行してください。
 
     Args:
         project: プロジェクト名またはスクリプトID
-        dry_run: 削除を実行せず、差分（diff）プレビューのみを表示するかどうか（デフォルト: False）
-        deploy: 削除後に自動で新バージョンをデプロイするかどうか（デフォルト: False）
+        dry_run: プレビューのみ表示するか（デフォルト: True）
+        names: 削除する関数名（カンマ区切り文字列またはリスト）
+        force: 保留 (suspect) の関数も強制削除するか（デフォルト: False）
+        deploy: 削除後に新バージョンをデプロイするか（デフォルト: False）
     """
     client = get_client()
-    res = client.clean_dead(project, dry_run=dry_run, deploy=deploy)
-    return res["markdown_report"]
+    names_list = [n.strip() for n in names.split(",") if n.strip()] if isinstance(names, str) and names else (names if isinstance(names, list) else None)
+    res = client.clean_dead(project, dry_run=dry_run, names=names_list, force=force, deploy=deploy)
+    return res.get("markdown_report") or res.get("message", "")
 
 
 @mcp.tool()
 @safe_tool
-def clone_web(url: str, project: str = "", deploy: bool = True) -> str:
-    """指定した外部 Web ページ（ツールやサイト）を解析し、CSS/JS/画像をバンドルした自立型 GAS Web アプリとして自動作成・デプロイします。
+def clone_web(url: str, project: str = "", deploy: bool = False, access: str = "MYSELF") -> str:
+    """指定した外部 Web ページを解析し、自立型 GAS Web アプリとして自動作成します。写してよいのは自分が作ったページ・権利のあるページだけです。
     デプロイ直後に自動でレントゲン解析（xray）を実行し、クローン後のアプリの健全性を報告します。
 
     Args:
         url: クローン元の Web ページ URL
         project: 作成する GAS プロジェクト名（省略時はページの title を使用）
-        deploy: 自動で本番デプロイを行い Web アプリ URL を発行するかどうか（デフォルト: True）
+        deploy: 本番デプロイを行うかどうか（デフォルト: False）
+        access: Webアプリ公開範囲（デフォルト: MYSELF）
     """
     client = get_client()
-    res = client.clone_web(url, project_name=project or None, deploy=deploy)
-    return res["markdown_report"]
+    res = client.clone_web(url, project_name=project or None, deploy=deploy, access=access)
+    return res.get("markdown_report") or res.get("message", "")
 
 
 @mcp.tool()
@@ -1508,19 +1512,29 @@ def gas(command: str) -> str:
 
     if sub in ("clean-dead", "clean_dead", "cleandead"):
         if len(parts) < 2:
-            return "プロジェクト名を指定してください: clean-dead <project> [--dry-run] [--deploy]"
+            return "プロジェクト名を指定してください: clean-dead <project> [--apply] [--names func1,func2] [--force] [--deploy]"
         p_name = parts[1]
-        is_dry = "--dry-run" in parts
+        is_apply = "--apply" in parts
+        is_dry = not is_apply
         do_dep = "--deploy" in parts
-        return clean_dead(project=p_name, dry_run=is_dry, deploy=do_dep)
+        do_force = "--force" in parts
+        names_str = ""
+        for i, pt in enumerate(parts):
+            if pt in ("--names", "--name") and i + 1 < len(parts):
+                names_str = parts[i + 1]
+        return clean_dead(project=p_name, dry_run=is_dry, names=names_str, force=do_force, deploy=do_dep)
 
     if sub in ("clone-web", "clone_web", "clone"):
         if len(parts) < 2:
-            return "クローン元の URL を指定してください: clone-web <url> [project_name] [--no-deploy]"
+            return "クローン元の URL を指定してください: clone-web <url> [project_name] [--deploy] [--access MYSELF|ANYONE]"
         target_url = parts[1]
         p_name = parts[2] if len(parts) > 2 and not parts[2].startswith("--") else ""
-        do_deploy = "--no-deploy" not in parts
-        return clone_web(url=target_url, project=p_name, deploy=do_deploy)
+        do_deploy = "--deploy" in parts
+        access_val = "MYSELF"
+        for i, pt in enumerate(parts):
+            if pt == "--access" and i + 1 < len(parts):
+                access_val = parts[i + 1]
+        return clone_web(url=target_url, project=p_name, deploy=do_deploy, access=access_val)
 
     if sub in ("xray", "x-ray", "blueprint"):
         if len(parts) < 2:

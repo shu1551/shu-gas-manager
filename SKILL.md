@@ -46,10 +46,6 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 - **ターン 3（実機テスト・健康診断・本番デプロイ）**:
   - 関数単体テスト・ベンチマーク関所: `benchmark_function(project="...", func_name="...", args="[...]")`
   - 健康診断: `diagnose(project="...")`
-  - 死にコード一括削除 (レントゲン解析で検出された孤立関数を自動安全削除): `clean_dead(project="...", dry_run=False)` / CLI: `py gas.py clean-dead <project> [--dry-run]`
-  - Webクローン化 (外部Webページを解析し自立型GAS Webアプリとしてクローン・デプロイ): `clone_web(url="...", project="...")` / CLI: `py gas.py clone-web <url> [project]`
-  - レントゲン解析 (E2Eコールパス・幽霊関数・死にコード検知): `xray(project="...", filename="Index")` / CLI: `py gas.py xray <project>`
-
   - 本番反映: `deploy(project="...", description="...")`
 
 ### 万一のロールバック（ローカル退避 ＆ Googleクラウド版履歴の二重保険）
@@ -75,6 +71,8 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 ## 4. 実機ベンチマーク関所（`bench`）による自律カイゼンループ
 
 「動くはず」の推測納品を厳禁とし、実機計測と診断が一体化した **`benchmark_function`（CLI/統合窓口: `gas("bench <project> <func_name> [args] --target-ms <目標ms> --expected <期待値>")`）** を関所として自律ループを回す：
+
+消す・送る・ゴミ箱へ移す・本番のシートへ書く関数は、bench の自律ループで撃たない（本物のメールやデータが連打で消える）。撃つのは読むだけの関数か、試し用のコピーに向けたときだけ。
 
 1. **実装・改修**: `patch_function` / `add_function` で対象関数を実装する。
 2. **実機ベンチマーク関所**: `benchmark_function(project="...", func_name="...", args="[...]", target_ms=500, expected="...")` を実行する。
@@ -110,7 +108,7 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 2. **6大視覚レイヤーの完全内蔵**:
    - タイポグラフィ階層・8pxグリッド・半透明サーフェス＆ボーダー・空気感のある多層シャドウ・角丸秩序・マイクロインタラクションが確定ロジックで自動注入され、一瞬で最高峰のSaaSクオリティへ昇華する。
 
-## 8. 実機画面監査とコントラスト自動監査（inspect-ui: 明示指示時のみ）
+## 7. 実機画面監査とコントラスト自動監査（inspect-ui: 明示指示時のみ）
 
 **【重要・速度最優先の掟】`inspect_ui`（Playwright実機レンダリング・全ボタン踏破・コントラスト監査）は重量級ツールです。通常のコード修正・UI改修時に勝手に実行することは厳禁とします。「画面を確認して」「コントラストをチェックして」「スクショを撮って」とユーザーから明示指示された時のみ実行してください。**
 
@@ -122,7 +120,7 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
      - **スクリーンショット撮影**: 実画面の画像を保存し、ユーザーへ提示。
 
 
-## 9. REA思想の高度解析武器群 (trace-rpc, diff-behavior, ledger 等: 明示指示時のみ)
+## 8. REA思想の高度解析武器群 (trace-rpc, diff-behavior, ledger 等: 明示指示時のみ)
 
 ※以下の高度解析ツール群は、通常のコード改修時には呼び出さず、ユーザーから調査・解析・大掃除・移行を明示指示された時のみ使用します（AIによる勝手な自動実行を厳禁）。
 
@@ -138,13 +136,13 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
    - `gas("ledger <project> [file]")`
    - Webアプリとして備えるべき必須要件の充足状況をチェックリスト化し、スコアを算出。
 
-4. **`clean_dead`（死にコード一括削除）**:
-   - `gas("clean-dead <project>")`
-   - 画面から使われていない孤立サーバー関数を一括安全削除。
+4. **`clean_dead`（死にコード安全削除）**:
+   - `gas("clean-dead <project>")`（CLI: `py gas.py clean-dead <project>`）
+   - 手順: (1) `dry_run=True` でプレビュー表示 ➔ (2) 人間が削除対象の関数名を確認・選定 ➔ (3) `names=["func1", ...]`（CLI: `--apply --names func1`）で名指し削除（保留 suspect の関数は強制フラグ force なしでは削除不可）。
 
 5. **`clone_web`（Webサイトクローン化）**:
-   - `gas("clone-web <url>")`
-   - 外部Webページを解析し自立型GAS Webアプリとしてクローン・デプロイ。
+   - `gas("clone-web <url>")`（CLI: `py gas.py clone-web <url>`）
+   - 外部Webページを解析し自立型GAS Webアプリとしてクローン。写してよいのは自分が作ったページ・権利のあるページだけです（既定では非公開 access="MYSELF"、未デプロイ）。
 
 6. **`xray`（深層レントゲン解析）**:
    - `gas("xray <project>")`

@@ -300,13 +300,17 @@ def main():
     cd_p = subparsers.add_parser("clean-dead", aliases=["clean"], help="死にコード（孤立サーバー関数）自動一括削除＆安全バックアップ")
     cd_p.add_argument("project", help="プロジェクト名またはスクリプトID")
     cd_p.add_argument("file", nargs="?", default="Index", help="対象HTMLファイル (デフォルト: Index)")
+    cd_p.add_argument("--apply", action="store_true", help="実際に削除を実行する（指定しない場合は dry-run プレビュー）")
+    cd_p.add_argument("--names", default="", help="削除する関数名をカンマ区切りで指定")
+    cd_p.add_argument("--force", action="store_true", help="保留 (suspect) の関数も強制削除する")
     cd_p.add_argument("--deploy", action="store_true", help="削除完了後に自動本番デプロイ")
 
     # 2. clone-web
-    cw_p = subparsers.add_parser("clone-web", aliases=["clone"], help="外部WebサイトのHTML/CSS/JSを自動吸い出し・新規GAS化＆即時デプロイ")
+    cw_p = subparsers.add_parser("clone-web", aliases=["clone"], help="外部WebサイトのHTML/CSS/JSを自動吸い出し・新規GAS化")
     cw_p.add_argument("url", help="クローン対象の外部WebサイトURL")
     cw_p.add_argument("--title", "-t", default="", help="作成するGASプロジェクト名 (省略時はページタイトル)")
-    cw_p.add_argument("--deploy", action="store_true", default=True, help="クローン完了後に自動デプロイ (デフォルト: 有効)")
+    cw_p.add_argument("--deploy", action="store_true", default=False, help="クローン完了後に自動デプロイ (デフォルト: 無効)")
+    cw_p.add_argument("--access", default="MYSELF", choices=["MYSELF", "ANYONE"], help="Webアプリ公開範囲 (デフォルト: MYSELF)")
 
     # 3. xray
     xr_p = subparsers.add_parser("xray", aliases=["x-ray"], help="深層レントゲン解析（UI要素 ➔ フロントJS ➔ GAS APIコールパス、死にコード、未定義RPC検知）")
@@ -855,31 +859,14 @@ def main():
                 print(f"URL: {res['webAppUrl']}")
 
         elif args.command in ("clean-dead", "clean"):
-            res = client.clean_dead(args.project, filename=args.file, deploy=args.deploy)
-            print(f"=== 🧹 死にコード削除完了: [{res.get('script_id')}] ===")
-            print(f"削除件数: {res.get('cleaned_count', 0)}件 ({', '.join(res.get('cleaned_functions', [])) if res.get('cleaned_functions') else 'なし'})")
-            if res.get("backup_file"):
-                print(f"バックアップ: {res['backup_file']}")
-            if res.get("deployment"):
-                print(f"Webアプリデプロイ: Version {res['deployment'].get('versionNumber')}")
-            else:
-                print("Webアプリ更新: 未デプロイ（コード反映のみ）")
-            if res.get("post_xray"):
-                print("\n--- 🩻 削除後レントゲン検査 ---")
-                print(res["post_xray"].get("markdown_report", ""))
+            dry_run = not args.apply
+            names_list = [n.strip() for n in args.names.split(",") if n.strip()] if args.names else None
+            res = client.clean_dead(args.project, dry_run=dry_run, names=names_list, force=args.force, deploy=args.deploy)
+            print(res.get("markdown_report") or res.get("message", ""))
 
         elif args.command in ("clone-web", "clone"):
-            res = client.clone_web(args.url, title=args.title or None, deploy=args.deploy)
-            if not res.get("success"):
-                print(f"[ERROR] {res.get('error')}")
-            else:
-                print(f"=== 🌐 Webクローン＆GAS化完了: [{res.get('title')}] ===")
-                print(f"新規プロジェクトID: {res.get('script_id')}")
-                if res.get("deployment"):
-                    print(f"本番WebアプリURL: {res['deployment'].get('webAppUrl')}")
-                if res.get("xray"):
-                    print("\n--- 🩻 即時レントゲン照射結果 ---")
-                    print(res["xray"].get("markdown_report", ""))
+            res = client.clone_web(args.url, project_name=args.title or None, deploy=args.deploy, access=args.access)
+            print(res.get("markdown_report") or res.get("message", ""))
 
         elif args.command in ("xray", "x-ray"):
             res = client.xray(args.project, filename=args.file)

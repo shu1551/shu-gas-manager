@@ -21,6 +21,11 @@ import webbrowser
 import hashlib
 
 class GasClient:
+    STANDARD_ENTRY_POINTS = (
+        "doGet", "doPost", "onOpen", "onEdit", "onInstall",
+        "onSelectionChange", "onFormSubmit", "onChange", "authorize", "authorizeForge"
+    )
+
     def __init__(self, clasprc_path=None, backup_dir=None, cache_file=None):
         if clasprc_path is None:
             clasprc_path = os.path.expanduser("~/.clasprc.json")
@@ -3535,7 +3540,7 @@ class GasClient:
                     })
 
         # 5. エントリーポイント検出
-        standard_entries = ("doGet", "doPost", "onOpen", "onEdit", "onInstall", "onSelectionChange", "onFormSubmit", "authorize", "authorizeForge")
+        standard_entries = self.STANDARD_ENTRY_POINTS
         for ent in standard_entries:
             if ent in top_level_map:
                 entry_points[ent] = top_level_map[ent]
@@ -4294,7 +4299,23 @@ sandbox.self = sandbox;
             funcs = self._extract_functions_from_js(src)
             for fn in funcs:
                 if fn["name"] not in server_functions:
-                    server_functions[fn["name"]] = {"file": fname, "line": fn["start_line"]}
+                    fn_decl_m = re.search(rf'(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+{re.escape(fn["name"])}\s*\(([^)]*)\)', src)
+                    params = []
+                    has_customfunction = False
+                    if fn_decl_m:
+                        p_str = fn_decl_m.group(1).strip()
+                        params = [p.strip() for p in p_str.split(',') if p.strip()] if p_str else []
+                        pre_code = src[:fn_decl_m.start()].rstrip()
+                        if pre_code.endswith("*/"):
+                            c_start = pre_code.rfind("/*")
+                            if c_start != -1 and "@customfunction" in pre_code[c_start:].lower():
+                                has_customfunction = True
+                    server_functions[fn["name"]] = {
+                        "file": fname,
+                        "line": fn["start_line"],
+                        "params": params,
+                        "has_customfunction": has_customfunction
+                    }
 
         # 2. 対象HTMLファイルの特定
         target_name = filename.replace(".html", "").replace(".HTML", "")
@@ -4434,21 +4455,75 @@ sandbox.self = sandbox;
 
         # 7. サーバー関数の精密分類
         classified_server_funcs = {}
+        suspect_reasons = {}
         _, masked_srv = self._tokenize_js(all_server_src)
+        all_sources = [(f.get("name", ""), f.get("source", ""), "gs" if f.get("type") == "SERVER_JS" else "html") for f in files if f.get("type") in ("SERVER_JS", "HTML")]
 
         for fn_name, info in server_functions.items():
-            if fn_name in ("doGet", "doPost", "onOpen", "onEdit", "onInstall"):
+            if fn_name in self.STANDARD_ENTRY_POINTS:
                 classified_server_funcs[fn_name] = "entry_point"
             elif fn_name in active_rpc_set:
                 classified_server_funcs[fn_name] = "public_rpc"
             else:
                 calls = len(re.findall(rf'\b{re.escape(fn_name)}\s*\(', masked_srv))
-                defs = len(re.findall(rf'function\s+{re.escape(fn_name)}\s*\(', masked_srv))
+                defs = len(re.findall(rf'\bfunction\s+{re.escape(fn_name)}\s*\(', masked_srv))
                 internal_calls = calls - defs
                 if internal_calls > 0:
                     classified_server_funcs[fn_name] = "internal_helper"
                 else:
-                    classified_server_funcs[fn_name] = "dead_code"
+                    is_suspect = False
+                    suspect_reason = ""
+
+                    # (1) サーバー側・HTML側のどこかに名前の文字列（'名前' または "名前" または `名前`）がある
+                    str_pat = re.compile(rf"""['"`]{re.escape(fn_name)}['"`]""")
+                    for s_fname, s_fsrc, s_fext in all_sources:
+                        m_str = str_pat.search(s_fsrc)
+                        if m_str:
+                            line_no = s_fsrc.count('\n', 0, m_str.start()) + 1
+                            is_suspect = True
+                            suspect_reason = f"文字列 '{fn_name}' が {s_fname}.{s_fext} {line_no} 行目にある"
+                            break
+
+                    # (2) 定義直前の JSDoc に @customfunction がある
+                    if not is_suspect and info.get("has_customfunction"):
+                        is_suspect = True
+                        suspect_reason = "@customfunction (カスタム関数)"
+
+                    # (3) 名前が \b名前\b で定義以外の所に出る（括弧なしのコールバック渡し等）
+                    if not is_suspect:
+                        total_ids = len(re.findall(rf'\b{re.escape(fn_name)}\b', masked_srv))
+                        if total_ids > defs:
+                            is_suspect = True
+                            suspect_reason = "定義箇所以外で参照あり (コールバック渡し等の疑い)"
+
+                    # (4) 名前の末尾が _ でなく、引数を取らない（エディタやトリガーから手で撃つ形）
+                    if not is_suspect and not fn_name.endswith('_'):
+                        params = info.get("params", [])
+                        if len(params) == 0:
+                            is_suspect = True
+                            suspect_reason = "画面で作ったトリガー・手で撃つ関数はコードから見えない"
+                        else:
+                            # 引数があっても内部で他のサーバー関数を参照していれば suspect
+                            # （setup・useCallback のように他関数を統括・コールバック利用するトップレベル関数）
+                            fn_src = info.get("source", "")
+                            if not fn_src:
+                                mf = self._match_file(files, info["file"])
+                                span = self._get_function_absolute_span(mf, fn_name)
+                                fn_src = mf["source"][span[0]:span[1]]
+                            body_calls_other = any(
+                                re.search(rf'\b{re.escape(other_fn)}\b', fn_src)
+                                for other_fn in server_functions
+                                if other_fn != fn_name
+                            )
+                            if body_calls_other:
+                                is_suspect = True
+                                suspect_reason = "他関数を参照・統括する関数の可能性あり"
+
+                    if is_suspect:
+                        classified_server_funcs[fn_name] = "suspect"
+                        suspect_reasons[fn_name] = suspect_reason
+                    else:
+                        classified_server_funcs[fn_name] = "dead_code"
 
         # 8. 照合判定（Ghost RPC & Dead Code）
         ghost_rpcs = [r for r in sorted(list(active_rpc_set)) if r not in server_functions]
@@ -4456,6 +4531,11 @@ sandbox.self = sandbox;
             {"name": fn, "file": server_functions[fn]["file"], "line": server_functions[fn]["line"]}
             for fn, kind in sorted(classified_server_funcs.items())
             if kind == "dead_code"
+        ]
+        suspect_server_funcs = [
+            {"name": fn, "file": server_functions[fn]["file"], "line": server_functions[fn]["line"], "reason": suspect_reasons.get(fn, "")}
+            for fn, kind in sorted(classified_server_funcs.items())
+            if kind == "suspect"
         ]
 
         # 9. ストレージ/キャッシュキーの抽出
@@ -4479,6 +4559,13 @@ sandbox.self = sandbox;
             lines.append("### 🔴 幽霊RPC (フロントから呼んでいるが存在しないGAS関数 - 本番クラッシュ確定)")
             for g in ghost_rpcs:
                 lines.append(f"  - `{g}()` (HTML側で呼び出しを確認、サーバー側に未実装)")
+            lines.append("")
+
+        # 保留（suspect）
+        if suspect_server_funcs:
+            lines.append("### 🟠 保留サーバー関数 (suspect: 使われていない疑いがあるがトリガー・コールバック等の可能性あり・削除除外)")
+            for s in suspect_server_funcs:
+                lines.append(f"  - `{s['name']}()` [{s['file']}.gs 行 {s['line']}] - {s['reason']}")
             lines.append("")
 
         # 死にコード（Dead Server Code）
@@ -4526,6 +4613,7 @@ sandbox.self = sandbox;
             "server_functions_count": len(server_functions),
             "ghost_rpcs": ghost_rpcs,
             "dead_server_functions": dead_server_funcs,
+            "suspect_server_functions": suspect_server_funcs,
             "dead_ui_elements": dead_ui_elements,
             "server_classification": classified_server_funcs,
             "ui_call_paths": ui_call_paths,
@@ -4658,8 +4746,10 @@ function doGet() {{
             "total_html_length": len(str(soup))
         }
 
-    def clone_web(self, url: str, project_name: str = None, deploy: bool = True) -> dict:
-        """外部 Web ページを自立型 GAS Web アプリとしてクローン作成しデプロイする"""
+    def clone_web(self, url: str, project_name: str = None, deploy: bool = False, access: str = "MYSELF") -> dict:
+        """外部 Web ページを自立型 GAS Web アプリとしてクローン作成する。
+        ※ 写してよいのは自分が作ったページ・権利のあるページだけです。
+        """
         bundle = self._bundle_web_page(url)
         title = project_name or bundle["title"] or "Cloned Web App"
 
@@ -4676,7 +4766,7 @@ function doGet() {{
             "runtimeVersion": "V8",
             "webapp": {
                 "executeAs": "USER_DEPLOYING",
-                "access": "ANYONE"
+                "access": access
             }
         }
 
@@ -4698,11 +4788,16 @@ function doGet() {{
 
         xray_res = self.xray(sid, filename="Index")
 
+        warning_header = ""
+        if access == "ANYONE":
+            warning_header = "⚠️ 写したページを誰でも見られる形で公開しました。他者のページ・ログイン画面の写しを公開すると、なりすましと著作権の問題になります。\n\n"
+
         lines = [
             f"=== 🚀 Webクローン完了: [{title}] ===",
             f"元URL: {url}",
             f"スクリプトID: {sid}",
             f"WebアプリURL: {webapp_url or '(未デプロイ)'}",
+            f"アクセス権限: {access}",
             f"バンドル規模: HTML {bundle['total_html_length']:,} 文字 (CSSインライン化: {bundle['inlined_css_count']}件, JSインライン化: {bundle['inlined_js_count']}件, リンク書き換え: {bundle['rewritten_links_count']}件)",
             "",
             "--- 🩻 クローン直後レントゲン検査 ---",
@@ -4715,59 +4810,156 @@ function doGet() {{
             "project_name": title,
             "url": url,
             "webapp_url": webapp_url,
+            "access": access,
             "inlined_css_count": bundle["inlined_css_count"],
             "inlined_js_count": bundle["inlined_js_count"],
             "rewritten_links_count": bundle["rewritten_links_count"],
             "html_length": bundle["total_html_length"],
             "xray": xray_res,
-            "markdown_report": "\n".join(lines)
+            "markdown_report": warning_header + "\n".join(lines)
         }
 
 
-    def clean_dead(self, script_id: str, dry_run: bool = False, deploy: bool = False, deploy_desc: str = "Clean dead functions via GasClient") -> dict:
-        """レントゲン解析で検出された孤立した死にコード（Dead Functions）を一括で安全に削除する"""
+    def clean_dead(self, script_id: str, dry_run: bool = True, names: list = None, force: bool = False, deploy: bool = False, deploy_desc: str = "Clean dead functions via GasClient") -> dict:
+        """レントゲン解析で検出された孤立した死にコード（Dead Functions）を名指しで安全に削除する"""
+        notice_msg = "Apps Script の画面で作ったトリガー・シートの式から呼ぶ関数は、コードからは見えません。消す前に［トリガー］画面とシートの式を確かめてください。"
+
         sid = self.resolve_script_id(script_id)
         xray_res = self.xray(sid)
         dead_funcs = xray_res.get("dead_server_functions", [])
+        suspect_funcs = xray_res.get("suspect_server_functions", [])
+        suspect_map = {s["name"]: s.get("reason", "suspect") for s in suspect_funcs}
 
-        if not dead_funcs:
+        if dry_run:
+            if not dead_funcs:
+                lines = [
+                    f"=== [DRY-RUN] 死にコード削除プレビュー: [{script_id}] ===",
+                    "🟢 削除対象の死にコードはありません（すでに極限までクリーンです）。",
+                    "",
+                    notice_msg
+                ]
+                return {
+                    "status": "no_action",
+                    "script_id": sid,
+                    "deleted_count": 0,
+                    "dead_functions": [],
+                    "suspect_functions": suspect_funcs,
+                    "message": "削除対象の死にコードはありません（すでに極限までクリーンです）。\n" + notice_msg,
+                    "markdown_report": "\n".join(lines)
+                }
+
+            content = self.get_content(sid)
+            files = content.get("files", [])
+            by_file = collections.defaultdict(list)
+            for d in dead_funcs:
+                by_file[d["file"]].append(d["name"])
+
+            all_diffs = []
+            for fname, fnames in by_file.items():
+                matched_file = self._match_file(files, fname)
+                src = matched_file["source"]
+                spans = []
+                for fn in fnames:
+                    start, end = self._get_function_absolute_span(matched_file, fn)
+                    spans.append((start, end, fn))
+                spans.sort(key=lambda x: x[0], reverse=True)
+                cur_src = src
+                for start, end, fn in spans:
+                    before = cur_src[:start]
+                    after = cur_src[end:]
+                    cur_src = before.rstrip() + ("\n\n" if after.strip() else "\n") + after.lstrip()
+                diff_iter = list(difflib.unified_diff(
+                    src.splitlines(keepends=True),
+                    cur_src.splitlines(keepends=True),
+                    fromfile=f"a/{fname}.gs",
+                    tofile=f"b/{fname}.gs",
+                    n=2
+                ))
+                diff_text = "".join(diff_iter[:60]) if len(diff_iter) <= 60 else "".join(diff_iter[:60]) + "\n... (以降省略)\n"
+                all_diffs.append(diff_text)
+
+            lines = [
+                f"=== [DRY-RUN] 死にコード削除プレビュー: [{script_id}] ===",
+                f"検出された死にコード: {len(dead_funcs)}件 ({', '.join([d['name'] for d in dead_funcs])})",
+                f"保留 (suspect): {len(suspect_funcs)}件",
+                "",
+                "```diff",
+                "\n".join(all_diffs),
+                "```",
+                "※ dry_run=True のため実際の削除は行われていません。",
+                "※ 実際に削除するには names=['関数名', ...] を指定して dry_run=False で実行してください。",
+                "",
+                notice_msg
+            ]
+            return {
+                "status": "dry_run",
+                "script_id": sid,
+                "deleted_count": len(dead_funcs),
+                "dead_functions": dead_funcs,
+                "suspect_functions": suspect_funcs,
+                "diff": "\n".join(all_diffs),
+                "markdown_report": "\n".join(lines)
+            }
+
+        # dry_run=False（本番実行）
+        if not names:
+            err_msg = "dry_run で出た名前から選んで names に渡してください"
+            return {
+                "status": "error",
+                "script_id": sid,
+                "deleted_count": 0,
+                "message": err_msg,
+                "markdown_report": f"⚠️ {err_msg}"
+            }
+
+        names_set = set(names)
+        if not force:
+            for n in names:
+                if n in suspect_map:
+                    err_msg = f"関数 '{n}' は suspect (理由: {suspect_map[n]}) のため消せません。強制削除する場合は force=True を指定してください。"
+                    return {
+                        "status": "error",
+                        "script_id": sid,
+                        "deleted_count": 0,
+                        "message": err_msg,
+                        "markdown_report": f"⚠️ {err_msg}"
+                    }
+
+        target_funcs = [d for d in dead_funcs if d["name"] in names_set]
+        if force:
+            target_funcs += [s for s in suspect_funcs if s["name"] in names_set]
+
+        if not target_funcs:
             return {
                 "status": "no_action",
                 "script_id": sid,
                 "deleted_count": 0,
-                "message": "削除対象の死にコードはありません（すでに極限までクリーンです）。",
-                "markdown_report": "🟢 削除対象の死にコードはありません（すでに極限までクリーンです）。"
+                "message": "指定された関数名が削除可能リストに見つかりません。",
+                "markdown_report": "⚠️ 指定された関数名が削除可能リストに見つかりません。"
             }
 
         content = self.get_content(sid)
         files = content.get("files", [])
-
         by_file = collections.defaultdict(list)
-        for d in dead_funcs:
+        for d in target_funcs:
             by_file[d["file"]].append(d["name"])
 
         all_diffs = []
         new_sources = {}
-
         for fname, fnames in by_file.items():
             matched_file = self._match_file(files, fname)
             src = matched_file["source"]
             ftype = matched_file.get("type", "SERVER_JS")
-
             spans = []
             for fn in fnames:
                 start, end = self._get_function_absolute_span(matched_file, fn)
                 spans.append((start, end, fn))
-
-            # 降順ソートで後ろから安全にカット
             spans.sort(key=lambda x: x[0], reverse=True)
-
             cur_src = src
             for start, end, fn in spans:
                 before = cur_src[:start]
                 after = cur_src[end:]
                 cur_src = before.rstrip() + ("\n\n" if after.strip() else "\n") + after.lstrip()
-
             diff_iter = list(difflib.unified_diff(
                 src.splitlines(keepends=True),
                 cur_src.splitlines(keepends=True),
@@ -4777,40 +4969,15 @@ function doGet() {{
             ))
             diff_text = "".join(diff_iter[:60]) if len(diff_iter) <= 60 else "".join(diff_iter[:60]) + "\n... (以降省略)\n"
             all_diffs.append(diff_text)
-
-            # 構文チェック
             self._validate_syntax(fname, cur_src, file_type=ftype)
             new_sources[fname] = cur_src
 
-        if dry_run:
-            lines = [
-                f"=== [DRY-RUN] 死にコード削除プレビュー: [{script_id}] ===",
-                f"検出された死にコード: {len(dead_funcs)}件 ({', '.join([d['name'] for d in dead_funcs])})",
-                "",
-                "```diff",
-                "\n".join(all_diffs),
-                "```",
-                "※ dry_run=True のため実際の削除は行われていません。"
-            ]
-            return {
-                "status": "dry_run",
-                "script_id": sid,
-                "deleted_count": len(dead_funcs),
-                "dead_functions": dead_funcs,
-                "diff": "\n".join(all_diffs),
-                "markdown_report": "\n".join(lines)
-            }
-
-        # 本番実行: 自動バックアップ保存
         backup_path = self._save_backup(sid, content)
-
         for fname, n_src in new_sources.items():
             mf = self._match_file(files, fname)
             mf["source"] = n_src
-
         self._put_content(sid, files)
 
-        # デプロイ
         dep_res = None
         if deploy:
             try:
@@ -4818,25 +4985,23 @@ function doGet() {{
             except Exception:
                 pass
 
-        # 再度レントゲン照射
         after_xray = self.xray(sid)
-
         lines = [
             f"=== 🧹 死にコード削除完了: [{script_id}] ===",
-            f"削除件数: {len(dead_funcs)}件 ({', '.join([d['name'] for d in dead_funcs])})",
+            f"削除件数: {len(target_funcs)}件 ({', '.join([d['name'] for d in target_funcs])})",
             f"バックアップ: {backup_path}",
             f"Webアプリ更新: {dep_res.get('webAppUrl') if dep_res else '未デプロイ（コード反映のみ）'}",
             "",
             "--- 🩻 削除後レントゲン検査 ---",
             after_xray["markdown_report"]
         ]
-
         return {
             "status": "success",
             "script_id": sid,
-            "deleted_count": len(dead_funcs),
-            "dead_functions": dead_funcs,
+            "deleted_count": len(target_funcs),
+            "deleted_functions": target_funcs,
             "backup_path": str(backup_path),
+            "diff": "\n".join(all_diffs),
             "deploy": dep_res,
             "after_xray": after_xray,
             "markdown_report": "\n".join(lines)

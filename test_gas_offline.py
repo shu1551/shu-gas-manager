@@ -2717,7 +2717,7 @@ function serverApiFunc() {
   return "OK";
 }
 
-function unusedServerFunc() {
+function unusedServerFunc(dummy) {
   return "Dead";
 }
 """
@@ -2801,8 +2801,8 @@ def test_clean_dead_offline(mock_client):
     assert res_dry["deleted_count"] == 1
     mock_client._put_content.assert_not_called()
 
-    # 本番削除テスト
-    res = mock_client.clean_dead("dummy_id", dry_run=False)
+    # 本番削除テスト（名指しで削除）
+    res = mock_client.clean_dead("dummy_id", dry_run=False, names=["deadFn"])
     assert res["status"] == "success"
     assert res["deleted_count"] == 1
     mock_client._put_content.assert_called_once()
@@ -3007,3 +3007,130 @@ def test_design_skin_no_root_fallback(mock_client):
     patches = json.loads(mock_client.patch_code.call_args[1]["patches"])
     assert len(patches) >= 1
     assert ":root" in patches[0]["replacement"]
+
+
+# --- 106: clean_dead と clone_web の安全化テスト ---
+
+def test_xray_and_clean_dead_suspect_protection(mock_client):
+    """指示書106: 模擬プロジェクトで dead_server_functions が trulyDead の1件だけで、残りが suspect または entry_point であることを検証"""
+    server_code = """
+function onOpen() { SpreadsheetApp.getUi().createMenu('秀').addItem('集計', 'runSummary').addToUi(); }
+function runSummary() { return 1; }
+function setup() { ScriptApp.newTrigger('dailySync').timeBased().everyDays(1).create(); }
+function dailySync() { return 2; }
+/** @customfunction */
+function MYTAX(x) { return x * 1.1; }
+function toRow(r) { return r; }
+function useCallback(rows) { return rows.map(toRow); }
+function onFormSubmit(e) { return e; }
+function trulyDead(a) { return a; }
+"""
+    files = [
+        {"name": "コード", "type": "SERVER_JS", "source": server_code},
+        {"name": "Index", "type": "HTML", "source": "<html><body></body></html>"}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": files})
+    mock_client.resolve_script_id = MagicMock(return_value="mock_id_106")
+
+    # 1. xray 実行
+    xray_res = mock_client.xray("mock_id_106")
+    dead_names = [d["name"] for d in xray_res["dead_server_functions"]]
+    assert dead_names == ["trulyDead"]
+
+    classification = xray_res["server_classification"]
+    assert classification["onOpen"] == "entry_point"
+    assert classification["onFormSubmit"] == "entry_point"
+    assert classification["runSummary"] == "suspect"
+    assert classification["setup"] == "suspect"
+    assert classification["dailySync"] == "suspect"
+    assert classification["MYTAX"] == "suspect"
+    assert classification["toRow"] == "suspect"
+    assert classification["useCallback"] == "suspect"
+    assert classification["trulyDead"] == "dead_code"
+
+    # 2. clean_dead(dry_run=True) の検証
+    clean_res = mock_client.clean_dead("mock_id_106", dry_run=True)
+    assert clean_res["status"] == "dry_run"
+    assert clean_res["deleted_count"] == 1
+    assert [d["name"] for d in clean_res["dead_functions"]] == ["trulyDead"]
+    notice_text = "Apps Script の画面で作ったトリガー・シートの式から呼ぶ関数は、コードからは見えません。消す前に［トリガー］画面とシートの式を確かめてください。"
+    assert notice_text in clean_res["markdown_report"]
+
+
+def test_clean_dead_apply_requires_names(mock_client):
+    """指示書106: clean_dead の本番 apply で names の名指しがない場合は何も消さない"""
+    server_code = "function trulyDead(a) { return a; }"
+    files = [
+        {"name": "コード", "type": "SERVER_JS", "source": server_code},
+        {"name": "Index", "type": "HTML", "source": "<html></html>"}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": files})
+    mock_client.resolve_script_id = MagicMock(return_value="mock_id_106")
+    mock_client._put_content = MagicMock()
+
+    # dry_run=False で names=None または空
+    res = mock_client.clean_dead("mock_id_106", dry_run=False, names=None)
+    assert res["status"] == "error"
+    assert "dry_run で出た名前から選んで names に渡してください" in res["message"]
+    mock_client._put_content.assert_not_called()
+
+
+def test_clean_dead_suspect_protection_without_force(mock_client):
+    """指示書106: suspect の関数を名指ししても force=True なしでは消さない"""
+    server_code = """
+function setup() { ScriptApp.newTrigger('dailySync').timeBased().everyDays(1).create(); }
+function dailySync() { return 2; }
+function trulyDead(a) { return a; }
+"""
+    files = [
+        {"name": "コード", "type": "SERVER_JS", "source": server_code},
+        {"name": "Index", "type": "HTML", "source": "<html></html>"}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": files})
+    mock_client.resolve_script_id = MagicMock(return_value="mock_id_106")
+    mock_client._put_content = MagicMock()
+    mock_client._save_backup = MagicMock(return_value="mock_backup.json")
+
+    # dailySync (suspect) を名指し、force=False ➔ エラーで消さない
+    res = mock_client.clean_dead("mock_id_106", dry_run=False, names=["dailySync"], force=False)
+    assert res["status"] == "error"
+    assert "suspect" in res["message"]
+    mock_client._put_content.assert_not_called()
+
+    # trulyDead (dead_code) を名指し ➔ 正常削除
+    res_ok = mock_client.clean_dead("mock_id_106", dry_run=False, names=["trulyDead"], force=False)
+    assert res_ok["status"] == "success"
+    assert res_ok["deleted_count"] == 1
+    mock_client._put_content.assert_called_once()
+
+
+def test_clone_web_defaults_myself_and_no_deploy(mock_client):
+    """指示書106: clone_web の既定が access: 'MYSELF' で未デプロイであることを検証"""
+    mock_client.resolve_script_id = MagicMock(side_effect=ValueError("not found"))
+    mock_client.create_project = MagicMock(return_value={"scriptId": "new_cloned_id"})
+    mock_client._put_content = MagicMock()
+    mock_client.deploy = MagicMock()
+    mock_client.xray = MagicMock(return_value={"markdown_report": "OK"})
+
+    mock_bundle = {
+        "title": "Test LP",
+        "server_code": "function doGet() {}",
+        "html": "<html><body>Hello</body></html>",
+        "inlined_css_count": 1,
+        "inlined_js_count": 0,
+        "rewritten_links_count": 0,
+        "total_html_length": 100
+    }
+    with patch.object(mock_client, "_bundle_web_page", return_value=mock_bundle):
+        res = mock_client.clone_web("https://example.com/lp")
+
+    assert res["status"] == "success"
+    assert res["access"] == "MYSELF"
+    assert res["webapp_url"] is None
+    mock_client.deploy.assert_not_called()
+
+    # _put_content に渡されたマニフェストを検証
+    put_files = mock_client._put_content.call_args[0][1]
+    manifest_file = next(f for f in put_files if f["name"] == "appsscript")
+    manifest_data = json.loads(manifest_file["source"])
+    assert manifest_data["webapp"]["access"] == "MYSELF"
