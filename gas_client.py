@@ -1499,8 +1499,11 @@ class GasClient:
         sid_short = script_id[:12]
         pattern = f"backup_{sid_short}_*.json"
         bak_files = sorted(self.backup_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
-        if len(bak_files) > keep:
-            to_delete = bak_files[:-keep]
+        now = time.time()
+        cutoff = now - 24 * 3600
+        old_files = [f for f in bak_files if f.stat().st_mtime < cutoff]
+        if len(old_files) > keep:
+            to_delete = old_files[:-keep]
             for f in to_delete:
                 try:
                     f.unlink()
@@ -1818,6 +1821,9 @@ class GasClient:
             target_sid_prefix = sid[:12]
             if bak_sid_prefix != target_sid_prefix and not force:
                 raise ValueError(f"この控えは別のプロジェクトのものです (控え: {bak_sid_prefix}, 戻し先: {target_sid_prefix})。強制復元する場合は force=True を指定してください。")
+        else:
+            if not force:
+                raise ValueError("控えの持ち主が分かりません。強制復元する場合は force=True を指定してください。")
 
         with open(target_path, "r", encoding="utf-8") as f:
             bak_content = json.load(f)
@@ -2589,7 +2595,7 @@ class GasClient:
             content = None
             files = []
         else:
-            content = self.get_content(sid, use_cache=True)
+            content = self.get_content(sid, use_cache=False)
             files = content.get("files", [])
 
             already_installed = False
@@ -2761,10 +2767,21 @@ class GasClient:
         finally:
             if not already_installed and not keep_runner:
                 try:
-                    self._put_content(sid, files)
-                    if sid in self._cache_data.get("deployments", {}):
-                        self._cache_data["deployments"][sid].pop("runner_installed", None)
-                        self._save_cache()
+                    self.clean_runner(sid)
+                    head_content = self.get_content(sid, use_cache=False)
+                    runner_left = any(
+                        "__gm_exec_" in f.get("source", "") or "__gm_run" in f.get("source", "")
+                        for f in head_content.get("files", [])
+                    )
+                    if runner_left:
+                        warn_msg = f"ランナーが残っています。py gas.py clean-runner {script_id} で外してください"
+                        if isinstance(data, dict):
+                            data["warning"] = warn_msg
+                            data["runner_cleaned"] = False
+                        print(f"⚠️ {warn_msg}")
+                    else:
+                        if isinstance(data, dict):
+                            data["runner_cleaned"] = True
                 except Exception as ex:
                     warn_msg = f"ランナーが残っています。py gas.py clean-runner {script_id} で外してください"
                     if isinstance(data, dict):
@@ -4837,7 +4854,7 @@ function doGet() {{
         xray_res = self.xray(sid, filename="Index")
 
         warning_header = ""
-        if access == "ANYONE":
+        if access != "MYSELF":
             warning_header = "⚠️ 写したページを誰でも見られる形で公開しました。他者のページ・ログイン画面の写しを公開すると、なりすましと著作権の問題になります。\n\n"
 
         lines = [

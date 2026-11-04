@@ -7,6 +7,8 @@ test_gas_offline.py - gas-manager オフライン・純Python単体テスト
 import pytest
 from unittest.mock import MagicMock, patch
 import json
+import time
+import os
 from pathlib import Path
 from gas_client import GasClient
 import gas_mcp_server
@@ -187,9 +189,11 @@ def test_backup_cleanup_30_limit(tmp_path):
         sid_short = sid[:12]
 
         # 31個のバックアップを作成
+        past_time = time.time() - 86400 * 2
         for i in range(31):
             f = backup_dir / f"backup_{sid_short}_20261031_0000{i:02d}.json"
             f.write_text(json.dumps({"files": []}), encoding="utf-8")
+            os.utime(f, (past_time + i, past_time + i))
 
         assert len(list(backup_dir.glob(f"backup_{sid_short}_*.json"))) == 31
 
@@ -1800,8 +1804,15 @@ def test_run_function_zero_footprint(mock_client):
         {"name": "appsscript", "type": "JSON", "source": "{}"},
         {"name": "Code", "type": "SERVER_JS", "source": "function myCalc(a, b) { return a + b; }"}
     ]
-    mock_client.get_content = MagicMock(return_value={"files": list(initial_files)})
-    mock_client._put_content = MagicMock()
+    curr_files = [dict(f) for f in initial_files]
+    def fake_get_content(sid, use_cache=True):
+        return {"files": [dict(f) for f in curr_files]}
+    def fake_put_content(sid, flist):
+        nonlocal curr_files
+        curr_files = [dict(f) for f in flist]
+        return {"files": curr_files}
+    mock_client.get_content = MagicMock(side_effect=fake_get_content)
+    mock_client._put_content = MagicMock(side_effect=fake_put_content)
 
     # executions.run API のモック
     exec_res = MagicMock()
@@ -3323,3 +3334,126 @@ def test_107_6_writing_methods_use_cache_false(mock_client):
     recorded_calls.clear()
     mock_client.delete_file("mock_sid", "Code")
     assert recorded_calls == [False]
+
+
+
+def test_108_1_run_function_preserves_external_changes_during_execution(mock_client):
+    """指示書108-1: run_function 実行中に別ファイルが書き換わっても、後片付けで消えずに残る"""
+    mock_client.resolve_script_id = MagicMock(return_value="mock_sid")
+    mock_client._save_backup = MagicMock()
+    mock_client.resolve_webapp_url = MagicMock(return_value="https://script.google.com/test")
+
+    current_files = [
+        {"name": "Code", "type": "SERVER_JS", "source": "function myFunc() { return 1; }\nfunction doGet(e) { return ContentService.createTextOutput('ok'); }"}
+    ]
+
+    import copy
+    def fake_get_content(sid, use_cache=True):
+        return {"files": copy.deepcopy(current_files)}
+
+    def fake_put_content(sid, flist):
+        nonlocal current_files
+        current_files = copy.deepcopy(flist)
+        return {"files": current_files}
+
+    mock_client.get_content = MagicMock(side_effect=fake_get_content)
+    mock_client._put_content = MagicMock(side_effect=fake_put_content)
+
+    def on_call_webapp(*args, **kwargs):
+        # 実行中（call_webapp 処理中）に外部で別ファイルが追加・編集された模擬
+        current_files.append({
+            "name": "ExternalEdit",
+            "type": "SERVER_JS",
+            "source": "function userEdit() { return 999; }"
+        })
+        return {"data": {"ok": True, "result": 1}}
+
+    mock_client.call_webapp = MagicMock(side_effect=on_call_webapp)
+
+    res = mock_client.run_function("mock_sid", "myFunc")
+    assert res.get("status") == "success"
+
+    # 後片付けの後も外部変更 ExternalEdit が残っていること
+    assert any(f["name"] == "ExternalEdit" and "userEdit" in f["source"] for f in current_files)
+    # かつランナー (__gm_exec_) は除去されていること
+    assert not any("__gm_exec_" in f["source"] for f in current_files)
+
+
+def test_108_2_restore_backup_invalid_filename_format_protection(mock_client, tmp_path):
+    """指示書108-2: backup_<12字>_ の形でない控えを戻そうとすると例外になり _put_content が呼ばれない"""
+    mock_client.resolve_script_id = MagicMock(return_value="TARGET_PROJECT_12345")
+    mock_client._put_content = MagicMock()
+
+    # 形の合わないファイル名（名前変更された控え）
+    custom_backup = tmp_path / "renamed_backup_file.json"
+    custom_backup.write_text(json.dumps({"files": [{"name": "Code", "type": "SERVER_JS", "source": "function x(){}"}]}), encoding="utf-8")
+
+    # force=False ➔ 例外になり _put_content は呼ばれない
+    with pytest.raises(ValueError) as exc:
+        mock_client.restore_backup("TARGET_PROJECT_12345", str(custom_backup), force=False)
+    assert "控えの持ち主が分かりません" in str(exc.value)
+    mock_client._put_content.assert_not_called()
+
+    # force=True ➔ 復元可能
+    mock_client.get_content = MagicMock(return_value={"files": []})
+    mock_client._save_backup = MagicMock(return_value="safety.json")
+    res = mock_client.restore_backup("TARGET_PROJECT_12345", str(custom_backup), force=True)
+    assert res["status"] == "success"
+    mock_client._put_content.assert_called_once()
+
+
+def test_108_3_clone_web_warning_for_anyone_anonymous(mock_client):
+    """指示書108-3: clone_web で access が ANYONE_ANONYMOUS のとき警告が出ること"""
+    mock_client.resolve_script_id = MagicMock(return_value="mock_sid")
+    mock_client._put_content = MagicMock()
+    mock_client.deploy = MagicMock(return_value={"webAppUrl": "https://script.google.com/test"})
+    mock_client.xray = MagicMock(return_value={"markdown_report": "レントゲン正常"})
+    mock_client._fetch_and_bundle = MagicMock(return_value={
+        "server_code": "function doGet(){}",
+        "html": "<h1>Test</h1>",
+        "total_html_length": 100,
+        "inlined_css_count": 0,
+        "inlined_js_count": 0,
+        "rewritten_links_count": 0
+    })
+
+    res = mock_client.clone_web("https://example.com", access="ANYONE_ANONYMOUS", deploy=True)
+    assert "⚠️ 写したページを誰でも見られる形で公開しました" in res["markdown_report"]
+
+
+def test_108_4_cleanup_old_backups_preserves_backups_within_24h(mock_client, tmp_path):
+    """指示書108-4: 24時間以内の控えが 40 個あっても 1 個も消えないこと"""
+    mock_client.backup_dir = tmp_path
+    sid = "MOCK_PROJECT_12345"
+    sid_prefix = sid[:12]
+
+    now = time.time()
+    # 24時間以内（10分前〜20時間前）のファイルを 40 個作成
+    created_within_24h = []
+    for i in range(40):
+        f = tmp_path / f"backup_{sid_prefix}_20261104_{i:04d}.json"
+        f.write_text("{}", encoding="utf-8")
+        # タイムスタンプを 24時間以内（i * 30分前）に設定
+        mtime = now - (i * 1800)
+        os.utime(f, (mtime, mtime))
+        created_within_24h.append(f)
+
+    # 24時間より古いファイル（48時間前〜）を 35 個作成
+    created_older = []
+    for i in range(35):
+        f = tmp_path / f"backup_{sid_prefix}_20261101_{i:04d}.json"
+        f.write_text("{}", encoding="utf-8")
+        mtime = now - (86400 * 2 + i * 3600)
+        os.utime(f, (mtime, mtime))
+        created_older.append(f)
+
+    # keep=30 でクリーンアップ実行
+    mock_client._cleanup_old_backups(sid, keep=30)
+
+    # 1. 24時間以内の 40 個は 1 個も消えていないこと
+    remaining_within_24h = [f for f in created_within_24h if f.exists()]
+    assert len(remaining_within_24h) == 40
+
+    # 2. 24時間より古い 35 個は最新 30 個に絞られ、古い 5 個が削除されていること
+    remaining_older = [f for f in created_older if f.exists()]
+    assert len(remaining_older) == 30

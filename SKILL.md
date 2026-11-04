@@ -66,7 +66,7 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
    - ループ内での `PropertiesService.getScriptProperties().getProperty(k)` や `CacheService.getScriptCache().get(k)` は厳禁。
    - ループの外で `getProperties()` / `getAll(keys)` により辞書として1回で一括取得し、ループ内はメモリ参照のみとする。
 4. **6分実行制限を突破する「継続トークン＆自己増殖トリガー」**:
-   - 万単位の重いバッチ処理では `const t0 = Date.now();` で経過時間を監視し、280,000ms（4分40秒）を超えたら現在のインデックスを `PropertiesService` に保存し、`ScriptApp.newTrigger(fnName).timeBased().after(60 * 1000).create()` で次走トリガーを予約して安全終了する。
+   - 重いバッチ処理では `const t0 = Date.now();` で監視し、280,000ms（4分40秒）超過時にインデックスを `PropertiesService` へ退避。次走トリガー作成前に同関数の古いトリガーを `ScriptApp.getProjectTriggers()` で探して `deleteTrigger` し、`ScriptApp.newTrigger(fnName).timeBased().after(60 * 1000).create()` で予約して安全終了する。全処理完了時は自身のトリガーも削除する。
 
 ## 4. 実機ベンチマーク関所（`bench`）による自律カイゼンループ
 
@@ -81,7 +81,6 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
    - 判定が **`[PASS] (100点)`** に到達するまで自律ループを回し合格ミリ秒を報告。
    - bench の後はランナーを外してから deploy（deploy が自動で外す）。
 
-
 ## 5. UI/CSS改修の爆速一撃モード（最速・最短手数の原則）
 
 フロントエンド（HTML/CSS/JS）の改善・見た目のブラッシュアップを行う際は、多段の対話往復や重い検査の連打を排し、以下の**「爆速一撃モード」**で完走する：
@@ -93,7 +92,6 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
    - 会話セッション内で一度特定したプロジェクトは、プロジェクトID一覧（`list_projects`）やファイル一覧（`list_files`）の再取得を一切スキップし、0秒で該当ファイル・対象セレクタへ直撃する。
 3. **「作って即提示」スタイル（手戻りゼロの最速プロトタイピング）**:
    - 方針が見えた時点で直ちにコード反映＆デプロイまで済ませ、「最新バージョンを実機（ブラウザ）で見ていただきながら微調整する」型で進め、人間の待ち時間を最小化する。
-
 
 ## 6. プロ仕様デザイン一撃着せ替え (skin: 0秒でSaaS級昇華)
 
@@ -119,7 +117,6 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
      - **WCAG 2.1 コントラスト監査**: 文字色・背景色のコントラスト比を計算し、視認性不具合を検出。
      - **全ボタン踏破・画面遷移**: 画面内のボタンクリックと表示変化を追跡。
      - **スクリーンショット撮影**: 実画面の画像を保存し、ユーザーへ提示。
-
 
 ## 8. REA思想の高度解析武器群 (trace-rpc, diff-behavior, ledger 等: 明示指示時のみ)
 
