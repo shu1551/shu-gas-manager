@@ -87,11 +87,13 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 
 1. **`deploy=True` の同時反映**:
    - `patch_code` には「自動バックアップ」と「構文自動検査」が備わっているため、UI/CSS修正では `dry_run` を挟まず初手から `patch_code(project, filename, patches=..., deploy=True)` を実行する。
-   - `verify=True`（フロント実機シミュレーション）や `inspect_ui`（Chromiumレンダリング）は普段は不要（明示指示された時のみ使用）。パッチ適用・自動デプロイのみを1回のツール呼び出しで最速（1〜2秒）で完結させる。
+   - `verify=True` や `inspect_ui` は明示指示された時のみ使う。パッチ適用・自動デプロイのみを1回のツール呼び出しで最速（1〜2秒）で完結させる。
 2. **特定済みプロジェクトの点呼ゼロ秒化**:
-   - 会話セッション内で一度特定したプロジェクトは、プロジェクトID一覧（`list_projects`）やファイル一覧（`list_files`）の再取得を一切スキップし、0秒で該当ファイル・対象セレクタへ直撃する。
+   - 一度特定したプロジェクトは `list_projects`・`list_files` を撃ち直さず、そのまま対象のファイルへ進む。
 3. **「作って即提示」スタイル（手戻りゼロの最速プロトタイピング）**:
    - 方針が見えた時点で直ちにコード反映＆デプロイまで済ませ、「最新バージョンを実機（ブラウザ）で見ていただきながら微調整する」型で進め、人間の待ち時間を最小化する。
+4. **メール本文などよその HTML は sandbox 付きの iframe で表示する**:
+   - `GmailMessage.getBody()` の HTML は、Gmail の画面と違いスクリプトが除かれていない。そのまま `innerHTML`・`srcdoc`・`document.write` に入れると、届いたメールのスクリプトがアプリの権限（`google.script.run`）で動く。iframe に `sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"`（`allow-scripts` は付けない）を付け、`<meta http-equiv="Content-Security-Policy" content="script-src 'none'">` も入れる。印刷も同じ iframe から `contentWindow.print()` で行う。
 
 ## 6. デザイン着せ替え (skin: CSS変数プリセット注入)
 
