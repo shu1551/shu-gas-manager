@@ -87,6 +87,23 @@ def main():
     diag_p = subparsers.add_parser("diagnose", aliases=["diag"], help="GAS プロジェクト健康診断（構文・重複・リンク切れ・エントリーポイント）")
     diag_p.add_argument("project", help="プロジェクト名またはスクリプトID")
 
+    # 2e. dock (GASドック)
+    dock_p = subparsers.add_parser("dock", aliases=["gas-dock"], help="GASドック（diagnose + xray 統合診断、健康点採点、直す手処方箋）")
+    dock_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    dock_p.add_argument("-f", "--file", default="Index", help="対象HTMLファイル名 (デフォルト: Index)")
+
+    # 2f. recipe (高速化レシピ棚)
+    recipe_p = subparsers.add_parser("recipe", help="GAS 高速化レシピ棚（頻出パターンの検出・処方コード生成・自動変換・自然言語判定）")
+    recipe_p.add_argument("project", nargs="?", default="", help="プロジェクト名またはスクリプトID（--list 時は省略可）")
+    recipe_p.add_argument("--list", action="store_true", help="高速化レシピ棚の一覧を表示")
+    recipe_p.add_argument("--ask", default="", help="自然言語クエリから最適なレシピを判定")
+    recipe_p.add_argument("-f", "--file", default="", help="対象ファイル名（省略時は全 SERVER_JS / HTML）")
+    recipe_p.add_argument("--func", default="", help="対象関数名（省略時は全関数）")
+    recipe_p.add_argument("--id", default="", help="レシピID指定 (例: R01..R12)")
+    recipe_p.add_argument("--apply", action="store_true", help="自動変換を適用してプロジェクトに反映")
+    recipe_p.add_argument("--ttl", type=int, default=300, help="CacheService キャッシュ有効秒数 (デフォルト: 300)")
+    recipe_p.add_argument("--deploy", action="store_true", help="反映後に本番Webアプリを自動デプロイ")
+
     # 2b. grep (プロジェクト横断検索)
     grep_p = subparsers.add_parser("grep", help="プロジェクト内のコード横断検索")
     grep_p.add_argument("project", help="プロジェクト名またはスクリプトID")
@@ -119,6 +136,7 @@ def main():
     patch_p.add_argument("--force", action="store_true", help="構文エラーを無視して強制反映")
     patch_p.add_argument("--dry-run", action="store_true", help="クラウド反映を行わず差分のみ確認")
     patch_p.add_argument("--deploy", action="store_true", help="修正完了後に本番Webアプリを自動デプロイ")
+    patch_p.add_argument("--fast", action="store_true", help="直近キャッシュを利用し取得通信をスキップして高速反映")
 
     # 5a. patch-func (関数内限定置換)
     pf_p = subparsers.add_parser("patch-func", help="関数スコープ内限定のコード置換")
@@ -131,6 +149,7 @@ def main():
     pf_p.add_argument("--force", action="store_true", help="構文エラーを無視して強制反映")
     pf_p.add_argument("--dry-run", action="store_true", help="クラウド反映を行わず差分のみ確認")
     pf_p.add_argument("--deploy", action="store_true", help="修正完了後に本番Webアプリを自動デプロイ")
+    pf_p.add_argument("--fast", action="store_true", help="直近キャッシュを利用し取得通信をスキップして高速反映")
 
     # 5b. replace-func (関数丸ごと置換)
     rf_p = subparsers.add_parser("replace-func", help="指定ファイル内の特定関数を丸ごと置換")
@@ -141,6 +160,7 @@ def main():
     rf_p.add_argument("--force", action="store_true", help="構文エラーを無視して強制反映")
     rf_p.add_argument("--dry-run", action="store_true", help="クラウド反映を行わず差分のみ確認")
     rf_p.add_argument("--deploy", action="store_true", help="修正完了後に本番Webアプリを自動デプロイ")
+    rf_p.add_argument("--fast", action="store_true", help="直近キャッシュを利用し取得通信をスキップして高速反映")
 
     # 5c. add-func (関数追加)
     af_p = subparsers.add_parser("add-func", help="関数追加（既存重複チェック付き）")
@@ -150,6 +170,7 @@ def main():
     af_p.add_argument("--force", action="store_true", help="構文エラーを無視して強制反映")
     af_p.add_argument("--dry-run", action="store_true", help="クラウド反映を行わず差分のみ確認")
     af_p.add_argument("--deploy", action="store_true", help="修正完了後に本番Webアプリを自動デプロイ")
+    af_p.add_argument("--fast", action="store_true", help="直近キャッシュを利用し取得通信をスキップして高速反映")
 
     # 5d. del-func (関数削除)
     df_p = subparsers.add_parser("del-func", help="関数削除")
@@ -159,6 +180,7 @@ def main():
     df_p.add_argument("--force", action="store_true", help="構文エラーを無視して強制反映")
     df_p.add_argument("--dry-run", action="store_true", help="クラウド反映を行わず差分のみ確認")
     df_p.add_argument("--deploy", action="store_true", help="修正完了後に本番Webアプリを自動デプロイ")
+    df_p.add_argument("--fast", action="store_true", help="直近キャッシュを利用し取得通信をスキップして高速反映")
 
     # 5e. batch (一括アトミック更新)
     batch_p = subparsers.add_parser("batch", help="複数操作の一括アトミック合成反映（1回通信）")
@@ -167,6 +189,7 @@ def main():
     batch_p.add_argument("--force", action="store_true", help="構文エラーを無視して強制反映")
     batch_p.add_argument("--dry-run", action="store_true", help="クラウド反映を行わず差分のみ確認")
     batch_p.add_argument("--deploy", action="store_true", help="修正完了後に本番Webアプリを自動デプロイ")
+    batch_p.add_argument("--fast", action="store_true", help="直近キャッシュを利用し取得通信をスキップして高速反映")
 
     # 6. replace
     rep_p = subparsers.add_parser("replace", help="ファイル丸ごと置換")
@@ -176,6 +199,7 @@ def main():
     rep_p.add_argument("--force", action="store_true", help="構文エラーを無視して強制反映")
     rep_p.add_argument("--dry-run", action="store_true", help="クラウド反映を行わず差分のみ確認")
     rep_p.add_argument("--deploy", action="store_true", help="修正完了後に本番Webアプリを自動デプロイ")
+    rep_p.add_argument("--fast", action="store_true", help="直近キャッシュを利用し取得通信をスキップして高速反映")
 
     # 7. add
     add_p = subparsers.add_parser("add", help="ファイル追加")
@@ -212,6 +236,7 @@ def main():
     dep_p.add_argument("project", help="プロジェクト名またはスクリプトID")
     dep_p.add_argument("-d", "--desc", default="Auto deployed via CLI", help="バージョン説明")
     dep_p.add_argument("-r", "--refresh", action="store_true", help="デプロイIDキャッシュを再取得")
+    dep_p.add_argument("--fast", action="store_true", help="直近キャッシュを再利用し取得通信を省略して高速デプロイ")
 
     # 9b. deployments (deps)
     deps_p = subparsers.add_parser("deployments", aliases=["deps"], help="デプロイ一覧表示")
@@ -358,6 +383,49 @@ def main():
     skin_p.add_argument("--file", "-f", default="Index", help="対象HTMLファイル名 (デフォルト: Index)")
     skin_p.add_argument("--deploy", "-d", action="store_true", help="反映後に本番Webアプリを自動デプロイ")
 
+    # scaffold (上級骨格棚)
+    scaff_p = subparsers.add_parser("scaffold", help="上級GAS骨格部品棚のプレビュー・安全注入")
+    scaff_p.add_argument("project", nargs="?", default="", help="プロジェクト名またはスクリプトID")
+    scaff_p.add_argument("--id", "-i", default="", help="骨格棚ID (S01〜S05 または部品名)")
+    scaff_p.add_argument("--file", "-f", default="Index", help="対象HTMLファイル名 (デフォルト: Index)")
+    scaff_p.add_argument("--server-file", default="Code", help="対象サーバー側ファイル名 (デフォルト: Code)")
+    scaff_p.add_argument("--apply", "-a", action="store_true", help="実際にプロジェクトへ注入")
+    scaff_p.add_argument("--deploy", "-d", action="store_true", help="反映後に本番Webアプリを自動デプロイ")
+    scaff_p.add_argument("--list", "-l", action="store_true", help="カタログ一覧表示")
+
+    # shelf (先撃ち総合棚ルーター)
+    shelf_p = subparsers.add_parser("shelf", aliases=["seiri"], help="GAS先撃ち総合棚ルーター（全25棚直結・頼み文判定・棚当て検査）")
+    shelf_p.add_argument("project", nargs="?", default="", help="プロジェクト名またはスクリプトID")
+    shelf_p.add_argument("query", nargs="*", default=[], help="自然言語の頼み文")
+    shelf_p.add_argument("--id", "-i", default="", help="直接指定する棚ID (R01〜R12, S01〜S05, K01〜K04, D01〜D04)")
+    shelf_p.add_argument("--file", "-f", default="Index", help="対象HTMLファイル名 (デフォルト: Index)")
+    shelf_p.add_argument("--func", default="", help="対象関数名 (レシピ適用時)")
+    shelf_p.add_argument("--apply", "-a", action="store_true", help="実際にプロジェクトへ変更を反映")
+    shelf_p.add_argument("--deploy", "-d", action="store_true", help="反映後に本番Webアプリを自動デプロイ")
+    shelf_p.add_argument("--list", "-l", action="store_true", help="全25棚の一覧カタログ表示")
+    shelf_p.add_argument("--check", "-c", action="store_true", help="全25棚のゴールデン頼み文検査")
+
+    # py-outline
+    py_out_p = subparsers.add_parser("py-outline", help="Pythonコード内の関数・メソッド一覧を高速取得")
+    py_out_p.add_argument("file_path", help="対象Pythonファイルパス")
+
+    # py-func
+    py_fn_p = subparsers.add_parser("py-func", help="Pythonコード内の特定関数・メソッド定義ブロックを抽出")
+    py_fn_p.add_argument("file_path", help="対象Pythonファイルパス")
+    py_fn_p.add_argument("func_spec", help="関数名または ClassName.method_name")
+
+    # py-patch
+    py_pat_p = subparsers.add_parser("py-patch", help="Pythonコード内の特定関数・メソッド内限定でコードを安全置換（AST特定・構文検査）")
+    py_pat_p.add_argument("file_path", help="対象Pythonファイルパス")
+    py_pat_p.add_argument("func_spec", help="関数名または ClassName.method_name")
+    py_pat_p.add_argument("target", nargs="?", default="", help="置換対象文字列")
+    py_pat_p.add_argument("replacement", nargs="?", default="", help="置換後文字列")
+    py_pat_p.add_argument("--code", default="", help="関数丸ごと置換する場合の新しいコード")
+    py_pat_p.add_argument("--all", "-a", action="store_true", help="複数箇所すべて置換")
+
+    # reload
+    reload_p = subparsers.add_parser("reload", help="常駐MCPサーバーおよびモジュールのホットリロード案内・実行")
+
 
     args = parser.parse_args()
     if not args.command:
@@ -420,8 +488,10 @@ def main():
         elif args.command in ("diagnose", "diag"):
             diag = client.diagnose(args.project)
             status_str = "正常 (HEALTHY)" if diag["status"] == "healthy" else f"警告あり (WARNING: {diag['issues_count']}件の問題)"
+            score = diag.get("score", 100)
+            grade = diag.get("grade", "A")
             print(f"=== GAS プロジェクト健康診断: [{args.project}] ===")
-            print(f"判定: {status_str}")
+            print(f"健康点: {score}/100点 (ランク{grade}) | 判定: {status_str}")
             print(f"ファイル数: {diag['file_count']} | 総関数数: {diag['total_functions']} | 検出された問題: {diag['issues_count']}件\n")
 
             print(f"[構文エラー] ({len(diag['syntax_errors'])}件):")
@@ -530,6 +600,38 @@ def main():
                     wa = mf["webapp"]
                     print(f"  - WebApp: access={wa.get('access', 'N/A')}, executeAs={wa.get('executeAs', 'N/A')}")
 
+            prescriptions = diag.get("prescriptions", [])
+            print("\n[直す手 (処方箋)]:")
+            if prescriptions:
+                for idx, p in enumerate(prescriptions, 1):
+                    print(f"  {idx}. [{p['category']}] {p['target']} -> {p['action']}")
+            else:
+                print("  なし (健康な状態です)")
+
+        elif args.command in ("dock", "gas-dock"):
+            res = client.gas_dock(args.project, filename=args.file)
+            print(res.get("markdown_report", ""))
+
+        elif args.command == "recipe":
+            if args.list:
+                res = client.gas_recipe(list_only=True)
+            elif not args.project and not args.ask:
+                print("プロジェクト名またはスクリプトIDを指定してください（一覧表示は --list）")
+                sys.exit(1)
+            else:
+                res = client.gas_recipe(
+                    args.project,
+                    filename=args.file,
+                    func_name=args.func,
+                    recipe_id=args.id,
+                    apply=args.apply,
+                    ttl=args.ttl,
+                    deploy=args.deploy,
+                    ask=args.ask,
+                    list_only=args.list
+                )
+            print(res.get("markdown_report", ""))
+
         elif args.command in ("verify-ui", "verify_frontend"):
             res = client.verify_frontend(args.project, filename=args.file, test_js=args.test_js)
             status_tag = "[SUCCESS]" if res.get("success") else "[FAILED]"
@@ -570,7 +672,7 @@ def main():
             print(code)
 
         elif args.command == "patch":
-            res = client.patch_code(args.project, args.filename, args.target, args.replacement, replace_all=args.all, force=args.force, dry_run=args.dry_run, deploy=args.deploy)
+            res = client.patch_code(args.project, args.filename, args.target, args.replacement, replace_all=args.all, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
             print(f"{prefix} 置換対象: {res['file']}, 置換箇所: {res['replaced_occurrences']}箇所, 構文: {res.get('syntax_check', 'N/A')}")
             if res.get("backup_file"):
@@ -583,7 +685,7 @@ def main():
                 print(f"本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})")
 
         elif args.command == "patch-func":
-            res = client.patch_function(args.project, args.filename, args.func_name, args.target, args.replacement, replace_all=args.all, force=args.force, dry_run=args.dry_run, deploy=args.deploy)
+            res = client.patch_function(args.project, args.filename, args.func_name, args.target, args.replacement, replace_all=args.all, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
             print(f"{prefix} 関数内置換: {res['file']} -> {res['function']}, 置換箇所: {res['replaced_occurrences']}箇所, 構文: {res.get('syntax_check', 'N/A')}")
             if res.get("backup_file"):
@@ -603,7 +705,7 @@ def main():
             else:
                 new_code = args.code_or_file
 
-            res = client.replace_function(args.project, args.filename, args.func_name, new_code, force=args.force, dry_run=args.dry_run, deploy=args.deploy)
+            res = client.replace_function(args.project, args.filename, args.func_name, new_code, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
             print(f"{prefix} 関数置換: {res['file']} -> {res['function']}, 構文: {res.get('syntax_check', 'N/A')}")
             if res.get("backup_file"):
@@ -622,7 +724,7 @@ def main():
             else:
                 new_code = args.code_or_file
 
-            res = client.add_function(args.project, args.filename, new_code, force=args.force, dry_run=args.dry_run, deploy=args.deploy)
+            res = client.add_function(args.project, args.filename, new_code, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
             print(f"{prefix} 関数追加: {res['file']} -> {res['function']}, 構文: {res.get('syntax_check', 'N/A')}")
             if res.get("backup_file"):
@@ -635,7 +737,7 @@ def main():
                 print(f"本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})")
 
         elif args.command == "del-func":
-            res = client.delete_function(args.project, args.filename, args.func_name, force=args.force, dry_run=args.dry_run, deploy=args.deploy)
+            res = client.delete_function(args.project, args.filename, args.func_name, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
             print(f"{prefix} 関数削除: {res['file']} -> {res['deleted_function']}, 構文: {res.get('syntax_check', 'N/A')}")
             if res.get("backup_file"):
@@ -654,7 +756,7 @@ def main():
             else:
                 ops_data = json.loads(args.ops_json_or_file)
 
-            res = client.batch_patch(args.project, ops_data, force=args.force, dry_run=args.dry_run, deploy=args.deploy)
+            res = client.batch_patch(args.project, ops_data, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
             print(f"{prefix} アトミック一括反映完了 ({len(res.get('applied_operations', []))}操作, 変更ファイル: {', '.join(res.get('changed_files', []))})")
             if res.get("backup_file"):
@@ -669,7 +771,7 @@ def main():
         elif args.command == "replace":
             with open(args.file_path, "r", encoding="utf-8") as f:
                 new_src = f.read()
-            res = client.replace_file(args.project, args.filename, new_src, force=args.force, dry_run=args.dry_run, deploy=args.deploy)
+            res = client.replace_file(args.project, args.filename, new_src, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
             print(f"{prefix} ファイル置換: {res['file']} ({res['length']:,} 文字), 構文: {res.get('syntax_check', 'N/A')}")
             if res.get("backup_file"):
@@ -712,7 +814,7 @@ def main():
                 print(res["diff"])
 
         elif args.command == "deploy":
-            res = client.deploy(args.project, description=args.desc, refresh=args.refresh)
+            res = client.deploy(args.project, description=args.desc, refresh=args.refresh, fast=args.fast)
             print(f"[SUCCESS] 本番デプロイ完了 (Version: {res['versionNumber']})")
             print(f"WebアプリURL: {res.get('webAppUrl', 'N/A')}")
 
@@ -975,8 +1077,69 @@ def main():
             print(f"反映ファイル: {res.get('filename')}.html (置換箇所: {res.get('patches_applied')}箇所){dep_str}")
             print("状態: 正常反映 (視覚レイヤーの反映完了)")
 
+        elif args.command == "scaffold":
+            res = client.gas_scaffold(
+                script_id=args.project,
+                scaffold_id=args.id,
+                filename=args.file,
+                server_file=args.server_file,
+                apply=args.apply,
+                deploy=args.deploy,
+                list_only=args.list
+            )
+            print(res.get("markdown_report", ""))
+
+        elif args.command in ("shelf", "seiri"):
+            p_val = args.project
+            q_list = list(args.query) if isinstance(args.query, list) else ([args.query] if args.query else [])
+            if p_val and (any(ord(c) > 127 for c in p_val) or client.match_shelf(p_val).get("shelf_id")):
+                q_list.insert(0, p_val)
+                p_val = ""
+            q_str = " ".join(q_list).strip()
+            res = client.gas_shelf(
+                script_id=p_val,
+                query=q_str,
+                shelf_id=args.id,
+                filename=args.file,
+                func_name=args.func,
+                apply=args.apply,
+                deploy=args.deploy,
+                list_only=args.list,
+                check_only=args.check
+            )
+            print(res.get("markdown_report", ""))
+
         elif args.command == "webapp":
             res = client.call_webapp(args.url, params=args.params, body=args.body, method=args.method, key=args.key, use_auth=args.auth, dev=args.dev)
+            print(res)
+
+        elif args.command == "py-outline":
+            items = GasClient.py_outline(args.file_path)
+            print(f"=== 🐍 Python 関数一覧 (py-outline): [{args.file_path}] (計 {len(items)} 個) ===")
+            print("| 行範囲 | 種別 | 名前 | 行数 | 文字数 |")
+            print("| --- | --- | --- | --- | --- |")
+            for it in items:
+                kind = "メソッド" if it["is_method"] else "関数"
+                print(f"| L{it['start_line']}-L{it['end_line']} | {kind} | {it['name']} | {it['lines_count']}行 | {it['chars_count']}文字 |")
+
+        elif args.command == "py-func":
+            res = GasClient.py_get_function(args.file_path, args.func_spec)
+            print(res.get("markdown_report", res.get("source", "")))
+
+        elif args.command == "py-patch":
+            res = GasClient.py_patch_function(
+                args.file_path,
+                args.func_spec,
+                target=args.target,
+                replacement=args.replacement,
+                new_code=args.code,
+                replace_all=args.all
+            )
+            print(res.get("markdown_report", ""))
+
+        elif args.command == "reload":
+            import gas_mcp_server
+            res = gas_mcp_server.reload_tools()
             print(res)
 
     except Exception as e:

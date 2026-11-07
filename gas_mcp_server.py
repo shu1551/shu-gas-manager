@@ -39,6 +39,40 @@ def safe_tool(func):
             return f"[ERROR] {type(e).__name__}: {str(e)}"
     return wrapper
 
+@mcp.tool()
+@safe_tool
+def reload_tools() -> str:
+    """常駐MCPサーバーのツール定義および GasClient ロジックをメモリ上でホットリロードします。
+    サーバープロセスを再起動することなく、最新の Python コードを即座に反映します。
+    """
+    global _client
+    import importlib
+    import gas_client
+
+    importlib.reload(gas_client)
+    if "gas_local_extras" in sys.modules:
+        import gas_local_extras
+        importlib.reload(gas_local_extras)
+
+    if _client is not None:
+        old_client = _client
+        new_client = gas_client.GasClient(
+            clasprc_path=str(old_client.clasprc_path),
+            backup_dir=str(old_client.backup_dir)
+        )
+        new_client.cache_file = old_client.cache_file
+        new_client._cache_data = getattr(old_client, "_cache_data", {})
+        new_client._content_cache = getattr(old_client, "_content_cache", {})
+        new_client._synced_sids = getattr(old_client, "_synced_sids", set())
+        new_client._dock_cache = getattr(old_client, "_dock_cache", {})
+        new_client._diag_cache = getattr(old_client, "_diag_cache", {})
+        new_client._xray_cache = getattr(old_client, "_xray_cache", {})
+        new_client._access_token = getattr(old_client, "_access_token", None)
+        new_client._token_expiry = getattr(old_client, "_token_expiry", 0)
+        _client = new_client
+
+    return "[SUCCESS] gas-manager ホットリロード完了: gas_client を再読み込みし、最新ロジックを反映しました。"
+
 def get_client() -> GasClient:
     global _client
     if _client is None:
@@ -1381,6 +1415,57 @@ def ledger(
 
 @mcp.tool()
 @safe_tool
+def gas_dock(
+    project: str,
+    filename: str = "Index"
+) -> str:
+    """GASドック（diagnose + xray 統合診断、健康点算出、直す手処方箋）。
+    プロジェクトの健康診断・レントゲン解析・RPC契約検査を一括実行し、100点満点スコアと処方箋を返します。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        filename: 対象HTMLファイル名 (デフォルト: Index)
+    """
+    client = get_client()
+    res = client.gas_dock(project, filename=filename)
+    return res.get("markdown_report", "")
+
+@mcp.tool()
+@safe_tool
+def gas_recipe(
+    project: str = "",
+    filename: str = "",
+    func_name: str = "",
+    recipe_id: str = "",
+    apply: bool = False,
+    deploy: bool = False,
+    ask: str = "",
+    list_only: bool = False
+) -> str:
+    """GAS高速化レシピ棚（全12レシピ: appendRow一括化・getValues2次元配列化・UrlFetch並列化・CacheService包装等）の検出・プレビュー・自動変換を行います。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        filename: 対象ファイル名 (省略時は全SERVER_JS)
+        func_name: 対象関数名 (省略時はファイル内全走査)
+        recipe_id: レシピID ("R01"〜"R12" またはレシピ名)
+        apply: 実際にプロジェクトへコード変換を反映するか (デフォルト: False でプレビュー)
+        deploy: 反映後に本番Webアプリを自動デプロイするか (デフォルト: False)
+        ask: 「頼みの文」による自然言語判定クエリ (例: "appendRowをまとめたい")
+        list_only: 全12レシピの一覧のみ表示するか (デフォルト: False)
+    """
+    client = get_client()
+    res = client.gas_recipe(
+        script_id=project,
+        filename=filename,
+        func_name=func_name,
+        recipe_id=recipe_id,
+        apply=apply,
+        deploy=deploy,
+        ask=ask,
+        list_only=list_only
+    )
+    return res.get("markdown_report", "")
 
 @mcp.tool()
 @safe_tool
@@ -1411,6 +1496,80 @@ def design_skin(
         f"反映ファイル: {res.get('filename')}.html (置換箇所: {res.get('patches_applied')}箇所){dep_str}\n"
         f"状態: 正常反映 (視覚レイヤーの反映完了)"
     )
+
+@mcp.tool()
+@safe_tool
+def gas_scaffold(
+    project: str = "",
+    scaffold_id: str = "",
+    filename: str = "Index",
+    server_file: str = "Code",
+    apply: bool = False,
+    deploy: bool = False,
+    list_only: bool = False
+) -> str:
+    """上級GASアーキテクチャ骨格棚（S01〜S05: Promise化RPC・SWR即時描画・楽観UI・サーバー統一応答・一括注入）のプレビューおよび安全注入を行います。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        scaffold_id: 骨格棚ID ("S01"〜"S05" または部品名)
+        filename: 対象HTMLファイル名 (デフォルト: Index)
+        server_file: 対象サーバー側ファイル名 (デフォルト: Code)
+        apply: 実際にプロジェクトへ注入するか (デフォルト: False でプレビュー)
+        deploy: 反映後に本番Webアプリを自動デプロイするか (デフォルト: False)
+        list_only: カタログ一覧のみ表示するか (デフォルト: False)
+    """
+    client = get_client()
+    res = client.gas_scaffold(
+        script_id=project,
+        scaffold_id=scaffold_id,
+        filename=filename,
+        server_file=server_file,
+        apply=apply,
+        deploy=deploy,
+        list_only=list_only
+    )
+    return res.get("markdown_report", "")
+
+@mcp.tool()
+@safe_tool
+def gas_shelf(
+    project: str = "",
+    query: str = "",
+    shelf_id: str = "",
+    filename: str = "Index",
+    func_name: str = "",
+    apply: bool = False,
+    deploy: bool = False,
+    list_only: bool = False,
+    check_only: bool = False
+) -> str:
+    """GAS 先撃ち総合棚ルーター（全25棚直結・頼み文からの自動判定・棚当て検査・自動ディスパッチ）を実行します。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        query: 日本語・自然言語の頼み文 (例: "シートに追記するのを速くして", "GASドックで診断して")
+        shelf_id: 直接指定する棚ID ("R01"〜"R12", "S01"〜"S05", "K01"〜"K04", "D01"〜"D04")
+        filename: 対象HTMLファイル名 (デフォルト: Index)
+        func_name: 対象関数名 (レシピ適用時など)
+        apply: 実際にプロジェクトへ変更を反映するか (デフォルト: False でプレビュー)
+        deploy: 反映後に本番Webアプリを自動デプロイするか (デフォルト: False)
+        list_only: 全25棚の一覧カタログのみ表示するか (デフォルト: False)
+        check_only: 全25棚のゴールデン頼み文検査 (--check) を実行するか (デフォルト: False)
+    """
+    client = get_client()
+    res = client.gas_shelf(
+        script_id=project,
+        query=query,
+        shelf_id=shelf_id,
+        filename=filename,
+        func_name=func_name,
+        apply=apply,
+        deploy=deploy,
+        list_only=list_only,
+        check_only=check_only
+    )
+    return res.get("markdown_report", "")
 
 def gas(command: str) -> str:
     """ガスマネージャー (GAS Manager) 統合コマンド窓口。
@@ -1478,6 +1637,13 @@ def gas(command: str) -> str:
             "  deployments <project>             - デプロイ一覧（deps でも可）\n"
             "  webapp <url_or_p> [params] [--dev]- Webアプリ呼び出し（中継機モード）\n"
             "  inspect-ui <p_or_url> [f] [--all] - Webアプリ実機画面撮影＆コントラスト監査（screenshot）\n"
+            "  dock <project> [filename]         - GASドック（総合診断・100点満点・処方箋）\n"
+            "  recipe [p] [--id Rxx] [--ask 文]  - 高速化レシピ棚（全12レシピ検出・自動変換）\n"
+            "  sync <project> [--force]          - デスクトップ常駐型ハイブリッド同期\n"
+            "  reload                            - 常駐MCPサーバーのホットリロード\n"
+            "  py-outline <file>                 - Pythonコード内関数一覧取得\n"
+            "  py-func <file> <func>             - Pythonコード内関数定義抽出\n"
+            "  py-patch <file> <func> <t> <r>    - Pythonコード内安全ピンポイント置換\n"
         )
 
     if sub == "setup":
@@ -2045,6 +2211,205 @@ def gas(command: str) -> str:
                 fn = parts[i]
                 i += 1
         return design_skin(project=proj, filename=fn, preset=pst, deploy=dep)
+
+    if sub in ("scaffold", "gas-scaffold", "gas_scaffold"):
+        list_flag = "--list" in parts or "-l" in parts
+        project = ""
+        s_id = ""
+        fname = "Index"
+        s_file = "Code"
+        apply_flag = False
+        deploy_flag = False
+        i = 1
+        while i < len(parts):
+            if parts[i] in ("--list", "-l"):
+                list_flag = True
+                i += 1
+            elif parts[i] in ("-f", "--file") and i + 1 < len(parts):
+                fname = parts[i + 1]
+                i += 2
+            elif parts[i] == "--server-file" and i + 1 < len(parts):
+                s_file = parts[i + 1]
+                i += 2
+            elif parts[i] in ("--id", "-i") and i + 1 < len(parts):
+                s_id = parts[i + 1]
+                i += 2
+            elif parts[i] == "--apply":
+                apply_flag = True
+                i += 1
+            elif parts[i] == "--deploy":
+                deploy_flag = True
+                i += 1
+            elif not project and not parts[i].startswith("-"):
+                project = parts[i]
+                i += 1
+            elif not s_id and not parts[i].startswith("-"):
+                s_id = parts[i]
+                i += 1
+            else:
+                i += 1
+        return gas_scaffold(project=project, scaffold_id=s_id, filename=fname, server_file=s_file, apply=apply_flag, deploy=deploy_flag, list_only=list_flag)
+
+    if sub in ("shelf", "seiri", "gas-shelf", "gas_shelf"):
+        check_flag = "--check" in parts or "-c" in parts
+        list_flag = "--list" in parts or "-l" in parts
+        project = ""
+        s_id = ""
+        fname = "Index"
+        fn_name = ""
+        apply_flag = False
+        deploy_flag = False
+        query_words = []
+        i = 1
+        while i < len(parts):
+            if parts[i] in ("--check", "-c"):
+                check_flag = True
+                i += 1
+            elif parts[i] in ("--list", "-l"):
+                list_flag = True
+                i += 1
+            elif parts[i] in ("-f", "--file") and i + 1 < len(parts):
+                fname = parts[i + 1]
+                i += 2
+            elif parts[i] == "--func" and i + 1 < len(parts):
+                fn_name = parts[i + 1]
+                i += 2
+            elif parts[i] in ("--id", "-i") and i + 1 < len(parts):
+                s_id = parts[i + 1]
+                i += 2
+            elif parts[i] == "--apply":
+                apply_flag = True
+                i += 1
+            elif parts[i] == "--deploy":
+                deploy_flag = True
+                i += 1
+            elif not project and not parts[i].startswith("-"):
+                project = parts[i]
+                i += 1
+            elif not parts[i].startswith("-"):
+                query_words.append(parts[i])
+                i += 1
+            else:
+                i += 1
+
+        query_str = " ".join(query_words).strip()
+        return gas_shelf(project=project, query=query_str, shelf_id=s_id, filename=fname, func_name=fn_name, apply=apply_flag, deploy=deploy_flag, list_only=list_flag, check_only=check_flag)
+
+    if sub in ("dock", "gas-dock", "gas_dock"):
+        if len(parts) < 2:
+            return "プロジェクト名を指定してください: dock <project> [-f <filename>]"
+        proj = parts[1]
+        fname = "Index"
+        i = 2
+        while i < len(parts):
+            if parts[i] in ("-f", "--file") and i + 1 < len(parts):
+                fname = parts[i + 1]
+                i += 2
+            else:
+                i += 1
+        return gas_dock(project=proj, filename=fname)
+
+    if sub in ("recipe", "gas-recipe", "gas_recipe"):
+        list_flag = "--list" in parts or "-l" in parts
+        project = ""
+        r_id = ""
+        fname = ""
+        fn_name = ""
+        apply_flag = False
+        deploy_flag = False
+        ask_words = []
+        i = 1
+        while i < len(parts):
+            if parts[i] in ("--list", "-l"):
+                list_flag = True
+                i += 1
+            elif parts[i] in ("-f", "--file") and i + 1 < len(parts):
+                fname = parts[i + 1]
+                i += 2
+            elif parts[i] == "--func" and i + 1 < len(parts):
+                fn_name = parts[i + 1]
+                i += 2
+            elif parts[i] in ("--id", "-i") and i + 1 < len(parts):
+                r_id = parts[i + 1]
+                i += 2
+            elif parts[i] == "--ask" and i + 1 < len(parts):
+                ask_words.append(parts[i + 1])
+                i += 2
+            elif parts[i] == "--apply":
+                apply_flag = True
+                i += 1
+            elif parts[i] == "--deploy":
+                deploy_flag = True
+                i += 1
+            elif not project and not parts[i].startswith("-"):
+                project = parts[i]
+                i += 1
+            elif not parts[i].startswith("-"):
+                ask_words.append(parts[i])
+                i += 1
+            else:
+                i += 1
+        ask_str = " ".join(ask_words).strip()
+        return gas_recipe(project=project, filename=fname, func_name=fn_name, recipe_id=r_id, apply=apply_flag, deploy=deploy_flag, ask=ask_str, list_only=list_flag)
+
+    if sub in ("sync", "sync-project", "sync_project"):
+        if len(parts) < 2:
+            return "プロジェクト名を指定してください: sync <project> [--force]"
+        proj = parts[1]
+        force_flag = "--force" in parts or "-f" in parts
+        client = get_client()
+        res = client.sync_project(proj, force=force_flag)
+        lines = [
+            f"=== 🔄 GAS ハイブリッド同期 (sync): [{res.get('script_id')}] ===",
+            f"状態: {'同期完了 (クラウドから更新)' if res.get('updated_from_cloud') else '同期済み (ローカルキャッシュ利用・通信ゼロ)'}",
+            f"更新時刻: {res.get('modifiedTime', 'N/A')}",
+        ]
+        if "file_count" in res:
+            lines.append(f"ファイル数: {res.get('file_count')} 個")
+        return "\n".join(lines)
+
+    if sub in ("reload", "reload-tools", "reload_tools"):
+        return reload_tools()
+
+    if sub in ("py-outline", "py_outline"):
+        if len(parts) < 2:
+            return "Pythonファイルパスを指定してください: py-outline <file_path>"
+        items = GasClient.py_outline(parts[1])
+        lines = [
+            f"=== 🐍 Python 関数一覧 (py-outline): [{parts[1]}] (計 {len(items)} 個) ===",
+            "| 行範囲 | 種別 | 名前 | 行数 | 文字数 |",
+            "| --- | --- | --- | --- | --- |"
+        ]
+        for it in items:
+            kind = "メソッド" if it["is_method"] else "関数"
+            lines.append(f"| L{it['start_line']}-L{it['end_line']} | {kind} | {it['name']} | {it['lines_count']}行 | {it['chars_count']}文字 |")
+        return "\n".join(lines)
+
+    if sub in ("py-func", "py_func", "py-get"):
+        if len(parts) < 3:
+            return "引数を指定してください: py-func <file_path> <func_spec>"
+        res = GasClient.py_get_function(parts[1], parts[2])
+        return res.get("markdown_report", res.get("source", ""))
+
+    if sub in ("py-patch", "py_patch"):
+        if len(parts) < 3:
+            return "引数を指定してください: py-patch <file_path> <func_spec> [target] [replacement] [--code <code>] [--all]"
+        f_path = parts[1]
+        f_spec = parts[2]
+        is_all = "--all" in parts or "-a" in parts
+        new_c = ""
+        target_str = ""
+        repl_str = ""
+        rem_parts = [p for p in parts[3:] if p not in ("--all", "-a")]
+        if "--code" in rem_parts:
+            c_idx = rem_parts.index("--code")
+            if c_idx + 1 < len(rem_parts):
+                new_c = rem_parts[c_idx + 1]
+        elif len(rem_parts) >= 2:
+            target_str = rem_parts[0]
+            repl_str = rem_parts[1]
+        res = GasClient.py_patch_function(f_path, f_spec, target=target_str, replacement=repl_str, new_code=new_c, replace_all=is_all)
+        return res.get("markdown_report", "")
 
     return f"不明なコマンドです: '{sub}'。'help' で使い方を確認してください。"
 

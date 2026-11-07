@@ -110,6 +110,7 @@ def main():
         text=True,
         encoding="utf-8",
         errors="replace",
+        **( {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW") else {} )
     )
     out_lines = (r.stdout or "").strip().splitlines()
     summary = out_lines[-1] if out_lines else "no output"

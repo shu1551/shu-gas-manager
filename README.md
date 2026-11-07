@@ -76,6 +76,10 @@ py gas.py setup --open
    - 全ての書き込み直前にローカルの `.backups/` へ自動スナップショット退避（`diff` / `restore` で即比較・復元）。
    - さらに Google クラウド上の過去バージョン履歴（`versions`）を直接参照し、**「いま稼働中の本番バージョンと現在の最新コード（HEAD）の差分」をデプロイ前に直接表示する `diff-prod`（`diff_version`）** や、クラウド過去版からの直接ロールバック（`restore-version`）を完備しています。
 
+6. **書き換え後の「壊したか自動復元」と「GASドック / 高速化レシピ棚」**:
+   - 関数削除やパッチ適用時に、HTML側の RPC リンク切れや重複関数などの破壊的不整合をインメモリで瞬時に検知。新しく不整合が発生した場合は直前の状態へ自動復元します。
+   - `dock`（GASドック）により100点満点の健康点と具体的な直す手処方箋を提示し、`recipe`（高速化レシピ棚）によりループ内 appendRow の一括配列化（R01）や CacheService 包装（R04）を自動適用できます。
+
 ---
 
 ## 💻 CLI の主な使い方
@@ -91,6 +95,13 @@ py gas.py outline "MyProject"
 
 # 2. プロジェクト深層健康診断（構文・グローバル衝突・RPC・ループ内重いAPI・デッドコード）
 py gas.py diagnose "MyProject"
+
+# 2b. GASドック（100点満点の健康点採点・直す手処方箋の自動案内）
+py gas.py dock "MyProject"
+
+# 2c. 高速化レシピ棚（頻出パターンの検出・コード変換案・自動適用）
+py gas.py recipe "MyProject"
+py gas.py recipe "MyProject" --func addData --apply
 
 # 3. コード検索・ファイル取得・特定関数ブロック抽出
 py gas.py grep "MyProject" "fetch" -e "appsscript"

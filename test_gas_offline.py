@@ -3560,3 +3560,636 @@ def test_pick_latest_deployment_prefers_newest_version():
     ]
     assert GasClient._pick_latest_deployment(deps)["deploymentId"] == "new16"
     assert GasClient._pick_latest_deployment([{"deploymentId": "HEAD", "deploymentConfig": {}}]) is None
+
+
+def test_002_tokenize_and_extract_functions_cache(mock_client):
+    source = "function hello() { return 'world'; }\nfunction add(a, b) { return a + b; }"
+    toks1, mask1 = mock_client._tokenize_js(source)
+    toks2, mask2 = mock_client._tokenize_js(source)
+    assert toks1 == toks2
+    assert mask1 == mask2
+    toks1.append((0, 0, 'DUMMY'))
+    assert toks1 != mock_client._tokenize_js(source)[0]
+
+    funcs1 = mock_client._extract_functions_from_js(source)
+    funcs2 = mock_client._extract_functions_from_js(source)
+    assert funcs1 == funcs2
+    assert len(funcs1) == 2
+    funcs1[0]["name"] = "corrupted"
+    assert mock_client._extract_functions_from_js(source)[0]["name"] == "hello"
+
+
+def test_002_subprocess_no_window_flag(mock_client, monkeypatch):
+    import subprocess
+    captured_kwargs = {}
+
+    def fake_run(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = ""
+        mock_proc.stderr = ""
+        return mock_proc
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    mock_client._syntax_cache.clear()
+    mock_client._validate_syntax("test_file", "function test() {}", file_type="SERVER_JS")
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        assert captured_kwargs.get("creationflags") == subprocess.CREATE_NO_WINDOW
+
+
+def test_003_gas_dock_scoring_and_prescriptions(mock_client):
+    import copy
+    clean_diag = {
+        "status": "healthy",
+        "script_id": "dummy_sid",
+        "issues_count": 0,
+        "file_count": 1,
+        "total_functions": 1,
+        "syntax_errors": [],
+        "duplicate_functions": [],
+        "duplicate_globals": [],
+        "broken_rpc_calls": [],
+        "broken_html_templates": [],
+        "rpc_arity_warnings": [],
+        "performance_warnings": [],
+        "unused_params": [],
+        "frontend_warnings": [],
+        "unused_functions": [],
+        "entry_points": {"doGet": [{"file": "Code", "line": 1}]},
+        "manifest": {}
+    }
+    score, grade, pres = mock_client._compute_dock_score_and_prescriptions("dummy", clean_diag, xr=None)
+    assert score == 100
+    assert grade == "A"
+    assert len(pres) == 0
+
+    dead_diag = copy.deepcopy(clean_diag)
+    dead_diag["unused_functions"] = [{"name": f"deadFunc{i}", "file": "Code", "line": i} for i in range(10)]
+    score, grade, pres = mock_client._compute_dock_score_and_prescriptions("dummy", dead_diag, xr=None)
+    assert score == 85
+    assert grade == "B"
+    assert any("clean-dead" in p["action"] for p in pres)
+
+    warn_diag = copy.deepcopy(clean_diag)
+    warn_diag["broken_rpc_calls"] = [{"file": "Index", "line": 10, "function": "missingRpc"}]
+    warn_diag["performance_warnings"] = [{"file": "Code", "line": 20, "api": "appendRow", "reason": "ループ内 appendRow"}]
+    score, grade, pres = mock_client._compute_dock_score_and_prescriptions("dummy", warn_diag, xr=None)
+    assert score == 65
+    assert grade == "C"
+    actions = [p["action"] for p in pres]
+    assert any("add-func" in a for a in actions)
+    assert any("recipe" in a for a in actions)
+
+
+def test_004_auto_rollback_on_broken_rpc_when_deleting_or_renaming_function(mock_client):
+    import copy
+    files = [
+        {"name": "Code", "type": "SERVER_JS", "source": "function fetchData() { return 1; }\nfunction other() { return 2; }"},
+        {"name": "Index", "type": "HTML", "source": "<html><script>google.script.run.fetchData();</script></html>"}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+
+    with pytest.raises(ValueError) as exc:
+        mock_client.delete_function("dummy_sid", "Code", "fetchData")
+    assert "【壊したか自動復元】" in str(exc.value)
+    assert "RPCリンク切れ" in str(exc.value)
+    last_call_files = mock_client._put_content.call_args[0][1]
+    code_file = next(f for f in last_call_files if f["name"] == "Code")
+    assert "function fetchData" in code_file["source"]
+
+
+def test_004_auto_rollback_on_duplicate_top_level_function(mock_client):
+    import copy
+    files = [
+        {"name": "FileA", "type": "SERVER_JS", "source": "function helperFn() { return 'A'; }"},
+        {"name": "FileB", "type": "SERVER_JS", "source": "function otherFn() { return 'B'; }"}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+
+    with pytest.raises(ValueError) as exc:
+        mock_client.add_function("dummy_sid", "FileB", "function helperFn() { return 'duplicate'; }")
+    assert "【壊したか自動復元】" in str(exc.value)
+    assert "重複定義" in str(exc.value)
+
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    res = mock_client.add_function("dummy_sid", "FileB", "function helperFn() { return 'duplicate'; }", force=True)
+    assert res["status"] == "success"
+
+
+def test_004_pre_existing_broken_rpc_does_not_false_trigger(mock_client):
+    import copy
+    files = [
+        {"name": "Code", "type": "SERVER_JS", "source": "function goodFn() { return 1; }"},
+        {"name": "Index", "type": "HTML", "source": "<html><script>google.script.run.alreadyBroken();</script></html>"}
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+
+    res = mock_client.patch_function("dummy_sid", "Code", "goodFn", target="1", replacement="2")
+    assert res["status"] == "success"
+    assert mock_client._put_content.call_count == 1
+
+
+def test_005_gas_recipe_detect_and_apply_append_row(mock_client):
+    import copy
+    source = (
+        "function addRows(sheet) {\n"
+        "  for (let i = 0; i < 10; i++) {\n"
+        "    sheet.appendRow([i, 'item' + i]);\n"
+        "  }\n"
+        "}"
+    )
+    files = [{"name": "Code", "type": "SERVER_JS", "source": source}]
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+
+    res = mock_client.gas_recipe("dummy_sid", filename="Code", apply=False)
+    assert len(res["detections"]) >= 1
+    r01 = next(d for d in res["detections"] if d["recipe_id"] == "R01")
+    assert "append_row_batch" in r01["recipe_name"]
+    assert "setValues" in r01["transformed_code"]
+    assert "__batchRows" in r01["transformed_code"]
+
+    res_apply = mock_client.gas_recipe("dummy_sid", filename="Code", apply=True)
+    assert len(res_apply["applied_results"]) >= 1
+    assert mock_client._put_content.call_count == 1
+    saved_source = mock_client._put_content.call_args[0][1][0]["source"]
+    assert "__batchRows.push([i, 'item' + i])" in saved_source
+    assert "setValues(__batchRows)" in saved_source
+
+
+def test_005_gas_recipe_detect_and_apply_cache_wrap(mock_client):
+    import copy
+    source = (
+        "function getMasterData(sheetName) {\n"
+        "  const ss = SpreadsheetApp.getActiveSpreadsheet();\n"
+        "  const sheet = ss.getSheetByName(sheetName);\n"
+        "  return sheet.getDataRange().getValues();\n"
+        "}"
+    )
+    files = [{"name": "Code", "type": "SERVER_JS", "source": source}]
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+
+    res = mock_client.gas_recipe("dummy_sid", filename="Code", apply=False)
+    assert len(res["detections"]) >= 1
+    r04 = next(d for d in res["detections"] if d["recipe_id"] == "R04")
+    assert "cache_service_wrap" in r04["recipe_name"]
+    assert "CacheService.getScriptCache()" in r04["transformed_code"]
+
+    res_apply = mock_client.gas_recipe("dummy_sid", filename="Code", func_name="getMasterData", apply=True)
+    assert len(res_apply["applied_results"]) >= 1
+    assert mock_client._put_content.call_count == 1
+    saved_source = mock_client._put_content.call_args[0][1][0]["source"]
+    assert "CacheService.getScriptCache()" in saved_source
+    assert "__cache.put(" in saved_source
+
+
+def test_006_recipe_catalog_12_items_and_natural_language_match(mock_client):
+    res = mock_client.list_recipes()
+    assert res["count"] == 12
+    assert len(res["recipes"]) == 12
+    ids = [r["id"] for r in res["recipes"]]
+    for i in range(1, 13):
+        assert f"R{i:02d}" in ids
+
+    m1 = mock_client.match_recipe_by_text("メールのスレッド取得が遅い")
+    assert len(m1) > 0
+    assert m1[0]["id"] == "R06"
+
+    m2 = mock_client.match_recipe_by_text("シートに1行ずつ追記")
+    assert len(m2) > 0
+    assert m2[0]["id"] == "R01"
+
+    m3 = mock_client.match_recipe_by_text("排他ロックと6分制限")
+    assert len(m3) > 0
+    assert m3[0]["id"] == "R12"
+
+
+def test_006_detect_r05_r06_r07_r08_r10_r11_and_apply_r06_r12(mock_client):
+    import copy
+    files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": (
+                "function processProps() {\n"
+                "  for (let i = 0; i < 10; i++) {\n"
+                "    const val = PropertiesService.getScriptProperties().getProperty('key_' + i);\n"
+                "  }\n"
+                "}\n\n"
+                "function fetchMail() {\n"
+                "  const threads = GmailApp.search('label:unread');\n"
+                "  for (let i = 0; i < threads.length; i++) {\n"
+                "    const msgs = threads[i].getMessages();\n"
+                "  }\n"
+                "}\n\n"
+                "function styleCells() {\n"
+                "  const sheet = SpreadsheetApp.getActiveSheet();\n"
+                "  for (let i = 1; i <= 10; i++) {\n"
+                "    sheet.getRange(i, 1).setBackground('#ff0000');\n"
+                "  }\n"
+                "}\n\n"
+                "function deleteOld() {\n"
+                "  const sheet = SpreadsheetApp.getActiveSheet();\n"
+                "  for (let i = 10; i >= 1; i--) {\n"
+                "    sheet.deleteRow(i);\n"
+                "  }\n"
+                "}\n\n"
+                "function searchDrive() {\n"
+                "  const files = DriveApp.getFiles();\n"
+                "  while (files.hasNext()) {\n"
+                "    const f = files.next();\n"
+                "    if (f.getName() === 'test') {}\n"
+                "  }\n"
+                "}\n\n"
+                "function batchWrite() {\n"
+                "  const sheet = SpreadsheetApp.getActiveSheet();\n"
+                "  for (let i = 0; i < 5; i++) {\n"
+                "    sheet.appendRow([i]);\n"
+                "  }\n"
+                "}\n"
+            )
+        },
+        {
+            "name": "Index",
+            "type": "HTML",
+            "source": (
+                "<html><script>\n"
+                "function load() {\n"
+                "  google.script.run.withSuccessHandler(res => {\n"
+                "    google.script.run.withSuccessHandler(sub => {}).other();\n"
+                "  }).first();\n"
+                "}\n"
+                "</script></html>"
+            )
+        }
+    ]
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+
+    res = mock_client.gas_recipe("dummy_sid")
+    detected_ids = {d["recipe_id"] for d in res["detections"]}
+    assert "R05" in detected_ids
+    assert "R06" in detected_ids
+    assert "R07" in detected_ids
+    assert "R08" in detected_ids
+    assert "R10" in detected_ids
+    assert "R11" in detected_ids
+
+    # R06 自動適用検証
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    res_r06 = mock_client.gas_recipe("dummy_sid", filename="Code", func_name="fetchMail", recipe_id="R06", apply=True)
+    assert len(res_r06["applied_results"]) == 1
+    assert res_r06["applied_results"][0]["recipe_id"] == "R06"
+    applied_source_r06 = mock_client._put_content.call_args[0][1][0]["source"]
+    assert "GmailApp.getMessagesForThreads(threads)" in applied_source_r06
+    assert "__threadMsgs[i]" in applied_source_r06
+
+    # R12 自動適用検証
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    res_r12 = mock_client.gas_recipe("dummy_sid", filename="Code", func_name="batchWrite", recipe_id="R12", apply=True)
+    assert len(res_r12["applied_results"]) == 1
+    assert res_r12["applied_results"][0]["recipe_id"] == "R12"
+    applied_source_r12 = mock_client._put_content.call_args[0][1][0]["source"]
+    assert "LockService.getScriptLock()" in applied_source_r12
+    assert "tryLock(10000)" in applied_source_r12
+    assert "releaseLock()" in applied_source_r12
+
+
+def test_007_fast_write_mode_skips_get_content_network_call(mock_client):
+    import copy
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function test() { return 1; }"}]
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+
+    # fast=False (既定) では use_cache=False が渡る
+    mock_client.replace_function("dummy_sid", "Code", "test", "function test() { return 2; }")
+    mock_client.get_content.assert_called_with("dummy_sid", use_cache=False)
+
+    # fast=True では use_cache=True が渡る
+    mock_client.get_content.reset_mock()
+    mock_client.replace_function("dummy_sid", "Code", "test", "function test() { return 3; }", fast=True)
+    mock_client.get_content.assert_called_with("dummy_sid", use_cache=True)
+
+
+def test_007_deploy_after_put_skips_redundant_get_content(mock_client):
+    import copy
+    from unittest.mock import call
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function hello() { return 'world'; }"}]
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client.create_version = MagicMock(return_value=2)
+    mock_client.get_deployments = MagicMock(return_value=[{"deploymentId": "dep1", "deploymentConfig": {"versionNumber": 1}, "entryPoints": []}])
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"versionNumber": 2, "deploymentId": "dep1"}
+    mock_client._request_with_retry = MagicMock(return_value=mock_resp)
+
+    # patch_function(..., deploy=True) を実行
+    res = mock_client.patch_function("dummy_sid", "Code", "hello", target="'world'", replacement="'fast'", deploy=True)
+    assert res["status"] == "success"
+
+    # get_content の全呼び出し履歴を確認: 1回目は書き込み用(use_cache=False)、2回目の deploy 内は直前キャッシュ再利用(use_cache=True)
+    calls = mock_client.get_content.call_args_list
+    assert len(calls) == 2
+    assert calls[0] == call("dummy_sid", use_cache=False)
+    assert calls[1] == call("dummy_sid", use_cache=True)
+
+
+def test_008_rpc_property_mismatch_detection_and_auto_rollback(mock_client):
+    import copy
+    files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": (
+                "function getUserInfo() {\n"
+                "  return { userName: 'Alice', role: 'admin' };\n"
+                "}\n\n"
+                "function fetchSpreadsheetData() {\n"
+                "  const ss = SpreadsheetApp.getActiveSpreadsheet();\n"
+                "  return ss.getDataRange().getValues();\n"
+                "}\n"
+            )
+        },
+        {
+            "name": "Index",
+            "type": "HTML",
+            "source": (
+                "<html><script>\n"
+                "function load() {\n"
+                "  google.script.run.withSuccessHandler(function(res) {\n"
+                "    console.log(res.userName);\n"
+                "  }).getUserInfo();\n\n"
+                "  google.script.run.withSuccessHandler(res => {\n"
+                "    console.log(res.length);\n"
+                "  }).fetchSpreadsheetData();\n"
+                "}\n"
+                "</script></html>"
+            )
+        }
+    ]
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+    mock_client.get_content = MagicMock(return_value={"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+
+    # 1. 正常状態での check_rpc_contracts
+    contracts = mock_client.check_rpc_contracts("dummy_sid")
+    assert contracts["status"] == "healthy"
+    assert len(contracts["rpc_property_mismatches"]) == 0
+    # missing_failure_handlers: 2件 (getUserInfo, fetchSpreadsheetData で withFailureHandler 未設定)
+    assert len(contracts["missing_failure_handlers"]) == 2
+    # unprotected_server_rpcs: 1件 (fetchSpreadsheetData は SpreadsheetApp を呼ぶが try/catch なし)
+    assert len(contracts["unprotected_server_rpcs"]) == 1
+    assert contracts["unprotected_server_rpcs"][0]["rpc"] == "fetchSpreadsheetData"
+
+    # 2. gas_dock での契約ズレ・減点検証
+    dock_res = mock_client.gas_dock("dummy_sid")
+    assert any(p["category"] == "通信エラー防御" for p in dock_res["prescriptions"])
+    assert any(p["category"] == "サーバー例外防御" for p in dock_res["prescriptions"])
+
+    # 3. サーバー側を return { fullName: 'Alice', role: 'admin' }; に patch_function -> 壊したか自動復元
+    with pytest.raises(ValueError) as excinfo:
+        mock_client.patch_function(
+            "dummy_sid", "Code", "getUserInfo",
+            target="userName: 'Alice'",
+            replacement="fullName: 'Alice'"
+        )
+    assert "壊したか自動復元" in str(excinfo.value)
+    assert "RPC戻り値プロパティ契約の不一致が新規発生" in str(excinfo.value)
+    assert "getUserInfo.userName" in str(excinfo.value)
+
+
+def test_009_gas_scaffold_catalog_and_apply_full_architecture(mock_client):
+    import copy
+    # 1. カタログ取得
+    res_list = mock_client.gas_scaffold(list_only=True)
+    assert res_list["count"] == 5
+    ids = [s["id"] for s in res_list["scaffolds"]]
+    assert ids == ["S01", "S02", "S03", "S04", "S05"]
+
+    # 2. S05 (full_architecture) の注入
+    files = [
+        {"name": "Code", "type": "SERVER_JS", "source": "function doGet() { return HtmlService.createHtmlOutputFromFile('Index'); }"},
+        {"name": "Index", "type": "HTML", "source": "<html><head></head><body><h1>Hello</h1><script>\nconsole.log('init');\n</script></body></html>"}
+    ]
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=False: {"files": copy.deepcopy(files)})
+
+    def fake_put(sid, new_files):
+        files.clear()
+        files.extend(copy.deepcopy(new_files))
+    mock_client._put_content = MagicMock(side_effect=fake_put)
+
+    res_apply = mock_client.gas_scaffold(script_id="dummy_sid", scaffold_id="S05", apply=True)
+    assert res_apply["status"] == "success"
+    assert res_apply["applied"] is True
+
+    # Index.html に S01, S02, S03 の主要関数が存在することを確認
+    html_f = next(f for f in files if f["name"] == "Index")
+    assert "callServer" in html_f["source"]
+    assert "createSwrStore" in html_f["source"]
+    assert "runOptimistic" in html_f["source"]
+    assert "/* @gas-scaffold:S01 */" in html_f["source"]
+    assert "/* @gas-scaffold:S02 */" in html_f["source"]
+    assert "/* @gas-scaffold:S03 */" in html_f["source"]
+
+    # Code.gs に S04 (runSafeRpc_) が存在することを確認
+    code_f = next(f for f in files if f["name"] == "Code")
+    assert "runSafeRpc_" in code_f["source"]
+    assert "/* @gas-scaffold:S04 */" in code_f["source"]
+
+    # 3. 2回目の apply=True 呼び出しで二重注入が防止されること
+    res_apply2 = mock_client.gas_scaffold(script_id="dummy_sid", scaffold_id="S05", apply=True)
+    assert res_apply2["status"] == "already_applied"
+    assert res_apply2["applied"] is False
+    assert len(res_apply2["skipped_parts"]) >= 4
+
+
+def test_010_unified_shelf_25_catalog_and_golden_check(mock_client):
+    import copy
+    from gas_client import GAS_UNIFIED_SHELVES
+
+    # 1. 全25棚（R:12 + S:5 + K:4 + D:4 = 25棚）の検証
+    assert len(GAS_UNIFIED_SHELVES) == 25
+    categories = [s["category"] for s in GAS_UNIFIED_SHELVES]
+    assert categories.count("SPEEDUP") == 12
+    assert categories.count("SCAFFOLD") == 5
+    assert categories.count("DESIGN") == 4
+    assert categories.count("DIAG") == 4
+
+    # 2. check_shelves によるゴールデン頼み文全問一致検証
+    chk = mock_client.check_shelves()
+    assert chk["passed"] is True
+    assert chk["total"] >= 30
+    assert chk["matched"] == chk["total"]
+    assert chk["mismatches"] == []
+
+    # 3. gas_shelf 直結ディスパッチの検証 (D01: gas_dock, D03: clean_dead)
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+    mock_client.gas_dock = MagicMock(return_value={"status": "healthy", "markdown_report": "dock report"})
+    mock_client.clean_dead = MagicMock(return_value={"status": "success", "markdown_report": "clean report"})
+
+    res_dock = mock_client.gas_shelf("dummy_sid", query="ガスドックで健康診断して")
+    assert res_dock["status"] == "success"
+    assert res_dock["matched_shelf"]["id"] == "D01"
+    mock_client.gas_dock.assert_called_once_with("dummy_sid", filename="Index")
+
+    res_clean = mock_client.gas_shelf("dummy_sid", query="使っていない関数を掃除して")
+    assert res_clean["status"] == "success"
+    assert res_clean["matched_shelf"]["id"] == "D03"
+    mock_client.clean_dead.assert_called_once_with("dummy_sid", dry_run=True, deploy=False)
+
+def test_011_hybrid_sync_and_cached_writes(mock_client):
+    """指示書011: 初回クラウド突き合わせ＋同期後キャッシュ自動活用＋解析キャッシュ永続化"""
+    import copy
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function test() { return 1; }"}]
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_sid")
+    mock_client._put_content = MagicMock()
+    mock_client._synced_sids = set()
+
+    # 1. 初回書き込み: 未同期 (dummy_sid not in _synced_sids) では fast=False で use_cache=False (クラウド突き合わせ)
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client.replace_function("dummy_sid", "Code", "test", "function test() { return 2; }", fast=False)
+    mock_client.get_content.assert_called_with("dummy_sid", use_cache=False)
+
+    # 2. 同期後: _synced_sids に sid が入った状態では fast=False でも自動的に use_cache=True (通信カット)
+    mock_client._synced_sids.add("dummy_sid")
+    mock_client.get_content.reset_mock()
+    mock_client.patch_code("dummy_sid", "Code", target="return 1;", replacement="return 10;", fast=False)
+    mock_client.get_content.assert_called_with("dummy_sid", use_cache=True)
+
+    mock_client.get_content.reset_mock()
+    mock_client.replace_file("dummy_sid", "Code", "function test() { return 99; }", fast=False)
+    mock_client.get_content.assert_called_with("dummy_sid", use_cache=True)
+
+    # 3. sync_project の動作検証
+    with patch.object(mock_client, "_request_with_retry") as mock_req:
+        res_mock = MagicMock()
+        res_mock.status_code = 200
+        res_mock.json.return_value = {"files": copy.deepcopy(files)}
+        mock_req.return_value = res_mock
+
+        mock_client._synced_sids.clear()
+        sync_res = mock_client.sync_project("dummy_sid")
+        assert sync_res["synced"] is True
+        assert sync_res["updated_from_cloud"] is True
+        assert "dummy_sid" in mock_client._synced_sids
+
+    # 4. gas_dock の解析キャッシュ永続化検証
+    mock_client._force_dock_cache = True
+    mock_client._dock_cache.clear()
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+
+    with patch.object(GasClient, "diagnose", return_value={"status": "healthy", "issues_count": 0, "syntax_errors": []}) as mock_d,          patch.object(GasClient, "xray", return_value={"front_functions_count": 0, "ui_elements_count": 0, "ghost_rpcs": []}):
+        dock_res = mock_client.gas_dock("dummy_sid")
+        assert dock_res["score"] == 100
+        assert dock_res["status"] == "healthy"
+
+        # dock_reports に保存されたか確認
+        dock_reports = mock_client._cache_data.get("dock_reports", {})
+        assert len(dock_reports) >= 1
+        key = list(dock_reports.keys())[0]
+        assert key.startswith("dummy_sid:Index:")
+        assert dock_reports[key]["score"] == 100
+
+        # メモリキャッシュをクリアして再実行 -> ディスクキャッシュから即座に返却され diagnose は呼ばれない
+        mock_client._dock_cache.clear()
+        mock_d.reset_mock()
+        dock_res_cached = mock_client.gas_dock("dummy_sid")
+        assert dock_res_cached["score"] == 100
+        mock_d.assert_not_called()
+
+def test_012_reload_tools_and_py_ast_self_patch(tmp_path):
+    """指示書012: 常駐MCPホットリロード (reload_tools) と Python AST 自己整備 (py_outline, py_get_function, py_patch_function)"""
+    from gas_client import GasClient
+    import gas_mcp_server
+
+    # 1. 一時 Python ファイルの準備
+    dummy_py = tmp_path / "dummy_service.py"
+    dummy_code = '''# -*- coding: utf-8 -*-
+def top_level_calc(x, y):
+    # calc comment
+    return x + y
+
+class MathService:
+    @property
+    def version(self):
+        return "1.0.0"
+
+    def multiply(self, a, b):
+        res = a * b
+        return res
+'''
+    dummy_py.write_text(dummy_code, encoding="utf-8")
+
+    # 2. py_outline の検証
+    outline = GasClient.py_outline(str(dummy_py))
+    assert len(outline) == 3
+    names = [it["name"] for it in outline]
+    assert names == ["top_level_calc", "MathService.version", "MathService.multiply"]
+    assert outline[0]["lines_count"] == 3
+    assert outline[1]["lines_count"] == 3
+    assert outline[2]["lines_count"] == 3
+
+    # 3. py_get_function の検証
+    fn_top = GasClient.py_get_function(str(dummy_py), "top_level_calc")
+    assert fn_top["name"] == "top_level_calc"
+    assert "return x + y" in fn_top["source"]
+
+    fn_method = GasClient.py_get_function(str(dummy_py), "MathService.multiply")
+    assert fn_method["name"] == "MathService.multiply"
+    assert "res = a * b" in fn_method["source"]
+
+    # 短縮名での探索も動作すること
+    fn_short = GasClient.py_get_function(str(dummy_py), "multiply")
+    assert fn_short["name"] == "MathService.multiply"
+
+    # 4. py_patch_function の検証（正常置換）
+    patch_res = GasClient.py_patch_function(
+        str(dummy_py),
+        "MathService.multiply",
+        target="res = a * b",
+        replacement="res = (a * b) + 1"
+    )
+    assert patch_res["status"] == "success"
+    assert patch_res["replaced_occurrences"] == 1
+    assert "MathService.multiply" in patch_res["name"]
+
+    # 置換後のファイル内容確認
+    new_src = dummy_py.read_text(encoding="utf-8")
+    assert "res = (a * b) + 1" in new_src
+    assert "return x + y" in new_src
+
+    # 5. py_patch_function の検証（構文エラー時の書き込み拒否関所）
+    with pytest.raises(ValueError) as excinfo:
+        GasClient.py_patch_function(
+            str(dummy_py),
+            "MathService.multiply",
+            target="res = (a * b) + 1",
+            replacement="res = (a * b) +"
+        )
+    assert "構文エラー" in str(excinfo.value)
+
+    # 構文エラー時はファイルが一切変更されずロールバックされていること
+    unmodified_src = dummy_py.read_text(encoding="utf-8")
+    assert "res = (a * b) + 1" in unmodified_src
+
+    # 6. gas_mcp_server.reload_tools の検証
+    reload_msg = gas_mcp_server.reload_tools()
+    assert "[SUCCESS]" in reload_msg
+    assert "ホットリロード完了" in reload_msg
+

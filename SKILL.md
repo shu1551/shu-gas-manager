@@ -147,3 +147,14 @@ Google Apps Script (GAS) はローカルにファイルを落とさず（`clasp 
 6. **`xray`（深層レントゲン解析）**:
    - `gas("xray <project>")`
    - E2Eコールパス、未定義RPC、死にコードを可視化。
+
+## 9. GASドック（dock）と高速化レシピ棚（recipe）
+
+1. **`gas_dock`（GASドック・健康点採点と直す手案内）**:
+   - `gas("dock <project> [file]")`（CLI: `py gas.py dock <project>`）
+   - diagnose と xray を統合し、100点満点の健康点（ランクA〜D）と具体的な直す手処方箋を一覧出力する。
+2. **`gas_recipe`（高速化レシピ棚）**:
+   - `gas("recipe <project> [-f <file>] [--func <name>] [--id <R01..>] [--apply]")`（CLI: `py gas.py recipe <project>`）
+   - ループ内 appendRow の配列一括化（R01）や CacheService キャッシュ包装（R04）など、GAS高速化レシピの検出と自動変換を行う。
+3. **書き込み時の「壊したか自動復元（Auto-Rollback）」**:
+   - コード書き換え後に新規のRPCリンク切れ・重複関数・テンプレート未定義を検知した場合、直前の控えへ自動復元して安全を保つ。
