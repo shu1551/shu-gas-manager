@@ -235,6 +235,7 @@ def main():
     dep_p = subparsers.add_parser("deploy", help="新バージョン作成＆再デプロイ")
     dep_p.add_argument("project", help="プロジェクト名またはスクリプトID")
     dep_p.add_argument("-d", "--desc", default="Auto deployed via CLI", help="バージョン説明")
+    dep_p.add_argument("--deployment-id", "--dep-id", default=None, help="更新対象の特定デプロイID（未指定時は自動検出）")
     dep_p.add_argument("-r", "--refresh", action="store_true", help="デプロイIDキャッシュを再取得")
     dep_p.add_argument("--fast", action="store_true", help="直近キャッシュを再利用し取得通信を省略して高速デプロイ")
 
@@ -814,8 +815,9 @@ def main():
                 print(res["diff"])
 
         elif args.command == "deploy":
-            res = client.deploy(args.project, description=args.desc, refresh=args.refresh, fast=args.fast)
+            res = client.deploy(args.project, description=args.desc, deployment_id=getattr(args, "deployment_id", None), refresh=args.refresh, fast=args.fast)
             print(f"[SUCCESS] 本番デプロイ完了 (Version: {res['versionNumber']})")
+            print(f"Deployment ID: {res.get('deploymentId', 'N/A')}")
             print(f"WebアプリURL: {res.get('webAppUrl', 'N/A')}")
 
         elif args.command in ("deployments", "deps"):

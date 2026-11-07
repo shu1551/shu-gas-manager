@@ -4193,3 +4193,24 @@ class MathService:
     assert "[SUCCESS]" in reload_msg
     assert "ホットリロード完了" in reload_msg
 
+
+
+def test_deploy_with_specific_deployment_id(mock_client):
+    mock_client.resolve_script_id = MagicMock(return_value="dummy_id")
+    mock_client.create_version = MagicMock(return_value=42)
+
+    res_put = MagicMock()
+    res_put.status_code = 200
+    res_put.content = b'ok'
+    res_put.json.return_value = {
+        "deploymentId": "target_dep_123",
+        "entryPoints": [{"webApp": {"url": "https://script.google.com/macros/s/target_url/exec"}}]
+    }
+    mock_client._request_with_retry = MagicMock(return_value=res_put)
+
+    res = mock_client.deploy("dummy_id", description="Update specific dep", deployment_id="target_dep_123")
+    assert res["status"] == "success"
+    assert res["deploymentId"] == "target_dep_123"
+    assert res["versionNumber"] == 42
+    assert res["webAppUrl"] == "https://script.google.com/macros/s/target_url/exec"
+    assert mock_client._cache_data["deployments"]["dummy_id"]["id"] == "target_dep_123"

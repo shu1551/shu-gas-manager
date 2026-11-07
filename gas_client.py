@@ -3395,6 +3395,15 @@ class GasClient:
         if res.status_code != 200:
             raise RuntimeError(f"デプロイの更新に失敗しました ({res.status_code}): {res.text}")
 
+        res_data = res.json() if res.content else {}
+        for ep in res_data.get("entryPoints", []):
+            if ep.get("webApp", {}).get("url"):
+                web_url = ep["webApp"]["url"]
+                break
+
+        self._cache_data.setdefault("deployments", {})[sid] = {"id": dep_id, "url": web_url}
+        self._save_cache()
+
         return {
             "status": "success",
             "deploymentId": dep_id,

@@ -384,18 +384,20 @@ def diff_backup(project: str, backup_file: str = "", filename: str = "") -> str:
 
 @mcp.tool()
 @safe_tool
-def deploy(project: str, description: str = "Auto deployed via MCP", refresh: bool = False) -> str:
+def deploy(project: str, description: str = "Auto deployed via MCP", deployment_id: str | None = None, refresh: bool = False) -> str:
     """新バージョンを作成し、既存の Web アプリデプロイを更新（再デプロイ）します。
 
     Args:
         project: プロジェクト名またはスクリプトID
         description: バージョンの説明文
+        deployment_id: 更新対象の特定デプロイID（省略時は最新デプロイを自動検出）
         refresh: デプロイIDキャッシュを破棄して再取得するか (デフォルト: False)
     """
     client = get_client()
-    res = client.deploy(project, description=description, refresh=refresh)
+    res = client.deploy(project, description=description, deployment_id=deployment_id, refresh=refresh)
     return (
         f"[SUCCESS] 本番デプロイ完了 (Version {res['versionNumber']})\n"
+        f"Deployment ID: {res.get('deploymentId', 'N/A')}\n"
         f"URL: {res.get('webAppUrl', 'N/A')}\n"
         f"説明: {res['description']}"
     )
