@@ -4094,7 +4094,7 @@ class GasClient:
             "diff": "".join(diff_lines)
         }
 
-    def push(self, script_id=None, local_dir=".", force=False, dry_run=False, delete_missing=False, deploy=False, deploy_desc="Pushed via GasClient"):
+    def push(self, script_id=None, local_dir=".", force=False, dry_run=False, delete_missing=False, deploy=False, deploy_desc="Pushed via GasClient", deployment_id=None):
         """ローカルフォルダのコードをクラウドへ一括反映（差分0件時はAPI通信スキップ、一括Node構文検査付き）"""
         st = self.sync_status(script_id=script_id, local_dir=local_dir)
         sid = st["script_id"]
@@ -4209,7 +4209,7 @@ class GasClient:
             "diff": st["diff"]
         }
         if deploy:
-            dep_info = self.deploy(sid, description=deploy_desc, fast=True)
+            dep_info = self.deploy(sid, description=deploy_desc, deployment_id=deployment_id, fast=True)
             ret["deployment"] = dep_info
         return ret
 

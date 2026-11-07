@@ -863,7 +863,7 @@ def pull_project(project: str, local_dir: str = ".", clean: bool = False) -> str
 
 @mcp.tool()
 @safe_tool
-def push_project(project: str = "", local_dir: str = ".", force: bool = False, dry_run: bool = False, delete_missing: bool = False, deploy: bool = False, desc: str = "Pushed via MCP") -> str:
+def push_project(project: str = "", local_dir: str = ".", force: bool = False, dry_run: bool = False, delete_missing: bool = False, deploy: bool = False, desc: str = "Pushed via MCP", deployment_id: str = "") -> str:
     """ローカルフォルダのコードをクラウドへ一括反映します。差分0件時はAPI通信をスキップしミリ秒で即返却します。
     Node.js による全ファイルの一括構文検査、自動バックアップ、デプロイ連動を完備しています。
 
@@ -877,7 +877,8 @@ def push_project(project: str = "", local_dir: str = ".", force: bool = False, d
         desc: デプロイ時の説明文 (デフォルト: Pushed via MCP)
     """
     client = get_client()
-    res = client.push(project, local_dir=local_dir, force=force, dry_run=dry_run, delete_missing=delete_missing, deploy=deploy, deploy_desc=desc)
+    dep_id_arg = deployment_id.strip() if deployment_id else None
+    res = client.push(project, local_dir=local_dir, force=force, dry_run=dry_run, delete_missing=delete_missing, deploy=deploy, deploy_desc=desc, deployment_id=dep_id_arg)
     if res.get("status") == "no_changes":
         return "差分はありません（ローカルとクラウドは一致しています）。"
 
