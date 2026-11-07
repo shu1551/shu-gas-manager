@@ -16,3 +16,6 @@ screenshots/
 
 # ローカル固有拡張
 gas_local_extras.py
+
+# 開発指示書・作業レポート（内部専用・公開厳禁）
+queue/

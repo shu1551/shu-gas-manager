@@ -1573,6 +1573,8 @@ def gas_shelf(
     )
     return res.get("markdown_report", "")
 
+@mcp.tool()
+@safe_tool
 def gas(command: str) -> str:
     """ガスマネージャー (GAS Manager) 統合コマンド窓口。
     CLI と同じコマンド形式（例: 'files MyProject', 'outline MyProject', 'patch-func MyProject main myFunc old new' 等）で
@@ -2414,6 +2416,66 @@ def gas(command: str) -> str:
         return res.get("markdown_report", "")
 
     return f"不明なコマンドです: '{sub}'。'help' で使い方を確認してください。"
+
+@mcp.tool()
+@safe_tool
+def py_outline(file_path: str) -> str:
+    """Pythonファイル内の関数・クラスメソッド一覧（行範囲・文字数・種別）をAST高速解析で抽出します。
+
+    Args:
+        file_path: 対象のPythonファイルパス (例: "gas_client.py")
+    """
+    items = GasClient.py_outline(file_path)
+    lines = [
+        f"=== 🐍 Python 関数一覧 (py_outline): [{file_path}] (計 {len(items)} 個) ===",
+        "| 行範囲 | 種別 | 名前 | 行数 | 文字数 |",
+        "| --- | --- | --- | --- | --- |"
+    ]
+    for it in items:
+        kind = "メソッド" if it["is_method"] else "関数"
+        lines.append(f"| L{it['start_line']}-L{it['end_line']} | {kind} | {it['name']} | {it['lines_count']}行 | {it['chars_count']}文字 |")
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def py_get_function(file_path: str, func_spec: str) -> str:
+    """Pythonファイルから指定された関数・メソッドの定義（デコレータ含む）をAST高速特定で抽出します。
+
+    Args:
+        file_path: 対象のPythonファイルパス (例: "gas_client.py")
+        func_spec: 関数名またはクラス.メソッド名 (例: "reload_tools", "GasClient.gas_dock")
+    """
+    res = GasClient.py_get_function(file_path, func_spec)
+    return res.get("markdown_report", res.get("source", ""))
+
+@mcp.tool()
+@safe_tool
+def py_patch_function(
+    file_path: str,
+    func_spec: str,
+    target: str = "",
+    replacement: str = "",
+    new_code: str = "",
+    replace_all: bool = False
+) -> str:
+    """Pythonファイル内の指定関数スコープ限定でコード置換を行います。置換後に自動で構文検査（compile）を行い、構文エラー時は自動ロールバックします。
+
+    Args:
+        file_path: 対象のPythonファイルパス (例: "gas_client.py")
+        func_spec: 関数名またはクラス.メソッド名 (例: "reload_tools", "GasClient.gas_dock")
+        target: 置換前の文字列 (部分一致)
+        replacement: 置換後の文字列
+        new_code: 関数定義丸ごと差し替える場合の全コード (省略可)
+        replace_all: 関数内で一致する全箇所を置換するか (既定: False で1箇所目のみ)
+    """
+    res = GasClient.py_patch_function(
+        file_path, func_spec,
+        target=target,
+        replacement=replacement,
+        new_code=new_code,
+        replace_all=replace_all
+    )
+    return res.get("markdown_report", "")
 
 if __name__ == "__main__":
     mcp.run()
