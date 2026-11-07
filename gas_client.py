@@ -665,22 +665,22 @@ class GasClient:
     # プロジェクト / ファイル読み込み
     # ==========================================
 
-    def list_projects(self, limit=50, use_cache=False):
-        """Google Drive 上の GAS プロジェクト一覧を取得"""
+    def list_projects(self, limit=50, use_cache=False, refresh=False):
+        """Google Drive 上の GAS プロジェクト一覧を取得 (TTL 300秒, refresh=True で強制再取得)"""
         now = time.time()
-        # 1. メモリキャッシュ
-        if self._projects_list_cache is not None and now < self._projects_list_expiry and self._projects_list_fetched_limit >= limit:
+        # 1. メモリキャッシュ (refresh=True 時はスキップ)
+        if not refresh and self._projects_list_cache is not None and now < self._projects_list_expiry and self._projects_list_fetched_limit >= limit:
             return self._projects_list_cache[:limit]
 
-        # 2. ディスクキャッシュ (.cache.json)
+        # 2. ディスクキャッシュ (.cache.json) (TTL 300秒 = 5分, refresh=True 時はスキップ)
         disk_pl = self._cache_data.get("projects_list")
-        if disk_pl and isinstance(disk_pl, dict):
+        if not refresh and disk_pl and isinstance(disk_pl, dict):
             ts = disk_pl.get("ts", 0)
             cached_limit = disk_pl.get("limit", 0)
             files = disk_pl.get("files", [])
-            if (now - ts < 3600) and (cached_limit >= limit) and files:
+            if (now - ts < 300) and (cached_limit >= limit) and files:
                 self._projects_list_cache = files
-                self._projects_list_expiry = ts + 3600
+                self._projects_list_expiry = ts + 300
                 self._projects_list_fetched_limit = cached_limit
                 return files[:limit]
 
@@ -696,9 +696,15 @@ class GasClient:
             raise RuntimeError(f"プロジェクト一覧の取得に失敗しました ({res.status_code}): {res.text}")
         files = res.json().get("files", [])
         self._projects_list_cache = files
-        self._projects_list_expiry = now + 3600
+        self._projects_list_expiry = now + 300
         self._projects_list_fetched_limit = limit
         self._cache_data["projects_list"] = {"ts": now, "limit": limit, "files": files}
+        
+        # 取得したプロジェクト名をキャッシュ辞書に自動マージ (resolve_script_id を 0ms 化)
+        p_dict = self._cache_data.setdefault("projects", {})
+        for f in files:
+            if "name" in f and "id" in f:
+                p_dict[f["name"]] = f["id"]
         self._save_cache()
         return files
 
@@ -711,9 +717,9 @@ class GasClient:
         if len(name_or_id) >= 30 and re.match(r"^[A-Za-z0-9_-]+$", name_or_id):
             return name_or_id
 
-        # 高速パス: メモリキャッシュ未取得時でも、既に解決済みのプロジェクト名がディスクキャッシュにあれば Drive API 通信 (約650ms) をスキップして 0ms で返却
+        # 最速パス: 既に解決済みのプロジェクト名がキャッシュにあれば Drive API / list_projects を完全スキップして 0ms で即返却
         is_lp_mocked = hasattr(self.list_projects, "_mock_name") or hasattr(self.list_projects, "mock") or "Mock" in type(self.list_projects).__name__
-        if not is_lp_mocked and self._projects_list_cache is None:
+        if not is_lp_mocked:
             cached_id = self._cache_data.get("projects", {}).get(name_or_id)
             if cached_id:
                 return cached_id
@@ -1349,7 +1355,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
-            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True)
+            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "file": matched_file["name"],
@@ -1804,7 +1810,7 @@ class GasClient:
 
         backup_path = self._save_backup(sid, orig_content)
         self._put_content(sid, files)
-        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False, fast=fast)
 
         ret = {
             "status": "success",
@@ -2356,10 +2362,12 @@ class GasClient:
 
         return reasons
 
-    def _verify_and_rollback_if_broken(self, sid, orig_files, new_files, force=False, dry_run=False):
-        """書き込み後の不整合を検証し、新しく破壊が発生していれば自動復元（ロールバック）して例外送出"""
+    def _verify_and_rollback_if_broken(self, sid, orig_files, new_files, force=False, dry_run=False, fast=False):
+        """書き込み後の不整合を検証し、新しく破壊が発生していれば自動復元（ロールバック）して例外送出 (fast=True で深層検査スキップ)"""
         if force:
             return "passed (forced)"
+        if fast:
+            return "passed (fast)"
         reasons = self._check_broken_transition(orig_files, new_files)
         if reasons:
             if not dry_run:
@@ -2496,13 +2504,15 @@ class GasClient:
                     pass
 
     def _save_backup(self, script_id, content_data):
-        """変更前のプロジェクト全ファイルをローカルの .backups/ に退避保存"""
+        """変更前のプロジェクト全ファイルをローカルの .backups/ に退避保存 (コンパクト高速書き込み)"""
         sid_short = script_id[:12]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_file = self.backup_dir / f"backup_{sid_short}_{timestamp}.json"
         with open(backup_file, "w", encoding="utf-8") as f:
-            json.dump(content_data, f, ensure_ascii=False, indent=2)
-        self._cleanup_old_backups(script_id, keep=30)
+            json.dump(content_data, f, ensure_ascii=False, separators=(',', ':'))
+        # 毎回のディスク全走査を避け、タイムスタンプ末尾判定で約10回に1回のみクリーンアップ実行
+        if timestamp[-1] == '0':
+            self._cleanup_old_backups(script_id, keep=30)
         return backup_file
 
     def _put_content(self, script_id, files_list):
@@ -2534,6 +2544,28 @@ class GasClient:
         disk_cache = self._load_disk_content_cache()
         disk_cache[sid] = {"ts": now, "content": copy.deepcopy(c_dict)}
         self._save_disk_content_cache(disk_cache)
+
+        # スマートパージ: 関連する古い診断キャッシュを即時無効化
+        self._diag_cache.pop(sid, None)
+        self._dock_cache.pop(sid, None)
+        self._xray_cache.pop(sid, None)
+        self._tokenize_cache.clear()
+        self._extract_funcs_cache.clear()
+
+        # projects_list キャッシュ内の該当プロジェクトの modifiedTime を現在日時に即時更新
+        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        pl_disk = self._cache_data.get("projects_list", {})
+        if isinstance(pl_disk, dict) and "files" in pl_disk:
+            for p in pl_disk.get("files", []):
+                if p.get("id") == sid:
+                    p["modifiedTime"] = now_iso
+                    break
+        if self._projects_list_cache:
+            for p in self._projects_list_cache:
+                if p.get("id") == sid:
+                    p["modifiedTime"] = now_iso
+                    break
+        self._save_cache()
         return res_json
 
     # ==========================================
@@ -2621,7 +2653,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
-            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True)
+            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "file": matched_file["name"],
@@ -2634,7 +2666,7 @@ class GasClient:
         matched_file["source"] = new_source
 
         self._put_content(sid, files)
-        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False, fast=fast)
         ret = {
             "status": "success",
             "file": matched_file["name"],
@@ -2682,7 +2714,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
-            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True)
+            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "file": matched_file["name"],
@@ -2695,7 +2727,7 @@ class GasClient:
         matched_file["source"] = new_source
 
         self._put_content(sid, files)
-        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False, fast=fast)
         ret = {
             "status": "success",
             "file": matched_file["name"],

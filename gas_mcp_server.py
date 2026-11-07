@@ -81,14 +81,15 @@ def get_client() -> GasClient:
 
 @mcp.tool()
 @safe_tool
-def list_projects(limit: int = 20) -> str:
+def list_projects(limit: int = 20, refresh: bool = False) -> str:
     """Google Drive 上の GAS プロジェクト一覧を取得します。
 
     Args:
         limit: 取得する最大件数 (デフォルト: 20)
+        refresh: キャッシュを無視して最新のプロジェクト一覧を再取得するか (デフォルト: False)
     """
     client = get_client()
-    projects = client.list_projects(limit=limit)
+    projects = client.list_projects(limit=limit, refresh=refresh)
     if not projects:
         return "プロジェクトが見つかりませんでした。"
 
@@ -181,7 +182,7 @@ def list_functions(project: str, filename: str = "") -> str:
 
 @mcp.tool()
 @safe_tool
-def patch_code(project: str, filename: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False, verify: bool = False, dev: bool = False) -> str:
+def patch_code(project: str, filename: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False, verify: bool = False, dev: bool = False, fast: bool = False) -> str:
     """ファイル内の特定コード文字列を置換し、Google クラウドへ反映します。
     置換前に自動バックアップと Node.js vm による構文検査を実施します。
     patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
@@ -205,6 +206,8 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
         target=target, replacement=replacement, replace_all=replace_all,
         force=force, dry_run=dry_run, patches=patches if patches else None, deploy=deploy
     )
+    if fast:
+        kwargs["fast"] = True
     if verify:
         kwargs["verify"] = True
     if dev:
@@ -246,7 +249,7 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
 
 @mcp.tool()
 @safe_tool
-def replace_file(project: str, filename: str, new_source: str, force: bool = False, dry_run: bool = False, deploy: bool = False) -> str:
+def replace_file(project: str, filename: str, new_source: str, force: bool = False, dry_run: bool = False, deploy: bool = False, fast: bool = False) -> str:
     """指定ファイルの中身を丸ごと置き換え、Google クラウドへ反映します。
     反映前に自動バックアップと構文検査を実施します。
     deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
@@ -260,7 +263,10 @@ def replace_file(project: str, filename: str, new_source: str, force: bool = Fal
         deploy: 反映完了後に本番Webアプリを自動デプロイするか (デフォルト: False)
     """
     client = get_client()
-    res = client.replace_file(project, filename, new_source, force=force, dry_run=dry_run, deploy=deploy)
+    kwargs = dict(force=force, dry_run=dry_run, deploy=deploy)
+    if fast:
+        kwargs["fast"] = True
+    res = client.replace_file(project, filename, new_source, **kwargs)
     diff_out = f"\n--- 差分 (Diff) ---\n{res['diff']}" if res.get("diff") else ""
     dep_msg = ""
     if res.get("deployment"):
@@ -452,7 +458,7 @@ if gas_local_extras and hasattr(gas_local_extras, "register_mcp"):
 
 @mcp.tool()
 @safe_tool
-def patch_function(project: str, filename: str, func_name: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False) -> str:
+def patch_function(project: str, filename: str, func_name: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False, fast: bool = False) -> str:
     """指定ファイル内の特定関数スコープ内に限定してコード置換を行います（他関数にある同一コードの誤爆を物理的に防止）。
     置換前の自動バックアップ、構文検査、diff 出力を完備しています。
     patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
@@ -471,7 +477,10 @@ def patch_function(project: str, filename: str, func_name: str, target: str = ""
         deploy: 反映完了後に本番Webアプリを自動デプロイするか (デフォルト: False)
     """
     client = get_client()
-    res = client.patch_function(project, filename, func_name, target=target, replacement=replacement, replace_all=replace_all, force=force, dry_run=dry_run, patches=patches if patches else None, deploy=deploy)
+    kwargs = dict(target=target, replacement=replacement, replace_all=replace_all, force=force, dry_run=dry_run, patches=patches if patches else None, deploy=deploy)
+    if fast:
+        kwargs["fast"] = True
+    res = client.patch_function(project, filename, func_name, **kwargs)
     diff_out = f"\n--- 差分 (Diff) ---\n{res['diff']}" if res.get("diff") else ""
     dep_msg = ""
     if res.get("deployment"):
@@ -575,7 +584,7 @@ def delete_function(project: str, filename: str, func_name: str, force: bool = F
 
 @mcp.tool()
 @safe_tool
-def batch_patch(project: str, operations: str, force: bool = False, dry_run: bool = False, deploy: bool = False) -> str:
+def batch_patch(project: str, operations: str, force: bool = False, dry_run: bool = False, deploy: bool = False, fast: bool = False) -> str:
     """複数ファイル・複数操作（patch, patch_function, replace_function, add_function, delete_function, replace_file 等）を
     メモリ上で一括合成し、全ファイルの構文検査を経て1回の通信で安全にアトミック反映します。
 
@@ -589,7 +598,10 @@ def batch_patch(project: str, operations: str, force: bool = False, dry_run: boo
     import json
     ops_data = json.loads(operations) if isinstance(operations, str) else operations
     client = get_client()
-    res = client.batch_patch(project, ops_data, force=force, dry_run=dry_run, deploy=deploy)
+    kwargs = dict(force=force, dry_run=dry_run, deploy=deploy)
+    if fast:
+        kwargs["fast"] = True
+    res = client.batch_patch(project, ops_data, **kwargs)
     diff_out = f"\n--- 差分 (Diff) ---\n{res['diff']}" if res.get("diff") else ""
     dep_msg = ""
     if res.get("deployment"):
