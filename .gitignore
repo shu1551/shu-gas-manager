@@ -1,4 +1,5 @@
 # ローカルバックアップ・キャッシュ・認証情報（公開厳禁）
+aliases.json
 .backups/
 backups_before_audit_fix/
 .cache.json

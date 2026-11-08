@@ -655,6 +655,26 @@ class GasClient:
                     continue
                 raise
 
+    @property
+    def aliases_file(self):
+        return Path(__file__).resolve().parent / "aliases.json"
+
+    def _load_aliases(self):
+        try:
+            if self.aliases_file.exists():
+                with open(self.aliases_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_aliases(self, aliases):
+        try:
+            with open(self.aliases_file, "w", encoding="utf-8") as f:
+                json.dump(aliases, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def _headers(self):
         return {
             "Authorization": f"Bearer {self.get_access_token()}",
@@ -665,12 +685,29 @@ class GasClient:
     # プロジェクト / ファイル読み込み
     # ==========================================
 
+    def _merge_aliases(self, files):
+        aliases = self._load_aliases()
+        if not aliases:
+            return files
+        merged = list(files)
+        existing_ids = {f.get("id") for f in merged}
+        p_dict = self._cache_data.setdefault("projects", {})
+        for alias_name, alias_id in aliases.items():
+            if alias_id not in existing_ids:
+                merged.insert(0, {
+                    "id": alias_id,
+                    "name": alias_name,
+                    "modifiedTime": "登録済み"
+                })
+                p_dict[alias_name] = alias_id
+        return merged
+
     def list_projects(self, limit=50, use_cache=False, refresh=False):
         """Google Drive 上の GAS プロジェクト一覧を取得 (TTL 300秒, refresh=True で強制再取得)"""
         now = time.time()
         # 1. メモリキャッシュ (refresh=True 時はスキップ)
         if not refresh and self._projects_list_cache is not None and now < self._projects_list_expiry and self._projects_list_fetched_limit >= limit:
-            return self._projects_list_cache[:limit]
+            return self._merge_aliases(self._projects_list_cache)[:limit]
 
         # 2. ディスクキャッシュ (.cache.json) (TTL 300秒 = 5分, refresh=True 時はスキップ)
         disk_pl = self._cache_data.get("projects_list")
@@ -682,7 +719,7 @@ class GasClient:
                 self._projects_list_cache = files
                 self._projects_list_expiry = ts + 300
                 self._projects_list_fetched_limit = cached_limit
-                return files[:limit]
+                return self._merge_aliases(files)[:limit]
 
         url = "https://www.googleapis.com/drive/v3/files"
         params = {
@@ -706,12 +743,20 @@ class GasClient:
             if "name" in f and "id" in f:
                 p_dict[f["name"]] = f["id"]
         self._save_cache()
-        return files
+        return self._merge_aliases(files)[:limit]
 
     def resolve_script_id(self, name_or_id):
         """プロジェクト名またはスクリプトIDから正規の scriptId を解決"""
         if not name_or_id:
             raise ValueError("プロジェクト名またはスクリプトIDを指定してください。")
+
+        # 0. エイリアス（登録済みプロジェクト名）を最優先判定
+        aliases = self._load_aliases()
+        if name_or_id in aliases:
+            return aliases[name_or_id]
+        alias_matches = [aid for aname, aid in aliases.items() if name_or_id.lower() in aname.lower()]
+        if len(alias_matches) == 1:
+            return alias_matches[0]
 
         # 30文字以上の英数字記号はスクリプトIDとみなす
         if len(name_or_id) >= 30 and re.match(r"^[A-Za-z0-9_-]+$", name_or_id):
@@ -3244,6 +3289,14 @@ class GasClient:
         target = script_id.strip() if script_id else ""
         if not target:
             raise ValueError("プロジェクト名またはスクリプトIDを指定してください。")
+
+        # 0. エイリアス（登録済みプロジェクト名）を最優先判定
+        aliases = self._load_aliases()
+        if name_or_id in aliases:
+            return aliases[name_or_id]
+        alias_matches = [aid for aname, aid in aliases.items() if name_or_id.lower() in aname.lower()]
+        if len(alias_matches) == 1:
+            return alias_matches[0]
 
         if not refresh and not dev:
             # 1. script_id がそのまま deployments キャッシュにあれば即返却 (0ms)
