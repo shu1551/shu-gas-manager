@@ -611,9 +611,21 @@ class GasClient:
             "refresh_token": self._token_data["refresh_token"],
             "grant_type": "refresh_token"
         }
-        res = self.session.post(url, data=payload, timeout=10)
-        if res.status_code != 200:
-            raise RuntimeError(f"トークンの更新に失敗しました ({res.status_code}): {res.text}")
+        res = None
+        for attempt in range(3):
+            try:
+                res = self.session.post(url, data=payload, timeout=10)
+                if res.status_code == 200 or res.status_code < 500:
+                    break
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt == 2:
+                    raise
+            time.sleep(0.5 * (2 ** attempt))
+
+        if res is None or res.status_code != 200:
+            err_text = res.text if res is not None else "接続失敗またはタイムアウト"
+            sc = res.status_code if res is not None else 0
+            raise RuntimeError(f"トークンの更新に失敗しました ({sc}): {err_text}")
 
         data = res.json()
         self._access_token = data["access_token"]
@@ -1261,18 +1273,18 @@ class GasClient:
         # 2. 関数パターンのマッチング（CODE 領域のみに対して安全に実行）
         fn_esc = re.escape(func_name)
         pats = [
-            # (A) 通常関数: [export [default]] [async] function foo(...)
-            rf"(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+{fn_esc}\s*\(",
-            # (B) 変数代入関数: [export] const/let/var foo = [async] function(...)
-            rf"(?:export\s+)?(?:const|let|var)\s+{fn_esc}\s*=\s*(?:async\s+)?function\s*\(",
+            # (A) 通常関数 / ジェネレーター関数: [export [default]] [async] function[*] foo(...)
+            rf"(?:export\s+(?:default\s+)?)?(?:async\s+)?function\*?\s+{fn_esc}\s*\(",
+            # (B) 変数代入関数: [export] const/let/var foo = [async] function[*](...)
+            rf"(?:export\s+)?(?:const|let|var)\s+{fn_esc}\s*=\s*(?:async\s+)?function\*?\s*\(",
             # (C) 変数代入アロー関数 (引数あり): [export] const/let/var foo = [async] (...) =>
             rf"(?:export\s+)?(?:const|let|var)\s+{fn_esc}\s*=\s*(?:async\s*)?\([^)]*\)\s*=>",
             # (D) 変数代入アロー関数 (引数単体): [export] const/let/var foo = [async] x =>
             rf"(?:export\s+)?(?:const|let|var)\s+{fn_esc}\s*=\s*(?:async\s*)?[A-Za-z0-9_$]+\s*=>",
             # (E) クラスメソッド / オブジェクトメソッド: [async] foo(...) {
             rf"(?:(?:async\s+)?{fn_esc}\s*\([^)]*\)\s*\{{)",
-            # (F) オブジェクトプロパティ関数: foo: [async] function(...) または foo: (...) =>
-            rf"{fn_esc}\s*:\s*(?:async\s+)?function\s*\(",
+            # (F) オブジェクトプロパティ関数: foo: [async] function[*](...) または foo: (...) =>
+            rf"{fn_esc}\s*:\s*(?:async\s+)?function\*?\s*\(",
             rf"{fn_esc}\s*:\s*(?:async\s*)?\([^)]*\)\s*=>",
             rf"{fn_esc}\s*:\s*(?:async\s*)?[A-Za-z0-9_$]+\s*=>",
             # (G) 予備アロー代入
@@ -1340,9 +1352,9 @@ class GasClient:
         tokens, masked_source = self._tokenize_js(source)
 
         fn_pat = re.compile(
-            r"(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\("
+            r"(?:export\s+(?:default\s+)?)?(?:async\s+)?function\*?\s+([A-Za-z0-9_$]+)\s*\("
             r"|"
-            r"(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:(?:async\s+)?function\s*\(|(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>)"
+            r"(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:(?:async\s+)?function\*?\s*\(|(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>)"
         )
 
         funcs = []
@@ -4554,8 +4566,6 @@ class GasClient:
                         if pos < len(masked) and masked[pos] == '(':
                             arg_start = pos + 1
                             depth = 0
-                            commas = 0
-                            has_content = False
                             while pos < len(masked):
                                 if masked[pos] == '(':
                                     depth += 1
@@ -6349,7 +6359,7 @@ function doGet() {{
             if not dead_funcs:
                 lines = [
                     f"=== [DRY-RUN] 死にコード削除プレビュー: [{script_id}] ===",
-                    "🟢 削除対象の死にコードはありません（すでに極限までクリーンです）。",
+                    "🟢 削除対象の死にコードはありません（すでに十分にクリーンです）。",
                     "",
                     notice_msg
                 ]
@@ -6359,7 +6369,7 @@ function doGet() {{
                     "deleted_count": 0,
                     "dead_functions": [],
                     "suspect_functions": suspect_funcs,
-                    "message": "削除対象の死にコードはありません（すでに極限までクリーンです）。\n" + notice_msg,
+                    "message": "削除対象の死にコードはありません（すでに十分にクリーンです）。\n" + notice_msg,
                     "markdown_report": "\n".join(lines)
                 }
 
@@ -6787,8 +6797,10 @@ function doGet() {{
             }
         finally:
             if tmp_html_path and os.path.exists(tmp_html_path):
-                try: os.remove(tmp_html_path)
-                except: pass
+                try:
+                    os.remove(tmp_html_path)
+                except Exception:
+                    pass
 
 
     @classmethod
@@ -7530,7 +7542,7 @@ function doGet() {{
 
     def design_skin(self, project: str, filename: str = "Index", preset: str = "linear", deploy: bool = False) -> dict:
         """
-        HTMLファイルにプロ仕様のSaaS級6大視覚レイヤー（CSS変数・タイポグラフィ・8pxグリッド・多層シャドウ・半透明サーフェス）を0秒で一撃注入・着せ替えします。
+        HTMLファイルにプロ仕様の視覚レイヤー（CSS変数・タイポグラフィ・8pxグリッド・多層シャドウ・半透明サーフェス）を安全に注入・着せ替えします。
         """
         sid = self.resolve_script_id(project)
         content = self.get_content(sid)

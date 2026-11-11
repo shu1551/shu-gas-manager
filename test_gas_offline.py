@@ -4240,3 +4240,25 @@ def test_alias_management(mock_client, tmp_path):
     # 4. 存在しない別名削除で例外
     with pytest.raises(ValueError, match="登録されていません"):
         mock_client.delete_alias("存在しない別名")
+
+
+def test_generator_function_extraction_and_span(mock_client):
+    code = """
+function* idMaker() {
+  var index = 0;
+  while (true)
+    yield index++;
+}
+
+const numGen = function* () {
+  yield 1;
+};
+"""
+    funcs = mock_client._extract_functions_from_js(code)
+    fn_names = [f["name"] for f in funcs]
+    assert "idMaker" in fn_names
+    assert "numGen" in fn_names
+
+    span = mock_client._find_function_span(code, "idMaker")
+    assert span is not None
+    assert code[span[0]:span[1]].startswith("function* idMaker")
