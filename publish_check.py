@@ -91,12 +91,12 @@ def main():
 
     # 3. .gitignore の保護対象確認 ＆ ホワイトリスト外ファイル混入検査
     gitignore_text = (HERE / ".gitignore").read_text(encoding="utf-8", errors="replace") if (HERE / ".gitignore").is_file() else ""
-    for must_ignore in (".backups/", ".cache.json", ".content_cache.json", ".gas-sync.json", ".clasprc.json"):
+    for must_ignore in ("aliases.json", ".backups/", ".cache.json", ".content_cache.json", ".gas-sync.json", ".clasprc.json"):
         if must_ignore not in gitignore_text:
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".gas-sync.json", ".mocks", "screenshots", "gas_local_extras.py"}
+    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".gas-sync.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")

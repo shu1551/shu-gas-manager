@@ -69,6 +69,8 @@ def reload_tools() -> str:
         new_client._xray_cache = getattr(old_client, "_xray_cache", {})
         new_client._access_token = getattr(old_client, "_access_token", None)
         new_client._token_expiry = getattr(old_client, "_token_expiry", 0)
+        if getattr(old_client, "_aliases_file", None):
+            new_client.aliases_file = old_client.aliases_file
         _client = new_client
 
     return "[SUCCESS] gas-manager ホットリロード完了: gas_client を再読み込みし、最新ロジックを反映しました。"
@@ -98,6 +100,47 @@ def list_projects(limit: int = 20, refresh: bool = False) -> str:
         mtime = p.get("modifiedTime", "")[:19].replace("T", " ")
         lines.append(f"- {p['name']} (ID: {p['id']}, 更新: {mtime})")
     return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def list_aliases() -> str:
+    """登録済みのプロジェクト別名（エイリアス）一覧を取得します。
+    スプレッドシートやドキュメント付属のコンテナバインドスクリプトの紐付けを確認できます。
+    """
+    client = get_client()
+    aliases = client.list_aliases()
+    if not aliases:
+        return "登録済みのプロジェクト別名（エイリアス）はありません。"
+    lines = [f"=== プロジェクト別名（エイリアス）一覧 ({len(aliases)}件) ==="]
+    for name, sid in sorted(aliases.items()):
+        lines.append(f"- {name}: {sid}")
+    return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def set_alias(name: str, script_id: str) -> str:
+    """スプレッドシート付属（コンテナバインド）等のスクリプトIDに別名（エイリアス）を登録・更新します。
+    登録後は通常プロジェクト同様にプロジェクト名だけで list_files, get_function, patch 等が実行可能になります。
+
+    Args:
+        name: 登録するプロジェクト名・別名
+        script_id: 対象のスクリプトID
+    """
+    client = get_client()
+    res = client.set_alias(name, script_id)
+    return f"[SUCCESS] プロジェクト別名を登録しました: '{res['name']}' -> '{res['script_id']}' (全 {res['total_aliases']}件)"
+
+@mcp.tool()
+@safe_tool
+def delete_alias(name: str) -> str:
+    """登録済みのプロジェクト別名（エイリアス）を解除・削除します。
+
+    Args:
+        name: 削除するプロジェクト名・別名
+    """
+    client = get_client()
+    res = client.delete_alias(name)
+    return f"[SUCCESS] プロジェクト別名を解除しました: '{res['name']}' (旧ID: {res['deleted_script_id']}, 残 {res['total_aliases']}件)"
 
 @mcp.tool()
 @safe_tool

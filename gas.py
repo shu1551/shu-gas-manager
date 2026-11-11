@@ -74,6 +74,16 @@ def main():
     list_p = subparsers.add_parser("list", help="GAS プロジェクト一覧表示")
     list_p.add_argument("-n", "--limit", type=int, default=20, help="取得件数 (デフォルト: 20)")
 
+    # 1b. alias (プロジェクト別名管理)
+    alias_p = subparsers.add_parser("alias", help="プロジェクト別名（エイリアス）の登録・削除・一覧表示")
+    alias_sub = alias_p.add_subparsers(dest="alias_action", help="エイリアス操作")
+    alias_sub.add_parser("list", help="登録済みエイリアス一覧")
+    alias_set_p = alias_sub.add_parser("set", help="エイリアスを登録・更新")
+    alias_set_p.add_argument("name", help="プロジェクト別名")
+    alias_set_p.add_argument("script_id", help="スクリプトID")
+    alias_del_p = alias_sub.add_parser("del", aliases=["delete", "remove"], help="エイリアスを削除")
+    alias_del_p.add_argument("name", help="削除するプロジェクト別名")
+
     # 2. files
     files_p = subparsers.add_parser("files", help="プロジェクト内のファイル一覧表示")
     files_p.add_argument("project", help="プロジェクト名またはスクリプトID")
@@ -462,6 +472,24 @@ def main():
                 rows.append([p.get("name", ""), p.get("id", ""), mtime])
             print(f"=== GAS プロジェクト一覧 ({len(rows)}件) ===")
             print_table(headers, rows)
+
+        elif args.command == "alias":
+            action = getattr(args, "alias_action", None) or "list"
+            if action == "list":
+                aliases = client.list_aliases()
+                if not aliases:
+                    print("登録済みのプロジェクト別名（エイリアス）はありません。")
+                else:
+                    print(f"=== プロジェクト別名（エイリアス）一覧 ({len(aliases)}件) ===")
+                    headers = ["プロジェクト名（別名）", "スクリプトID"]
+                    rows = [[k, v] for k, v in sorted(aliases.items())]
+                    print_table(headers, rows)
+            elif action == "set":
+                res = client.set_alias(args.name, args.script_id)
+                print(f"[SUCCESS] プロジェクト別名を登録しました: '{res['name']}' -> '{res['script_id']}'")
+            elif action in ("del", "delete", "remove"):
+                res = client.delete_alias(args.name)
+                print(f"[SUCCESS] プロジェクト別名を削除しました: '{res['name']}' (旧ID: {res['deleted_script_id']})")
 
         elif args.command == "files":
             sid = client.resolve_script_id(args.project)

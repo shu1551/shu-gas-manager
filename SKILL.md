@@ -28,7 +28,7 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 スプレッドシートやドキュメントに付属するスクリプトは Google Drive の通常一覧検索から除外される仕様です。
 初回のみスクリプトIDとプロジェクト名を紐付けることで、以降は名前だけで操作可能になります。
 - **ユーザーからの指示例**: 「スクリプトID `xxxx` を『〇〇』として登録して」「このID `xxxx` をプロジェクト『〇〇』に追加して」
-- **対応フロー**: `aliases.json` に `{"プロジェクト名": "スクリプトID"}` を登録。次回以降は `list_files(project="プロジェクト名")` 等で通常プロジェクト同様に直接操作可能になります。
+- **対応フロー**: MCP ツール `set_alias(name="プロジェクト名", script_id="xxxx")` を実行。以降は `list_files(project="プロジェクト名")` 等で通常プロジェクト同様に直接操作可能になります。登録済み一覧は `list_aliases()` で確認できます。
 
 ## 3. GAS設計のベストプラクティス
 
@@ -54,5 +54,6 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 | **ローカル同期 (取得)** | `pull_project(project, local_dir)` | クラウドから最新コードを一括取得 |
 | **実機ベンチマーク** | `benchmark_function(project, func_name, args, target_ms=500)` | 関数の実機実行速度を計測 |
 | **本番デプロイ** | `deploy(project, description, deployment_id=...)` | 本番Webアプリへ即座に更新反映 |
+| **別名登録 (エイリアス)** | `set_alias(name, script_id)` / `list_aliases()` | スプレッドシート付属スクリプトの登録・確認 |
 | **バージョン復元** | `diff_version` / `restore_version(project, version_number)` | 差分確認・スナップショット復元 |
 | **環境診断** | `setup_check(open_browser=False)` | 認証・API接続状態の確認 |

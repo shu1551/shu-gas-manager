@@ -4217,3 +4217,26 @@ def test_deploy_with_specific_deployment_id(mock_client):
     assert res["versionNumber"] == 42
     assert res["webAppUrl"] == "https://script.google.com/macros/s/target_url/exec"
     assert mock_client._cache_data["deployments"]["dummy_id"]["id"] == "target_dep_123"
+
+
+def test_alias_management(mock_client, tmp_path):
+    mock_client.aliases_file = tmp_path / "custom_aliases.json"
+    assert mock_client.list_aliases() == {}
+
+    # 1. 登録
+    res = mock_client.set_alias("テストシート", "sid_test_123456789012345678901234567890")
+    assert res["status"] == "success"
+    assert res["name"] == "テストシート"
+    assert mock_client.list_aliases() == {"テストシート": "sid_test_123456789012345678901234567890"}
+
+    # 2. 解決
+    assert mock_client.resolve_script_id("テストシート") == "sid_test_123456789012345678901234567890"
+
+    # 3. 削除
+    del_res = mock_client.delete_alias("テストシート")
+    assert del_res["status"] == "success"
+    assert mock_client.list_aliases() == {}
+
+    # 4. 存在しない別名削除で例外
+    with pytest.raises(ValueError, match="登録されていません"):
+        mock_client.delete_alias("存在しない別名")

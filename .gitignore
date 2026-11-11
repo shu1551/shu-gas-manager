@@ -1,5 +1,6 @@
 # ローカルバックアップ・キャッシュ・認証情報（公開厳禁）
 aliases.json
+index_restored.html
 .backups/
 backups_before_audit_fix/
 .cache.json

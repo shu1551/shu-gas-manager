@@ -97,8 +97,13 @@ Googleスプレッドシート・ドキュメント・フォーム等の「拡�
 > - 「スクリプトID `xxxxxxxx` を **〇〇クイック** として登録して」
 > - 「このID `xxxxxxxx` をプロジェクト一覧に **案件管理シート** という名前で追加して」
 
-### 手動で登録する場合
-リポジトリ直下の `aliases.json` に以下のように記述するだけで完了します（Git にはコミットされないよう除外設定されています）。
+### コマンドまたは手動で登録する場合
+CLI コマンドから直接登録できます：
+```bash
+py gas.py alias set "案件管理シート" "1cTzrpv9TO4odU5c_95qJMUoo0F539eO8bdAtwYvO_B9IE9_tGqCQLs31"
+py gas.py alias list
+```
+または、リポジトリ直下の `aliases.json` に直接記述することも可能です（Git にはコミットされないよう除外設定されています）。
 
 ```json
 {

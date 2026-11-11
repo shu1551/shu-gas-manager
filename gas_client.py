@@ -682,6 +682,40 @@ class GasClient:
         except Exception:
             pass
 
+    def list_aliases(self) -> dict:
+        """登録済みのプロジェクト別名（エイリアス）一覧を取得"""
+        return self._load_aliases()
+
+    def set_alias(self, name: str, script_id: str) -> dict:
+        """プロジェクト別名（エイリアス）を登録・更新"""
+        name = name.strip()
+        script_id = script_id.strip()
+        if not name:
+            raise ValueError("プロジェクト別名（name）を指定してください。")
+        if not script_id:
+            raise ValueError("スクリプトID（script_id）を指定してください。")
+        aliases = self._load_aliases()
+        aliases[name] = script_id
+        self._save_aliases(aliases)
+        self._cache_data.setdefault("projects", {})[name] = script_id
+        self._save_cache()
+        return {"status": "success", "name": name, "script_id": script_id, "total_aliases": len(aliases)}
+
+    def delete_alias(self, name: str) -> dict:
+        """登録済みのプロジェクト別名（エイリアス）を削除"""
+        name = name.strip()
+        if not name:
+            raise ValueError("削除対象の別名（name）を指定してください。")
+        aliases = self._load_aliases()
+        if name not in aliases:
+            raise ValueError(f"別名 '{name}' は登録されていません。")
+        script_id = aliases.pop(name)
+        self._save_aliases(aliases)
+        if name in self._cache_data.get("projects", {}):
+            del self._cache_data["projects"][name]
+            self._save_cache()
+        return {"status": "success", "name": name, "deleted_script_id": script_id, "total_aliases": len(aliases)}
+
     def _headers(self):
         return {
             "Authorization": f"Bearer {self.get_access_token()}",
