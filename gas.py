@@ -289,6 +289,14 @@ def main():
     bench_p.add_argument("-e", "--expected", default="", help="期待する戻り値（指定時は一致検証を実施）")
     bench_p.add_argument("--no-fast", action="store_true", help="高速モードを無効化")
 
+    # 9f-3. verify-fix
+    vf_p = subparsers.add_parser("verify-fix", help="修正適用後に直前（または指定）のテスト関数を同一引数で再実行し、エラー解消を自動判定")
+    vf_p.add_argument("project", help="プロジェクト名またはスクリプトID")
+    vf_p.add_argument("func_name", nargs="?", default="", help="再検証対象のGAS関数名（省略時は直前の関数を自動復元）")
+    vf_p.add_argument("args_json", nargs="?", default="", help="関数引数（省略時は直前の引数を自動復元）")
+    vf_p.add_argument("--allow-side-effects", action="store_true", help="メール送信・シートの書き換え等、本物に作用する関数でも再実行する")
+    vf_p.add_argument("--force", action="store_true", help="3 回の上限を超えて続ける")
+
     # 9g. clean-runner
     cr_p = subparsers.add_parser("clean-runner", help="プロジェクト内の実行ランナー (__gm_exec_) および doGet フックを除去")
     cr_p.add_argument("project", help="プロジェクト名またはスクリプトID")
@@ -668,6 +676,19 @@ def main():
             print(f"判定: {status_tag}")
             if res.get("error"):
                 print(f"エラー: {res['error']}")
+            if res.get("diagnosis") and res["diagnosis"].get("code") not in ("GENERIC_GAS_ERROR", "UNKNOWN"):
+                diag = res["diagnosis"]
+                print(f"\n🩺 病名診断: [{diag['name']}]")
+                print(f"   原因: {diag['summary']}")
+                print(f"   処方箋: {diag['remedy']}")
+                if diag.get("quickfix_guide"):
+                    print(f"   改善ヒント: {diag['quickfix_guide']}")
+            if res.get("trace") and res["trace"].get("formatted_trace"):
+                print(f"\n{res['trace']['formatted_trace']}")
+            elif res.get("stack"):
+                print(f"\nスタックトレース:\n{res['stack']}")
+            if res.get("quickfix") and res["quickfix"].get("formatted_quickfix"):
+                print(f"\n{res['quickfix']['formatted_quickfix']}")
             if res.get("test_result") is not None:
                 print(f"test_result: {res['test_result']}")
             print(f"IndexedDB レコード数: {res.get('db_records_count', 0)}件")
@@ -918,6 +939,19 @@ def main():
                     print(f"  {lg}")
             if res.get("error"):
                 print(f"エラー: {res['error']}")
+            if res.get("diagnosis") and res["diagnosis"].get("code") not in ("GENERIC_GAS_ERROR", "UNKNOWN"):
+                diag = res["diagnosis"]
+                print(f"\n🩺 病名診断: [{diag['name']}]")
+                print(f"   原因: {diag['summary']}")
+                print(f"   処方箋: {diag['remedy']}")
+                if diag.get("quickfix_guide"):
+                    print(f"   改善ヒント: {diag['quickfix_guide']}")
+            if res.get("trace") and res["trace"].get("formatted_trace"):
+                print(f"\n{res['trace']['formatted_trace']}")
+            elif res.get("stack"):
+                print(f"\nスタックトレース:\n{res['stack']}")
+            if res.get("quickfix") and res["quickfix"].get("formatted_quickfix"):
+                print(f"\n{res['quickfix']['formatted_quickfix']}")
 
         elif args.command in ("bench", "benchmark"):
             parsed_args = []
@@ -948,6 +982,18 @@ def main():
                 print("--- カイゼン処方箋 (Next Actions) ---")
                 for pr in res["prescriptions"]:
                     print(f"  * {pr}")
+
+        elif args.command == "verify-fix":
+            parsed_args = None
+            if args.args_json:
+                try:
+                    val = json.loads(args.args_json)
+                    parsed_args = val if isinstance(val, list) else [val]
+                except Exception:
+                    parsed_args = [args.args_json]
+            res = client.verify_fix(args.project, func_name=args.func_name or None, args=parsed_args,
+                                    allow_side_effects=args.allow_side_effects, force=args.force)
+            print(res.get("formatted_verdict", res.get("message", "")))
 
         elif args.command == "clean-runner":
             res = client.clean_runner(args.project)

@@ -3880,10 +3880,10 @@ def test_007_fast_write_mode_skips_get_content_network_call(mock_client):
     mock_client.replace_function("dummy_sid", "Code", "test", "function test() { return 2; }")
     mock_client.get_content.assert_called_with("dummy_sid", use_cache=False)
 
-    # fast=True では use_cache=True が渡る
+    # fast=True でも、手元に写しが無ければ取り直す（11/11: 古い写しでほかの直しを上書きしないため、fast も最新を確かめる）
     mock_client.get_content.reset_mock()
     mock_client.replace_function("dummy_sid", "Code", "test", "function test() { return 3; }", fast=True)
-    mock_client.get_content.assert_called_with("dummy_sid", use_cache=True)
+    mock_client.get_content.assert_called_with("dummy_sid", use_cache=False)
 
 
 def test_007_deploy_after_put_skips_redundant_get_content(mock_client):
@@ -4069,8 +4069,10 @@ def test_011_hybrid_sync_and_cached_writes(mock_client):
     mock_client.replace_function("dummy_sid", "Code", "test", "function test() { return 2; }", fast=False)
     mock_client.get_content.assert_called_with("dummy_sid", use_cache=False)
 
-    # 2. 同期後: _synced_sids に sid が入った状態では fast=False でも自動的に use_cache=True (通信カット)
+    # 2. 手元に写しがあり、クラウドがその後に変わっていなければ写しを使う (通信カット)
     mock_client._synced_sids.add("dummy_sid")
+    mock_client._content_cache["dummy_sid"] = (2000.0, {"files": copy.deepcopy(files)})
+    mock_client._remote_modified_epoch = MagicMock(return_value=1500.0)
     mock_client.get_content.reset_mock()
     mock_client.patch_code("dummy_sid", "Code", target="return 1;", replacement="return 10;", fast=False)
     mock_client.get_content.assert_called_with("dummy_sid", use_cache=True)
@@ -4078,6 +4080,7 @@ def test_011_hybrid_sync_and_cached_writes(mock_client):
     mock_client.get_content.reset_mock()
     mock_client.replace_file("dummy_sid", "Code", "function test() { return 99; }", fast=False)
     mock_client.get_content.assert_called_with("dummy_sid", use_cache=True)
+    mock_client._content_cache.pop("dummy_sid", None)
 
     # 3. sync_project の動作検証
     with patch.object(mock_client, "_request_with_retry") as mock_req:
@@ -4675,11 +4678,1009 @@ def test_cycle10_google_api_quota_and_rate_limit(tmp_path):
             mock_sleep.assert_called_once_with(1.0)
 
 
+def test_round3_cycle1_invisible_chars_sanitization(tmp_path):
+    """第3ラウンド サイクル1: 不可視文字（ゼロ幅スペース・BOM）・制御文字サニタイズ点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        files = [{"name": "Code", "type": "SERVER_JS", "source": "function test(){}"}]
+
+        # ゼロ幅スペースやBOMが含まれていても Code にヒットする
+        matched = client._match_file(files, "\u200bCode\ufeff.gs")
+        assert matched["name"] == "Code"
+
+        # ゼロ幅スペースのみの指定は空判定で弾かれる
+        with pytest.raises(ValueError, match="検索対象のファイル名を指定してください"):
+            client._match_file(files, "\u200b\u200c\ufeff")
 
 
+def test_round3_cycle2_push_manifest_validation(tmp_path):
+    """第3ラウンド サイクル2: push 時の appsscript.json 構文検査と保護点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        work_dir = tmp_path / "project_src"
+        work_dir.mkdir()
+        # 空の 0バイト appsscript.json
+        (work_dir / "appsscript.json").write_text("", encoding="utf-8")
+        (work_dir / "Code.gs").write_text("function hello(){}", encoding="utf-8")
+
+        with patch.object(client, "get_content", return_value={"files": [{"name": "appsscript", "type": "JSON", "source": "{}"}]}), \
+             patch.object(client, "sync_status", return_value={"script_id": sid, "local_dir": str(work_dir), "modified": ["appsscript.json"], "added": [], "remote_only": [], "diff": ""}):
+            with pytest.raises(ValueError, match="無効な JSON フォーマット"):
+                client.push(sid, local_dir=str(work_dir))
 
 
+def test_round3_cycle3_json_serialization_and_batch_types(tmp_path):
+    """第3ラウンド サイクル3: JSONシリアライズ安全化と batch_patch 型検査点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # 1. _atomic_json_dump で set や Path が混ざってもクラッシュしない
+        atomic_file = tmp_path / "complex_types.json"
+        client._atomic_json_dump(atomic_file, {"path": tmp_path, "tags": {"a", "b"}})
+        assert atomic_file.exists()
+
+        # 2. batch_patch で配列要素が dict 以外（不正文字列等）の場合の事前防御
+        with patch.object(client, "get_content", return_value={"files": [{"name": "Code", "type": "SERVER_JS", "source": ""}]}):
+            with pytest.raises(ValueError, match="オブジェクト.*辞書.*である必要があります"):
+                client.batch_patch(sid, ["not_a_dict"])
 
 
+def test_round3_cycle4_unclosed_brace_span_safety(tmp_path):
+    """第3ラウンド サイクル4: 波括弧未終了JSにおける関数スパン巻き込み破壊防御点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
 
+        # 波括弧が閉じられていない壊れた JS コード
+        broken_code = "function unclosedFunc() {\n  let a = 10;\n  // no closing brace\n\nfunction otherFunc() {}"
+        span = client._find_function_span(broken_code, "unclosedFunc")
+        # ファイル全体 (len) を誤認して返さず None になる
+        assert span is None
+
+
+def test_round3_cycle5_token_invalid_grant_guidance(tmp_path):
+    """第3ラウンド サイクル5: OAuth invalid_grant 発生時の回復ガイド案内点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+    fake_res = MagicMock()
+    fake_res.status_code = 400
+    fake_res.text = '{"error": "invalid_grant", "error_description": "Token has been expired or revoked."}'
+
+    with patch.object(client.session, "post", return_value=fake_res):
+        with pytest.raises(RuntimeError, match="clasp login を実行して再ログインしてください"):
+            client.get_access_token()
+
+
+def test_round3_cycle6_windows_long_path_resilience(tmp_path):
+    """第3ラウンド サイクル6: Windows MAX_PATH (260文字) 超えパス耐性点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    # 長いバックアップディレクトリ階層
+    long_dir = tmp_path / ("a" * 120) / ("b" * 120)
+    long_dir.mkdir(parents=True)
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(long_dir))
+        sid = "1" * 35
+        # バックアップファイル書き込みが長いパスでも正常終了する
+        bf = client._save_backup(sid, {"files": []})
+        assert bf.exists()
+
+
+def test_round3_cycle7_huge_diff_truncation(tmp_path):
+    """第3ラウンド サイクル7: 巨大Diff時のメッセージ長超過防止点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # 5万文字を超える巨大差分
+        old_lines = "\n".join(f"line_{i} = {i};" for i in range(2000))
+        new_lines = "\n".join(f"line_{i} = 'completely_changed_{i}';" for i in range(2000))
+
+        bak_file = backup_dir / "backup_dummy_123.json"
+        bak_file.write_text(json.dumps({"files": [{"name": "Code", "type": "SERVER_JS", "source": old_lines}]}), encoding="utf-8")
+
+        with patch.object(client, "get_content", return_value={"files": [{"name": "Code", "type": "SERVER_JS", "source": new_lines}]}):
+            res = client.diff_backup(sid, backup_file=str(bak_file))
+            assert len(res["diff"]) <= 45000
+            assert "文字省略" in res["diff"]
+
+
+def test_round3_cycle8_runner_args_wrapping(tmp_path):
+    """第3ラウンド サイクル8: WebAppランナーの非配列引数・インジェクション耐性点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # run_function 呼び出し時に args が非リスト (文字列単体や数値) でも正しくリスト化される
+        with patch.object(client, "get_content", return_value={"files": [{"name": "Code", "type": "SERVER_JS", "source": "function fn(a){}"}]}), \
+             patch.object(client, "_put_content"), \
+             patch.object(client, "resolve_webapp_url", return_value="https://script.google.com/macros/s/xxx/exec"), \
+             patch.object(client, "call_webapp", return_value={"data": {"ok": True, "result": 42}}) as mock_call, \
+             patch.object(client, "clean_runner"):
+            res = client.run_function(sid, "fn", args="hello_single_string")
+            assert res["status"] == "success"
+            assert res["result"] == 42
+            # call_webapp に渡される params['__gm_args'] が JSON 配列になっている
+            call_params = mock_call.call_args[1]["params"]
+            assert json.loads(call_params["__gm_args"]) == ["hello_single_string"]
+
+
+def test_round3_cycle9_diagnose_comment_false_positive_prevention(tmp_path):
+    """第3ラウンド サイクル9: コメントアウト内APIのボトルネック誤検出防止点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # ループ内にコメントアウトされた重いAPI呼び出しがあるコード
+        js_code = """
+function processData(items) {
+  for (let i = 0; i < items.length; i++) {
+    // SpreadsheetApp.openById("xxx").appendRow([items[i]]);
+    /* UrlFetchApp.fetch("https://api.example.com"); */
+    const label = "DriveApp.getFileById(123)";
+    items[i] = items[i] * 2;
+  }
+}
+"""
+        with patch.object(client, "get_content", return_value={"files": [{"name": "Code", "type": "SERVER_JS", "source": js_code}]}):
+            diag = client.diagnose(sid)
+            # コメント・文字列内なので警告は0件になるべき
+            assert len(diag["performance_warnings"]) == 0
+
+
+def test_round3_cycle10_atomic_dump_concurrency_and_retry(tmp_path):
+    """第3ラウンド サイクル10: アトミック保存のナノ秒衝突防止＆Windows一時ロック耐性点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        target_file = tmp_path / "concurrent_atomic.json"
+        # 1回目の書き込み
+        client._atomic_json_dump(target_file, {"step": 1})
+        assert json.loads(target_file.read_text(encoding="utf-8")) == {"step": 1}
+
+        # PermissionError が一時的に出てもリトライして最終成功する
+        orig_replace = os.replace
+        call_count = [0]
+        def mock_replace(src, dst):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise PermissionError("Access is denied (locked by antivirus)")
+            return orig_replace(src, dst)
+
+        with patch("os.replace", side_effect=mock_replace):
+            client._atomic_json_dump(target_file, {"step": 2})
+            assert call_count[0] == 2
+            assert json.loads(target_file.read_text(encoding="utf-8")) == {"step": 2}
+
+
+def test_decode_stack_trace_inspector_all_cases(tmp_path):
+    """提案1テスト: スタックトレース自動デコーダー＆コードスニペット抜粋表示の深層感知実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        files = [
+            {
+                "name": "Code",
+                "type": "SERVER_JS",
+                "source": (
+                    "function calculateTotal(items) {\n"
+                    "  let total = 0;\n"
+                    "  for (let i = 0; i < items.length; i++) {\n"
+                    "    total += items[i].price;\n"
+                    "  }\n"
+                    "  return total;\n"
+                    "}\n"
+                )
+            },
+            {
+                "name": "Worker",
+                "type": "SERVER_JS",
+                "source": (
+                    "function doWork() {\n"
+                    "  throw new Error('Worker crash');\n"
+                    "}\n"
+                )
+            }
+        ]
+
+        # 1. 通常のスタックトレース感知（関数名あり・コード行特定）
+        stack1 = (
+            "TypeError: Cannot read properties of undefined (reading 'price')\n"
+            "    at calculateTotal (Code:4:23)\n"
+            "    at __gm_exec_ (Code:98:17)\n"
+            "    at doGet (Code:1:50)"
+        )
+        res1 = client.decode_stack_trace(stack1, files=files)
+        assert len(res1["frames"]) == 3
+        pf1 = res1["primary_frame"]
+        assert pf1 is not None
+        assert pf1["function"] == "calculateTotal"
+        assert pf1["file"] == "Code"
+        assert pf1["line"] == 4
+        assert pf1["code_line"] == "    total += items[i].price;"
+        assert ">>>    4:     total += items[i].price;" in pf1["snippet"]
+        assert "📍 エラー発生箇所: [Code.gs 行 4 (calculateTotal)]" in res1["formatted_trace"]
+
+        # 2. 匿名関数スタックトレース（関数名なし）
+        stack2 = (
+            "ReferenceError: x is not defined\n"
+            "    at Worker:2:9"
+        )
+        res2 = client.decode_stack_trace(stack2, files=files)
+        pf2 = res2["primary_frame"]
+        assert pf2["function"] == "<anonymous>"
+        assert pf2["file"] == "Worker"
+        assert pf2["line"] == 2
+        assert ">>>    2:   throw new Error('Worker crash');" in pf2["snippet"]
+
+        # 3. 存在しない外部ライブラリ・範囲外行でも例外を出さず安全にフォールバック
+        stack3 = "Error: Unknown\n    at libFunc (External:999:1)"
+        res3 = client.decode_stack_trace(stack3, files=files)
+        assert res3["primary_frame"]["file"] == "External"
+        assert res3["primary_frame"]["line"] == 999
+        assert res3["primary_frame"]["code_line"] == ""
+
+        # 4. run_function 失敗時の trace 自動付与実証
+        sid = "1" * 35
+        fake_webapp_fail = {
+            "ok": False,
+            "error": "TypeError: Cannot read properties of undefined",
+            "stack": stack1,
+            "elapsed_ms": 32
+        }
+        with patch.object(client, "get_content", return_value={"files": files}), \
+             patch.object(client, "_put_content"), \
+             patch.object(client, "resolve_webapp_url", return_value="https://script.google.com/macros/s/xxx/exec"), \
+             patch.object(client, "call_webapp", return_value={"data": fake_webapp_fail}), \
+             patch.object(client, "clean_runner"):
+            rf_res = client.run_function(sid, "calculateTotal")
+            assert rf_res["status"] == "error"
+            assert "trace" in rf_res
+            assert rf_res["trace"]["primary_frame"]["function"] == "calculateTotal"
+            assert ">>>    4:" in rf_res["trace"]["formatted_trace"]
+
+        # 5. benchmark_function のエラー処方箋自動生成実証
+        with patch.object(client, "run_function", return_value=rf_res), \
+             patch.object(client, "diagnose", return_value={"performance_warnings": [], "syntax_errors": [], "issues_count": 0}), \
+             patch.object(client, "list_functions", return_value=[]):
+            bm_res = client.benchmark_function(sid, "calculateTotal")
+            assert bm_res["verdict"] == "FAILED"
+            assert any("Code 行 4 (calculateTotal)" in p for p in bm_res["prescriptions"])
+            assert any("total += items[i].price;" in p for p in bm_res["prescriptions"])
+
+
+def test_decode_stack_trace_edge_cases(tmp_path):
+    """提案1テスト（反復・ループ検証）: 空文字・日本語関数名・HTML・改行コード混在のスタックトレース耐性実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        files = [
+            {"name": "Code", "type": "SERVER_JS", "source": "function 日本語テスト() {\n  return 1;\n}"},
+            {"name": "Index", "type": "HTML", "source": "<!DOCTYPE html>\n<html>\n<head>\n<script>\nfunction frontendErr() {\n  throw 'err';\n}\n</script>\n</head>\n</html>"}
+        ]
+
+        # A. None / 空文字 / 不正型
+        assert client.decode_stack_trace("") == {"frames": [], "primary_frame": None, "formatted_trace": ""}
+        assert client.decode_stack_trace(None) == {"frames": [], "primary_frame": None, "formatted_trace": ""}
+        assert client.decode_stack_trace(12345) == {"frames": [], "primary_frame": None, "formatted_trace": ""}
+
+        # B. at 行がない単なるエラーメッセージ
+        no_at = client.decode_stack_trace("Exception: Simple Error Message without stack frames")
+        assert len(no_at["frames"]) == 0
+        assert no_at["primary_frame"] is None
+
+        # C. 日本語関数名
+        jp_stack = "Error: 失敗\r\n    at 日本語テスト (Code:2:3)\r\n"
+        res_jp = client.decode_stack_trace(jp_stack, files=files)
+        assert res_jp["primary_frame"]["function"] == "日本語テスト"
+        assert res_jp["primary_frame"]["line"] == 2
+        assert ">>>    2:   return 1;" in res_jp["primary_frame"]["snippet"]
+
+        # D. HTML ファイル内のスタックトレース
+        html_stack = "Error: frontend\n    at frontendErr (Index.html:6:9)"
+        res_html = client.decode_stack_trace(html_stack, files=files)
+        assert res_html["primary_frame"]["file"] == "Index"
+        assert res_html["primary_frame"]["line"] == 6
+        assert ">>>    6:   throw 'err';" in res_html["primary_frame"]["snippet"]
+
+        # E. Object.<anonymous> や native / anonymous フレームの混在
+        anon_stack = (
+            "TypeError: Cannot read property 'name' of undefined\n"
+            "    at Array.forEach (<anonymous>)\n"
+            "    at Object.<anonymous> (Code:2:10)\n"
+            "    at __gm_exec_ (runner:1:1)"
+        )
+        res_anon = client.decode_stack_trace(anon_stack, files=files)
+        # Array.forEach (<anonymous>) はファイル・行番号を持たないため無視され、実ファイルを持つ2フレームが抽出される
+        assert len(res_anon["frames"]) == 2
+        # primary_frame は runner ではなく Code:2:10 であるべき
+        assert res_anon["primary_frame"] is not None
+        assert res_anon["primary_frame"]["file"] == "Code"
+        assert res_anon["primary_frame"]["line"] == 2
+
+        # F. 列番号なし (Code:2)
+        no_col_stack = "Error: boom\n    at testFunc (Code:2)"
+        res_no_col = client.decode_stack_trace(no_col_stack, files=files)
+        assert res_no_col["primary_frame"]["line"] == 2
+        assert res_no_col["primary_frame"]["column"] == 0
+
+        # G. 拡張子 Code.gs と files内の "Code" の突き合わせ
+        gs_stack = "Error: boom\n    at testFunc (Code.gs:2:1)"
+        res_gs = client.decode_stack_trace(gs_stack, files=files)
+        assert res_gs["primary_frame"]["file"] == "Code"
+        assert ">>>    2:   return 1;" in res_gs["primary_frame"]["snippet"]
+
+        # H. 存在しない外部ファイル (UnknownLib:10:5)
+        unknown_stack = "Error: lib fail\n    at libCall (UnknownLib:10:5)"
+        res_unknown = client.decode_stack_trace(unknown_stack, files=files)
+        assert res_unknown["primary_frame"]["file"] == "UnknownLib"
+        assert res_unknown["primary_frame"]["snippet"] == ""
+
+        # I. script_id による自動ファイル取得フォールバック
+        with patch.object(client, "get_content", return_value={"files": files}):
+            res_fetch = client.decode_stack_trace("Error\n    at 日本語テスト (Code:2:3)", script_id="dummy_sid")
+            assert res_fetch["primary_frame"]["file"] == "Code"
+            assert ">>>    2:   return 1;" in res_fetch["primary_frame"]["snippet"]
+
+
+def test_diagnose_gas_error_all_diseases(tmp_path):
+    """提案2テスト: 頻出GASエラー病名判定（1-indexed座標、権限不足、タイムアウト等）全パターンの判定実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        # 1. 1-indexed 座標違反
+        d1 = client.diagnose_gas_error("Exception: The coordinates or dimensions of the range are invalid.")
+        assert d1["code"] == "INDEX_ZERO_OR_NEGATIVE"
+        assert "1-indexed 座標境界違反" in d1["name"]
+        assert "1始まり" in d1["summary"]
+        assert "i + 1" in d1["remedy"]
+
+        d1_alt = client.diagnose_gas_error("Coordinates must be greater than or equal to 1")
+        assert d1_alt["code"] == "INDEX_ZERO_OR_NEGATIVE"
+
+        # 2. 権限・OAuthスコープ不足
+        d2 = client.diagnose_gas_error("Exception: You do not have permission to call SpreadsheetApp.openById")
+        assert d2["code"] == "PERMISSION_DENIED"
+        assert "権限・OAuthスコープ不足" in d2["name"]
+        assert "oauthScopes" in d2["remedy"]
+
+        # 3. 実行時間上限超過 (6分タイムアウト)
+        d3 = client.diagnose_gas_error("Exceeded maximum execution time")
+        assert d3["code"] == "EXECUTION_TIMEOUT"
+        assert "実行時間上限超過" in d3["name"]
+        assert "getValues/setValues" in d3["remedy"]
+
+        # 4. シート / Range 未検出・Null参照
+        d4 = client.diagnose_gas_error("TypeError: Cannot read properties of null (reading 'getRange')")
+        assert d4["code"] == "TARGET_NOT_FOUND"
+        assert "シート / Range 未検出" in d4["name"]
+        assert "getSheetByName" in d4["remedy"]
+
+        d4_alt = client.diagnose_gas_error("Exception: Range not found")
+        assert d4_alt["code"] == "TARGET_NOT_FOUND"
+
+        # 5. 未定義値参照 / 型不整合
+        d5 = client.diagnose_gas_error("TypeError: Cannot read properties of undefined (reading 'length')")
+        assert d5["code"] == "TYPE_ERROR_UNDEFINED"
+        assert "未定義値参照 / 型不整合" in d5["name"]
+
+        # 6. Googleサービス一時障害 / レート制限超過
+        d6 = client.diagnose_gas_error("Exception: Service Spreadsheets failed while accessing document.")
+        assert d6["code"] == "SERVICE_FAILURE_OR_QUOTA"
+        assert "一時障害" in d6["name"] or "レート制限" in d6["name"]
+
+        d6_alt = client.diagnose_gas_error("Service invoked too many times for one day: email.")
+        assert d6_alt["code"] == "SERVICE_FAILURE_OR_QUOTA"
+
+        # 7. メソッド引数シグネチャ不整合
+        d7 = client.diagnose_gas_error("Exception: The parameters (String,number) don't match the method signature for SpreadsheetApp.Range.setValue.")
+        assert d7["code"] == "INVALID_ARGUMENTS"
+        assert "引数シグネチャ不整合" in d7["name"]
+
+        # 8. 汎用GASエラー
+        d8 = client.diagnose_gas_error("Custom business error: Balance is negative")
+        assert d8["code"] == "GENERIC_GAS_ERROR"
+
+        # 9. 空・None
+        d9 = client.diagnose_gas_error("", "")
+        assert d9["code"] == "UNKNOWN"
+
+
+def test_diagnose_gas_error_run_benchmark_mcp_integration(tmp_path):
+    """提案2テスト: run_function / benchmark_function / MCPツール出力での病名診断統合の実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        sid = "1" * 35
+        files = [
+            {"name": "Code", "type": "SERVER_JS", "source": "function getCell(i) {\n  var sheet = SpreadsheetApp.getActiveSheet();\n  return sheet.getRange(i, 1).getValue();\n}"}
+        ]
+
+        # 1. run_function でのエラー病名診断の自動付与
+        err_response = {
+            "ok": False,
+            "error": "Exception: The coordinates or dimensions of the range are invalid.",
+            "stack": "Exception: The coordinates or dimensions of the range are invalid.\n    at getCell (Code:3:16)\n    at __gm_exec_ (runner:1:1)",
+            "elapsed_ms": 15
+        }
+        with patch.object(client, "list_files", return_value=files), \
+             patch.object(client, "get_content", return_value={"files": files}), \
+             patch.object(client, "_put_content"), \
+             patch.object(client, "resolve_webapp_url", return_value="https://script.google.com/macros/s/xxx/exec"), \
+             patch.object(client, "call_webapp", return_value={"data": err_response}), \
+             patch.object(client, "clean_runner", return_value=None):
+            res = client.run_function(sid, "getCell", args=[0], keep_runner=True)
+            assert res["status"] == "error"
+            assert "diagnosis" in res
+            assert res["diagnosis"]["code"] == "INDEX_ZERO_OR_NEGATIVE"
+            assert "1-indexed 座標境界違反" in res["diagnosis"]["name"]
+
+        # 2. benchmark_function でのエラー処方箋（病名診断）の自動生成
+        with patch.object(client, "run_function", return_value=res), \
+             patch.object(client, "diagnose", return_value={"performance_warnings": [], "syntax_errors": [], "issues_count": 0}), \
+             patch.object(client, "list_functions", return_value=[]):
+            bm = client.benchmark_function(sid, "getCell", args="[0]")
+            assert bm["verdict"] == "FAILED"
+            assert any("[病名診断: 1-indexed 座標境界違反" in p for p in bm["prescriptions"])
+            assert any("i + 1" in p for p in bm["prescriptions"])
+
+        # 3. gas_mcp_server.py の run_function 出力への病名診断統合
+        import gas_mcp_server
+        with patch.object(gas_mcp_server, "get_client", return_value=client), \
+             patch.object(client, "run_function", return_value=res):
+            tool_output = gas_mcp_server.run_function(project=sid, func_name="getCell", args="[0]")
+            assert "🩺 病名診断: [1-indexed 座標境界違反" in tool_output
+            assert "GASのスプレッドシート等の座標" in tool_output
+            assert "i + 1" in tool_output
+            assert "改善ヒント:" in tool_output
+
+
+def test_diagnose_gas_error_edge_cases_and_simulation_loop(tmp_path):
+    """提案2テスト（反復・ループ検証）: 優先度判定、スタックのみ、大文字小文字、10回連続エラー反復シミュレーション実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        # A. 優先度判定: null.getRange は単なる TypeError ではなく TARGET_NOT_FOUND (シート未検出) と診断されること
+        null_range_err = "TypeError: Cannot read properties of null (reading 'getRange')"
+        res_null_range = client.diagnose_gas_error(null_range_err)
+        assert res_null_range["code"] == "TARGET_NOT_FOUND"
+        assert "シート / Range 未検出" in res_null_range["name"]
+
+        # B. error_message が空で stack_text のみにエラー情報がある場合
+        stack_only = (
+            "Exceeded maximum execution time\n"
+            "    at heavyLoop (Code:10:5)\n"
+            "    at __gm_exec_ (runner:1:1)"
+        )
+        res_stack = client.diagnose_gas_error("", stack_only)
+        assert res_stack["code"] == "EXECUTION_TIMEOUT"
+        assert "実行時間上限超過" in res_stack["name"]
+
+        # C. ALL CAPS (大文字混在)
+        caps_err = "THE STARTING COLUMN OF THE RANGE IS TOO SMALL"
+        res_caps = client.diagnose_gas_error(caps_err)
+        assert res_caps["code"] == "INDEX_ZERO_OR_NEGATIVE"
+
+        # D. 10回連続のエラー感知シミュレーションループ
+        simulated_errors = [
+            ("The coordinates or dimensions of the range are invalid.", "INDEX_ZERO_OR_NEGATIVE"),
+            ("Coordinates must be greater than or equal to 1", "INDEX_ZERO_OR_NEGATIVE"),
+            ("You do not have permission to call GmailApp.sendEmail", "PERMISSION_DENIED"),
+            ("Access denied: DriveApp", "PERMISSION_DENIED"),
+            ("Script execution timed out", "EXECUTION_TIMEOUT"),
+            ("Exceeded maximum execution time", "EXECUTION_TIMEOUT"),
+            ("Sheet not found: 'Sheet99'", "TARGET_NOT_FOUND"),
+            ("Cannot read property 'getSheetByName' of null", "TARGET_NOT_FOUND"),
+            ("TypeError: obj.map is not a function", "TYPE_ERROR_UNDEFINED"),
+            ("Service Spreadsheets failed while accessing document", "SERVICE_FAILURE_OR_QUOTA"),
+        ]
+
+        for idx, (raw_msg, expected_code) in enumerate(simulated_errors, start=1):
+            diag = client.diagnose_gas_error(raw_msg)
+            assert diag["code"] == expected_code, f"サイクル {idx} 判定失敗: {raw_msg} -> 期待={expected_code}, 実際={diag['code']}"
+            assert len(diag["name"]) > 0
+            assert len(diag["summary"]) > 0
+            assert len(diag["remedy"]) > 0
+
+
+def test_generate_quickfix_all_cases(tmp_path):
+    """提案3テスト: エラー箇所からのQuickFixコマンド（patch_code, patch_function）自動生成実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        sid = "sid_123456789012345678901234567890123"
+        trace_sample = {
+            "primary_frame": {
+                "file": "Code",
+                "function": "processRow",
+                "line": 15,
+                "code_line": "  var val = sheet.getRange(i, 1).getValue();"
+            }
+        }
+        diag_sample = {
+            "code": "INDEX_ZERO_OR_NEGATIVE",
+            "name": "1-indexed 座標境界違反",
+            "remedy": "i + 1 に修正してください。"
+        }
+
+        # 1. 通常関数（patch_code + patch_function の両方が生成される）
+        qf = client.generate_quickfix(sid, trace_sample, diag_sample)
+        assert qf["target_file"] == "Code"
+        assert qf["target_function"] == "processRow"
+        assert qf["target_line"] == 15
+        assert 'patch_code(project="sid_123456789012345678901234567890123", file_name="Code", search="var val = sheet.getRange(i, 1).getValue();"' in qf["mcp_patch_code"]
+        assert 'py gas.py patch sid_123456789012345678901234567890123 Code --search "var val = sheet.getRange(i, 1).getValue();"' in qf["cli_patch_code"]
+        assert 'patch_function(project="sid_123456789012345678901234567890123", func_name="processRow"' in qf["mcp_patch_function"]
+        assert 'py gas.py patch-func sid_123456789012345678901234567890123 processRow Code' in qf["cli_patch_function"]
+        assert "0始まりのインデックスを 1始まり (i + 1) に補正" in qf["suggested_fix"]
+        assert "🔧 QuickFix 修正案内: [Code 行 15 (processRow)]" in qf["formatted_quickfix"]
+
+        # 2. 匿名関数の場合（patch_function は生成されず、patch_code のみ提供）
+        trace_anon = {
+            "primary_frame": {
+                "file": "Utils",
+                "function": "<anonymous>",
+                "line": 42,
+                "code_line": "    items.map(function(x) { return x.val; });"
+            }
+        }
+        qf_anon = client.generate_quickfix(sid, trace_anon, {"code": "TYPE_ERROR_UNDEFINED"})
+        assert qf_anon["mcp_patch_function"] == ""
+        assert qf_anon["cli_patch_function"] == ""
+        assert 'patch_code(project="sid_123456789012345678901234567890123", file_name="Utils"' in qf_anon["mcp_patch_code"]
+        assert "オプショナルチェーン" in qf_anon["suggested_fix"]
+
+        # 3. トレースなし / 空フレームの安全なフォールバック
+        qf_empty = client.generate_quickfix(sid, {}, {})
+        assert qf_empty["target_file"] == ""
+        assert qf_empty["code_line"] == ""
+        assert qf_empty["mcp_patch_code"] == ""
+        assert qf_empty["formatted_quickfix"] == ""
+
+
+def test_generate_quickfix_run_benchmark_mcp_integration(tmp_path):
+    """提案3テスト: run_function / benchmark_function / MCPツール出力でのQuickFix統合の実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        sid = "2" * 35
+        files = [
+            {"name": "Code", "type": "SERVER_JS", "source": "function fetchConfig() {\n  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Config');\n  return sheet.getRange(1, 1).getValue();\n}"}
+        ]
+
+        # 1. run_function での quickfix 自動付与
+        err_response = {
+            "ok": False,
+            "error": "TypeError: Cannot read properties of null (reading 'getRange')",
+            "stack": "TypeError: Cannot read properties of null (reading 'getRange')\n    at fetchConfig (Code:3:16)\n    at __gm_exec_ (runner:1:1)",
+            "elapsed_ms": 20
+        }
+        with patch.object(client, "list_files", return_value=files), \
+             patch.object(client, "get_content", return_value={"files": files}), \
+             patch.object(client, "_put_content"), \
+             patch.object(client, "resolve_webapp_url", return_value="https://script.google.com/macros/s/xxx/exec"), \
+             patch.object(client, "call_webapp", return_value={"data": err_response}), \
+             patch.object(client, "clean_runner", return_value=None):
+            res = client.run_function(sid, "fetchConfig", args=[], keep_runner=True)
+            assert res["status"] == "error"
+            assert "quickfix" in res
+            assert res["quickfix"]["target_file"] == "Code"
+            assert res["quickfix"]["target_line"] == 3
+            assert "patch_code" in res["quickfix"]["mcp_patch_code"]
+            assert "null チェックガード" in res["quickfix"]["suggested_fix"]
+
+        # 2. benchmark_function 処方箋での quickfix 統合
+        with patch.object(client, "run_function", return_value=res), \
+             patch.object(client, "diagnose", return_value={"performance_warnings": [], "syntax_errors": [], "issues_count": 0}), \
+             patch.object(client, "list_functions", return_value=[]):
+            bm = client.benchmark_function(sid, "fetchConfig")
+            assert bm["verdict"] == "FAILED"
+            assert any("🔧 QuickFix 修正案内: [Code 行 3 (fetchConfig)]" in p for p in bm["prescriptions"])
+            assert any("修正MCPコマンド: patch_code" in p for p in bm["prescriptions"])
+
+        # 3. gas_mcp_server.py run_function ツール出力での quickfix 統合
+        import gas_mcp_server
+        with patch.object(gas_mcp_server, "get_client", return_value=client), \
+             patch.object(client, "run_function", return_value=res):
+            tool_output = gas_mcp_server.run_function(project=sid, func_name="fetchConfig")
+            assert "🔧 QuickFix 修正案内: [Code 行 3 (fetchConfig)]" in tool_output
+            assert "修正MCPコマンド: patch_code" in tool_output
+            assert "修正CLIコマンド: py gas.py patch" in tool_output
+
+
+def test_generate_quickfix_simulation_loop(tmp_path):
+    """提案3テスト（反復・ループ検証）: 10回連続の異なるエラー病名・コードに対するQuickFix生成シミュレーション実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        sid = "3" * 35
+        simulations = [
+            ("Code", "loopCells", 5, "sheet.getRange(0, 1)", "INDEX_ZERO_OR_NEGATIVE", "1始まり"),
+            ("Auth", "sendReport", 12, "GmailApp.sendEmail(to, sub, body)", "PERMISSION_DENIED", "oauthScopes"),
+            ("Batch", "heavyJob", 25, "while(true) { Utilities.sleep(1000); }", "EXECUTION_TIMEOUT", "一括メモリ処理"),
+            ("Db", "findSheet", 8, "sheet.getRange('A1')", "TARGET_NOT_FOUND", "null チェックガード"),
+            ("Parser", "readItem", 18, "data.user.profile.name", "TYPE_ERROR_UNDEFINED", "オプショナルチェーン"),
+            ("Api", "fetchData", 30, "UrlFetchApp.fetch(url)", "SERVICE_FAILURE_OR_QUOTA", ""),
+            ("Calc", "compute", 14, "Math.round(val)", "GENERIC_GAS_ERROR", ""),
+            ("Sub", "<anonymous>", 7, "items.forEach(x => x.run())", "TYPE_ERROR_UNDEFINED", "オプショナルチェーン"),
+            ("Main", "init", 1, "var x = 10;", "UNKNOWN", ""),
+            ("Helper", "cleanUp", 99, "sheet.clear()", "INDEX_ZERO_OR_NEGATIVE", "1始まり"),
+        ]
+
+        for idx, (f, fn, l, code, diag_code, expected_hint) in enumerate(simulations, start=1):
+            trace = {"primary_frame": {"file": f, "function": fn, "line": l, "code_line": code}}
+            diag = {"code": diag_code, "remedy": "汎用対策"}
+            qf = client.generate_quickfix(sid, trace, diag)
+
+            assert qf["target_file"] == f, f"サイクル {idx}: target_file 不一致"
+            assert qf["target_line"] == l, f"サイクル {idx}: target_line 不一致"
+            assert code in qf["mcp_patch_code"], f"サイクル {idx}: mcp_patch_code にコード未反映"
+            assert code in qf["cli_patch_code"], f"サイクル {idx}: cli_patch_code にコード未反映"
+            if expected_hint:
+                assert expected_hint in qf["suggested_fix"], f"サイクル {idx}: 推奨アクションヒント不一致"
+            if fn != "<anonymous>":
+                assert fn in qf["mcp_patch_function"], f"サイクル {idx}: 関数修正MCPに {fn} 未反映"
+            else:
+                assert qf["mcp_patch_function"] == "", f"サイクル {idx}: 匿名関数で mcp_patch_function が空でない"
+            assert "🔧 QuickFix 修正案内:" in qf["formatted_quickfix"]
+
+
+def test_verify_fix_all_verdicts_and_mcp(tmp_path):
+    """提案4テスト: 修正後リトライ自動検証（RESOLVED, PERSISTENT_ERROR, NEW_ERROR, MCPツール統合）実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir), cache_file=str(tmp_path / ".cache.json"))
+        client.detect_side_effects = MagicMock(return_value=[])
+
+        sid = "4" * 35
+
+        # 1. 履歴なしで func_name 未指定の場合は ValueError
+        with pytest.raises(ValueError, match="直前のテスト実行履歴が見つかりません"):
+            client.verify_fix(sid)
+
+        # 2. 直前エラーの履歴をセット（1-indexed 違反エラー）
+        client._last_run_context[sid] = {
+            "func_name": "processData",
+            "args": [0, "test"],
+            "status": "error",
+            "ok": False,
+            "error": "The coordinates or dimensions of the range are invalid.",
+            "diagnosis": {"code": "INDEX_ZERO_OR_NEGATIVE", "name": "1-indexed 座標境界違反"}
+        }
+        client._save_last_run_context()
+
+        # 3. ケースA: 修正成功 -> RESOLVED (引数未指定でも直前の [0, 'test'] が復元される)
+        success_res = {"ok": True, "status": "success", "result": {"rows": 10}, "duration_ms": 45}
+        with patch.object(client, "run_function", return_value=success_res) as mock_run:
+            vf_res = client.verify_fix(sid)
+            mock_run.assert_called_once_with(sid, "processData", args=[0, "test"], timeout=30)
+            assert vf_res["verdict"] == "RESOLVED"
+            assert "✅ エラーが解消されました" in vf_res["message"]
+            assert "rows" in vf_res["formatted_verdict"]
+
+        # 4. ケースB: 修正未完了 -> PERSISTENT_ERROR (同一エラーが継続)
+        still_err = {
+            "ok": False,
+            "status": "error",
+            "error": "The coordinates or dimensions of the range are invalid.",
+            "diagnosis": {"code": "INDEX_ZERO_OR_NEGATIVE", "name": "1-indexed 座標境界違反"}
+        }
+        client._save_last_run_context()
+        with patch.object(client, "run_function", return_value=still_err):
+            vf_res2 = client.verify_fix(sid)
+            assert vf_res2["verdict"] == "PERSISTENT_ERROR"
+            assert "❌ エラーが解消されていません" in vf_res2["message"]
+
+        # 5. ケースC: 別の新エラー -> NEW_ERROR
+        new_err = {
+            "ok": False,
+            "status": "error",
+            "error": "TypeError: Cannot read properties of null (reading 'getRange')",
+            "diagnosis": {"code": "TARGET_NOT_FOUND", "name": "シート / Range 未検出"}
+        }
+        with patch.object(client, "run_function", return_value=new_err):
+            vf_res3 = client.verify_fix(sid)
+            assert vf_res3["verdict"] == "NEW_ERROR"
+            assert "⚠️ 直前のエラーは解消されましたが、別の新しいエラーが発生しました" in vf_res3["message"]
+
+        # 6. gas_mcp_server.py の verify_fix ツール統合実証
+        import gas_mcp_server
+        with patch.object(gas_mcp_server, "get_client", return_value=client), \
+             patch.object(client, "verify_fix", return_value=vf_res):
+            tool_res = gas_mcp_server.verify_fix(project=sid)
+            assert "🔄 修正後リトライ自動検証結果: [processData]" in tool_res
+            assert "✅ エラーが解消されました" in tool_res
+
+
+def test_verify_fix_simulation_loop(tmp_path):
+    """提案4テスト（反復・ループ検証）: 10回連続の修正・再検証サイクルの合否判定シミュレーション実証"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir), cache_file=str(tmp_path / ".cache.json"))
+        client.detect_side_effects = MagicMock(return_value=[])
+
+        sid = "5" * 35
+
+        # 10サイクルの (直前状態, 今回状態, 期待verdict)
+        scenarios = [
+            # 1. 座標エラー -> 成功
+            ({"error": "Range invalid", "code": "INDEX_ZERO_OR_NEGATIVE"}, {"ok": True, "res": 1}, "RESOLVED"),
+            # 2. 権限エラー -> 権限エラー継続
+            ({"error": "Permission denied", "code": "PERMISSION_DENIED"}, {"ok": False, "error": "Permission denied", "code": "PERMISSION_DENIED"}, "PERSISTENT_ERROR"),
+            # 3. タイムアウト -> 成功
+            ({"error": "Timeout", "code": "EXECUTION_TIMEOUT"}, {"ok": True, "res": "ok"}, "RESOLVED"),
+            # 4. シート未検出 -> 未定義エラー（新エラー）
+            ({"error": "Sheet null", "code": "TARGET_NOT_FOUND"}, {"ok": False, "error": "TypeError: undefined", "code": "TYPE_ERROR_UNDEFINED"}, "NEW_ERROR"),
+            # 5. TypeError -> TypeError継続
+            ({"error": "TypeError: x is not func", "code": "TYPE_ERROR_UNDEFINED"}, {"ok": False, "error": "TypeError: x is not func", "code": "TYPE_ERROR_UNDEFINED"}, "PERSISTENT_ERROR"),
+            # 6. Service error -> 成功
+            ({"error": "Service error", "code": "SERVICE_FAILURE_OR_QUOTA"}, {"ok": True, "res": [1, 2]}, "RESOLVED"),
+            # 7. 引数エラー -> 成功
+            ({"error": "Invalid signature", "code": "INVALID_ARGUMENTS"}, {"ok": True, "res": 100}, "RESOLVED"),
+            # 8. 座標エラー -> シート未検出（新エラー）
+            ({"error": "Range invalid", "code": "INDEX_ZERO_OR_NEGATIVE"}, {"ok": False, "error": "Range not found", "code": "TARGET_NOT_FOUND"}, "NEW_ERROR"),
+            # 9. 汎用エラー -> 成功
+            ({"error": "Custom boom", "code": "GENERIC_GAS_ERROR"}, {"ok": True, "res": True}, "RESOLVED"),
+            # 10. タイムアウト -> タイムアウト継続
+            ({"error": "Exceeded maximum execution time", "code": "EXECUTION_TIMEOUT"}, {"ok": False, "error": "Exceeded maximum execution time", "code": "EXECUTION_TIMEOUT"}, "PERSISTENT_ERROR"),
+        ]
+
+        for idx, (prev, curr, expected_verdict) in enumerate(scenarios, start=1):
+            client._last_run_context[sid] = {
+                "func_name": f"fn_{idx}",
+                "args": [idx],
+                "ok": False,
+                "error": prev["error"],
+                "diagnosis": {"code": prev["code"], "name": "err"}
+            }
+            client._save_last_run_context()
+
+            fake_run_res = {
+                "ok": curr["ok"],
+                "status": "success" if curr["ok"] else "error",
+                "result": curr.get("res"),
+                "error": curr.get("error", ""),
+                "diagnosis": {"code": curr.get("code", ""), "name": "err"} if not curr["ok"] else None,
+                "duration_ms": 10 * idx
+            }
+
+            with patch.object(client, "run_function", return_value=fake_run_res):
+                res = client.verify_fix(sid)
+                assert res["verdict"] == expected_verdict, f"サイクル {idx} 判定失敗: 期待={expected_verdict}, 実際={res['verdict']}"
+                assert res["function"] == f"fn_{idx}"
+                assert res["args"] == [idx]
+
+
+# ===== 2026-11-11 Opus 点検の直し: 古い写しでの上書き・二重実行・verify_fix の安全弁 =====
+
+import copy
+
+
+def _vf_client(tmp_path):
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        c = GasClient(clasprc_path=str(clasprc), backup_dir=str(tmp_path / ".backups"),
+                      cache_file=str(tmp_path / ".cache.json"))
+    return c
+
+
+def test_1111_write_refetches_when_cloud_changed_after_copy(mock_client):
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function f() { return 1; }"}]
+    mock_client.resolve_script_id = MagicMock(return_value="sid1")
+    mock_client._content_cache["sid1"] = (1000.0, {"files": copy.deepcopy(files)})
+    mock_client._remote_modified_epoch = MagicMock(return_value=5000.0)  # 写しの後にエディタで直された
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client._get_content_for_write("sid1")
+    assert mock_client.get_content.call_args_list[-1].kwargs == {"use_cache": False}
+
+
+def test_1111_write_refetches_when_cloud_time_unknown(mock_client):
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function f() { return 1; }"}]
+    mock_client._content_cache["sid2"] = (1000.0, {"files": copy.deepcopy(files)})
+    mock_client._remote_modified_epoch = MagicMock(return_value=None)
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client._get_content_for_write("sid2")
+    assert mock_client.get_content.call_args_list[-1].kwargs == {"use_cache": False}
+
+
+def test_1111_write_uses_copy_when_cloud_unchanged(mock_client):
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function f() { return 1; }"}]
+    mock_client._content_cache["sid3"] = (5000.0, {"files": copy.deepcopy(files)})
+    mock_client._remote_modified_epoch = MagicMock(return_value=4999.5)
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client._get_content_for_write("sid3")
+    assert [c.kwargs for c in mock_client.get_content.call_args_list] == [{"use_cache": True}]
+
+
+def test_1111_no_rerun_does_not_retry_read_timeout(mock_client):
+    import requests
+    mock_client.session = MagicMock()
+    mock_client.session.request.side_effect = requests.ReadTimeout("slow")
+    with patch("time.sleep"):
+        with pytest.raises(requests.ReadTimeout):
+            mock_client._request_with_retry("GET", "https://script.google.com/x", retry_timeout=False)
+    assert mock_client.session.request.call_count == 1
+
+
+def test_1111_no_rerun_still_retries_connect_timeout(mock_client):
+    import requests
+    ok = MagicMock(status_code=200)
+    mock_client.session = MagicMock()
+    mock_client.session.request.side_effect = [requests.ConnectTimeout("no conn"), ok]
+    with patch("time.sleep"):
+        res = mock_client._request_with_retry("GET", "https://script.google.com/x", retry_timeout=False)
+    assert res is ok and mock_client.session.request.call_count == 2
+
+
+def test_1111_401_refresh_works_with_zero_retries(mock_client):
+    r401 = MagicMock(status_code=401)
+    ok = MagicMock(status_code=200)
+    mock_client.session = MagicMock()
+    mock_client.session.request.side_effect = [r401, ok]
+    mock_client.get_access_token = MagicMock(return_value="new")
+    res = mock_client._request_with_retry("POST", "https://script.google.com/x", max_retries=0, headers={"Authorization": "Bearer old"})
+    assert res is ok
+
+
+def test_1111_run_function_calls_webapp_without_rerun(mock_client):
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function f() { return 1; }"}]
+    mock_client.resolve_script_id = MagicMock(return_value="sid4")
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client._save_backup = MagicMock()
+    mock_client.clean_runner = MagicMock()
+    mock_client.resolve_webapp_url = MagicMock(return_value="https://script.google.com/macros/s/x/dev")
+    mock_client.call_webapp = MagicMock(return_value={"status_code": 200, "data": {"ok": True, "result": 1, "logs": []}})
+    mock_client.run_function("sid4", "f")
+    assert mock_client.call_webapp.call_args.kwargs.get("no_rerun") is True
+
+
+def test_1111_run_function_does_not_recall_on_5xx(mock_client):
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function f() { return 1; }"}]
+    mock_client.resolve_script_id = MagicMock(return_value="sid5")
+    mock_client.get_content = MagicMock(side_effect=lambda sid, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client._save_backup = MagicMock()
+    mock_client.clean_runner = MagicMock()
+    mock_client.resolve_webapp_url = MagicMock(return_value="https://script.google.com/macros/s/x/dev")
+    mock_client.call_webapp = MagicMock(return_value={"status_code": 500, "text": "<html>Server Error</html>"})
+    mock_client.run_function("sid5", "f")
+    assert mock_client.call_webapp.call_count == 1
+
+
+SIDE_SRC = """
+function sendReport() { var b = build_(); MailApp.sendEmail('a@example.com', 's', b); }
+function build_() { return 'x'; }
+function addRow() { helper_(); }
+function helper_() { SpreadsheetApp.getActive().getSheets()[0].appendRow([1]); }
+function pure(a) { var arr = [3,1,2]; arr.sort(); return a + 1; }
+"""
+
+
+def test_1111_detect_side_effects(tmp_path):
+    c = _vf_client(tmp_path)
+    files = [{"name": "Code", "type": "SERVER_JS", "source": SIDE_SRC}]
+    assert c.detect_side_effects("s" * 35, "sendReport", files=files)
+    via_callee = c.detect_side_effects("s" * 35, "addRow", files=files)
+    assert via_callee and via_callee[0]["function"] == "helper_"
+    assert c.detect_side_effects("s" * 35, "pure", files=files) == []
+
+
+def test_1111_verify_fix_blocks_side_effects(tmp_path):
+    c = _vf_client(tmp_path)
+    sid = "6" * 35
+    c._last_run_context[sid] = {"func_name": "sendReport", "args": [], "ok": False, "error": "boom"}
+    c.detect_side_effects = MagicMock(return_value=[{"function": "sendReport", "kind": "メールの送信・操作"}])
+    with patch.object(c, "run_function") as run:
+        res = c.verify_fix(sid)
+        assert res["verdict"] == "BLOCKED_SIDE_EFFECTS"
+        run.assert_not_called()
+    with patch.object(c, "run_function", return_value={"ok": True, "result": 1}) as run:
+        res = c.verify_fix(sid, allow_side_effects=True)
+        assert res["verdict"] == "RESOLVED"
+        run.assert_called_once()
+
+
+def test_1111_verify_fix_stops_after_three(tmp_path):
+    c = _vf_client(tmp_path)
+    sid = "7" * 35
+    c.detect_side_effects = MagicMock(return_value=[])
+    c._last_run_context[sid] = {"func_name": "f", "args": [1], "ok": False, "error": "E"}
+    still = {"ok": False, "error": "E", "diagnosis": {"code": "X"}}
+    with patch.object(c, "run_function", return_value=still) as run:
+        for _ in range(3):
+            assert c.verify_fix(sid)["verdict"] == "PERSISTENT_ERROR"
+        res = c.verify_fix(sid)
+        assert res["verdict"] == "STOPPED"
+        assert run.call_count == 3
+        assert c.verify_fix(sid, force=True)["verdict"] == "PERSISTENT_ERROR"
+
+
+def test_1111_verify_fix_restores_args_when_name_given(tmp_path):
+    c = _vf_client(tmp_path)
+    sid = "8" * 35
+    c.detect_side_effects = MagicMock(return_value=[])
+    c._last_run_context[sid] = {"func_name": "f", "args": [42, "x"], "ok": False, "error": "E"}
+    with patch.object(c, "run_function", return_value={"ok": True}) as run:
+        c.verify_fix(sid, func_name="f")
+        assert run.call_args.kwargs["args"] == [42, "x"]
 

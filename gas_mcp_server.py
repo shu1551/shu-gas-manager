@@ -840,6 +840,23 @@ def run_function(project: str, func_name: str, args: str = "", keep_runner: bool
             lines.append(f"  {lg}")
     if res.get("error"):
         lines.append(f"エラー: {res['error']}")
+    if res.get("diagnosis") and res["diagnosis"].get("code") not in ("GENERIC_GAS_ERROR", "UNKNOWN"):
+        diag = res["diagnosis"]
+        lines.append("")
+        lines.append(f"🩺 病名診断: [{diag['name']}]")
+        lines.append(f"   原因: {diag['summary']}")
+        lines.append(f"   処方箋: {diag['remedy']}")
+        if diag.get("quickfix_guide"):
+            lines.append(f"   改善ヒント: {diag['quickfix_guide']}")
+    if res.get("trace") and res["trace"].get("formatted_trace"):
+        lines.append("")
+        lines.append(res["trace"]["formatted_trace"])
+    elif res.get("stack"):
+        lines.append("")
+        lines.append(f"スタックトレース:\n{res['stack']}")
+    if res.get("quickfix") and res["quickfix"].get("formatted_quickfix"):
+        lines.append("")
+        lines.append(res["quickfix"]["formatted_quickfix"])
     return "\n".join(lines)
 
 @mcp.tool()
@@ -888,6 +905,25 @@ def benchmark_function(project: str, func_name: str, args: str = "", target_ms: 
         for pr in res["prescriptions"]:
             lines.append(f"  * {pr}")
     return "\n".join(lines)
+
+@mcp.tool()
+@safe_tool
+def verify_fix(project: str, func_name: str = "", args: str = "", allow_side_effects: bool = False, force: bool = False) -> str:
+    """修正パッチ適用後に直前（または指定）のテスト関数を同一引数で再実行し、エラーが解消されたかを自動判定します。
+    メール送信・シートの書き換え・ファイル作成など本物に作用する関数は、既定で再実行しません（二重の送信・書き込みを防ぐ）。
+    同じ関数の再実行は 3 回まで。通らなければ止めて控えからの戻し方を返します。
+
+    Args:
+        project: プロジェクト名またはスクリプトID
+        func_name: 再検証する関数名（省略時は直前にテスト実行した関数を自動復元）
+        args: 引数の JSON 文字列 (例: '[10, "test"]')。省略時は直前の引数を自動復元
+        allow_side_effects: 本物に作用する関数でも再実行する（試し用の写しで動かすときなど、承知のうえで）
+        force: 3 回の上限を超えて続ける
+    """
+    client = get_client()
+    res = client.verify_fix(project, func_name=func_name or None, args=args or None,
+                            allow_side_effects=allow_side_effects, force=force)
+    return res.get("formatted_verdict", res.get("message", ""))
 
 @mcp.tool()
 @safe_tool

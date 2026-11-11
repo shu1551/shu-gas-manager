@@ -494,6 +494,7 @@ class GasClient:
         self._synced_sids = set()
         self._disk_cache_mem = None
         self._disk_cache_mtime = 0.0
+        self._last_run_context = self._load_last_run_context()
         self._load_clasprc()
 
     @property
@@ -523,14 +524,22 @@ class GasClient:
     def _atomic_json_dump(path, data, indent=None):
         """テンポラリファイル書き込み＋アトミック置換による耐クラッシュ・排他安全保存"""
         target = Path(path)
-        tmp_path = target.parent / f"{target.name}.tmp.{os.getpid()}"
+        tmp_path = target.parent / f"{target.name}.tmp.{os.getpid()}_{time.time_ns()}"
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 if indent is not None:
-                    json.dump(data, f, ensure_ascii=False, indent=indent)
+                    json.dump(data, f, ensure_ascii=False, indent=indent, default=str)
                 else:
-                    json.dump(data, f, ensure_ascii=False)
-            os.replace(tmp_path, target)
+                    json.dump(data, f, ensure_ascii=False, default=str)
+            for replace_attempt in range(5):
+                try:
+                    os.replace(tmp_path, target)
+                    break
+                except PermissionError:
+                    if replace_attempt < 4:
+                        time.sleep(0.05)
+                        continue
+                    raise
         except Exception:
             try:
                 if tmp_path.exists():
@@ -541,6 +550,27 @@ class GasClient:
     def _save_cache(self):
         try:
             self._atomic_json_dump(self.cache_file, self._cache_data, indent=2)
+        except Exception:
+            pass
+
+    @property
+    def _last_run_file(self):
+        return self.cache_file.parent / ".last_run.json"
+
+    def _load_last_run_context(self):
+        try:
+            if self._last_run_file.exists():
+                with open(self._last_run_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_last_run_context(self):
+        try:
+            self._atomic_json_dump(self._last_run_file, self._last_run_context, indent=2)
         except Exception:
             pass
 
@@ -645,6 +675,8 @@ class GasClient:
         if res is None or res.status_code != 200:
             err_text = res.text if res is not None else "接続失敗またはタイムアウト"
             sc = res.status_code if res is not None else 0
+            if "invalid_grant" in err_text:
+                raise RuntimeError(f"トークンの更新に失敗しました (認証失効: invalid_grant): clasp login を実行して再ログインしてください。詳細: {err_text}")
             raise RuntimeError(f"トークンの更新に失敗しました ({sc}): {err_text}")
 
         data = res.json()
@@ -659,15 +691,22 @@ class GasClient:
         self._save_cache()
         return self._access_token
 
-    def _request_with_retry(self, method, url, max_retries=3, retry_5xx=True, **kwargs):
-        """429 (Too Many Requests), 403 (レートリミット超過), 500番台エラー、および 401 (失効トークン) 時に自動再試行"""
+    def _request_with_retry(self, method, url, max_retries=3, retry_5xx=True, retry_timeout=True, **kwargs):
+        """429 (Too Many Requests), 403 (レートリミット超過), 500番台エラー、および 401 (失効トークン) 時に自動再試行
+
+        retry_timeout=False: 読み取りの時間切れ・接続の途中切れは呼び直さない（相手側で処理が走った後かもしれないため。
+        GAS 関数の実行など、二重に走ると困る呼び出しで使う）。接続そのものができなかった時間切れだけは呼び直す。
+        """
         kwargs.setdefault("timeout", 20)
         backoff = 1.0
-        for attempt in range(max_retries + 1):
+        refreshed = False
+        attempt = 0
+        while True:
             try:
                 res = self.session.request(method, url, **kwargs)
-                # 401 (Unauthorized) 時はトークンが失効した可能性があるため、1回だけリフレッシュして再試行
-                if res.status_code == 401 and attempt == 0:
+                # 401 (Unauthorized) 時はトークンが失効した可能性があるため、1回だけリフレッシュして再試行（回数に数えない）
+                if res.status_code == 401 and not refreshed:
+                    refreshed = True
                     self._access_token = None
                     self._cache_data.pop("token", None)
                     self._save_cache()
@@ -685,14 +724,45 @@ class GasClient:
                             wait_sec = max(backoff, min(float(retry_after), 30.0))
                         time.sleep(wait_sec)
                         backoff *= 2
+                        attempt += 1
                         continue
                 return res
-            except (requests.ConnectionError, requests.Timeout):
-                if attempt < max_retries:
+            except (requests.ConnectionError, requests.Timeout) as ex:
+                safe_to_retry = retry_timeout or isinstance(ex, requests.ConnectTimeout)
+                if safe_to_retry and attempt < max_retries:
                     time.sleep(backoff)
                     backoff *= 2
+                    attempt += 1
                     continue
                 raise
+
+    def _remote_modified_epoch(self, sid):
+        """クラウド上のプロジェクトの最終更新時刻（Drive の modifiedTime、UNIX 秒）。取れなければ None"""
+        try:
+            url = f"https://www.googleapis.com/drive/v3/files/{sid}"
+            res = self._request_with_retry("GET", url, headers=self._headers(), params={"fields": "modifiedTime"}, timeout=10)
+            if res.status_code != 200:
+                return None
+            mt = res.json().get("modifiedTime", "")
+            if not mt:
+                return None
+            return datetime.fromisoformat(mt.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+
+    def _get_content_for_write(self, sid):
+        """書き換え用の読み。手元の写しがあっても、クラウドの更新時刻を 1 回見て、
+        写しを取った後にほかで直されていれば（GASエディタ・別の PC・clasp 等）読み直す。
+        確かめられないとき（Drive に無い・権限が無い等）も読み直す＝ほかの直しを古い写しで上書きしない。"""
+        had_copy = sid in self._content_cache or sid in self._load_disk_content_cache()
+        if not had_copy:
+            return self.get_content(sid, use_cache=False)
+        data = self.get_content(sid, use_cache=True)
+        ts = self._content_cache.get(sid, (0, None))[0]
+        remote = self._remote_modified_epoch(sid)
+        if remote is not None and remote <= ts + 1.0:
+            return data
+        return self.get_content(sid, use_cache=False)
 
     @property
     def aliases_file(self):
@@ -827,7 +897,7 @@ class GasClient:
 
     def resolve_script_id(self, name_or_id):
         """プロジェクト名またはスクリプトIDから正規の scriptId を解決"""
-        target = str(name_or_id).strip() if name_or_id else ""
+        target = re.sub(r'[\u200b-\u200d\ufeff\x00-\x1f]', '', str(name_or_id)).strip() if name_or_id else ""
         if not target:
             raise ValueError("プロジェクト名またはスクリプトIDを指定してください。")
 
@@ -1000,9 +1070,10 @@ class GasClient:
         """ファイル名または拡張子付き指定からプロジェクト内ファイルを一意特定"""
         if not files:
             raise ValueError("プロジェクト内にファイルが存在しません。")
-        if not filename or not str(filename).strip():
+        raw_name = re.sub(r'[\u200b-\u200d\ufeff\x00-\x1f]', '', str(filename)).strip() if filename else ""
+        if not raw_name:
             raise ValueError("検索対象のファイル名を指定してください。")
-        filename = str(filename).strip()
+        filename = raw_name
         base_name, ext = os.path.splitext(filename)
         ext_lower = ext.lower()
 
@@ -1303,7 +1374,7 @@ class GasClient:
                                 if m_semi:
                                     end_pos += m_semi.end()
                                 return end_pos
-            return len(source)
+            return None
         elif arrow_pos != -1:
             # 式本体のアロー関数
             for s, e, m in tokens:
@@ -1480,7 +1551,7 @@ class GasClient:
     def replace_function(self, script_id, filename, func_name, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイル内の特定関数定義ブロックを丸ごと置換（Excel の replace_procedure 相当）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid, use_cache=bool(fast or (sid in self._synced_sids)))
+        content = self._get_content_for_write(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
 
@@ -1541,7 +1612,7 @@ class GasClient:
     def patch_function(self, script_id, filename, func_name, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """関数定義スコープ内限定のコード置換（他関数に影響を与えずにピンポイント置換）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid, use_cache=bool(fast or (sid in self._synced_sids)))
+        content = self._get_content_for_write(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
         matched_file = self._match_file(files, filename)
@@ -1652,7 +1723,7 @@ class GasClient:
     def add_function(self, script_id, filename, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイルに関数を追加（既存関数との重複チェック付き）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid, use_cache=bool(fast or (sid in self._synced_sids)))
+        content = self._get_content_for_write(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
         matched_file = self._match_file(files, filename)
@@ -1727,7 +1798,7 @@ class GasClient:
     def delete_function(self, script_id, filename, func_name, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイルから関数を削除"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid, use_cache=bool(fast or (sid in self._synced_sids)))
+        content = self._get_content_for_write(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
         matched_file = self._match_file(files, filename)
@@ -1786,7 +1857,7 @@ class GasClient:
     def batch_patch(self, script_id, operations, force=False, dry_run=False, deploy=False, deploy_desc="Batch deployed via GasClient", fast=False):
         """複数ファイル・複数関数の修正をメモリ上で一括合成し、1回通信でアトミック反映"""
         sid = self.resolve_script_id(script_id)
-        orig_content = copy.deepcopy(self.get_content(sid, use_cache=bool(fast or (sid in self._synced_sids))))
+        orig_content = copy.deepcopy(self._get_content_for_write(sid))
         content = copy.deepcopy(orig_content)
         files = content.get("files", [])
         orig_files = copy.deepcopy(orig_content.get("files", []))
@@ -1808,6 +1879,8 @@ class GasClient:
         modified_file_objs = {}
 
         for op in op_list:
+            if not isinstance(op, dict):
+                raise ValueError(f"オペレーションの各要素はオブジェクト（辞書）である必要があります: {op}")
             fname = op.get("file")
             if not fname:
                 raise ValueError("各操作には 'file'（ファイル名）が必須です。")
@@ -2667,8 +2740,13 @@ class GasClient:
         while backup_file.exists():
             backup_file = self.backup_dir / f"backup_{sid_short}_{timestamp}_{counter}.json"
             counter += 1
-        with open(backup_file, "w", encoding="utf-8") as f:
-            json.dump(content_data, f, ensure_ascii=False, separators=(',', ':'))
+        win_backup_file = backup_file
+        if os.name == "nt":
+            p_str = str(backup_file.resolve())
+            if len(p_str) >= 240 and not p_str.startswith("\\\\?\\"):
+                win_backup_file = Path("\\\\?\\" + p_str)
+        with open(win_backup_file, "w", encoding="utf-8") as f:
+            json.dump(content_data, f, ensure_ascii=False, separators=(',', ':'), default=str)
         # 毎回のディスク全走査を避け、タイムスタンプ末尾判定で約10回に1回のみクリーンアップ実行
         if timestamp[-1] == '0':
             self._cleanup_old_backups(script_id, keep=30)
@@ -2739,7 +2817,7 @@ class GasClient:
     def patch_code(self, script_id, filename, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", verify=False, dev=False, fast=False):
         """ファイル内の特定文字列を置換（複数箇所ヒット時は警告停止、diff 出力・構文検査対応、複数一括置換 patches 対応、自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid, use_cache=bool(fast or (sid in self._synced_sids)))
+        content = self._get_content_for_write(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
 
@@ -2853,7 +2931,7 @@ class GasClient:
     def replace_file(self, script_id, filename, new_source, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """ファイルの中身を丸ごと置き換え（自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid, use_cache=bool(fast or (sid in self._synced_sids)))
+        content = self._get_content_for_write(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
 
@@ -2908,9 +2986,9 @@ class GasClient:
 
     def add_file(self, script_id, filename, file_type, source="", force=False):
         """新規ファイルを追加"""
-        if not filename or not str(filename).strip():
+        raw_name = re.sub(r'[\u200b-\u200d\ufeff\x00-\x1f]', '', str(filename)).strip() if filename else ""
+        if not raw_name:
             raise ValueError("ファイル名を指定してください。")
-        raw_name = str(filename).strip()
         base_name, ext = os.path.splitext(raw_name)
         base_name = base_name.strip()
         if not base_name or base_name in (".js", ".html", ".gs"):
@@ -3146,6 +3224,8 @@ class GasClient:
                 diff_chunks.append("".join(d_lines))
 
         diff_text = "\n".join(diff_chunks)
+        if len(diff_text) > 40000:
+            diff_text = diff_text[:40000] + f"\n... (以降 {len(diff_text) - 40000} 文字省略)"
         return {
             "backup_file": target_path.name,
             "changed_files": changed_files,
@@ -3301,6 +3381,8 @@ class GasClient:
                 diff_chunks.append("".join(d_lines))
 
         diff_text = "\n".join(diff_chunks)
+        if len(diff_text) > 40000:
+            diff_text = diff_text[:40000] + f"\n... (以降 {len(diff_text) - 40000} 文字省略)"
         return {
             "versionNumber": target_ver,
             "target_version": target_ver,
@@ -3668,7 +3750,7 @@ class GasClient:
     # ==========================================
 
 
-    def call_webapp(self, url, params=None, body=None, method="GET", key=None, timeout=15, use_auth=False, dev=False):
+    def call_webapp(self, url, params=None, body=None, method="GET", key=None, timeout=15, use_auth=False, dev=False, no_rerun=False):
         """GAS Web アプリ（doGet/doPost）を直接呼び出し（中継機モード / dev=True で最新HEAD直撃）
 
         Args:
@@ -3680,6 +3762,7 @@ class GasClient:
             timeout: タイムアウト秒
             use_auth: True の場合は Bearer トークンをヘッダーに付与
             dev: True の場合は最新 HEAD デプロイ URL を解決し、Bearer 認証を自動有効化
+            no_rerun: True の場合、GET でも時間切れ・500番台では呼び直さない（関数が二重に走るのを防ぐ）
         """
         if not url or not url.strip():
             raise ValueError("WebアプリURLを指定してください。")
@@ -3733,7 +3816,7 @@ class GasClient:
                 else:
                     res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body, headers=headers, timeout=timeout_val, allow_redirects=True)
             else:
-                res = self._request_with_retry("GET", url, max_retries=3, retry_5xx=True, params=req_params, headers=headers, timeout=timeout_val, allow_redirects=True)
+                res = self._request_with_retry("GET", url, max_retries=3, retry_5xx=not no_rerun, retry_timeout=not no_rerun, params=req_params, headers=headers, timeout=timeout_val, allow_redirects=True)
         except requests.Timeout as e:
             raise TimeoutError(f"Webアプリの呼び出しがタイムアウトしました ({timeout_val}秒): {e}")
 
@@ -3756,6 +3839,258 @@ class GasClient:
         return {
             "status_code": res.status_code,
             "text": cut_text
+        }
+
+    def decode_stack_trace(self, stack_text: str, files: list = None, script_id: str = None) -> dict:
+        """GASのスタックトレース文字列を解析し、プロジェクト内ファイルと照合してエラー発生行のコードスニペットを特定"""
+        if not stack_text or not isinstance(stack_text, str):
+            return {"frames": [], "primary_frame": None, "formatted_trace": ""}
+
+        if files is None and script_id:
+            try:
+                content = self.get_content(script_id, use_cache=True)
+                files = content.get("files", [])
+            except Exception:
+                files = []
+        files = files or []
+
+        # ファイル名マップ（拡張子なし / ありの両方で引けるようにする）
+        file_map = {}
+        for f in files:
+            name = f.get("name", "")
+            ftype = f.get("type", "SERVER_JS")
+            ext = "html" if ftype == "HTML" else ("json" if ftype == "JSON" else "gs")
+            file_map[name] = f
+            file_map[f"{name}.{ext}"] = f
+            file_map[f"{name}.gs"] = f
+            file_map[f"{name}.js"] = f
+
+        pat = re.compile(r'^\s*at\s+(?:(?P<func>[^\s:()]+)\s+\()?(?P<file>[^:()]+):(?P<line>\d+)(?::(?P<col>\d+))?\)?')
+        frames = []
+
+        for line_str in stack_text.splitlines():
+            m = pat.match(line_str)
+            if not m:
+                continue
+            func_name = m.group("func") or "<anonymous>"
+            file_ref = m.group("file").strip()
+            line_no = int(m.group("line"))
+            col_no = int(m.group("col")) if m.group("col") else 0
+
+            is_runner = (func_name in ("__gm_exec_", "doGet", "wrapFn") or "__gm_" in func_name)
+
+            f_obj = file_map.get(file_ref)
+            if not f_obj:
+                stem = Path(file_ref).stem
+                f_obj = file_map.get(stem)
+
+            snippet_lines = []
+            code_line = ""
+            if f_obj and "source" in f_obj:
+                src_lines = f_obj["source"].splitlines()
+                if 1 <= line_no <= len(src_lines):
+                    code_line = src_lines[line_no - 1]
+                    start_i = max(0, line_no - 1 - 2)
+                    end_i = min(len(src_lines), line_no + 2)
+                    for idx in range(start_i, end_i):
+                        cur_lno = idx + 1
+                        prefix = ">>>" if cur_lno == line_no else "   "
+                        snippet_lines.append(f"{prefix} {cur_lno:4d}: {src_lines[idx]}")
+
+            frame_data = {
+                "function": func_name,
+                "file": f_obj.get("name", file_ref) if f_obj else file_ref,
+                "line": line_no,
+                "column": col_no,
+                "is_runner": is_runner,
+                "code_line": code_line,
+                "snippet": "\n".join(snippet_lines)
+            }
+            frames.append(frame_data)
+
+        # ユーザーコードの最も直近（浅い）フレームを特定
+        user_frames = [f for f in frames if not f["is_runner"]]
+        primary_frame = user_frames[0] if user_frames else (frames[0] if frames else None)
+
+        formatted_lines = []
+        if primary_frame:
+            ext_hint = ".gs" if not primary_frame["file"].endswith((".gs", ".html", ".json")) else ""
+            func_hint = f" ({primary_frame['function']})" if primary_frame['function'] != '<anonymous>' else ""
+            formatted_lines.append(f"📍 エラー発生箇所: [{primary_frame['file']}{ext_hint} 行 {primary_frame['line']}{func_hint}]")
+            if primary_frame["snippet"]:
+                formatted_lines.append("```javascript")
+                formatted_lines.append(primary_frame["snippet"])
+                formatted_lines.append("```")
+
+        return {
+            "frames": frames,
+            "primary_frame": primary_frame,
+            "formatted_trace": "\n".join(formatted_lines)
+        }
+
+    def diagnose_gas_error(self, error_message: str, stack_text: str = "") -> dict:
+        """GAS実行時に発生したエラーメッセージとスタックトレースから病名を自動判定し、具体的処方箋を生成"""
+        combined = f"{error_message or ''}\n{stack_text or ''}".strip()
+        if not combined:
+            return {
+                "code": "UNKNOWN",
+                "name": "未知のエラー",
+                "summary": "エラーメッセージが取得できませんでした。",
+                "remedy": "関数の実行ログ (Logger.log) や引数を確認してください。",
+                "quickfix_guide": ""
+            }
+
+        # 1. 1-indexed 座標境界違反 (0以下の行/列や不正な範囲)
+        if re.search(r"coordinates or dimensions of the range are invalid|coordinates must be greater than or equal to 1|starting (?:column|row) of the range is too small|number of (?:rows|columns) in the range must be at least 1|Range coordinates must be positive", combined, re.IGNORECASE):
+            return {
+                "code": "INDEX_ZERO_OR_NEGATIVE",
+                "name": "1-indexed 座標境界違反 (Invalid Coordinates)",
+                "summary": "GASのスプレッドシート等の座標（行・列番号）は1始まりですが、0または無効なインデックスが渡されました。",
+                "remedy": "配列インデックス i (0始まり) を行・列番号に渡す場合は i + 1 と指定し、1以上の正の整数を指定してください。",
+                "quickfix_guide": "getRange(row, col) の引数を見直し、0始まりになっていないか確認してください。"
+            }
+
+        # 2. 権限・OAuthスコープ不足
+        if re.search(r"you do not have permission to call|access denied|request is missing required authentication credential|insufficient permission|does not have permission to access|authorization is required", combined, re.IGNORECASE):
+            return {
+                "code": "PERMISSION_DENIED",
+                "name": "権限・OAuthスコープ不足 (Permission Denied)",
+                "summary": "呼び出そうとしたGoogleサービス（Spreadsheet, Gmail, Drive等）の実行権限・OAuthスコープが付与されていません。",
+                "remedy": "appsscript.json の oauthScopes に必要なスコープを追加するか、スクリプトエディタから再認可を行ってください。",
+                "quickfix_guide": "appsscript.json に oauthScopes 配列が定義されているか確認してください。"
+            }
+
+        # 3. 実行時間上限超過 (6分/30分タイムアウト)
+        if re.search(r"exceeded maximum execution time|script execution timed out|maximum execution time exceeded|timeout exceeded", combined, re.IGNORECASE):
+            return {
+                "code": "EXECUTION_TIMEOUT",
+                "name": "実行時間上限超過 (Execution Timeout)",
+                "summary": "GASの単一実行制限（無料アカウントは6分、Workspaceは30分）を超過しました。ループ内の単発API呼び出しや無限ループが疑われます。",
+                "remedy": "ループ内での getValue/setValue を廃止し、getValues/setValues による一括処理に置き換えるか、トリガーによる分割実行を設計してください。",
+                "quickfix_guide": "gas-manager の diagnose で「ループ内API呼び出し (API_CALL_IN_LOOP)」を点検してください。"
+            }
+
+        # 4. シート / Range 未検出・Null参照
+        if re.search(r"range not found|sheet not found|cannot read propert(?:y|ies) of null \(reading '(?:getRange|getSheetByName|getLastRow|getDataRange|appendRow)'\)|cannot read property '(?:getRange|getSheetByName|getLastRow|getDataRange|appendRow)' of null", combined, re.IGNORECASE):
+            return {
+                "code": "TARGET_NOT_FOUND",
+                "name": "シート / Range 未検出・Null参照 (Target Not Found)",
+                "summary": "指定したシート名が存在しない（または綴り間違い・前後の空白）ため null が返り、その後のメソッド呼び出しでクラッシュしました。",
+                "remedy": "getSheetByName('シート名') の名称が実在するか確認し、取得結果の null チェック (if (!sheet) return;) を追加してください。",
+                "quickfix_guide": "シート名の大文字小文字や余計な半角・全角空白が含まれていないか確認してください。"
+            }
+
+        # 5. 未定義値参照 / 型不整合 (TypeError / ReferenceError)
+        if re.search(r"cannot read propert(?:y|ies) of undefined|is not a function|is not defined|ReferenceError|TypeError", combined, re.IGNORECASE):
+            return {
+                "code": "TYPE_ERROR_UNDEFINED",
+                "name": "未定義値参照 / 型不整合 (TypeError / ReferenceError)",
+                "summary": "オブジェクトが undefined または定義されていないプロパティ・関数を呼び出しました。",
+                "remedy": "オプショナルチェーン (?.) や事前の null/undefined チェックを追加し、変数や関数名のスペルミスを確認してください。",
+                "quickfix_guide": "2次元配列の範囲外アクセス (values[i][j]) や、関数の未定義がないか確認してください。"
+            }
+
+        # 6. Googleサービス一時障害 / レート制限超過
+        if re.search(r"service (?:spreadsheets|drive|gmail|docs) failed|service invoked too many times|service error|rate limit exceeded|too many requests|quota exceeded", combined, re.IGNORECASE):
+            return {
+                "code": "SERVICE_FAILURE_OR_QUOTA",
+                "name": "Googleサービス一時障害 / レート制限超過 (Service Error / Quota Exceeded)",
+                "summary": "Googleバックエンドの一時的不安定、または短時間のAPI連続呼び出しによるレート制限・クォータ上限に達しました。",
+                "remedy": "指数バックオフ（指数関数的待機リトライ）を実装するか、Utilities.sleep(1000) 等でリクエスト間隔を空けてください。",
+                "quickfix_guide": "UrlFetchApp.fetchAll やバッチAPIの活用、CacheService によるキャッシュを検討してください。"
+            }
+
+        # 7. メソッド引数シグネチャ不整合
+        if re.search(r"parameters .* don't match the method signature|cannot find method|does not match method signature|invalid argument", combined, re.IGNORECASE):
+            return {
+                "code": "INVALID_ARGUMENTS",
+                "name": "メソッド引数シグネチャ不整合 (Invalid Method Signature)",
+                "summary": "GASのAPIメソッドに渡された引数の型（文字列、数値、配列など）や個数が一致していません。",
+                "remedy": "呼び出し先のメソッド定義・ドキュメントを確認し、引数の型と順序を正しく渡してください。",
+                "quickfix_guide": "文字列で渡すべき場所に数値を渡していないか、または引数の数が足りているか確認してください。"
+            }
+
+        # 8. 汎用GASエラー
+        return {
+            "code": "GENERIC_GAS_ERROR",
+            "name": "GAS 実行時エラー",
+            "summary": "GAS実行時にエラーが発生しました。",
+            "remedy": "スタックトレースのエラー発生箇所と該当行のコードを確認してください。",
+            "quickfix_guide": ""
+        }
+
+    def generate_quickfix(self, script_id: str, trace: dict = None, diagnosis: dict = None) -> dict:
+        """エラー箇所と病名診断から、即座に修正を適用するためのQuickFixコマンドと修正案を自動生成"""
+        trace = trace or {}
+        diagnosis = diagnosis or {}
+        pf = trace.get("primary_frame") or {}
+
+        target_file = pf.get("file", "")
+        target_func = pf.get("function", "")
+        target_line = pf.get("line", 0)
+        raw_code = (pf.get("code_line") or "").strip()
+
+        if not target_file and not raw_code:
+            return {
+                "target_file": "",
+                "target_function": "",
+                "target_line": 0,
+                "code_line": "",
+                "mcp_patch_code": "",
+                "cli_patch_code": "",
+                "mcp_patch_function": "",
+                "cli_patch_function": "",
+                "suggested_fix": diagnosis.get("remedy", ""),
+                "formatted_quickfix": ""
+            }
+
+        sid = script_id or "<script_id>"
+        mcp_code = f'patch_code(project="{sid}", file_name="{target_file}", search="{raw_code}", replace="<修正後コード>")'
+        cli_code = f'py gas.py patch {sid} {target_file} --search "{raw_code}" --replace "<修正後コード>"'
+
+        mcp_func = ""
+        cli_func = ""
+        if target_func and target_func != "<anonymous>":
+            mcp_func = f'patch_function(project="{sid}", func_name="{target_func}", code="<新関数コード>")'
+            cli_func = f'py gas.py patch-func {sid} {target_func} {target_file}'
+
+        diag_code = diagnosis.get("code", "")
+        if diag_code == "INDEX_ZERO_OR_NEGATIVE":
+            suggested = "0始まりのインデックスを 1始まり (i + 1) に補正するか、ループ開始値を 1 に変更してください。"
+        elif diag_code == "TARGET_NOT_FOUND":
+            suggested = "取得対象が存在するか null チェックガード (if (!obj) return;) を配置してください。"
+        elif diag_code == "PERMISSION_DENIED":
+            suggested = "appsscript.json の oauthScopes 配列に必要なAPIスコープを追加してください。"
+        elif diag_code == "EXECUTION_TIMEOUT":
+            suggested = "ループ内での getValue/setValue を廃止し、getValues/setValues による一括メモリ処理に置き換えてください。"
+        elif diag_code == "TYPE_ERROR_UNDEFINED":
+            suggested = "オプショナルチェーン (?.) または事前の未定義チェック (if (typeof x !== 'undefined')) を追加してください。"
+        else:
+            suggested = diagnosis.get("remedy", "")
+
+        qf_lines = [
+            f"🔧 QuickFix 修正案内: [{target_file} 行 {target_line}" + (f" ({target_func})]" if target_func else "]"),
+            f"   該当コード: {raw_code}",
+            f"   修正MCPコマンド: {mcp_code}",
+            f"   修正CLIコマンド: {cli_code}"
+        ]
+        if mcp_func:
+            qf_lines.append(f"   関数修正MCP: {mcp_func}")
+            qf_lines.append(f"   関数修正CLI: {cli_func}")
+        if suggested:
+            qf_lines.append(f"   推奨アクション: {suggested}")
+
+        return {
+            "target_file": target_file,
+            "target_function": target_func,
+            "target_line": target_line,
+            "code_line": raw_code,
+            "mcp_patch_code": mcp_code,
+            "cli_patch_code": cli_code,
+            "mcp_patch_function": mcp_func,
+            "cli_patch_function": cli_func,
+            "suggested_fix": suggested,
+            "formatted_quickfix": "\n".join(qf_lines)
         }
 
     def run_function(self, script_id, func_name, args=None, keep_runner=False, cleanup=None, fast=False, timeout=30):
@@ -3836,7 +4171,15 @@ class GasClient:
             "  try {\n"
             "    var fnName = e.parameter.__gm_run;\n"
             "    var rawArgs = e.parameter.__gm_args;\n"
-            "    var parsedArgs = rawArgs ? JSON.parse(rawArgs) : [];\n"
+            "    var parsedArgs = [];\n"
+            "    if (rawArgs) {\n"
+            "      try {\n"
+            "        var _p = JSON.parse(rawArgs);\n"
+            "        parsedArgs = Array.isArray(_p) ? _p : [_p];\n"
+            "      } catch (_ex) {\n"
+            "        parsedArgs = [rawArgs];\n"
+            "      }\n"
+            "    }\n"
             f"    var allowed = {allowed_json};\n"
             "    if (allowed.indexOf(fnName) === -1) {\n"
             "      return ContentService.createTextOutput(JSON.stringify({\n"
@@ -3934,7 +4277,8 @@ class GasClient:
                     params={"__gm_run": func_name, "__gm_args": json.dumps(args_list)},
                     method="GET",
                     timeout=timeout,
-                    use_auth=True
+                    use_auth=True,
+                    no_rerun=True
                 )
                 data = call_res.get("data")
                 if data is None and "text" in call_res:
@@ -3942,8 +4286,10 @@ class GasClient:
                         data = json.loads(call_res["text"])
                     except Exception:
                         data = {"ok": False, "raw": call_res["text"]}
-                # ランナー直後の @HEAD 伝播ラグ対策: まだ旧 doGet が返ってきた場合は短時間待って再試行
-                if not already_installed and (not isinstance(data, dict) or "ok" not in data or "raw" in data) and attempt < 2:
+                # ランナー直後の @HEAD 伝播ラグ対策: まだ旧 doGet が返ってきた場合（200 で JSON でない）だけ短時間待って再試行。
+                # 500番台などは関数が走った後かもしれないので呼び直さない
+                lag_like = call_res.get("status_code") == 200 and (not isinstance(data, dict) or "ok" not in data or "raw" in data)
+                if not already_installed and lag_like and attempt < 2:
                     time.sleep(0.4)
                     continue
                 break
@@ -3963,6 +4309,24 @@ class GasClient:
                 data["status"] = "success" if data.get("ok") else "error"
                 data["function"] = func_name
                 data["duration_ms"] = data.get("elapsed_ms", 0)
+                if not data.get("ok") and (data.get("stack") or data.get("error")):
+                    target_files = files if files else self.get_content(sid, use_cache=True).get("files", [])
+                    data["trace"] = self.decode_stack_trace(data.get("stack", ""), files=target_files)
+                    data["diagnosis"] = self.diagnose_gas_error(data.get("error", ""), data.get("stack", ""))
+                    data["quickfix"] = self.generate_quickfix(sid, data["trace"], data["diagnosis"])
+                self._last_run_context[sid] = {
+                    "func_name": func_name,
+                    "args": args_list,
+                    "status": data.get("status"),
+                    "ok": data.get("ok"),
+                    "error": data.get("error"),
+                    "stack": data.get("stack"),
+                    "diagnosis": data.get("diagnosis"),
+                    "trace": data.get("trace"),
+                    "quickfix": data.get("quickfix"),
+                    "timestamp": time.time()
+                }
+                self._save_last_run_context()
             return data
         finally:
             if not already_installed and not keep_runner:
@@ -4059,8 +4423,22 @@ class GasClient:
         if exec_error:
             verdict = "FAILED"
             score = 0
-            stack_str = f" (Stack: {last_res.get('stack')})" if last_res.get("stack") else ""
-            prescriptions.append(f"[実行エラー] {exec_error}{stack_str} -> 例外原因を特定し patch_function で修正してください。")
+            trace_info = last_res.get("trace") or self.decode_stack_trace(last_res.get("stack", ""), script_id=sid)
+            diag_info = last_res.get("diagnosis") or self.diagnose_gas_error(exec_error, last_res.get("stack", ""))
+            if diag_info.get("name") and diag_info.get("code") != "GENERIC_GAS_ERROR":
+                prescriptions.append(f"[病名診断: {diag_info['name']}] {diag_info['summary']}")
+                prescriptions.append(f"  処方箋: {diag_info['remedy']}")
+            if trace_info.get("primary_frame") and trace_info["primary_frame"].get("code_line"):
+                pf = trace_info["primary_frame"]
+                prescriptions.append(f"[実行時例外] {pf['file']} 行 {pf['line']} ({pf['function']}): {exec_error}")
+                prescriptions.append(f"  発生コード: {pf['code_line'].strip()}")
+                prescriptions.append(f"  処方アクション: py gas.py get {sid} {pf['file']} で該当行を確認し、patch_function で修正してください。")
+            else:
+                stack_str = f" (Stack: {last_res.get('stack')})" if last_res.get("stack") else ""
+                prescriptions.append(f"[実行エラー] {exec_error}{stack_str} -> 例外原因を特定し patch_function で修正してください。")
+            qf_info = last_res.get("quickfix") or self.generate_quickfix(sid, trace_info, diag_info)
+            if qf_info.get("formatted_quickfix"):
+                prescriptions.append(qf_info["formatted_quickfix"])
             avg_ms = min_ms = max_ms = 0.0
             expected_match = False
         else:
@@ -4128,6 +4506,163 @@ class GasClient:
             "performance_warnings": relevant_perf,
             "issues_count": diag.get("issues_count", 0),
             "prescriptions": prescriptions
+        }
+
+    # 再実行すると本物に二度目の作用が起きる呼び出し（verify_fix の関所で使う）
+    _SIDE_EFFECT_PATTERNS = [
+        (r"\b(?:MailApp|GmailApp)\s*\.", "メールの送信・操作"),
+        (r"\bUrlFetchApp\s*\.\s*fetch(?:All)?\s*\(", "外部への送信（UrlFetchApp）"),
+        (r"\bCalendarApp\s*\.", "カレンダーの操作"),
+        (r"\.\s*(?:appendRow|insertSheet|insertRows?\w*|insertColumns?\w*|deleteRows?|deleteColumns?|deleteSheet|setValues?|setFormulas?|setFormulaR1C1|clear(?:Contents|Content)?|copyTo|moveTo|appendParagraph|appendTable|appendListItem|insertParagraph|replaceText|setText|appendSlide|insertSlide|remove)\s*\(", "シート・文書・スライドの書き換え"),
+        (r"\b(?:SpreadsheetApp|DocumentApp|SlidesApp|FormApp)\s*\.\s*create\s*\(|\bDriveApp\s*\.\s*create\w*\s*\(|\.\s*(?:createFile|createFolder|makeCopy|setTrashed)\s*\(", "ファイルの作成・コピー・削除"),
+        (r"\.\s*(?:setProperty|setProperties|deleteProperty|deleteAllProperties)\s*\(", "保存済み設定の書き換え"),
+        (r"\bScriptApp\s*\.\s*(?:newTrigger|deleteTrigger)\b", "トリガーの作成・削除"),
+        (r"\b(?:Sheets|Docs|Drive|Gmail|Calendar|Slides)\s*\.\s*\w+\s*\.\s*(?:\w+\s*\.\s*)?(?:insert|update|batchUpdate|create|delete|send|patch|copy|append)\s*\(", "高度なサービスでの書き換え"),
+    ]
+
+    def detect_side_effects(self, script_id, func_name, files=None, max_depth=4):
+        """関数（と、そこから呼ぶプロジェクト内の関数）が本物に作用する呼び出しを含むかを調べる。
+        戻り値: [{"function": 関数名, "kind": 種類}]。見つからなければ空。"""
+        if files is None:
+            files = self.get_content(self.resolve_script_id(script_id), use_cache=True).get("files", [])
+        sources = [f.get("source", "") for f in files if f.get("type") == "SERVER_JS"]
+        project_fns = set()
+        for src in sources:
+            project_fns.update(fn["name"] for fn in self._extract_functions_from_js(src))
+
+        def body_of(name):
+            for src in sources:
+                span = self._find_function_span(src, name)
+                if span:
+                    return src[span[0]:span[1]]
+            return None
+
+        found, seen = [], set()
+        queue = [(func_name, 0)]
+        while queue:
+            name, depth = queue.pop(0)
+            if name in seen:
+                continue
+            seen.add(name)
+            body = body_of(name)
+            if body is None:
+                continue
+            for pat, kind in self._SIDE_EFFECT_PATTERNS:
+                if re.search(pat, body):
+                    found.append({"function": name, "kind": kind})
+            if depth < max_depth:
+                for callee in set(re.findall(r"\b([A-Za-z_$][\w$]*)\s*\(", body)):
+                    if callee in project_fns and callee not in seen:
+                        queue.append((callee, depth + 1))
+        return found
+
+    VERIFY_FIX_MAX = 3
+
+    def verify_fix(self, script_id: str, func_name: str = None, args=None, timeout: int = 30,
+                   allow_side_effects: bool = False, force: bool = False) -> dict:
+        """修正適用後に直前（または指定）のテスト関数を再実行し、エラーが解消されたかを自動判定
+
+        安全弁:
+          - 本物に作用する関数（メール送信・シートの書き換え・ファイル作成など）は既定で再実行しない
+            （試し用の写しで確かめるか、承知のうえで allow_side_effects=True）
+          - 同じ関数の直しと再実行は 3 回まで。通らなければ止めて、控えからの戻し方を返す（force=True で続行）
+        """
+        sid = self.resolve_script_id(script_id)
+        disk_ctx = self._load_last_run_context()
+        if disk_ctx:
+            self._last_run_context.update(disk_ctx)
+        last_ctx = self._last_run_context.get(sid, {})
+
+        if not func_name:
+            func_name = last_ctx.get("func_name")
+            if not func_name:
+                raise ValueError("直前のテスト実行履歴が見つかりません。func_name を指定して再テストを実行してください。")
+        if args is None and func_name == last_ctx.get("func_name"):
+            args = last_ctx.get("args", [])
+
+        same_fn = func_name == last_ctx.get("func_name")
+        prev_count = int(last_ctx.get("verify_count", 0) or 0) if same_fn else 0
+        if prev_count >= self.VERIFY_FIX_MAX and not force:
+            msg = (f"⛔ [{func_name}] は {prev_count} 回直して再実行しても通っていません。ここで止めます。\n"
+                   f"  直す前に戻すなら: list_backups で控えを選び restore_backup。続けるなら force=True。")
+            return {"verdict": "STOPPED", "message": msg, "function": func_name, "args": args or [],
+                    "previous_error": last_ctx.get("error", ""), "formatted_verdict": msg}
+
+        if not allow_side_effects:
+            effects = self.detect_side_effects(sid, func_name)
+            if effects:
+                listed = "\n".join(f"    - {e['function']}: {e['kind']}" for e in effects)
+                msg = (f"⛔ [{func_name}] は本物に作用する呼び出しを含むため、自動の再実行を止めました"
+                       f"（二度目の送信・書き込みを防ぐため）。\n{listed}\n"
+                       f"  試し用の写し（コピーしたファイル・送信先を自分に）で確かめるか、承知のうえで allow_side_effects=True。")
+                return {"verdict": "BLOCKED_SIDE_EFFECTS", "message": msg, "function": func_name,
+                        "args": args or [], "side_effects": effects,
+                        "previous_error": last_ctx.get("error", ""), "formatted_verdict": msg}
+
+        # 引数のパース処理
+        if args is None:
+            args_list = []
+        elif isinstance(args, str):
+            try:
+                args_list = json.loads(args)
+            except Exception:
+                args_list = [args]
+        elif isinstance(args, list):
+            args_list = args
+        else:
+            args_list = [args]
+
+        prev_err = last_ctx.get("error", "")
+        prev_diag_code = (last_ctx.get("diagnosis") or {}).get("code", "")
+
+        now_res = self.run_function(sid, func_name, args=args_list, timeout=timeout)
+        is_ok = now_res.get("ok", False)
+
+        formatted_lines = [f"🔄 修正後リトライ自動検証結果: [{func_name}]"]
+
+        if is_ok:
+            verdict = "RESOLVED"
+            dur = now_res.get("duration_ms", 0)
+            res_val = now_res.get("result")
+            res_str = json.dumps(res_val, ensure_ascii=False) if res_val is not None else "なし"
+            msg = f"✅ エラーが解消されました。正常に実行完了しました（所要時間: {dur}ms, 戻り値: {res_str}）。"
+            formatted_lines.append(f"  判定: {msg}")
+        else:
+            curr_err = now_res.get("error", "")
+            curr_diag_code = (now_res.get("diagnosis") or {}).get("code", "")
+            if curr_err == prev_err or (curr_diag_code and curr_diag_code == prev_diag_code):
+                verdict = "PERSISTENT_ERROR"
+                msg = f"❌ エラーが解消されていません。同一のエラーが継続しています: {curr_err}"
+            else:
+                verdict = "NEW_ERROR"
+                msg = f"⚠️ 直前のエラーは解消されましたが、別の新しいエラーが発生しました: {curr_err}"
+            formatted_lines.append(f"  判定: {msg}")
+            if now_res.get("diagnosis"):
+                diag = now_res["diagnosis"]
+                if diag.get("name"):
+                    formatted_lines.append(f"  病名診断: [{diag['name']}]")
+                if diag.get("remedy"):
+                    formatted_lines.append(f"  処方箋: {diag['remedy']}")
+            if now_res.get("quickfix") and now_res["quickfix"].get("formatted_quickfix"):
+                formatted_lines.append("")
+                formatted_lines.append(now_res["quickfix"]["formatted_quickfix"])
+
+        # 回数を残す（run_function が直前の記録を書き替えた後に足す。通ったら 0 に戻す）
+        new_count = 0 if verdict == "RESOLVED" else prev_count + 1
+        if sid in self._last_run_context:
+            self._last_run_context[sid]["verify_count"] = new_count
+            self._save_last_run_context()
+        if verdict != "RESOLVED":
+            formatted_lines.append(f"  再実行: {new_count}/{self.VERIFY_FIX_MAX} 回目")
+
+        return {
+            "verdict": verdict,
+            "message": msg,
+            "function": func_name,
+            "args": args_list,
+            "previous_error": prev_err,
+            "current_result": now_res,
+            "formatted_verdict": "\n".join(formatted_lines)
         }
 
     def clean_runner(self, script_id):
@@ -4247,7 +4782,12 @@ class GasClient:
 
             target_file.parent.mkdir(parents=True, exist_ok=True)
             norm_source = source.replace("\r\n", "\n")
-            with open(target_file, "w", encoding="utf-8", newline="\n") as wf:
+            win_target = target_file
+            if os.name == "nt":
+                p_str = str(target_file.resolve())
+                if len(p_str) >= 240 and not p_str.startswith("\\\\?\\"):
+                    win_target = Path("\\\\?\\" + p_str)
+            with open(win_target, "w", encoding="utf-8", newline="\n") as wf:
                 wf.write(norm_source)
             pulled_files.append(norm_rel)
             sha = hashlib.sha256(norm_source.encode("utf-8")).hexdigest()
@@ -4429,6 +4969,12 @@ class GasClient:
                 continue
 
             if rel == "appsscript.json":
+                try:
+                    parsed_manifest = json.loads(source)
+                    if not isinstance(parsed_manifest, dict):
+                        raise ValueError()
+                except Exception:
+                    raise ValueError("ローカルの appsscript.json が空または無効な JSON フォーマットです。プロジェクト破損を未然に阻止しました。")
                 local_files_to_push.append({"name": "appsscript", "type": "JSON", "source": source, "rel": rel})
             elif rel.endswith(".html"):
                 name = rel[:-5]
@@ -4970,9 +5516,12 @@ class GasClient:
                     has_early_break = bool(re.search(r"\bbreak\s*;", sub_masked))
 
                     for api_m in heavy_api_pat.finditer(sub_src):
+                        api_pos_in_sub = api_m.start()
+                        # コメントまたは文字列リテラル内（マスキング済み）の誤検知防止
+                        if api_pos_in_sub < len(sub_masked) and sub_masked[api_pos_in_sub].isspace():
+                            continue
                         raw_hit = api_m.group(1) or api_m.group(2) or ""
                         api_name = raw_hit.rstrip("(").strip()
-                        api_pos_in_sub = api_m.start()
 
                         # .getPlainBody の直前に ? '' : がある場合はフォールバックなので除外
                         if "getPlainBody" in api_name:
