@@ -366,9 +366,13 @@ class WorkspaceManager:
                 lines[-1] += f"（ほか {len(ch) - 2} 件）"
             if not ch:
                 lines.append("直した所: なし")
-            rest = (res.get("notes") or []) + (res.get("remaining") or [])
+            rest = []
+            if res.get("notes"):
+                rest.append("メモ: " + " ／ ".join(res["notes"][:3]))
+            if res.get("remaining"):
+                rest.append("残り: " + " ／ ".join(res["remaining"][:3]))
             if rest:
-                lines.append("残り: " + " ／ ".join(rest[:3]))
+                lines.append("　".join(rest))
             tail = []
             if tgt.get("url"):
                 tail.append(tgt["url"])

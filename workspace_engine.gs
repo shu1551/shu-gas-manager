@@ -254,8 +254,14 @@ function docBkSlotDoc_(slot) {
   ids[slot] = d.getId(); setJson_('BK_DOCS', ids);
   return d;
 }
+// body.clear() が「最終段落は削除できません」で落ちる文書がある（末尾が表・箇条書きのとき）ので、手で外す道を持つ
+function clearBody_(b) {
+  try { b.clear(); return; } catch (e) { }
+  b.appendParagraph('');
+  for (var i = b.getNumChildren() - 2; i >= 0; i--) { try { b.removeChild(b.getChild(i)); } catch (e2) { } }
+}
 function copyBody_(src, dst) {
-  dst.clear();
+  clearBody_(dst);
   var afterTable = false;
   for (var i = 0; i < src.getNumChildren(); i++) {
     var el = src.getChild(i).copy(), t = String(el.getType());
@@ -267,7 +273,10 @@ function copyBody_(src, dst) {
     else if (t === 'HORIZONTAL_RULE') dst.appendHorizontalRule();
     else if (t === 'PAGE_BREAK') dst.appendPageBreak();
   }
-  if (dst.getNumChildren() > 1 && dst.getChild(0).getType() == DocumentApp.ElementType.PARAGRAPH && dst.getChild(0).asParagraph().getText() === '') dst.removeChild(dst.getChild(0));
+  if (dst.getNumChildren() > 1 && dst.getChild(0).getType() == DocumentApp.ElementType.PARAGRAPH && dst.getChild(0).asParagraph().getText() === '') {
+    try { dst.removeChild(dst.getChild(0)); }
+    catch (e) { try { dst.removeChild(dst.getChild(dst.getNumChildren() - 1)); } catch (e2) { } }   // 空の文書：最終段落は消せないので、もう一方を外す
+  }
 }
 // 控え文書の枠：今の台帳で使われていない枠を先に使い、全部使われていれば一番古い枠を上書きする
 function pickSlot_() {
@@ -373,7 +382,7 @@ function runDo_(req) {
       discardBackup_(bk);
     } catch (e2) { why = String(e2.message || e2); }
     var out2 = { ok: false, error: String(err.message || err), where: '棚 #' + (ctx.opNo || 0) + ' ' + (ctx.opName || ''),
-      restored: restored, restore_error: why, blocked: !!err.isBlocked, arg: !!err.isArg, target: tgt_(ctx, file) };
+      restored: restored, restore_error: why, blocked: !!err.isBlocked, arg: !!err.isArg, target: tgt_(ctx, file), stack: String(err.stack || '').slice(0, 400) };
     if (created) out2.created = created;
     return out2;
   }
@@ -422,7 +431,7 @@ function resetNew_(ctx, kind) {
     var shs = ctx.ss.getSheets();
     for (var i = shs.length - 1; i >= 1; i--) ctx.ss.deleteSheet(shs[i]);
     shs[0].clear(); shs[0].setName('シート1');
-  } else { ctx.doc.getBody().clear(); }
+  } else { clearBody_(ctx.doc.getBody()); }
 }
 
 // ---------------------------------------------------------------- undo
