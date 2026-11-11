@@ -33,6 +33,7 @@ PUBLIC_FILES = [
     "gas_client.py",
     "gas_mcp_server.py",
     "gas_workspace.py",
+    "gas_workspace_view.py",
     "workspace_engine.gs",
     "WORKSPACE.md",
     "test_gas_offline.py",
@@ -99,7 +100,7 @@ def main():
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html"}
+    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")

@@ -2595,11 +2595,12 @@ def _ws_run(fn, **kw):
 
 @mcp.tool()
 @safe_tool
-def ws_look(target: str = "", sheet: str = "", range: str = "") -> str:
+def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False) -> str:
     """スプレッドシート・文書を見て、今の相手として覚える（シートの表の形・文書の見出し）。
     target=URL・ID・名前（空なら今の相手）。range=A1表記で中身も返す。
+    image=True で見た目を画像に撮って場所を返す（ws_do の後の目視はこれ。画像を開いて確かめる）。
     作る・直す前の確認はこれ。手順は WORKSPACE.md。"""
-    return _ws_run(get_ws().look, target=target, sheet=sheet, range=range)
+    return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image)
 
 @mcp.tool()
 @safe_tool

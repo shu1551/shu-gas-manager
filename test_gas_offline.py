@@ -6143,3 +6143,57 @@ def test_ws_mcp_tools_exist_and_are_short(ws_env):
         assert out.startswith("棚「nothing」はありません") and "[ERROR]" not in out
     finally:
         gas_mcp_server._ws = None
+
+
+# ===== 2026-11-12 Workspace の目（render → 手元で描き直して PNG） =====
+
+def test_1112_view_css_color_argb():
+    import gas_workspace_view as v
+    assert v._css_color("#ff000000") == "#000000"
+    assert v._css_color("#1f4e79") == "#1f4e79"
+    assert v._css_color("") == ""
+
+
+def test_1112_view_html_sheet_draws_values_borders_merges():
+    import gas_workspace_view as v
+    res = {"kind": "sheet", "target": {"name": "見積", "sheet": "S"}, "range": "A1:B2", "row0": 1, "col0": 1, "frozen": 1,
+           "values": [["品名", "金額"], ["合計", "1,200"]], "bg": [["#1f4e79", "#1f4e79"], ["#ffffff", "#ffffff"]],
+           "color": [["#ffffff", "#ffffff"], ["#ff000000", "#ff000000"]], "bold": [["bold", "bold"], ["normal", "bold"]],
+           "italic": [["normal"] * 2] * 2, "size": [[10, 10], [10, 10]], "align": [["center", "center"], ["general-left", "general"]],
+           "widths": [80, 90], "heights": [21, 21], "merges": [], "borders": [["S|S|S|S", "S|S|S|S"], ["S|S|D|S", "S|S|D|S"]], "ebg": [["", ""], ["", ""]]}
+    h, w = v.html_sheet(res)
+    assert "1,200" in h and "合計" in h
+    assert "#ff000000" not in h  # 透明にならない
+    assert "3px double #000" in h  # 二重罫線
+    assert "text-align:right" in h  # 数字は右寄せ
+    assert w == 46 + 170 + 40
+    res["merges"] = [{"r": 0, "c": 0, "nr": 1, "nc": 2}]
+    h2, _ = v.html_sheet(res)
+    assert "colspan='2'" in h2 and h2.count("<td") == 3
+
+
+def test_1112_view_html_doc_lists_and_tables():
+    import gas_workspace_view as v
+    res = {"kind": "doc", "target": {"name": "議事録"}, "blocks": [
+        {"k": "h1", "runs": [{"t": "議事録"}]},
+        {"k": "li", "runs": [{"t": "A"}], "level": 0, "ordered": True},
+        {"k": "li", "runs": [{"t": "B", "b": True}], "level": 0, "ordered": True},
+        {"k": "table", "rows": [[{"t": "項目", "b": True, "bg": "#ff1f4e79"}]]}]}
+    h, w = v.html_doc(res)
+    assert "1." in h and "2." in h and "<b>B</b>" in h and "#1f4e79" in h
+
+
+def test_1112_look_image_calls_render_and_returns_png(tmp_path, monkeypatch):
+    import gas_workspace, gas_workspace_view
+    ws = gas_workspace.WorkspaceManager.__new__(gas_workspace.WorkspaceManager)
+    monkeypatch.setattr(ws, "_look", lambda **kw: "対象: x", raising=False)
+    monkeypatch.setattr(ws, "_load", lambda: {"target": {"id": "F", "kind": "sheet", "sheet": "S"}}, raising=False)
+    sent = {}
+    def fake_post(body, timeout=90):
+        sent.update(body)
+        return {"ok": True, "kind": "sheet", "values": [["a"]]}
+    monkeypatch.setattr(ws, "_post", fake_post, raising=False)
+    monkeypatch.setattr(gas_workspace_view, "render_to_png", lambda res, d: tmp_path / "x.png")
+    out = ws.look(image=True)
+    assert sent["action"] == "render" and sent["target"]["id"] == "F"
+    assert "画像:" in out and "x.png" in out

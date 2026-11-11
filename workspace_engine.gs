@@ -27,6 +27,10 @@ function doPost(e) {
   try { req = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: '荷物が JSON ではありません' }); }
   var a = req.action;
   if (a === 'ping') return json_({ ok: true, version: ENGINE_VERSION });
+  if (a === 'render') {  // 見るだけ（書かない）ので鍵は掛けない
+    try { var rr = actRender_(req); rr.version = ENGINE_VERSION; return json_(rr); }
+    catch (err) { return json_({ ok: false, error: String(err && err.message || err), version: ENGINE_VERSION }); }
+  }
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) return json_({ ok: false, error: '別の処理が走っています。少し待って撃ち直してください。', busy: true });
   try {
@@ -523,6 +527,113 @@ function actLook_(req) {
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------- 目（見た目を読む・書かない）
+// 手元で描き直して画像にするための材料を、範囲ごとの一括読みで返す。
+var RENDER_MAX_ROWS = 100, RENDER_MAX_COLS = 26, RENDER_MAX_BLOCKS = 200;
+
+function hexOf_(c) {
+  try { return c && c.getColorType() == SpreadsheetApp.ColorType.RGB ? c.asRgbColor().asHexString() : ''; } catch (e) { return ''; }
+}
+
+function actRender_(req) {
+  var t = req.target || {}, o = openTarget_(t);
+  return o.kind === 'sheet' ? renderSheet_(o.file, req) : renderDoc_(o.file, req);
+}
+
+function renderSheet_(ss, req) {
+  var sh = sheetOf_(ss, req.sheet || (req.target || {}).sheet, '');
+  var rg;
+  if (req.range) rg = sh.getRange(req.range);
+  else {
+    var lr = Math.max(sh.getLastRow(), 1), lc = Math.max(sh.getLastColumn(), 1);
+    rg = sh.getRange(1, 1, Math.min(lr + 1, RENDER_MAX_ROWS), Math.min(lc, RENDER_MAX_COLS));
+  }
+  var r0 = rg.getRow(), c0 = rg.getColumn();
+  var nr = Math.min(rg.getNumRows(), RENDER_MAX_ROWS), nc = Math.min(rg.getNumColumns(), RENDER_MAX_COLS);
+  var cut = nr < rg.getNumRows() || nc < rg.getNumColumns();
+  rg = sh.getRange(r0, c0, nr, nc);
+  var widths = [], heights = [];
+  for (var c = 0; c < nc; c++) widths.push(sh.getColumnWidth(c0 + c));
+  for (var r = 0; r < nr; r++) heights.push(sh.getRowHeight(r0 + r));
+  var out = {
+    ok: true, kind: 'sheet',
+    target: { id: ss.getId(), name: ss.getName(), kind: 'sheet', url: ss.getUrl(), sheet: sh.getName() },
+    range: rg.getA1Notation(), row0: r0, col0: c0, cut: cut, frozen: sh.getFrozenRows(),
+    values: rg.getDisplayValues(),
+    bg: rg.getBackgrounds(),
+    color: rg.getFontColorObjects().map(function (row) { return row.map(hexOf_); }),
+    bold: rg.getFontWeights(), italic: rg.getFontStyles(), size: rg.getFontSizes(),
+    align: rg.getHorizontalAlignments(), widths: widths, heights: heights,
+    merges: rg.getMergedRanges().map(function (m) { return { r: m.getRow() - r0, c: m.getColumn() - c0, nr: m.getNumRows(), nc: m.getNumColumns() }; }),
+    borders: null
+  };
+  // 罫線と、条件付き書式を含む実際の背景色は SpreadsheetApp では読めないので、Sheets の高度なサービスで（無ければ省く）
+  try {
+    var g = Sheets.Spreadsheets.get(ss.getId(), {
+      ranges: [q_(sh.getName()) + '!' + out.range],
+      fields: 'sheets(data(rowData(values(effectiveFormat(borders,backgroundColor)))))'
+    });
+    var rows = (((g.sheets || [])[0] || {}).data || [])[0];
+    rows = rows && rows.rowData || [];
+    var side = function (b) { return b && b.style && b.style !== 'NONE' ? (b.style.indexOf('DOUBLE') >= 0 ? 'D' : b.style.indexOf('THICK') >= 0 || b.style.indexOf('MEDIUM') >= 0 ? 'T' : 'S') : ''; };
+    var hex = function (col) {
+      if (!col) return '';
+      var f = function (v) { var s = Math.round((v || 0) * 255).toString(16); return s.length < 2 ? '0' + s : s; };
+      return '#' + f(col.red) + f(col.green) + f(col.blue);
+    };
+    out.borders = []; out.ebg = [];
+    for (var i = 0; i < nr; i++) {
+      var vs = (rows[i] && rows[i].values) || [], br = [], eb = [];
+      for (var j = 0; j < nc; j++) {
+        var ef = (vs[j] && vs[j].effectiveFormat) || {}, b = ef.borders || {};
+        br.push(side(b.top) + '|' + side(b.right) + '|' + side(b.bottom) + '|' + side(b.left));
+        eb.push(ef.backgroundColor ? hex(ef.backgroundColor) : '');
+      }
+      out.borders.push(br); out.ebg.push(eb);
+    }
+  } catch (e) { out.borders_note = '罫線は読めませんでした（' + String(e.message || e).slice(0, 80) + '）'; }
+  return out;
+}
+
+function renderDoc_(d, req) {
+  var b = d.getBody(), n = b.getNumChildren(), blocks = [];
+  var lim = Math.min(n, req.limit || RENDER_MAX_BLOCKS);
+  var alignOf = function (p) { var a = p.getAlignment(); return a ? String(a).toLowerCase() : ''; };
+  var runsOf = function (el) {  // 太字・斜体・色の区切りごとに文字を分ける
+    var tx = el.editAsText(), s = tx.getText(), idx = tx.getTextAttributeIndices(), runs = [];
+    for (var k = 0; k < idx.length; k++) {
+      var a = idx[k], z = k + 1 < idx.length ? idx[k + 1] : s.length;
+      if (z <= a) continue;
+      runs.push({ t: s.slice(a, z), b: !!tx.isBold(a), i: !!tx.isItalic(a), c: tx.getForegroundColor(a) || '' });
+    }
+    return runs.length ? runs : [{ t: s, b: false, i: false, c: '' }];
+  };
+  for (var i = 0; i < lim; i++) {
+    var ch = b.getChild(i), ty = String(ch.getType());
+    if (ty === 'PARAGRAPH') {
+      var p = ch.asParagraph(), h = String(p.getHeading()), m = /^HEADING(\d)/.exec(h);
+      blocks.push({ k: m ? 'h' + m[1] : (h === 'TITLE' ? 'title' : h === 'SUBTITLE' ? 'subtitle' : 'p'), runs: runsOf(p), align: alignOf(p) });
+    } else if (ty === 'LIST_ITEM') {
+      var li = ch.asListItem(), g = String(li.getGlyphType());
+      blocks.push({ k: 'li', runs: runsOf(li), level: li.getNestingLevel(), ordered: /NUMBER|LATIN|ROMAN/.test(g) });
+    } else if (ty === 'TABLE') {
+      var tb = ch.asTable(), rows = [];
+      for (var r = 0; r < tb.getNumRows(); r++) {
+        var row = tb.getRow(r), cells = [];
+        for (var c = 0; c < row.getNumCells(); c++) {
+          var cell = row.getCell(c);
+          var ct = cell.getText();
+          cells.push({ t: ct, bg: cell.getBackgroundColor() || '', b: ct.length > 0 ? !!cell.editAsText().isBold(0) : false });
+        }
+        rows.push(cells);
+      }
+      blocks.push({ k: 'table', rows: rows });
+    } else if (ty === 'HORIZONTAL_RULE') blocks.push({ k: 'hr' });
+    else if (ty === 'PAGE_BREAK') blocks.push({ k: 'hr' });
+  }
+  return { ok: true, kind: 'doc', target: { id: d.getId(), name: d.getName(), kind: 'doc', url: d.getUrl() }, blocks: blocks, cut: n > lim, total: n };
 }
 
 // ---------------------------------------------------------------- 棚（共通）

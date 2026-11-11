@@ -109,7 +109,9 @@ class WorkspaceManager:
         text = self.engine_path.read_text(encoding="utf-8")
         text = re.sub(r"var ENGINE_VERSION = '[^']*';", f"var ENGINE_VERSION = '{self.engine_version()}';", text, count=1)
         manifest = {
-            "timeZone": "Asia/Tokyo", "dependencies": {}, "exceptionLogging": "STACKDRIVER", "runtimeVersion": "V8",
+            "timeZone": "Asia/Tokyo", "exceptionLogging": "STACKDRIVER", "runtimeVersion": "V8",
+            # 目（render）が罫線を読むのに Sheets の高度なサービスを使う（許可は spreadsheets のまま増えない）
+            "dependencies": {"enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
             "oauthScopes": ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/documents"],
             "webapp": {"executeAs": "USER_DEPLOYING", "access": "MYSELF"},
         }
@@ -404,7 +406,22 @@ class WorkspaceManager:
         return "\n".join(lines[:5])
 
     # ------------------------------------------------------------ ws_look
-    def look(self, target="", sheet="", range=""):
+    def look(self, target="", sheet="", range="", image=False):
+        text = self._look(target=target, sheet=sheet, range=range)
+        if not image:
+            return text
+        st = self._load()
+        cur = st.get("target") or {}
+        body = {"action": "render", "target": {"id": cur.get("id"), "kind": cur.get("kind")},
+                "sheet": sheet or cur.get("sheet", ""), "range": range}
+        res = self._post(body)
+        if not res.get("ok"):
+            return text + "\n画像: 撮れませんでした（" + str(res.get("error") or "") + "）"
+        import gas_workspace_view
+        png = gas_workspace_view.render_to_png(res, HERE / "screenshots")
+        return text + f"\n画像: {png}（描き直した姿。グラフ・画像・プルダウンは写りません。この画像を開いて見た目を確かめる）"
+
+    def _look(self, target="", sheet="", range=""):
         st = self._load()
         tgt, is_new = self.resolve_target(target, None, st)
         if is_new:
