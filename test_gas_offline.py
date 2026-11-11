@@ -6197,3 +6197,32 @@ def test_1112_look_image_calls_render_and_returns_png(tmp_path, monkeypatch):
     out = ws.look(image=True)
     assert sent["action"] == "render" and sent["target"]["id"] == "F"
     assert "画像:" in out and "x.png" in out
+
+
+def test_1112_failed_do_does_not_remember_sheet(tmp_path):
+    import gas_workspace
+    ws = gas_workspace.WorkspaceManager.__new__(gas_workspace.WorkspaceManager)
+    saved = {}
+    ws._save = lambda st: saved.update(st)
+    ws.format_do = lambda res: "ok"
+    res = {"ok": False, "target": {"id": "F", "name": "n", "kind": "sheet", "url": "u", "sheet": "作りかけ"}}
+    ws._finish_do({}, res, "k")
+    assert "sheet" not in saved["target"]
+    res_ok = {"ok": True, "target": {"id": "F", "name": "n", "kind": "sheet", "url": "u", "sheet": "表"}}
+    ws._finish_do({}, res_ok, "k")
+    assert saved["target"]["sheet"] == "表"
+
+
+def test_1112_undo_sends_current_target(tmp_path):
+    import gas_workspace
+    ws = gas_workspace.WorkspaceManager.__new__(gas_workspace.WorkspaceManager)
+    ws._load = lambda: {"target": {"id": "FILE1", "kind": "sheet"}}
+    ws._save = lambda st: None
+    sent = {}
+    def fake_post(body, timeout=90):
+        sent.update(body)
+        return {"ok": False, "error": "今の相手のファイルには、戻せる記録がありません"}
+    ws._post = fake_post
+    out = ws.undo()
+    assert sent["target_id"] == "FILE1"
+    assert "戻せる記録がありません" in out

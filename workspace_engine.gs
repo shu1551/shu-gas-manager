@@ -59,7 +59,12 @@ function getJson_(k, d) { var v = props_().getProperty(k); if (!v) return d; try
 function setJson_(k, v) { props_().setProperty(k, JSON.stringify(v)); }
 
 function colLetter_(n) { var s = ''; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
-function colNum_(s) { s = String(s).toUpperCase(); var n = 0; for (var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n; }
+function colNum_(s) {
+  s = String(s).trim().toUpperCase();
+  // 列記号（A〜ZZZ）以外を数に直すと桁外れの列番号になり「セル数の上限」で落ちる（11/12 実機で「金額」を渡して踏んだ）
+  if (!/^[A-Z]{1,3}$/.test(s)) throw new ArgError('列「' + s + '」は列記号（A・B…）ではありません。見出しの名前で指すときは表の見出しと同じ文字で');
+  var n = 0; for (var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n;
+}
 function a1_(r, c, nr, nc) {
   var s = colLetter_(c) + r;
   if ((nr || 1) > 1 || (nc || 1) > 1) s += ':' + colLetter_(c + (nc || 1) - 1) + (r + (nr || 1) - 1);
@@ -443,8 +448,14 @@ function resetNew_(ctx, kind) {
 function actUndo_(req) {
   var l = ledger_(), it;
   if (req.to) it = l.items.filter(function (x) { return x.n === parseInt(req.to); })[0];
-  else { for (var i = l.items.length - 1; i >= 0; i--) if (!l.items[i].undone && !l.items[i].isUndo) { it = l.items[i]; break; } }
-  if (!it) return { ok: false, error: '戻せる記録がありません' };
+  else {
+    // 「直前を戻す」は今の相手のファイルの直前だけ（台帳は全ファイル共通なので、別のファイルを戻さない。11/12 実機で踏んだ）
+    for (var i = l.items.length - 1; i >= 0; i--) {
+      var x = l.items[i];
+      if (!x.undone && !x.isUndo && (!req.target_id || x.id === req.target_id)) { it = x; break; }
+    }
+  }
+  if (!it) return { ok: false, error: req.target_id && !req.to ? '今の相手のファイルには、戻せる記録がありません（ws_undo(list=True) で全体の台帳）' : '戻せる記録がありません' };
   if (it.isNew && !it.sheets && !it.doc) return { ok: false, error: '新しく作ったファイルは undo では消しません（消すのは人です）: ' + it.name };
   var file = it.kind === 'doc' ? DocumentApp.openById(it.id) : SpreadsheetApp.openById(it.id);
   // 指紋：道具が書いた後に人が手で直していないか
@@ -668,9 +679,12 @@ SHELF['table.new'] = function (ctx, op) {
     var row = r.slice(); while (row.length < nc) row.push('');
     grid.push(row.slice(0, nc).map(function (v) { return typeof v === 'string' ? shiftFormula_(v, off) : v; }));
   });
-  var numCol = op.number ? colNum_(op.number) : 0;
+  // 列は見出しの名前でも列記号でも（手順書の約束どおり）
+  var colOf = function (ref) { var k = headers.map(String).indexOf(String(ref)); return k >= 0 ? k + 1 : colNum_(ref); };
+  var numCol = op.number ? colOf(op.number) : 0;
   if (numCol) for (var i = 1; i < grid.length; i++) grid[i][numCol - 1] = i;
-  var totalCols = (op.total || []).map(function (c) { return colNum_(c); });
+  var totalCols = (op.total || []).map(colOf);
+  totalCols.concat(numCol ? [numCol] : []).forEach(function (c) { if (c > nc) throw new ArgError('列「' + colLetter_(c) + '」は表の外です（見出しは ' + nc + ' 列）'); });
   if (sh) {
     // 同じ頼みの撃ち直し：中身が同じなら変更なし。違えば止める
     var same = false;
@@ -926,13 +940,13 @@ SHELF['summary'] = function (ctx, op) {
     var cur = dst.getLastRow() ? dst.getRange(1, 1, grid.length, grid[0].length).getFormulas() : [];
     var curV = dst.getLastRow() ? dst.getRange(1, 1, grid.length, grid[0].length).getValues() : [];
     var same = dst.getLastRow() === grid.length && grid.every(function (row, r2) { return row.every(function (v, c2) { return String(cur[r2][c2] || curV[r2][c2]) === String(v); }); });
-    ctx.curSheet = into;
+    ctx.curSheet = src.getName();  // 集計は元の表から作るおまけ。今のシートは元の表のまま（続く「並べ替えて」等が元の表に効くように）
     if (same) { note_(ctx, '集計シート「' + into + '」は最新です（変更なし）'); return; }
     guardDelete_(ctx, '集計シート「' + into + '」はすでにあり、中身が変わります（作り直します）');
     dst.clear();
   } else { dst = ctx.ss.insertSheet(into); ctx.createdSheets.push(into); }
   dst.getRange(1, 1, grid.length, grid[0].length).setValues(grid);
-  ctx.curSheet = into;
+  ctx.curSheet = src.getName();
   chg_(ctx, dst, a1_(1, 1, grid.length, grid[0].length), '「' + src.getName() + '」の ' + hdr[0] + ' ごとの集計（元の表を直すと追従）');
   tidyRange_(ctx, dst, null);
 };

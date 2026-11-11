@@ -338,7 +338,9 @@ class WorkspaceManager:
         if created and not tgt.get("id"):
             tgt = created
         if tgt.get("id"):
-            st["target"] = {k: tgt[k] for k in ("id", "name", "kind", "url", "sheet") if tgt.get(k)}
+            # 失敗して戻したときのシート名は、作りかけて消えたシートかもしれないので覚えない（11/12 実機で踏んだ）
+            keys = ("id", "name", "kind", "url", "sheet") if res.get("ok") else ("id", "name", "kind", "url")
+            st["target"] = {k: tgt[k] for k in keys if tgt.get(k)}
         fails = st.setdefault("fails", {})
         if res.get("ok"):
             for k in (key, tgt.get("id")):
@@ -479,7 +481,8 @@ class WorkspaceManager:
                 out.append(f"#{it['n']} {it['time'][5:16]} {it['target']} {it['what']}" + ("（戻し済み）" if it.get("undone") else ""))
             return "\n".join(out)
         st = self._load()
-        res = self._post({"action": "undo", "to": str(to or ""), "ok": bool(ok)})
+        res = self._post({"action": "undo", "to": str(to or ""), "ok": bool(ok),
+                          "target_id": (st.get("target") or {}).get("id", "")})
         t = res.get("target") or {}
         if res.get("ok"):
             if t.get("id"):
