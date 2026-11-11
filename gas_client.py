@@ -3941,7 +3941,7 @@ class GasClient:
             }
 
         # 1. 1-indexed 座標境界違反 (0以下の行/列や不正な範囲)
-        if re.search(r"coordinates or dimensions of the range are invalid|coordinates must be greater than or equal to 1|starting (?:column|row) of the range is too small|number of (?:rows|columns) in the range must be at least 1|Range coordinates must be positive", combined, re.IGNORECASE):
+        if re.search(r"coordinates or dimensions of the range are invalid|coordinates must be greater than or equal to 1|starting (?:column|row) of the range is too small|number of (?:rows|columns) in the range must be at least 1|Range coordinates must be positive|範囲の(?:開始行|開始列|行数|列数)の値が小さすぎます|範囲の座標またはサイズが無効|範囲の(?:行数|列数)は 1 以上|座標.{0,12}(?:無効|正の)", combined, re.IGNORECASE):
             return {
                 "code": "INDEX_ZERO_OR_NEGATIVE",
                 "name": "1-indexed 座標境界違反 (Invalid Coordinates)",
@@ -3951,7 +3951,7 @@ class GasClient:
             }
 
         # 2. 権限・OAuthスコープ不足
-        if re.search(r"you do not have permission to call|access denied|request is missing required authentication credential|insufficient permission|does not have permission to access|authorization is required", combined, re.IGNORECASE):
+        if re.search(r"you do not have permission to call|access denied|request is missing required authentication credential|insufficient permission|does not have permission to access|authorization is required|権限では .{0,80}呼び出すことができません|必要な権限|アクセスが拒否|承認が必要|権限がありません", combined, re.IGNORECASE):
             return {
                 "code": "PERMISSION_DENIED",
                 "name": "権限・OAuthスコープ不足 (Permission Denied)",
@@ -3961,7 +3961,7 @@ class GasClient:
             }
 
         # 3. 実行時間上限超過 (6分/30分タイムアウト)
-        if re.search(r"exceeded maximum execution time|script execution timed out|maximum execution time exceeded|timeout exceeded", combined, re.IGNORECASE):
+        if re.search(r"exceeded maximum execution time|script execution timed out|maximum execution time exceeded|timeout exceeded|最大実行時間を超|実行時間(?:の上限)?を超|タイムアウトしました", combined, re.IGNORECASE):
             return {
                 "code": "EXECUTION_TIMEOUT",
                 "name": "実行時間上限超過 (Execution Timeout)",
@@ -3971,7 +3971,7 @@ class GasClient:
             }
 
         # 4. シート / Range 未検出・Null参照
-        if re.search(r"range not found|sheet not found|cannot read propert(?:y|ies) of null \(reading '(?:getRange|getSheetByName|getLastRow|getDataRange|appendRow)'\)|cannot read property '(?:getRange|getSheetByName|getLastRow|getDataRange|appendRow)' of null", combined, re.IGNORECASE):
+        if re.search(r"range not found|sheet not found|シート(?:が|を)?見つかりません|範囲が見つかりません|cannot read propert(?:y|ies) of null \(reading '(?:getRange|getSheetByName|getLastRow|getDataRange|appendRow)'\)|cannot read property '(?:getRange|getSheetByName|getLastRow|getDataRange|appendRow)' of null", combined, re.IGNORECASE):
             return {
                 "code": "TARGET_NOT_FOUND",
                 "name": "シート / Range 未検出・Null参照 (Target Not Found)",
@@ -3991,7 +3991,7 @@ class GasClient:
             }
 
         # 6. Googleサービス一時障害 / レート制限超過
-        if re.search(r"service (?:spreadsheets|drive|gmail|docs) failed|service invoked too many times|service error|rate limit exceeded|too many requests|quota exceeded", combined, re.IGNORECASE):
+        if re.search(r"service (?:spreadsheets|drive|gmail|docs) failed|service invoked too many times|service error|rate limit exceeded|too many requests|quota exceeded|呼び出された回数が多すぎます|呼び出し回数が多すぎます|サービス.{0,20}(?:でエラー|に失敗)|(?:クォータ|割り当て)(?:を超|の上限)", combined, re.IGNORECASE):
             return {
                 "code": "SERVICE_FAILURE_OR_QUOTA",
                 "name": "Googleサービス一時障害 / レート制限超過 (Service Error / Quota Exceeded)",
@@ -4001,7 +4001,7 @@ class GasClient:
             }
 
         # 7. メソッド引数シグネチャ不整合
-        if re.search(r"parameters .* don't match the method signature|cannot find method|does not match method signature|invalid argument", combined, re.IGNORECASE):
+        if re.search(r"parameters .* don't match the method signature|cannot find method|does not match method signature|invalid argument|メソッド シグネチャと一致しません|メソッドのシグネチャと一致|引数が無効|パラメータ.{0,60}一致しません", combined, re.IGNORECASE):
             return {
                 "code": "INVALID_ARGUMENTS",
                 "name": "メソッド引数シグネチャ不整合 (Invalid Method Signature)",
@@ -4045,14 +4045,17 @@ class GasClient:
             }
 
         sid = script_id or "<script_id>"
-        mcp_code = f'patch_code(project="{sid}", file_name="{target_file}", search="{raw_code}", replace="<修正後コード>")'
-        cli_code = f'py gas.py patch {sid} {target_file} --search "{raw_code}" --replace "<修正後コード>"'
+        q = lambda v: json.dumps(v, ensure_ascii=False)
+        mcp_code = (f'patch_code(project={q(sid)}, filename={q(target_file)}, '
+                    f'target={q(raw_code)}, replacement="<修正後コード>")')
+        cli_code = f'py gas.py patch {sid} {q(target_file)} {q(raw_code)} "<修正後コード>"'
 
         mcp_func = ""
         cli_func = ""
         if target_func and target_func != "<anonymous>":
-            mcp_func = f'patch_function(project="{sid}", func_name="{target_func}", code="<新関数コード>")'
-            cli_func = f'py gas.py patch-func {sid} {target_func} {target_file}'
+            mcp_func = (f'patch_function(project={q(sid)}, filename={q(target_file)}, func_name={q(target_func)}, '
+                        f'target={q(raw_code)}, replacement="<修正後コード>")')
+            cli_func = f'py gas.py patch-func {sid} {q(target_file)} {target_func} {q(raw_code)} "<修正後コード>"'
 
         diag_code = diagnosis.get("code", "")
         if diag_code == "INDEX_ZERO_OR_NEGATIVE":
@@ -4093,7 +4096,7 @@ class GasClient:
             "formatted_quickfix": "\n".join(qf_lines)
         }
 
-    def run_function(self, script_id, func_name, args=None, keep_runner=False, cleanup=None, fast=False, timeout=30):
+    def run_function(self, script_id, func_name, args=None, keep_runner=False, cleanup=None, fast=False, timeout=30, force=False):
         if cleanup is not None:
             keep_runner = not cleanup
         """任意のGAS関数をリモート実行し、ログ（Logger.log）と戻り値・エラートレースを回収"""
@@ -4113,6 +4116,20 @@ class GasClient:
             args_list = [args]
 
         sid = self.resolve_script_id(script_id)
+
+        # 同じ関数を直して再実行しても通らない回数（verify_fix 以外の再実行でも数える）
+        _prev = self._last_run_context.get(sid, {})
+        _disk = self._load_last_run_context().get(sid)
+        if _disk and _disk.get("timestamp", 0) >= _prev.get("timestamp", 0):
+            _prev = _disk
+        _same = _prev.get("func_name") == func_name
+        _prev_count = int(_prev.get("verify_count", 0) or 0) if _same else 0
+        if _same and _prev_count >= self.VERIFY_FIX_MAX and not force:
+            msg = (f"⛔ [{func_name}] は {_prev_count} 回直して再実行しても通っていません。ここで止めます。\n"
+                   f"  直す前に戻すなら: list_backups で控えを選び restore_backup。続けるなら force=True。")
+            return {"ok": False, "status": "stopped", "function": func_name, "error": msg, "stopped": True}
+        _prev_failed = _same and _prev.get("ok") is False
+
         cached_runner = bool(fast and self._cache_data.get("deployments", {}).get(sid, {}).get("runner_installed"))
 
         if cached_runner and sid not in self._content_cache:
@@ -4324,6 +4341,7 @@ class GasClient:
                     "diagnosis": data.get("diagnosis"),
                     "trace": data.get("trace"),
                     "quickfix": data.get("quickfix"),
+                    "verify_count": 0 if data.get("ok") else (_prev_count + 1 if _prev_failed else 0),
                     "timestamp": time.time()
                 }
                 self._save_last_run_context()
@@ -4530,6 +4548,27 @@ class GasClient:
         for src in sources:
             project_fns.update(fn["name"] for fn in self._extract_functions_from_js(src))
 
+        # ライブラリ（中身が見えない）の呼び出し名
+        lib_symbols = set()
+        for f in files:
+            if f.get("type") == "JSON" and f.get("name") == "appsscript":
+                try:
+                    libs = (json.loads(f.get("source", "") or "{}").get("dependencies") or {}).get("libraries") or []
+                    lib_symbols.update(l.get("userSymbol") for l in libs if l.get("userSymbol"))
+                except Exception:
+                    pass
+
+        all_src = "\n".join(sources)
+        _kw = {"if", "for", "while", "switch", "catch", "function", "return", "typeof", "new"}
+
+        def defined_but_unreadable(name):
+            # const f = () => … / クラスのメソッド など、本体を切り出せない定義
+            if re.search(r"\b(?:const|let|var)\s+" + re.escape(name) + r"\s*=\s*(?:async\s*)?(?:function\b|\(|[A-Za-z_$][\w$]*\s*=>)", all_src):
+                return True
+            if name not in _kw and re.search(r"^\s*(?:static\s+|async\s+)*" + re.escape(name) + r"\s*\([^)]*\)\s*\{", all_src, re.M):
+                return True
+            return False
+
         def body_of(name):
             for src in sources:
                 span = self._find_function_span(src, name)
@@ -4546,14 +4585,26 @@ class GasClient:
             seen.add(name)
             body = body_of(name)
             if body is None:
+                # 見えないものは「あり」とみなす
+                found.append({"function": name, "kind": "本体が見つからない（調べきれないため、作用ありとみなす）"})
                 continue
             for pat, kind in self._SIDE_EFFECT_PATTERNS:
                 if re.search(pat, body):
                     found.append({"function": name, "kind": kind})
-            if depth < max_depth:
-                for callee in set(re.findall(r"\b([A-Za-z_$][\w$]*)\s*\(", body)):
-                    if callee in project_fns and callee not in seen:
+            for sym in lib_symbols:
+                if re.search(r"\b" + re.escape(sym) + r"\s*\.", body):
+                    found.append({"function": name, "kind": f"ライブラリ {sym} の呼び出し（中身が見えないため、作用ありとみなす）"})
+            callees = set(re.findall(r"\b([A-Za-z_$][\w$]*)\s*\(", body))
+            for callee in callees:
+                if callee in seen or callee == name:
+                    continue
+                if callee in project_fns:
+                    if depth < max_depth:
                         queue.append((callee, depth + 1))
+                    else:
+                        found.append({"function": name, "kind": f"呼び出しが深すぎて {callee} を調べきれない（作用ありとみなす）"})
+                elif callee not in project_fns and defined_but_unreadable(callee):
+                    queue.append((callee, depth + 1))
         return found
 
     VERIFY_FIX_MAX = 3
@@ -4648,7 +4699,8 @@ class GasClient:
                 formatted_lines.append(now_res["quickfix"]["formatted_quickfix"])
 
         # 回数を残す（run_function が直前の記録を書き替えた後に足す。通ったら 0 に戻す）
-        new_count = 0 if verdict == "RESOLVED" else prev_count + 1
+        cur_count = int(self._last_run_context.get(sid, {}).get("verify_count", 0) or 0)
+        new_count = 0 if verdict == "RESOLVED" else max(cur_count, prev_count + 1)
         if sid in self._last_run_context:
             self._last_run_context[sid]["verify_count"] = new_count
             self._save_last_run_context()
@@ -5608,7 +5660,7 @@ class GasClient:
                 if m_params:
                     params_str = (m_params.group(1) or "").strip()
                 else:
-                    m_params = re.search(r"(?:const|let|var)\s+" + re.escape(fn_name) + r"\s*=\s*(?:async\s*)?(?:function\s*\(([^)]*)\)|\(([^)]*)\)\s*=>)", fn_src)
+                    m_params = re.search(r"\b(?:const|let|var)\s+" + re.escape(fn_name) + r"\s*=\s*(?:async\s*)?(?:function\s*\(([^)]*)\)|\(([^)]*)\)\s*=>)", fn_src)
                     if m_params:
                         g1 = m_params.group(1)
                         g2 = m_params.group(2) if m_params.lastindex and m_params.lastindex >= 2 else None

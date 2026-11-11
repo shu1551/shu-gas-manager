@@ -13,6 +13,17 @@ from pathlib import Path
 from gas_client import GasClient
 import gas_mcp_server
 
+@pytest.fixture(autouse=True)
+def _isolate_last_run_file(tmp_path, monkeypatch):
+    """試験が本物の .last_run.json を読み書きしない（過去に汚した）"""
+    import sys
+    prop = property(lambda self: tmp_path / ".last_run.json")
+    monkeypatch.setattr(GasClient, "_last_run_file", prop)
+    cur = getattr(sys.modules.get("gas_client"), "GasClient", None)  # 試験の途中で reload されても効くように
+    if cur is not None and cur is not GasClient:
+        monkeypatch.setattr(cur, "_last_run_file", prop)
+
+
 @pytest.fixture
 def mock_client(tmp_path):
     clasprc = tmp_path / ".clasprc.json"
@@ -5271,10 +5282,10 @@ def test_generate_quickfix_all_cases(tmp_path):
         assert qf["target_file"] == "Code"
         assert qf["target_function"] == "processRow"
         assert qf["target_line"] == 15
-        assert 'patch_code(project="sid_123456789012345678901234567890123", file_name="Code", search="var val = sheet.getRange(i, 1).getValue();"' in qf["mcp_patch_code"]
-        assert 'py gas.py patch sid_123456789012345678901234567890123 Code --search "var val = sheet.getRange(i, 1).getValue();"' in qf["cli_patch_code"]
-        assert 'patch_function(project="sid_123456789012345678901234567890123", func_name="processRow"' in qf["mcp_patch_function"]
-        assert 'py gas.py patch-func sid_123456789012345678901234567890123 processRow Code' in qf["cli_patch_function"]
+        assert 'patch_code(project="sid_123456789012345678901234567890123", filename="Code", target="var val = sheet.getRange(i, 1).getValue();"' in qf["mcp_patch_code"]
+        assert 'py gas.py patch sid_123456789012345678901234567890123 "Code" "var val = sheet.getRange(i, 1).getValue();"' in qf["cli_patch_code"]
+        assert 'patch_function(project="sid_123456789012345678901234567890123", filename="Code", func_name="processRow"' in qf["mcp_patch_function"]
+        assert 'py gas.py patch-func sid_123456789012345678901234567890123 "Code" processRow' in qf["cli_patch_function"]
         assert "0始まりのインデックスを 1始まり (i + 1) に補正" in qf["suggested_fix"]
         assert "🔧 QuickFix 修正案内: [Code 行 15 (processRow)]" in qf["formatted_quickfix"]
 
@@ -5290,7 +5301,7 @@ def test_generate_quickfix_all_cases(tmp_path):
         qf_anon = client.generate_quickfix(sid, trace_anon, {"code": "TYPE_ERROR_UNDEFINED"})
         assert qf_anon["mcp_patch_function"] == ""
         assert qf_anon["cli_patch_function"] == ""
-        assert 'patch_code(project="sid_123456789012345678901234567890123", file_name="Utils"' in qf_anon["mcp_patch_code"]
+        assert 'patch_code(project="sid_123456789012345678901234567890123", filename="Utils"' in qf_anon["mcp_patch_code"]
         assert "オプショナルチェーン" in qf_anon["suggested_fix"]
 
         # 3. トレースなし / 空フレームの安全なフォールバック
@@ -5684,3 +5695,84 @@ def test_1111_verify_fix_restores_args_when_name_given(tmp_path):
         c.verify_fix(sid, func_name="f")
         assert run.call_args.kwargs["args"] == [42, "x"]
 
+
+
+# ===== 2026-11-11 Workspace 段0: 4つの目と安全弁の直し =====
+
+def test_ws0_diagnose_japanese_messages(tmp_path):
+    c = _vf_client(tmp_path)
+    cases = {
+        "範囲の開始行の値が小さすぎます。": "INDEX_ZERO_OR_NEGATIVE",
+        "範囲の座標またはサイズが無効です。": "INDEX_ZERO_OR_NEGATIVE",
+        "指定された権限では DocumentApp.create を呼び出すことができません。必要な権限: https://www.googleapis.com/auth/documents": "PERMISSION_DENIED",
+        "最大実行時間を超えました": "EXECUTION_TIMEOUT",
+        "シートが見つかりません": "TARGET_NOT_FOUND",
+        "1 日に呼び出された回数が多すぎます: メール": "SERVICE_FAILURE_OR_QUOTA",
+        "パラメータ (String,number) が SpreadsheetApp.Range.setValue のメソッド シグネチャと一致しません。": "INVALID_ARGUMENTS",
+    }
+    for msg, code in cases.items():
+        assert c.diagnose_gas_error(msg)["code"] == code, msg
+
+
+def test_ws0_quickfix_arg_names_match_real_tools(tmp_path):
+    import inspect
+    c = _vf_client(tmp_path)
+    trace = {"primary_frame": {"file": "Code", "function": "f", "line": 3, "code_line": 'var s = "a";'}}
+    qf = c.generate_quickfix("s" * 35, trace, {"code": "X"})
+    pc = inspect.signature(gas_mcp_server.patch_code).parameters
+    pf = inspect.signature(gas_mcp_server.patch_function).parameters
+    import re as _re
+    for call, params in ((qf["mcp_patch_code"], pc), (qf["mcp_patch_function"], pf)):
+        names = _re.findall(r"(\w+)=", call)
+        assert names and all(n in params for n in names), (call, names)
+    assert 'target="var s = \\"a\\";"' in qf["mcp_patch_code"]  # 引用符は壊れない
+
+
+def test_ws0_side_effects_unknown_means_yes(tmp_path):
+    c = _vf_client(tmp_path)
+    sid = "s" * 35
+    # 本体が見つからない
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "const f = () => { MailApp.sendEmail('a','b','c'); };"}]
+    assert c.detect_side_effects(sid, "f", files=files)
+    # アロー関数の呼び出し先
+    src = "function top() { helper(); }\nconst helper = () => { SpreadsheetApp.getActive().getSheets()[0].appendRow([1]); };"
+    r = c.detect_side_effects(sid, "top", files=[{"name": "Code", "type": "SERVER_JS", "source": src}])
+    assert r and r[0]["function"] == "helper"
+    # クラスのメソッド（本体を切り出せない）
+    src = "class A {\n  run() { MailApp.sendEmail('a','b','c'); }\n}\nfunction top2() { run(); }"
+    r = c.detect_side_effects(sid, "top2", files=[{"name": "Code", "type": "SERVER_JS", "source": src}])
+    assert r
+    # ライブラリ呼び出し
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function g() { return Lib.doIt(); }"},
+             {"name": "appsscript", "type": "JSON", "source": json.dumps({"dependencies": {"libraries": [{"userSymbol": "Lib"}]}})}]
+    r = c.detect_side_effects(sid, "g", files=files)
+    assert r and "ライブラリ" in r[0]["kind"]
+    # 深さ超え（a0→a1→…→a6）
+    src = "\n".join(f"function a{i}() {{ a{i+1}(); }}" for i in range(6)) + "\nfunction a6() { return 1; }"
+    r = c.detect_side_effects(sid, "a0", files=[{"name": "Code", "type": "SERVER_JS", "source": src}], max_depth=4)
+    assert r and "深すぎ" in r[0]["kind"]
+    # 純粋な関数は従来どおり「なし」
+    pure = "function p(a) { var x = Math.max(a, 1); return x + 1; }"
+    assert c.detect_side_effects(sid, "p", files=[{"name": "Code", "type": "SERVER_JS", "source": pure}]) == []
+
+
+def test_ws0_count_applies_to_plain_run_function(mock_client):
+    """patch→run_function を繰り返しても 3 回で止まる（verify_fix を通らなくても）"""
+    files = [{"name": "Code", "type": "SERVER_JS", "source": "function f() { return 1; }"}]
+    sid = "sidX"
+    mock_client.resolve_script_id = MagicMock(return_value=sid)
+    mock_client.get_content = MagicMock(side_effect=lambda s, use_cache=True: {"files": copy.deepcopy(files)})
+    mock_client._put_content = MagicMock()
+    mock_client._save_backup = MagicMock()
+    mock_client.clean_runner = MagicMock()
+    mock_client.resolve_webapp_url = MagicMock(return_value="https://script.google.com/macros/s/x/dev")
+    bad = {"status_code": 200, "data": {"ok": False, "error": "boom", "stack": "", "logs": []}}
+    mock_client.call_webapp = MagicMock(return_value=bad)
+    for _ in range(4):  # 初回失敗 + 再実行 3 回
+        assert mock_client.run_function(sid, "f").get("stopped") is None
+    assert mock_client.call_webapp.call_count == 4
+    res = mock_client.run_function(sid, "f")
+    assert res.get("stopped") is True and mock_client.call_webapp.call_count == 4
+    assert mock_client.run_function(sid, "f", force=True).get("stopped") is None
+    # 別の関数なら数え直し
+    assert mock_client.run_function(sid, "g").get("stopped") is None
