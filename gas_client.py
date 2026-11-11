@@ -462,7 +462,7 @@ class GasClient:
         "onSelectionChange", "onFormSubmit", "onChange", "authorize", "authorizeForge", "include"
     )
 
-    def __init__(self, clasprc_path=None, backup_dir=None, cache_file=None):
+    def __init__(self, clasprc_path=None, backup_dir=None, cache_file=None, aliases_file=None):
         if clasprc_path is None:
             clasprc_path = os.path.expanduser("~/.clasprc.json")
         self.clasprc_path = Path(clasprc_path)
@@ -472,6 +472,7 @@ class GasClient:
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
+        self._aliases_file = Path(aliases_file) if aliases_file else None
         self._token_data = None
         self._access_token = None
         self._token_expiry = 0
@@ -657,7 +658,13 @@ class GasClient:
 
     @property
     def aliases_file(self):
+        if self._aliases_file:
+            return self._aliases_file
         return Path(__file__).resolve().parent / "aliases.json"
+
+    @aliases_file.setter
+    def aliases_file(self, value):
+        self._aliases_file = Path(value) if value else None
 
     def _load_aliases(self):
         try:
@@ -3289,14 +3296,6 @@ class GasClient:
         target = script_id.strip() if script_id else ""
         if not target:
             raise ValueError("プロジェクト名またはスクリプトIDを指定してください。")
-
-        # 0. エイリアス（登録済みプロジェクト名）を最優先判定
-        aliases = self._load_aliases()
-        if name_or_id in aliases:
-            return aliases[name_or_id]
-        alias_matches = [aid for aname, aid in aliases.items() if name_or_id.lower() in aname.lower()]
-        if len(alias_matches) == 1:
-            return alias_matches[0]
 
         if not refresh and not dev:
             # 1. script_id がそのまま deployments キャッシュにあれば即返却 (0ms)

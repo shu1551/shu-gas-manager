@@ -30,6 +30,7 @@ def mock_client(tmp_path):
     with patch.object(GasClient, "get_access_token", return_value="dummy_access_token"):
         client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
         client.cache_file = tmp_path / ".cache.json"
+        client.aliases_file = tmp_path / "aliases.json"
         client._cache_data = {"projects": {}, "deployments": {}}
         yield client
 
@@ -1437,6 +1438,7 @@ def test_projects_list_disk_cache(tmp_path):
         # 1つ目のクライアント: API通信を行いディスクキャッシュへ保存
         client1 = GasClient(clasprc_path=str(clasprc), backup_dir=str(tmp_path / ".backups"))
         client1.cache_file = cache_file
+        client1.aliases_file = tmp_path / "aliases.json"
 
         mock_api_res = MagicMock()
         mock_api_res.status_code = 200
@@ -1456,6 +1458,7 @@ def test_projects_list_disk_cache(tmp_path):
         # 2つ目のクライアント: 新規インスタンスだが同じ .cache.json を読み、API通信0回で返却
         client2 = GasClient(clasprc_path=str(clasprc), backup_dir=str(tmp_path / ".backups"))
         client2.cache_file = cache_file
+        client2.aliases_file = tmp_path / "aliases.json"
         client2._cache_data = client2._load_cache()
         client2._request_with_retry = MagicMock()
 
