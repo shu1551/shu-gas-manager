@@ -5776,3 +5776,370 @@ def test_ws0_count_applies_to_plain_run_function(mock_client):
     assert mock_client.run_function(sid, "f", force=True).get("stopped") is None
     # 別の関数なら数え直し
     assert mock_client.run_function(sid, "g").get("stopped") is None
+
+
+# ===== 2026-11-11 Workspace マネージャー（gas_workspace.py / workspace_engine.gs / ws_* ツール） =====
+# 通信は全部偽物。本物の Google に出ようとしたら落ちる。状態ファイルは全部 tmp_path。
+
+import re
+import socket
+import gas_workspace as gw
+
+
+class _Resp:
+    def __init__(self, status=200, data=None, text=""):
+        self.status_code = status
+        self._d = data
+        self.text = text
+
+    def json(self):
+        return self._d
+
+
+class FakeWsClient:
+    """GasClient の代わり。エンジンへの POST と Drive の一覧だけを偽物で返す"""
+
+    def __init__(self):
+        self.posts = []          # エンジンに届いた荷物
+        self.script = []         # 次々に返す返事（dict / Exception / ("text", str)）
+        self.drive = {}          # 名前 → [{id,name,mimeType,...}]
+        self.meta = {}           # id → {id,name,mimeType}
+        self.put = []
+        self.created = []
+        self.deployed = []
+        self.engine_version = None
+
+    def _headers(self):
+        return {"Authorization": "Bearer fake"}
+
+    def _request_with_retry(self, method, url, headers=None, params=None, **kw):
+        if url.endswith("/drive/v3/files"):
+            q = params["q"]
+            if "google-apps.script" in q:
+                return _Resp(200, {"files": self.drive.get("__script__", [])})
+            m = re.search(r"name(?: contains |=)'((?:[^'\\]|\\.)*)'", q)
+            name = m.group(1).replace("\\'", "'") if m else ""
+            hits = list(self.drive.get(name, []))
+            if "contains" in q and not hits:
+                hits = [f for k, v in self.drive.items() if name in k for f in v]
+            return _Resp(200, {"files": hits})
+        fid = url.rsplit("/", 1)[-1]
+        if fid in self.meta:
+            return _Resp(200, self.meta[fid])
+        return _Resp(404, {})
+
+    def call_webapp(self, url, params=None, body=None, method="GET", key=None, timeout=15, use_auth=False, dev=False, no_rerun=False):
+        assert method == "POST" and use_auth and url.endswith("/dev"), url
+        self.posts.append(body)
+        item = self.script.pop(0) if self.script else {"ok": True, "target": {}, "changed": []}
+        if isinstance(item, Exception):
+            raise item
+        if isinstance(item, tuple):
+            return {"status_code": 200, "text": item[1]}
+        item = dict(item)
+        item.setdefault("version", self.engine_version)
+        return {"status_code": 200, "data": item}
+
+    def create_project(self, title):
+        self.created.append(title)
+        return {"scriptId": "S" * 40}
+
+    def _put_content(self, sid, files):
+        self.put.append((sid, files))
+
+    def deploy(self, sid, description=""):
+        self.deployed.append(sid)
+        return {"webAppUrl": "x"}
+
+    def resolve_webapp_url(self, sid, refresh=False, dev=False):
+        return "https://script.google.com/macros/s/AKfycbFAKE/exec"
+
+
+@pytest.fixture
+def ws_env(tmp_path, monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("本物の Google に出ようとしました（試験は通信を偽物にする決まり）")
+    monkeypatch.setattr(socket.socket, "connect", _boom)
+    monkeypatch.setattr(socket, "create_connection", _boom)
+    fc = FakeWsClient()
+    mgr = gw.WorkspaceManager(client=fc, state_path=tmp_path / ".ws_state.json")
+    fc.engine_version = mgr.engine_version()
+    st = {"engine_sid": "E" * 40, "engine_url": "https://script.google.com/macros/s/AKfycbFAKE/dev", "engine_ver": mgr.engine_version()}
+    mgr._save(st)
+    return mgr, fc, tmp_path
+
+
+SID_A = "A" * 44
+SID_B = "B" * 44
+OKRES = {"ok": True, "target": {"id": SID_A, "name": "見積書", "kind": "sheet", "url": "https://docs.google.com/spreadsheets/d/" + SID_A + "/edit", "sheet": "見積"},
+         "changed": ["見積!A1:D5 表を作成（3 行・合計行）"], "notes": [], "remaining": [], "backup": 7}
+TIDY = [{"shelf": "tidy"}]
+
+
+def _set_target(mgr, sid=SID_A, name="名簿"):
+    mgr._save(dict(mgr._load(), target={"id": sid, "name": name, "kind": "sheet"}))
+
+
+def test_ws_shelf_names_match_engine_source():
+    src = Path(gw.ENGINE_SOURCE).read_text(encoding="utf-8")
+    engine = set(re.findall(r"SHELF\['([\w.]+)'\]\s*=", src))
+    assert engine == set(gw.SHELVES), engine ^ set(gw.SHELVES)
+
+
+def test_ws_engine_scopes_are_sheets_and_docs_only(ws_env):
+    mgr, fc, _ = ws_env
+    manifest = json.loads(mgr._engine_files()[0]["source"])
+    assert manifest["oauthScopes"] == ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/documents"]
+    assert manifest["webapp"] == {"executeAs": "USER_DEPLOYING", "access": "MYSELF"}
+
+
+def test_ws_validate_ops(ws_env):
+    mgr, fc, _ = ws_env
+    with pytest.raises(gw.WorkspaceError, match="棚「nothing」はありません"):
+        mgr.validate_ops([{"shelf": "nothing"}])
+    with pytest.raises(gw.WorkspaceError, match="引数「colour」はありません"):
+        mgr.validate_ops([{"shelf": "format", "range": "A1", "colour": "red"}])
+    with pytest.raises(gw.WorkspaceError, match="「headers」が要ります"):
+        mgr.validate_ops([{"shelf": "table.new"}])
+    with pytest.raises(gw.WorkspaceError, match="どれかが要ります"):
+        mgr.validate_ops([{"shelf": "format"}])
+    with pytest.raises(gw.WorkspaceError, match="同じ ws_do にまとめられません"):
+        mgr.validate_ops([{"shelf": "tidy"}, {"shelf": "doc.style"}])
+    with pytest.raises(gw.WorkspaceError, match="行番号は 1 以上"):
+        mgr.validate_ops([{"shelf": "rows", "rows": [0]}])
+    with pytest.raises(gw.WorkspaceError, match="JSON として読めません"):
+        mgr.parse_ops("{not json")
+    assert mgr.parse_ops('{"shelf":"tidy"}') == [{"shelf": "tidy"}]
+    assert mgr.validate_ops([{"shelf": "doc.append", "markdown": "- a"}]) == "doc"
+
+
+def test_ws_do_reports_short_with_addresses_and_remembers_target(ws_env):
+    mgr, fc, tmp = ws_env
+    fc.script = [dict(OKRES)]
+    out = mgr.do(TIDY, target="new:見積書")
+    lines = out.splitlines()
+    assert lines[0] == "対象: 見積書 › 見積"
+    assert 3 <= len(lines) <= 5 and "見積!A1:D5" in out and "控え #7" in out and "ws_undo" in out
+    assert fc.posts[0]["target"] == {"new": "見積書", "kind": "sheet"}
+    st = mgr._load()
+    assert st["target"]["id"] == SID_A and st["target"]["sheet"] == "見積"
+    fc.script = [dict(OKRES)]
+    mgr.do(TIDY)   # target 省略 → 今の相手に撃つ
+    assert fc.posts[1]["target"]["id"] == SID_A and fc.posts[1]["target"]["sheet"] == "見積"
+    assert (tmp / ".ws_state.json").exists()
+
+
+def test_ws_do_without_target_and_state_says_so(ws_env):
+    mgr, fc, tmp = ws_env
+    with pytest.raises(gw.WorkspaceError, match="今の相手が決まっていません"):
+        mgr.do(TIDY)
+    assert fc.posts == []
+
+
+def test_ws_resolve_url_id_and_kind_mismatch(ws_env):
+    mgr, fc, _ = ws_env
+    fc.script = [dict(OKRES)]
+    mgr.do(TIDY, target=f"https://docs.google.com/spreadsheets/d/{SID_A}/edit#gid=0")
+    assert fc.posts[-1]["target"]["id"] == SID_A and fc.posts[-1]["target"]["kind"] == "sheet"
+    fc.meta[SID_B] = {"id": SID_B, "name": "議事録", "mimeType": gw.MIME_DOC}
+    with pytest.raises(gw.WorkspaceError, match="文書ですが、頼みの棚はシート用"):
+        mgr.do(TIDY, target=SID_B)
+    n = len(fc.posts)
+    fc.script = [{"ok": True, "target": {"id": SID_B, "name": "議事録", "kind": "doc", "url": "u"}, "changed": ["段落 3 番目 x"], "backup": 1}]
+    mgr.do([{"shelf": "doc.style"}], target=SID_B)
+    assert fc.posts[n]["target"]["kind"] == "doc"
+
+
+def test_ws_name_search_two_hits_stops_without_writing(ws_env):
+    mgr, fc, _ = ws_env
+    fc.drive["売上"] = [
+        {"id": SID_A, "name": "売上", "mimeType": gw.MIME_SHEET, "modifiedTime": "2026-11-01T10:00:00Z", "webViewLink": "https://x/a"},
+        {"id": SID_B, "name": "売上", "mimeType": gw.MIME_SHEET, "modifiedTime": "2026-10-01T10:00:00Z", "webViewLink": "https://x/b"},
+    ]
+    with pytest.raises(gw.WorkspaceError) as ei:
+        mgr.do(TIDY, target="売上")
+    assert "2 件" in str(ei.value) and "https://x/a" in str(ei.value) and "https://x/b" in str(ei.value)
+    assert fc.posts == []
+    fc.drive["売上"] = fc.drive["売上"][:1]
+    fc.script = [dict(OKRES)]
+    mgr.do(TIDY, target="売上")
+    assert fc.posts[0]["target"]["id"] == SID_A
+    with pytest.raises(gw.WorkspaceError, match="見つかりません"):
+        mgr.do(TIDY, target="存在しない名前")
+
+
+def test_ws_delete_without_ok_is_blocked_and_not_counted(ws_env):
+    mgr, fc, _ = ws_env
+    _set_target(mgr)
+    blocked = {"ok": False, "blocked": True, "error": "3行目「鈴木/営業」 を削除します（人の値を消すので、ok=True が要ります）",
+               "restored": True, "where": "棚 #1 rows", "target": {"id": SID_A, "name": "名簿", "kind": "sheet"}}
+    fc.script = [blocked, blocked, blocked, blocked, dict(OKRES)]
+    for _ in range(4):
+        out = mgr.do([{"shelf": "rows", "rows": [3]}])
+        assert "止めました" in out and "何も変えていません" in out
+    assert len(fc.posts) == 4 and all(p["ok"] is False for p in fc.posts)
+    out = mgr.do([{"shelf": "rows", "rows": [3]}], ok=True)
+    assert fc.posts[-1]["ok"] is True and "止めました" not in out
+
+
+def test_ws_failure_reports_restored_and_stops_after_three(ws_env):
+    mgr, fc, _ = ws_env
+    _set_target(mgr)
+    bad = {"ok": False, "error": "シート「ない」がありません。あるのは: 名簿", "where": "棚 #2 tidy", "restored": True,
+           "target": {"id": SID_A, "name": "名簿", "kind": "sheet"}}
+    fc.script = [bad, bad, bad]
+    outs = [mgr.do(TIDY) for _ in range(3)]
+    assert "戻した" in outs[0] and "棚 #2 tidy" in outs[0] and "1/3" in outs[0]
+    assert "3/3" in outs[2] and "次は止めます" in outs[2]
+    assert all(len(o.splitlines()) <= 5 for o in outs)
+    with pytest.raises(gw.WorkspaceError, match="3 回続けて通りませんでした"):
+        mgr.do(TIDY)
+    assert len(fc.posts) == 3
+    mgr._save(dict(mgr._load(), fails={}))
+    fc.script = [dict(OKRES)]
+    assert "失敗" not in mgr.do(TIDY)
+
+
+def test_ws_failure_after_creating_file_keeps_it_as_target(ws_env):
+    mgr, fc, _ = ws_env
+    fc.script = [{"ok": False, "error": "boom", "where": "棚 #1 table.new", "restored": True,
+                  "created": {"id": SID_B, "name": "新規", "kind": "sheet", "url": "https://x/new"},
+                  "target": {"id": SID_B, "name": "新規", "kind": "sheet", "url": "https://x/new"}}]
+    out = mgr.do(TIDY, target="new:新規")
+    assert "同じファイルに書きます" in out and "https://x/new" in out
+    assert mgr._load()["target"]["id"] == SID_B
+    fc.script = [dict(OKRES, target={"id": SID_B, "name": "新規", "kind": "sheet"})]
+    mgr.do(TIDY)   # target 省略＝作ったファイルに書く（2 個目を作らない）
+    assert fc.posts[-1]["target"]["id"] == SID_B and "new" not in fc.posts[-1]["target"]
+
+
+def test_ws_timeout_reuses_call_id_for_same_request(ws_env):
+    mgr, fc, _ = ws_env
+    _set_target(mgr)
+    fc.script = [TimeoutError("遅い"), dict(OKRES)]
+    with pytest.raises(gw.WorkspaceTimeout):
+        mgr.do(TIDY)
+    mgr.do(TIDY)   # 同じ頼み → 同じ番号
+    assert fc.posts[0]["call_id"] == fc.posts[1]["call_id"]
+    assert "pending" not in mgr._load()
+    fc.script = [dict(OKRES)]
+    mgr.do(TIDY)   # 成功の後は新しい番号
+    assert fc.posts[2]["call_id"] != fc.posts[1]["call_id"]
+    fc.script = [TimeoutError("遅い"), dict(OKRES)]
+    with pytest.raises(gw.WorkspaceTimeout):
+        mgr.do(TIDY)
+    mgr.do([{"shelf": "tidy", "range": "A1:B2"}])   # 別の頼みなら番号は使い回さない
+    assert fc.posts[3]["call_id"] != fc.posts[4]["call_id"]
+
+
+def test_ws_replayed_result_is_labelled(ws_env):
+    mgr, fc, _ = ws_env
+    _set_target(mgr)
+    fc.script = [dict(OKRES, replayed=True)]
+    assert "撃ち直さず" in mgr.do(TIDY)
+
+
+def test_ws_auth_needed_gives_three_step_message(ws_env):
+    mgr, fc, _ = ws_env
+    _set_target(mgr)
+    fc.script = [("text", "<html><head><title>Authorization needed</title></head></html>")]
+    with pytest.raises(gw.WorkspaceAuthNeeded) as ei:
+        mgr.do(TIDY)
+    msg = str(ei.value)
+    assert "/dev" in msg and "1." in msg and "2." in msg and "3." in msg and "もう一度頼んで" in msg
+    fc.script = [("text", "<html>Server Error</html>")]
+    with pytest.raises(gw.WorkspaceError, match="読めません"):
+        mgr.do(TIDY)
+
+
+def test_ws_engine_version_mismatch_reinstalls_once(ws_env):
+    mgr, fc, _ = ws_env
+    _set_target(mgr)
+    fc.script = [dict(OKRES, version="old"), dict(OKRES)]
+    mgr.do(TIDY)
+    assert len(fc.put) == 1 and fc.put[0][0] == "E" * 40
+    assert len(fc.posts) == 2
+    fc.script = [dict(OKRES, version="old"), dict(OKRES, version="old")]
+    mgr.do(TIDY)   # 版が毎回違っても無限に撃ち直さない
+
+
+def test_ws_install_engine_creates_project_when_missing(ws_env):
+    mgr, fc, tmp = ws_env
+    mgr._save({})
+    fc.drive["__script__"] = []
+    st = mgr.install_engine()
+    assert fc.created == ["shu-workspace-engine"] and fc.deployed == ["S" * 40]
+    assert st["engine_url"].endswith("/dev") and st["engine_sid"] == "S" * 40
+    files = fc.put[0][1]
+    assert [f["name"] for f in files] == ["appsscript", "Engine"]
+    assert mgr.engine_version() in files[1]["source"]
+    mgr._save({})
+    fc.drive["__script__"] = [{"id": "X" * 40, "name": "shu-workspace-engine"}]
+    fc.created.clear()
+    mgr.install_engine()
+    assert fc.created == []
+
+
+def test_ws_look_formats_sheet_and_doc(ws_env):
+    mgr, fc, _ = ws_env
+    fc.script = [{"ok": True, "target": {"id": SID_A, "name": "名簿", "kind": "sheet", "url": "https://x/a", "sheet": "名簿"},
+                  "sheets": [{"name": "名簿", "rows": 13, "cols": 4}],
+                  "table": {"header_row": 1, "first_col": "A", "last_col": "D", "data": "2-13", "total_row": None,
+                            "columns": [{"col": "A", "name": "No", "number": True}, {"col": "B", "name": "氏名", "number": False}]},
+                  "range": "A1:B2", "values": [["No", "氏名"], ["1", "佐藤"]], "formulas": [["", ""], ["", ""]]}]
+    fc.meta[SID_A] = {"id": SID_A, "name": "名簿", "mimeType": gw.MIME_SHEET}
+    out = mgr.look(target=SID_A, range="A1:B2")
+    assert out.startswith("対象: 名簿 › 名簿") and "明細 2-13 行目" in out and "合計行なし" in out and "A=No(数値)" in out and "佐藤" in out
+    assert mgr._load()["target"]["id"] == SID_A
+    fc.meta[SID_B] = {"id": SID_B, "name": "議事録", "mimeType": gw.MIME_DOC}
+    fc.script = [{"ok": True, "target": {"id": SID_B, "name": "議事録", "kind": "doc", "url": "https://x/b"}, "paragraphs": 5,
+                  "headings": [{"no": 0, "level": 1, "text": "議事録"}], "outline": ["0: P 議事録"]}]
+    out = mgr.look(target=SID_B)
+    assert "段落数 5" in out and "0:#議事録" in out
+    assert fc.posts[-1]["target"] == {"id": SID_B, "kind": "doc"}
+
+
+def test_ws_undo_list_needs_ok_and_success(ws_env):
+    mgr, fc, _ = ws_env
+    fc.script = [{"ok": True, "ledger": []}]
+    assert "まだありません" in mgr.undo(list=True)
+    fc.script = [{"ok": True, "ledger": [{"n": 3, "time": "2026-11-11 10:00:00", "target": "名簿", "kind": "sheet", "what": "rows・renumber", "undone": False}]}]
+    out = mgr.undo(list=True)
+    assert "#3" in out and "rows・renumber" in out
+    t = {"id": SID_A, "name": "名簿", "kind": "sheet", "url": "https://x/a"}
+    fc.script = [{"ok": False, "needs_ok": True, "error": "道具が書いた後に手で直した所があります（戻すと消えます）: 名簿。それでも戻すなら ok=True", "target": t}]
+    out = mgr.undo()
+    assert "止めました" in out and "手で直した所" in out
+    assert fc.posts[-1]["ok"] is False
+    fc.script = [{"ok": True, "undone": 3, "backup": 4, "what": "rows・renumber", "target": t}]
+    out = mgr.undo(ok=True)
+    assert "戻した: #3" in out and "控え #4" in out and fc.posts[-1]["ok"] is True
+    fc.script = [{"ok": False, "error": "戻せる記録がありません"}]
+    assert "戻せませんでした" in mgr.undo()
+
+
+def test_ws_state_files_stay_in_tmp(ws_env):
+    mgr, fc, tmp = ws_env
+    repo_state = Path(gw.HERE) / ".ws_state.json"
+    before = repo_state.stat().st_mtime if repo_state.exists() else None
+    fc.script = [dict(OKRES)]
+    mgr.do(TIDY, target="new:x")
+    after = repo_state.stat().st_mtime if repo_state.exists() else None
+    assert before == after
+    assert ".ws_state.json" in (Path(gw.HERE) / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_ws_mcp_tools_exist_and_are_short(ws_env):
+    mgr, fc, _ = ws_env
+    for name in ("ws_look", "ws_do", "ws_undo"):
+        fn = getattr(gas_mcp_server, name)
+        doc = (fn.__doc__ or "").strip().splitlines()
+        assert 1 <= len(doc) <= 5, (name, len(doc))
+    gas_mcp_server._ws = mgr
+    try:
+        fc.script = [dict(OKRES)]
+        assert "対象: 見積書" in gas_mcp_server.ws_do(ops=json.dumps(TIDY), target="new:見積書")
+        out = gas_mcp_server.ws_do(ops='[{"shelf":"nothing"}]')
+        assert out.startswith("棚「nothing」はありません") and "[ERROR]" not in out
+    finally:
+        gas_mcp_server._ws = None

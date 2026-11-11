@@ -32,12 +32,9 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 
 ## 3. GAS設計のベストプラクティス
 
-1. **スプレッドシート操作の配列一括処理**:
-   - ループ内での `.getValue()` / `.setValue()` 連打は避け、`getValues()` で配列取得・メモリ上で処理した後に `setValues()` で一括代入を行います。
-2. **外部通信の並列化**:
-   - 複数リクエストを行う場合は、ループ内の直列 `UrlFetchApp.fetch()` ではなく `UrlFetchApp.fetchAll()` の活用を検討します。
-3. **プロパティ・キャッシュの最適化**:
-   - プロパティへの頻繁なアクセスはループ外で `getProperties()` を取得するなど、通信回数を抑えます。
+1. **スプレッドシート**: ループ内の `getValue/setValue` 連打を避け、`getValues()` → メモリ処理 → `setValues()` で一括代入。
+2. **外部通信**: 直列の `UrlFetchApp.fetch()` ではなく `fetchAll()` を検討。
+3. **プロパティ・キャッシュ**: ループ外で `getProperties()` を取るなど通信回数を抑える。
 
 ## 4. 主要ツール一覧
 
@@ -57,3 +54,6 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 | **別名登録 (エイリアス)** | `set_alias(name, script_id)` / `list_aliases()` | スプレッドシート付属スクリプトの登録・確認 |
 | **バージョン復元** | `diff_version` / `restore_version(project, version_number)` | 差分確認・スナップショット復元 |
 | **環境診断** | `setup_check(open_browser=False)` | 認証・API接続状態の確認 |
+| **スプレッドシート・文書を作る/直す** | `ws_look` / `ws_do(ops, target, ok)` / `ws_undo` | 棚（型）の JSON を撃つ。書く前に控え・失敗なら自動で戻す。手順は `WORKSPACE.md` |
+
+> Workspace（`ws_*`）: 初回だけブラウザでエンジンの許可が要ります。人の値を消す手は「消してよい」の承認があるときだけ `ok=True`。
