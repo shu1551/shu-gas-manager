@@ -6938,7 +6938,8 @@ sandbox.self = sandbox;
             raise RuntimeError(f"プロジェクトの作成に失敗しました ({res.status_code}): {res.text}")
         data = res.json()
         sid = data["scriptId"]
-        self._project_cache[title] = sid
+        self._cache_data.setdefault("projects", {})[title] = sid
+        self._save_cache()
         return data
 
     def _bundle_web_page(self, url: str, timeout: int = 15) -> dict:
