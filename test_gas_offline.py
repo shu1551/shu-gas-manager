@@ -4421,3 +4421,265 @@ def test_ten_cycle_deep_audit_improvements(tmp_path):
         with patch.object(client, "_request_with_retry", return_value=fake_res):
             client._put_content(sid, [{"name": "Code", "type": "SERVER_JS", "source": ""}])
         assert len(client._content_cache) <= 33
+
+
+def test_cycle1_deploy_and_version_boundaries(tmp_path):
+    """第2ラウンド サイクル1: バージョン管理・デプロイの境界値点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+    # 1. get_version_content / restore_version の不正バージョン番号防御
+    for bad_v in [0, -1, "abc", ""]:
+        with pytest.raises(ValueError, match="無効なバージョン番号"):
+            client.get_version_content(sid, bad_v)
+        with pytest.raises(ValueError, match="無効なバージョン番号"):
+            client.restore_version(sid, bad_v)
+
+    # 2. _pick_latest_deployment での不正・HEAD・非数値 versionNumber 耐性
+    deps = [
+        {"deploymentId": "dep1", "deploymentConfig": {"versionNumber": "HEAD"}},
+        {"deploymentId": "dep2", "deploymentConfig": {"versionNumber": 0}},
+        {"deploymentId": "dep3", "deploymentConfig": {"versionNumber": -5}},
+        {"deploymentId": "dep4", "deploymentConfig": {"versionNumber": "3", "description": "v3"}, "updateTime": "2026-01-01T00:00:00Z"},
+        {"deploymentId": "dep5", "deploymentConfig": {"versionNumber": 5, "description": "v5"}, "updateTime": "2026-01-02T00:00:00Z"},
+    ]
+    chosen = GasClient._pick_latest_deployment(deps)
+    assert chosen is not None
+    assert chosen["deploymentId"] == "dep5"
+
+    # 全て不正な場合 None
+    bad_deps = [
+        {"deploymentId": "dep1", "deploymentConfig": {"versionNumber": "HEAD"}},
+        {"deploymentId": "dep2", "deploymentConfig": {"versionNumber": "none"}},
+    ]
+    assert GasClient._pick_latest_deployment(bad_deps) is None
+
+
+def test_cycle2_benchmark_and_dock_extremes(tmp_path):
+    """第2ラウンド サイクル2: ベンチマーク＆健康採点アルゴリズムの極限ケース点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # 1. _compute_dock_score_and_prescriptions の極限ケース（構文エラー100件、None入力など）
+        score, grade, pres = client._compute_dock_score_and_prescriptions(
+            sid,
+            {"syntax_errors": [{"file": "F", "line": i, "error": "err"} for i in range(100)]}
+        )
+        assert score == 0
+        assert grade == "D"
+        assert len(pres) == 100
+
+        # None や空辞書が渡されてもクラッシュしない
+        score, grade, pres = client._compute_dock_score_and_prescriptions(sid, None, xr=None, contracts=None)
+        assert score == 100
+        assert grade == "A"
+        assert pres == []
+
+        # 2. benchmark_function の極限入力耐性（iterations="abc", target_ms=-10, duration_ms=None）
+        with patch.object(client, "run_function", return_value={"status": "success", "result": 123, "duration_ms": None, "logs": None}), \
+             patch.object(client, "diagnose", return_value={"performance_warnings": [], "syntax_errors": [], "issues_count": 0}), \
+             patch.object(client, "list_functions", return_value=[]):
+            res = client.benchmark_function(sid, "testFunc", iterations="abc", target_ms=-10, expected=123)
+            assert res["status"] == "success"
+            assert res["verdict"] == "PASS"
+            assert res["score"] == 100
+            assert res["logs"] == []
+            assert res["avg_ms"] == 0.0
+
+
+def test_cycle3_recipe_scaffold_skin_safety(tmp_path):
+    """第2ラウンド サイクル3: レシピ棚・骨格部品・スキン注入の安全性点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # 1. design_skin で preset=None / filename=None の安全動作
+        dummy_html = "<html><head></head><body><h1>Hello</h1></body></html>"
+        with patch.object(client, "get_content", return_value={"files": [{"name": "Index", "type": "HTML", "source": dummy_html}]}), \
+             patch.object(client, "patch_code", return_value={"status": "success"}):
+            res = client.design_skin(sid, filename=None, preset=None)
+            assert res["success"] is True
+            assert res["preset"] == "linear"
+
+        # 2. gas_scaffold の未知ID防御
+        with pytest.raises(ValueError, match="見つかりません"):
+            client.gas_scaffold(sid, scaffold_id="UNKNOWN_99")
+
+
+def test_cycle4_call_webapp_edge_cases(tmp_path):
+    """第2ラウンド サイクル4: Webアプリ実行（doGet / doPost / パラメータ）のエッジケース点検"""
+    from gas_client import GasClient
+    import requests
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        # 1. body が list の場合に json=body で正しく渡される
+        fake_res = MagicMock()
+        fake_res.status_code = 200
+        fake_res.headers = {"Content-Type": "application/json"}
+        fake_res.json.return_value = {"ok": True}
+        fake_res.text = '{"ok": true}'
+
+        with patch.object(client, "_request_with_retry", return_value=fake_res) as mock_req:
+            res = client.call_webapp("https://script.google.com/macros/s/xxx/exec", method="POST", body=[1, 2, 3], timeout="abc")
+            assert res["status_code"] == 200
+            assert res["data"] == {"ok": True}
+            mock_req.assert_called_once()
+            _, kwargs = mock_req.call_args
+            assert kwargs["json"] == [1, 2, 3]
+            assert kwargs["timeout"] == 15
+
+        # 2. タイムアウト時の TimeoutError 送出
+        with patch.object(client, "_request_with_retry", side_effect=requests.Timeout("Connection timed out")):
+            with pytest.raises(TimeoutError, match="Webアプリの呼び出しがタイムアウトしました"):
+                client.call_webapp("https://script.google.com/macros/s/xxx/exec", method="GET")
+
+
+def test_cycle5_runner_integrity_and_cleanup(tmp_path):
+    """第2ラウンド サイクル5: 実行ランナー（__gm_exec_）の完全性＆残留点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # 1. run_function 実行時に例外が発生しても finally で clean_runner が呼ばれる
+        dummy_files = [{"name": "Code", "type": "SERVER_JS", "source": "function hello() { return 'ok'; }"}]
+        with patch.object(client, "get_content", return_value={"files": dummy_files}), \
+             patch.object(client, "_put_content"), \
+             patch.object(client, "resolve_webapp_url", return_value="https://script.google.com/macros/s/xxx/exec"), \
+             patch.object(client, "call_webapp", side_effect=RuntimeError("Webapp crash")), \
+             patch.object(client, "clean_runner") as mock_clean:
+            with pytest.raises(RuntimeError, match="Webapp crash"):
+                client.run_function(sid, "hello")
+            mock_clean.assert_called_once_with(sid)
+
+
+def test_cycle6_python_ast_nested_and_async(tmp_path):
+    """第2ラウンド サイクル6: Pythonコード操作（py_outline, py_func, py_patch）の AST 点検"""
+    from gas_client import GasClient
+    sample_code = """
+import asyncio
+
+@decorator1
+@decorator2
+async def top_async_func():
+    return 1
+
+class Outer:
+    def outer_method(self):
+        return 2
+
+    class Inner:
+        def inner_method(self):
+            return 3
+"""
+    py_file = tmp_path / "sample.py"
+    py_file.write_text(sample_code, encoding="utf-8")
+
+    # 1. py_outline でネストクラス・非同期関数・デコレータが正しく抽出される
+    outline = GasClient.py_outline(str(py_file))
+    names = [item["name"] for item in outline]
+    assert "top_async_func" in names
+    assert "Outer.outer_method" in names
+    assert "Outer.Inner.inner_method" in names
+
+    # 2. py_patch_function でネストクラスメソッドの安全置換
+    res = GasClient.py_patch_function(str(py_file), "Outer.Inner.inner_method", target="return 3", replacement="return 999")
+    assert res["status"] == "success"
+    assert "return 999" in py_file.read_text(encoding="utf-8")
+
+
+def test_cycle7_clone_web_and_bundle_resilience(tmp_path):
+    """第2ラウンド サイクル7: 外部依存処理（BeautifulSoup, URL結合）の例外連鎖点検"""
+    from gas_client import GasClient
+    import requests
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        # 1. 不正 URL スキーマの即時拒否
+        with pytest.raises(ValueError, match="有効な HTTP/HTTPS URL"):
+            client._bundle_web_page("ftp://invalid.com/file")
+        with pytest.raises(ValueError, match="有効な HTTP/HTTPS URL"):
+            client._bundle_web_page("")
+
+        # 2. 循環リダイレクト時の適切なエラー連鎖
+        with patch("requests.get", side_effect=requests.exceptions.TooManyRedirects("Exceeded 30 redirects.")):
+            with pytest.raises(RuntimeError, match="循環リダイレクトまたはリダイレクト上限超過"):
+                client._bundle_web_page("https://example.com/loop")
+
+
+def test_cycle9_windows_reserved_names_and_invalid_chars(tmp_path):
+    """第2ラウンド サイクル9: Windows ファイルシステム特有の禁則文字・パス点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+        sid = "1" * 35
+
+        # 1. add_file での CON, PRN, AUX やコロン等の拒否
+        for bad_name in ["CON", "prn", "AUX", "NUL", "COM1", "file:name", "bad*name"]:
+            with pytest.raises(ValueError, match="Windows禁則文字または予約デバイス名"):
+                client.add_file(sid, bad_name, "js")
+
+
+def test_cycle10_google_api_quota_and_rate_limit(tmp_path):
+    """第2ラウンド サイクル10: Google API クォータ枯渇・レートリミット模擬点検"""
+    from gas_client import GasClient
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        # 1. 403 RESOURCE_EXHAUSTED 発生時に自動バックオフリトライされる
+        res_403 = MagicMock()
+        res_403.status_code = 403
+        res_403.text = '{"error": {"status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded"}}'
+        res_403.headers = {"Retry-After": "1"}
+
+        res_200 = MagicMock()
+        res_200.status_code = 200
+        res_200.text = '{"ok": true}'
+        res_200.headers = {}
+
+        with patch.object(client.session, "request", side_effect=[res_403, res_200]) as mock_req, \
+             patch("time.sleep") as mock_sleep:
+            res = client._request_with_retry("GET", "https://script.googleapis.com/test", max_retries=2)
+            assert res.status_code == 200
+            assert mock_req.call_count == 2
+            mock_sleep.assert_called_once_with(1.0)
+
+
+
+
+
+
+
+
+
+

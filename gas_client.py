@@ -660,7 +660,7 @@ class GasClient:
         return self._access_token
 
     def _request_with_retry(self, method, url, max_retries=3, retry_5xx=True, **kwargs):
-        """429 (Too Many Requests), 500番台エラー、および 401 (失効トークン) 時に自動再試行"""
+        """429 (Too Many Requests), 403 (レートリミット超過), 500番台エラー、および 401 (失効トークン) 時に自動再試行"""
         kwargs.setdefault("timeout", 20)
         backoff = 1.0
         for attempt in range(max_retries + 1):
@@ -675,10 +675,15 @@ class GasClient:
                         kwargs["headers"]["Authorization"] = f"Bearer {self.get_access_token()}"
                     continue
 
-                is_retryable = (res.status_code == 429) or (retry_5xx and res.status_code >= 500 and res.status_code != 501)
+                is_quota_403 = (res.status_code == 403 and any(k in res.text for k in ("RATE_LIMIT_EXCEEDED", "RESOURCE_EXHAUSTED", "rateLimitExceeded")))
+                is_retryable = (res.status_code == 429) or is_quota_403 or (retry_5xx and res.status_code >= 500 and res.status_code != 501)
                 if is_retryable:
                     if attempt < max_retries:
-                        time.sleep(backoff)
+                        retry_after = res.headers.get("Retry-After")
+                        wait_sec = backoff
+                        if retry_after and retry_after.strip().isdigit():
+                            wait_sec = max(backoff, min(float(retry_after), 30.0))
+                        time.sleep(wait_sec)
                         backoff *= 2
                         continue
                 return res
@@ -2910,6 +2915,13 @@ class GasClient:
         base_name = base_name.strip()
         if not base_name or base_name in (".js", ".html", ".gs"):
             raise ValueError(f"無効なファイル名です: '{filename}'")
+        win_reserved = {
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        }
+        if base_name.upper() in win_reserved or any(c in base_name for c in '<>:"/\\|?*'):
+            raise ValueError(f"Windows禁則文字または予約デバイス名が含まれるため使用できません: '{filename}'")
         if base_name == "appsscript":
             raise ValueError("マニフェストファイル 'appsscript' は新規追加できません。更新する場合は replace_file または patch_code を使用してください。")
 
@@ -3160,7 +3172,11 @@ class GasClient:
         """プロジェクトの不変バージョン一覧を取得（最新順）"""
         sid = self.resolve_script_id(script_id)
         url = f"https://script.googleapis.com/v1/projects/{sid}/versions"
-        params = {"pageSize": min(limit, 100)}
+        try:
+            page_size = max(1, min(int(limit), 100))
+        except (TypeError, ValueError):
+            page_size = 20
+        params = {"pageSize": page_size}
         res = self._request_with_retry("GET", url, headers=self._headers(), params=params, timeout=15)
         if res.status_code != 200:
             raise RuntimeError(f"バージョン一覧の取得に失敗しました ({res.status_code}): {res.text}")
@@ -3178,7 +3194,12 @@ class GasClient:
     def get_version_content(self, script_id, version_number):
         """指定バージョンの全ファイルコンテンツを取得（不変のためメモリ＆ディスクキャッシュ）"""
         sid = self.resolve_script_id(script_id)
-        v_num = int(version_number)
+        try:
+            v_num = int(version_number)
+            if v_num <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise ValueError(f"無効なバージョン番号です: {version_number} (1以上の整数を指定してください)")
         if not hasattr(self, "_version_content_cache"):
             self._version_content_cache = {}
 
@@ -3214,6 +3235,13 @@ class GasClient:
         """指定バージョン（省略時は最新デプロイバージョン）と現在の HEAD コードを差分比較"""
         sid = self.resolve_script_id(script_id)
         target_ver = version_number
+        if target_ver is not None:
+            try:
+                target_ver = int(target_ver)
+                if target_ver <= 0:
+                    target_ver = None
+            except (TypeError, ValueError):
+                target_ver = None
 
         if not target_ver:
             deps = self.list_deployments(sid)
@@ -3283,7 +3311,12 @@ class GasClient:
     def restore_version(self, script_id, version_number, filename="", deploy=False, deploy_desc="Restored from version"):
         """Googleクラウド上の指定バージョンから全体または特定ファイルを復元"""
         sid = self.resolve_script_id(script_id)
-        v_num = int(version_number)
+        try:
+            v_num = int(version_number)
+            if v_num <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise ValueError(f"無効なバージョン番号です: {version_number} (1以上の整数を指定してください)")
         ver_content = self.get_version_content(sid, v_num)
         ver_files = ver_content.get("files", [])
 
@@ -3353,10 +3386,18 @@ class GasClient:
         使っている新しい入口が古い版のまま残る（2026-11-05 G-クイック-マイドライブで実際に起きた）。
         同じ版を指す入口が複数あれば、更新日時の新しい方を選ぶ。
         """
-        versioned = [d for d in deployments if d.get("deploymentConfig", {}).get("versionNumber")]
+        def _get_vnum(d):
+            val = d.get("deploymentConfig", {}).get("versionNumber")
+            try:
+                n = int(val)
+                return n if n > 0 else 0
+            except (TypeError, ValueError):
+                return 0
+
+        versioned = [d for d in deployments if _get_vnum(d) > 0]
         if not versioned:
             return None
-        return max(versioned, key=lambda d: (int(d["deploymentConfig"]["versionNumber"]), d.get("updateTime", "")))
+        return max(versioned, key=lambda d: (_get_vnum(d), str(d.get("updateTime", ""))))
 
     def get_deployments(self, script_id, use_cache=True):
         """プロジェクトのデプロイ一覧を取得（TTL 300秒のメモリ＆ディスクキャッシュ対応）"""
@@ -3643,6 +3684,11 @@ class GasClient:
         if not url or not url.strip():
             raise ValueError("WebアプリURLを指定してください。")
 
+        try:
+            timeout_val = max(1, int(timeout or 15))
+        except (TypeError, ValueError):
+            timeout_val = 15
+
         if dev:
             use_auth = True
 
@@ -3671,22 +3717,25 @@ class GasClient:
                 raise ValueError("認証つきで呼べるのは Apps Script の Web アプリだけです (https://script.google.com/ または https://script.googleusercontent.com/)")
         headers = self._headers() if use_auth else {}
 
-        method = method.upper()
-        if method == "POST":
-            # POST は重複送信・二重実行（副作用）を避けるため retry_5xx=False, max_retries=0 で送信
-            if isinstance(body, dict):
-                res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=body, headers=headers, timeout=timeout, allow_redirects=True)
-            elif isinstance(body, str):
-                # JSON 文字列の場合は json パラメータで送信して Content-Type: application/json を保証
-                try:
-                    parsed_json = json.loads(body)
-                    res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=parsed_json, headers=headers, timeout=timeout, allow_redirects=True)
-                except Exception:
-                    res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body.encode("utf-8"), headers=headers, timeout=timeout, allow_redirects=True)
+        method_str = (method or "GET").upper().strip()
+        try:
+            if method_str == "POST":
+                # POST は重複送信・二重実行（副作用）を避けるため retry_5xx=False, max_retries=0 で送信
+                if isinstance(body, (dict, list)):
+                    res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=body, headers=headers, timeout=timeout_val, allow_redirects=True)
+                elif isinstance(body, str):
+                    # JSON 文字列の場合は json パラメータで送信して Content-Type: application/json を保証
+                    try:
+                        parsed_json = json.loads(body)
+                        res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=parsed_json, headers=headers, timeout=timeout_val, allow_redirects=True)
+                    except Exception:
+                        res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body.encode("utf-8"), headers=headers, timeout=timeout_val, allow_redirects=True)
+                else:
+                    res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body, headers=headers, timeout=timeout_val, allow_redirects=True)
             else:
-                res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body, headers=headers, timeout=timeout, allow_redirects=True)
-        else:
-            res = self._request_with_retry("GET", url, max_retries=3, retry_5xx=True, params=req_params, headers=headers, timeout=timeout, allow_redirects=True)
+                res = self._request_with_retry("GET", url, max_retries=3, retry_5xx=True, params=req_params, headers=headers, timeout=timeout_val, allow_redirects=True)
+        except requests.Timeout as e:
+            raise TimeoutError(f"Webアプリの呼び出しがタイムアウトしました ({timeout_val}秒): {e}")
 
         content_type = res.headers.get("Content-Type", "")
         text = res.text
@@ -3856,11 +3905,21 @@ class GasClient:
                 first_js["source"] = first_js["source"].rstrip() + "\n\n" + stub + runner_code
                 installed = True
 
-            self._save_backup(sid, content)
-            self._put_content(sid, mod_files)
-            if keep_runner:
-                self._cache_data.setdefault("deployments", {}).setdefault(sid, {})["runner_installed"] = True
-                self._save_cache()
+            installed_by_us = False
+            try:
+                self._save_backup(sid, content)
+                self._put_content(sid, mod_files)
+                installed_by_us = True
+                if keep_runner:
+                    self._cache_data.setdefault("deployments", {}).setdefault(sid, {})["runner_installed"] = True
+                    self._save_cache()
+            except Exception:
+                if installed_by_us and not keep_runner:
+                    try:
+                        self.clean_runner(sid)
+                    except Exception:
+                        pass
+                raise
         elif keep_runner:
             if not self._cache_data.get("deployments", {}).get(sid, {}).get("runner_installed"):
                 self._cache_data.setdefault("deployments", {}).setdefault(sid, {})["runner_installed"] = True
@@ -3936,8 +3995,14 @@ class GasClient:
             raise ValueError("ベンチマーク対象の関数名を指定してください。")
 
         sid = self.resolve_script_id(script_id)
-        iters = max(1, min(int(iterations or 1), 10))
-        target_ms = max(1, int(target_ms or 1000))
+        try:
+            iters = max(1, min(int(iterations or 1), 10))
+        except (TypeError, ValueError):
+            iters = 1
+        try:
+            target_ms = max(1, int(target_ms or 1000))
+        except (TypeError, ValueError):
+            target_ms = 1000
 
         has_expected = expected is not None and expected != ""
         expected_val = expected
@@ -3957,10 +4022,16 @@ class GasClient:
             last_res = res if isinstance(res, dict) else {"status": "error", "error": str(res)}
             if last_res.get("status") != "success":
                 exec_error = last_res.get("error") or "Unknown execution error"
-                logs = last_res.get("logs", [])
+                raw_logs = last_res.get("logs")
+                logs = raw_logs if isinstance(raw_logs, list) else ([str(raw_logs)] if raw_logs is not None else [])
                 break
-            durations.append(float(last_res.get("duration_ms", 0)))
-            logs = last_res.get("logs", [])
+            try:
+                d_val = float(last_res.get("duration_ms", 0) or 0)
+            except (TypeError, ValueError):
+                d_val = 0.0
+            durations.append(d_val)
+            raw_logs = last_res.get("logs")
+            logs = raw_logs if isinstance(raw_logs, list) else ([str(raw_logs)] if raw_logs is not None else [])
 
         diag = self.diagnose(sid)
         perf_warnings = diag.get("performance_warnings", [])
@@ -4158,7 +4229,17 @@ class GasClient:
             norm_rel = rel_path.replace("\\", "/")
             remote_rel_paths.add(norm_rel)
 
-            target_file = (local_path / norm_rel).resolve()
+            safe_rel = norm_rel
+            if os.name == "nt":
+                p_obj = Path(norm_rel)
+                win_res = {"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"}
+                if p_obj.stem.upper() in win_res or any(c in p_obj.name for c in '<>:"|?*'):
+                    safe_name = re.sub(r'[<>:"|?*]', '_', p_obj.name)
+                    if Path(safe_name).stem.upper() in win_res:
+                        safe_name = f"_{safe_name}"
+                    safe_rel = str(p_obj.parent / safe_name).replace("\\", "/")
+
+            target_file = (local_path / safe_rel).resolve()
             try:
                 target_file.relative_to(local_path)
             except ValueError:
@@ -5121,6 +5202,9 @@ class GasClient:
 
     def _compute_dock_score_and_prescriptions(self, project_label, diag, xr=None, contracts=None):
         """GASドックの健康点（基礎点100点からの減点・ランクA〜D）および直す手（処方箋）を算出"""
+        diag = diag if isinstance(diag, dict) else {}
+        xr = xr if isinstance(xr, dict) else None
+        contracts = contracts if isinstance(contracts, dict) else None
         score = 100
         score -= len(diag.get("syntax_errors", [])) * 30
 
@@ -5163,7 +5247,7 @@ class GasClient:
         notice_deduct = min(notice_count * 3, 15)
         score -= notice_deduct
 
-        score = max(0, score)
+        score = max(0, min(100, score))
 
         if score >= 90:
             grade = "A"
@@ -6262,16 +6346,27 @@ sandbox.self = sandbox;
         import requests
         from bs4 import BeautifulSoup
 
+        url = (url or "").strip()
+        if not re.match(r"^https?://", url, re.IGNORECASE):
+            raise ValueError("有効な HTTP/HTTPS URL を指定してください。")
+
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
-        resp = requests.get(url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+        except requests.exceptions.TooManyRedirects as e:
+            raise RuntimeError(f"Webページの取得に失敗しました (循環リダイレクトまたはリダイレクト上限超過): {e}")
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Webページの取得に失敗しました: {e}")
+
         resp.encoding = resp.apparent_encoding or "utf-8"
         raw_html = resp.text
 
         soup = BeautifulSoup(raw_html, "html.parser")
-        title = soup.title.string.strip() if soup.title and soup.title.string else "Cloned Web App"
+        raw_title = soup.title.string.strip() if soup.title and soup.title.string else "Cloned Web App"
+        title = re.sub(r'[\r\n]+', ' ', raw_title).replace('*/', '* /')
 
         inlined_css = 0
         inlined_js = 0
@@ -7643,11 +7738,11 @@ function doGet() {{
         files = content.get('files', []) if isinstance(content, dict) else []
         
         target_file = None
-        clean_name = filename.replace(".html", "").replace(".HTML", "")
+        clean_name = (filename or "Index").replace(".html", "").replace(".HTML", "")
         for f in files:
             fname = f.get("name", "")
             ftype = f.get("type", "")
-            if ftype == "HTML" and (fname.lower() == clean_name.lower() or fname.lower() == filename.lower()):
+            if ftype == "HTML" and (fname.lower() == clean_name.lower() or fname.lower() == (filename or "Index").lower()):
                 target_file = f
                 break
         if not target_file:
@@ -7660,7 +7755,7 @@ function doGet() {{
         
         target_fname = target_file.get("name", "")
         html_src = target_file.get("source", "")
-        preset_key = preset.lower().strip()
+        preset_key = (preset or "linear").lower().strip()
         if preset_key in ("saas", "modern"): preset_key = "linear"
         if preset_key in ("apple", "acrylic"): preset_key = "glass"
         if preset_key in ("minimal", "clean"): preset_key = "notion"
@@ -7957,7 +8052,13 @@ function doGet() {{
                 patches[0]["replacement"] = patches[0]["replacement"] + new_light_block
 
         if not patches:
-            return {"success": False, "error": "HTML内に <style> または :root タグが見つかりませんでした"}
+            match_head_close = re.search(r'</head>', html_src, re.IGNORECASE)
+            if match_head_close:
+                head_tag = match_head_close.group(0)
+                new_block = f"  <style>\n    :root {{{selected['dark_body']}\n    }}\n  </style>\n{head_tag}"
+                patches.append({"target": head_tag, "replacement": new_block})
+            else:
+                return {"success": False, "error": "HTML内に <style>, :root または </head> タグが見つかりませんでした"}
 
         res = self.patch_code(script_id=sid, filename=target_fname, patches=json.dumps(patches), deploy=deploy)
         if res.get("status") != "success" and not res.get("success"):
@@ -8883,13 +8984,14 @@ function doGet() {{
                 "is_method": is_method
             })
 
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                _add_item(node.name, node, is_method=False)
-            elif isinstance(node, ast.ClassDef):
-                for sub in node.body:
-                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        _add_item(f"{node.name}.{sub.name}", sub, is_method=True)
+        def _walk_nodes(body_nodes, prefix=""):
+            for node in body_nodes:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    _add_item(f"{prefix}{node.name}", node, is_method=bool(prefix))
+                elif isinstance(node, ast.ClassDef):
+                    _walk_nodes(node.body, prefix=f"{prefix}{node.name}.")
+
+        _walk_nodes(tree.body)
 
         items.sort(key=lambda x: x["start_line"])
         return items
@@ -8957,7 +9059,7 @@ function doGet() {{
             occurrences = 1
         elif target:
             tgt = target
-            rep = replacement
+            rep = replacement if replacement is not None else ""
             if tgt not in func_source:
                 if "\r\n" in func_source and "\r\n" not in tgt:
                     tgt = tgt.replace("\n", "\r\n")

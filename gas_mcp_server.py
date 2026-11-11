@@ -759,7 +759,7 @@ def list_versions(project: str, limit: int = 20) -> str:
 
 @mcp.tool()
 @safe_tool
-def diff_version(project: str, version_number: int = None, filename: str = "") -> str:
+def diff_version(project: str, version_number: int | None = None, filename: str = "") -> str:
     """本番バージョン（または指定した不変バージョン）と現在の最新HEADコードの差分を比較します。
     「本番と最新作業コードの間にどんな差分があるか」を一発で確認できます。
 
@@ -1414,7 +1414,7 @@ def trace_rpc(
 def diff_behavior(
     project: str,
     target: str = "",
-    version: int = None,
+    version: int | None = None,
     filename: str = "Index"
 ) -> str:
     """REA find_changed_behavior 思想:
