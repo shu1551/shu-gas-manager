@@ -4372,3 +4372,52 @@ def test_robustness_cycle_improvements(tmp_path, monkeypatch):
         assert (sid, "file1", "sig1") not in client._dock_cache
         assert (sid, "file1", "sig1") not in client._xray_cache
         assert ("other_sid", "sig2") in client._diag_cache
+
+
+def test_ten_cycle_deep_audit_improvements(tmp_path):
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir))
+
+        # 1. アトミック保存の検証
+        test_file = tmp_path / "atomic.json"
+        client._atomic_json_dump(test_file, {"foo": "bar"}, indent=2)
+        assert test_file.exists()
+        assert json.loads(test_file.read_text(encoding="utf-8")) == {"foo": "bar"}
+
+        # 2. _match_file の余白トリムと空判定
+        files = [{"name": "Code", "type": "SERVER_JS", "source": "function test() {}"}]
+        assert client._match_file(files, "  Code.gs  ")["name"] == "Code"
+        with pytest.raises(ValueError, match="検索対象のファイル名を指定してください"):
+            client._match_file(files, "   ")
+        with pytest.raises(ValueError, match="プロジェクト内にファイルが存在しません"):
+            client._match_file([], "Code")
+
+        # 3. restore_backup / diff_backup のパストラバーサル防御
+        sid = "1" * 35
+        with pytest.raises(ValueError, match="パストラバーサル防止"):
+            client.restore_backup(sid, "../../outside.json")
+        with pytest.raises(ValueError, match="パストラバーサル防止"):
+            client.diff_backup(sid, backup_file="../../outside.json")
+
+        # 4. patch_code で replacement=None が渡されてもクラッシュしない
+        with patch.object(client, "get_content", return_value={"files": [{"name": "Code", "type": "SERVER_JS", "source": "const a = 10;"}]}), \
+             patch.object(client, "_save_backup", return_value=tmp_path / "dummy.json"), \
+             patch.object(client, "_put_content"), \
+             patch.object(client, "_validate_syntax", return_value="valid"):
+            res = client.patch_code(sid, "Code", target="const a = 10;", replacement=None)
+            assert res["status"] == "success"
+
+        # 5. _content_cache のサイズ上限（32件）
+        for i in range(40):
+            client._content_cache[f"sid_{i}"] = (time.time(), {"files": []})
+        fake_res = MagicMock()
+        fake_res.status_code = 200
+        fake_res.content = b'{"files": []}'
+        fake_res.json.return_value = {"files": []}
+        with patch.object(client, "_request_with_retry", return_value=fake_res):
+            client._put_content(sid, [{"name": "Code", "type": "SERVER_JS", "source": ""}])
+        assert len(client._content_cache) <= 33

@@ -519,10 +519,28 @@ class GasClient:
             pass
         return {"projects": {}, "deployments": {}, "token": {}, "syntax_hashes": []}
 
+    @staticmethod
+    def _atomic_json_dump(path, data, indent=None):
+        """テンポラリファイル書き込み＋アトミック置換による耐クラッシュ・排他安全保存"""
+        target = Path(path)
+        tmp_path = target.parent / f"{target.name}.tmp.{os.getpid()}"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                if indent is not None:
+                    json.dump(data, f, ensure_ascii=False, indent=indent)
+                else:
+                    json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp_path, target)
+        except Exception:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except Exception:
+                pass
+
     def _save_cache(self):
         try:
-            with open(self.cache_file, "w", encoding="utf-8") as f:
-                json.dump(self._cache_data, f, ensure_ascii=False, indent=2)
+            self._atomic_json_dump(self.cache_file, self._cache_data, indent=2)
         except Exception:
             pass
 
@@ -550,8 +568,7 @@ class GasClient:
     def _save_disk_content_cache(self, data):
         try:
             p = self._disk_content_cache_file
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
+            self._atomic_json_dump(p, data)
             self._disk_cache_mem = copy.deepcopy(data)
             self._disk_cache_mtime = p.stat().st_mtime
         except Exception:
@@ -695,8 +712,7 @@ class GasClient:
 
     def _save_aliases(self, aliases):
         try:
-            with open(self.aliases_file, "w", encoding="utf-8") as f:
-                json.dump(aliases, f, ensure_ascii=False, indent=2)
+            self._atomic_json_dump(self.aliases_file, aliases, indent=2)
         except Exception:
             pass
 
@@ -888,6 +904,8 @@ class GasClient:
                 ts = entry.get("ts", 0)
                 if now - ts < 86400 and "content" in entry:
                     c_data = entry["content"]
+                    while len(self._content_cache) >= 32:
+                        self._content_cache.pop(next(iter(self._content_cache)), None)
                     self._content_cache[sid] = (ts, copy.deepcopy(c_data))
                     self._synced_sids.add(sid)
                     return copy.deepcopy(c_data)
@@ -917,6 +935,8 @@ class GasClient:
             raise RuntimeError(f"コンテンツの取得に失敗しました ({res.status_code}): {res.text}")
         data = res.json()
         now = time.time()
+        while len(self._content_cache) >= 32:
+            self._content_cache.pop(next(iter(self._content_cache)), None)
         self._content_cache[sid] = (now, copy.deepcopy(data))
         self._synced_sids.add(sid)
         disk_cache = self._load_disk_content_cache()
@@ -973,6 +993,11 @@ class GasClient:
 
     def _match_file(self, files, filename):
         """ファイル名または拡張子付き指定からプロジェクト内ファイルを一意特定"""
+        if not files:
+            raise ValueError("プロジェクト内にファイルが存在しません。")
+        if not filename or not str(filename).strip():
+            raise ValueError("検索対象のファイル名を指定してください。")
+        filename = str(filename).strip()
         base_name, ext = os.path.splitext(filename)
         ext_lower = ext.lower()
 
@@ -1223,7 +1248,7 @@ class GasClient:
             else:
                 masked_chars.append(' ' * (e - s))
         masked_source = "".join(masked_chars)
-        if len(self._tokenize_cache) >= 64:
+        while len(self._tokenize_cache) >= 64:
             self._tokenize_cache.pop(next(iter(self._tokenize_cache)), None)
         self._tokenize_cache[cache_key] = (source, list(tokens), masked_source)
         return tokens, masked_source
@@ -1406,7 +1431,7 @@ class GasClient:
                     })
 
         funcs.sort(key=lambda x: x["start_line"])
-        if len(self._extract_funcs_cache) >= 64:
+        while len(self._extract_funcs_cache) >= 64:
             self._extract_funcs_cache.pop(next(iter(self._extract_funcs_cache)), None)
         self._extract_funcs_cache[cache_key] = (source, [dict(item) for item in funcs])
         return funcs
@@ -1544,7 +1569,7 @@ class GasClient:
             tgt = item.get("target", "")
             if not tgt:
                 raise ValueError("置換対象の文字列（target）を指定してください。")
-            rep = item.get("replacement", "")
+            rep = "" if item.get("replacement") is None else str(item.get("replacement", ""))
             rep_all = item.get("replace_all", replace_all)
 
             # CRLF / LF 自動救済
@@ -2668,6 +2693,8 @@ class GasClient:
         res_json = res.json() if res.content else {}
         now = time.time()
         c_dict = copy.deepcopy(res_json if "files" in res_json else {"files": cleaned_files})
+        while len(self._content_cache) >= 32:
+            self._content_cache.pop(next(iter(self._content_cache)), None)
         self._content_cache[sid] = (now, copy.deepcopy(c_dict))
         self._synced_sids.add(sid)
         disk_cache = self._load_disk_content_cache()
@@ -2738,7 +2765,7 @@ class GasClient:
             tgt = item.get("target", "")
             if not tgt:
                 raise ValueError("置換対象の文字列（target）を指定してください。")
-            rep = item.get("replacement", "")
+            rep = "" if item.get("replacement") is None else str(item.get("replacement", ""))
             rep_all = item.get("replace_all", replace_all)
 
             # 改行コードの差異（CRLF / LF）自動救済
@@ -2971,7 +2998,11 @@ class GasClient:
         sid = self.resolve_script_id(script_id)
         target_path = Path(backup_file)
         if not target_path.is_absolute():
-            target_path = self.backup_dir / backup_file
+            target_path = (self.backup_dir / backup_file).resolve()
+            try:
+                target_path.relative_to(self.backup_dir.resolve())
+            except ValueError:
+                raise ValueError(f"不正なバックアップパスが指定されました（パストラバーサル防止）: {backup_file}")
 
         if not target_path.exists():
             raise FileNotFoundError(f"バックアップファイルが見つかりません: {target_path}")
@@ -3048,7 +3079,11 @@ class GasClient:
 
         target_path = Path(target_bak)
         if not target_path.is_absolute():
-            target_path = self.backup_dir / target_bak
+            target_path = (self.backup_dir / target_bak).resolve()
+            try:
+                target_path.relative_to(self.backup_dir.resolve())
+            except ValueError:
+                raise ValueError(f"不正なバックアップパスが指定されました（パストラバーサル防止）: {target_bak}")
 
         if not target_path.exists():
             raise FileNotFoundError(f"バックアップファイルが見つかりません: {target_path}")
@@ -5079,7 +5114,7 @@ class GasClient:
         diag_res["grade"] = grade
         diag_res["prescriptions"] = prescriptions
         if not is_mocked_diag:
-            if len(self._diag_cache) >= 32:
+            while len(self._diag_cache) >= 32:
                 self._diag_cache.pop(next(iter(self._diag_cache)), None)
             self._diag_cache[(sid, files_sig)] = copy.deepcopy(diag_res)
         return diag_res
@@ -5379,7 +5414,7 @@ class GasClient:
             "prescriptions": prescriptions,
             "markdown_report": md_report
         }
-        if len(self._dock_cache) >= 32:
+        while len(self._dock_cache) >= 32:
             self._dock_cache.pop(next(iter(self._dock_cache)), None)
         self._dock_cache[dock_key] = copy.deepcopy(dock_res)
         if not is_mocked:
@@ -6200,7 +6235,7 @@ sandbox.self = sandbox;
             },
             "markdown_report": md_report
         }
-        if len(self._xray_cache) >= 32:
+        while len(self._xray_cache) >= 32:
             self._xray_cache.pop(next(iter(self._xray_cache)), None)
         self._xray_cache[xray_key] = copy.deepcopy(xray_res)
         return xray_res
