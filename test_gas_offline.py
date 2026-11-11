@@ -4287,3 +4287,28 @@ def test_edge_cases_and_robustness(mock_client, tmp_path):
     push_res = mock_client.push("mock_sid", local_dir=str(tmp_path), force=True)
     assert push_res["status"] == "success"
     assert "Code.gs" in push_res["changed_files"]
+
+
+def test_corrupted_cache_resilience_and_blank_script_id(tmp_path):
+    clasprc = tmp_path / ".clasprc.json"
+    clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+
+    # 1. 不正なキャッシュ内容 (list型) でも初期化クラッシュしない
+    bad_cache = tmp_path / "bad_cache.json"
+    bad_cache.write_text("[]", encoding="utf-8")
+
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(clasprc_path=str(clasprc), backup_dir=str(backup_dir), cache_file=str(bad_cache))
+        assert isinstance(client._cache_data, dict)
+
+        # 2. 空白のみのプロジェクト指定は即座に ValueError
+        with pytest.raises(ValueError, match="プロジェクト名またはスクリプトIDを指定してください"):
+            client.resolve_script_id("   ")
+
+        with pytest.raises(ValueError, match="プロジェクト名またはスクリプトIDを指定してください"):
+            client.resolve_script_id("\t\n")
+
+        # 3. 前後の余白付きスクリプトIDは安全にトリム解決される
+        long_id = "1" * 35
+        assert client.resolve_script_id(f"  {long_id}  ") == long_id

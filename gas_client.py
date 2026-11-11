@@ -512,7 +512,9 @@ class GasClient:
         try:
             if self.cache_file.exists():
                 with open(self.cache_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
         except Exception:
             pass
         return {"projects": {}, "deployments": {}, "token": {}, "syntax_hashes": []}
@@ -537,9 +539,10 @@ class GasClient:
                     return copy.deepcopy(self._disk_cache_mem)
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                self._disk_cache_mem = copy.deepcopy(data)
-                self._disk_cache_mtime = mtime
-                return data
+                if isinstance(data, dict):
+                    self._disk_cache_mem = copy.deepcopy(data)
+                    self._disk_cache_mtime = mtime
+                    return data
         except Exception:
             pass
         return {}
@@ -683,7 +686,9 @@ class GasClient:
         try:
             if self.aliases_file.exists():
                 with open(self.aliases_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
         except Exception:
             pass
         return {}
@@ -801,25 +806,26 @@ class GasClient:
 
     def resolve_script_id(self, name_or_id):
         """プロジェクト名またはスクリプトIDから正規の scriptId を解決"""
-        if not name_or_id:
+        target = str(name_or_id).strip() if name_or_id else ""
+        if not target:
             raise ValueError("プロジェクト名またはスクリプトIDを指定してください。")
 
         # 0. エイリアス（登録済みプロジェクト名）を最優先判定
         aliases = self._load_aliases()
-        if name_or_id in aliases:
-            return aliases[name_or_id]
-        alias_matches = [aid for aname, aid in aliases.items() if name_or_id.lower() in aname.lower()]
+        if target in aliases:
+            return aliases[target]
+        alias_matches = [aid for aname, aid in aliases.items() if target.lower() in aname.lower()]
         if len(alias_matches) == 1:
             return alias_matches[0]
 
         # 30文字以上の英数字記号はスクリプトIDとみなす
-        if len(name_or_id) >= 30 and re.match(r"^[A-Za-z0-9_-]+$", name_or_id):
-            return name_or_id
+        if len(target) >= 30 and re.match(r"^[A-Za-z0-9_-]+$", target):
+            return target
 
         # 最速パス: 既に解決済みのプロジェクト名がキャッシュにあれば Drive API / list_projects を完全スキップして 0ms で即返却
         is_lp_mocked = hasattr(self.list_projects, "_mock_name") or hasattr(self.list_projects, "mock") or "Mock" in type(self.list_projects).__name__
         if not is_lp_mocked:
-            cached_id = self._cache_data.get("projects", {}).get(name_or_id)
+            cached_id = self._cache_data.get("projects", {}).get(target)
             if cached_id:
                 return cached_id
 
@@ -827,10 +833,10 @@ class GasClient:
         projects = self.list_projects(limit=100)
 
         # 1. 完全一致の検索
-        exact_matches = [p for p in projects if p.get("name") == name_or_id]
+        exact_matches = [p for p in projects if p.get("name") == target]
         if len(exact_matches) == 1:
             p = exact_matches[0]
-            self._cache_data.setdefault("projects", {})[name_or_id] = p["id"]
+            self._cache_data.setdefault("projects", {})[target] = p["id"]
             self._save_cache()
             return p["id"]
         elif len(exact_matches) > 1:
@@ -838,22 +844,22 @@ class GasClient:
             raise ValueError(f"プロジェクト名が完全に一致する候補が複数あります ({len(exact_matches)}件):\n" + "\n".join(candidates))
 
         # 2. 部分一致の検索
-        partial_matches = [p for p in projects if name_or_id.lower() in p.get("name", "").lower()]
+        partial_matches = [p for p in projects if target.lower() in p.get("name", "").lower()]
         if len(partial_matches) == 1:
             p = partial_matches[0]
-            self._cache_data.setdefault("projects", {})[name_or_id] = p["id"]
+            self._cache_data.setdefault("projects", {})[target] = p["id"]
             self._save_cache()
             return p["id"]
         elif len(partial_matches) > 1:
             candidates = [f"- {p['name']} (ID: {p['id']})" for p in partial_matches]
-            raise ValueError(f"プロジェクト名 '{name_or_id}' に部分一致する候補が複数あります ({len(partial_matches)}件):\n" + "\n".join(candidates) + "\n名前をより具体的に指定するか、スクリプトIDを直接指定してください。")
+            raise ValueError(f"プロジェクト名 '{target}' に部分一致する候補が複数あります ({len(partial_matches)}件):\n" + "\n".join(candidates) + "\n名前をより具体的に指定するか、スクリプトIDを直接指定してください。")
 
         # 3. 一覧で見つからない場合、ローカルキャッシュに完全一致キーがあれば救済利用
-        cached_id = self._cache_data.get("projects", {}).get(name_or_id)
+        cached_id = self._cache_data.get("projects", {}).get(target)
         if cached_id:
             return cached_id
 
-        raise ValueError(f"指定されたプロジェクトが見つかりません: '{name_or_id}'")
+        raise ValueError(f"指定されたプロジェクトが見つかりません: '{target}'")
 
     def get_content(self, script_id, use_cache=True):
         """プロジェクト内の全ファイルコンテンツを取得（メモリ・ディスクキャッシュ＆404時再試行対応）"""
@@ -2970,6 +2976,8 @@ class GasClient:
 
         with open(target_path, "r", encoding="utf-8") as f:
             bak_content = json.load(f)
+        if not isinstance(bak_content, dict):
+            raise ValueError(f"バックアップファイルの内容が不正です: {target_path}")
         bak_files = bak_content.get("files", [])
 
         current_content = self.get_content(sid, use_cache=False)
@@ -3033,6 +3041,8 @@ class GasClient:
 
         with open(target_path, "r", encoding="utf-8") as f:
             bak_content = json.load(f)
+        if not isinstance(bak_content, dict):
+            raise ValueError(f"バックアップファイルの内容が不正です: {target_path}")
         bak_files = bak_content.get("files", [])
 
         current_content = self.get_content(sid, use_cache=True)

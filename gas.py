@@ -779,11 +779,15 @@ def main():
                 print(f"本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})")
 
         elif args.command == "batch":
-            if Path(args.ops_json_or_file).exists():
-                with open(args.ops_json_or_file, "r", encoding="utf-8") as f:
-                    ops_data = json.load(f)
-            else:
-                ops_data = json.loads(args.ops_json_or_file)
+            try:
+                if Path(args.ops_json_or_file).exists():
+                    with open(args.ops_json_or_file, "r", encoding="utf-8") as f:
+                        ops_data = json.load(f)
+                else:
+                    ops_data = json.loads(args.ops_json_or_file)
+            except Exception as e:
+                print(f"[ERROR] batch 操作 JSON の解析に失敗しました: {e}\n例: '[{{\"file\":\"Code\",\"op\":\"patch\",\"target\":\"a\",\"replacement\":\"b\"}}]'", file=sys.stderr)
+                sys.exit(1)
 
             res = client.batch_patch(args.project, ops_data, force=args.force, dry_run=args.dry_run, deploy=args.deploy, fast=args.fast)
             prefix = "[DRY-RUN]" if res.get("status") == "dry_run" else "[SUCCESS]"
