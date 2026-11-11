@@ -627,21 +627,27 @@ function tidyRange_(ctx, sh, rangeA1) {
   full.setVerticalAlignment('middle');
   var hd = sh.getRange(t.headerRow, t.firstCol, 1, nc);
   hd.setFontWeight('bold').setBackground(STYLE.headBg).setFontColor(STYLE.headFg).setHorizontalAlignment('center').setWrap(true);
-  for (var ci = t.firstCol; ci <= t.lastCol; ci++) {
-    var cnt = t.lastData - t.firstData + 1;
-    if (cnt < 1) continue;
-    var body = sh.getRange(t.firstData, ci, cnt, 1);
-    if (isNoCol_(t, ci)) { body.setHorizontalAlignment('center'); continue; }
-    var vals = body.getValues().map(function (x) { return x[0]; });
-    var nums = vals.filter(function (v) { return typeof v === 'number'; });
-    var dates = vals.filter(function (v) { return Object.prototype.toString.call(v) === '[object Date]'; });
-    var forms = body.getFormulas().map(function (x) { return x[0]; }).filter(function (f) { return f; }).length;
-    var nonEmpty = vals.filter(function (v) { return !isBlank_(v); }).length;
-    if (nonEmpty && (nums.length + (forms && !nums.length ? 0 : 0)) / nonEmpty > 0.5) {
-      var dec = nums.some(function (v) { return v % 1 !== 0; });
-      var rg = t.totalRow ? sh.getRange(t.firstData, ci, t.totalRow - t.firstData + 1, 1) : body;
-      rg.setNumberFormat(dec ? STYLE.numFmtDec : STYLE.numFmt).setHorizontalAlignment('right');
-    } else if (nonEmpty && dates.length / nonEmpty > 0.5) body.setNumberFormat(STYLE.dateFmt).setHorizontalAlignment('center');
+  var cnt = t.lastData - t.firstData + 1;
+  if (cnt >= 1) {
+    // 表の値は findTable_ が 1 回で読んだもの（t.vals）を使う。書式は範囲ごとの配列で一括して書く
+    var rows = (t.totalRow ? t.totalRow : t.lastData) - t.firstData + 1;
+    var bodyRg = sh.getRange(t.firstData, t.firstCol, rows, nc);
+    var nf = bodyRg.getNumberFormats(), al = bodyRg.getHorizontalAlignments();
+    for (var ci = t.firstCol; ci <= t.lastCol; ci++) {
+      var k = ci - t.firstCol, vals = [];
+      for (var r = t.firstData; r <= t.lastData; r++) vals.push(t.vals[r - 1][ci - 1]);
+      var fmt = null, align = null;
+      if (isNoCol_(t, ci)) align = 'center';
+      else {
+        var nums = vals.filter(function (v) { return typeof v === 'number'; });
+        var dates = vals.filter(function (v) { return Object.prototype.toString.call(v) === '[object Date]'; });
+        var nonEmpty = vals.filter(function (v) { return !isBlank_(v); }).length;
+        if (nonEmpty && nums.length / nonEmpty > 0.5) { fmt = nums.some(function (v) { return v % 1 !== 0; }) ? STYLE.numFmtDec : STYLE.numFmt; align = 'right'; }
+        else if (nonEmpty && dates.length / nonEmpty > 0.5) { fmt = STYLE.dateFmt; align = 'center'; }
+      }
+      for (var rr = 0; rr < rows; rr++) { if (fmt) nf[rr][k] = fmt; if (align) al[rr][k] = align; }
+    }
+    bodyRg.setNumberFormats(nf).setHorizontalAlignments(al);
   }
   if (t.totalRow) sh.getRange(t.totalRow, t.firstCol, 1, nc).setFontWeight('bold').setBackground(STYLE.totalBg);
   // 列幅：中身に合わせる（上限・下限つき）
@@ -675,8 +681,17 @@ SHELF['seiri'] = function (ctx, op) {
   }
   if (fixed.length) {
     // 式のセルは触らず、値のセルだけ書く
-    for (var r2 = 0; r2 < vals.length; r2++) for (var c2 = 0; c2 < vals[r2].length; c2++)
-      if (!forms[r2][c2]) { var cell = sh.getRange(t.headerRow + r2, t.firstCol + c2); if (cell.getValue() !== vals[r2][c2]) cell.setValue(vals[r2][c2]); }
+    // 直したセルだけを、列ごとに縦に連続した範囲にまとめて setValues（1 セルずつ書かない）
+    var changedSet = {}; fixed.forEach(function (a) { changedSet[a] = 1; });
+    for (var c2 = 0; c2 < vals[0].length; c2++) {
+      var r2 = 0;
+      while (r2 < vals.length) {
+        if (!changedSet[a1_(t.headerRow + r2, t.firstCol + c2)]) { r2++; continue; }
+        var r3 = r2; while (r3 + 1 < vals.length && changedSet[a1_(t.headerRow + r3 + 1, t.firstCol + c2)]) r3++;
+        sh.getRange(t.headerRow + r2, t.firstCol + c2, r3 - r2 + 1, 1).setValues(vals.slice(r2, r3 + 1).map(function (row) { return [row[c2]]; }));
+        r2 = r3 + 1;
+      }
+    }
     chg_(ctx, sh, fixed.slice(0, 4).join('・') + (fixed.length > 4 ? ' ほか' + (fixed.length - 4) + ' 件' : ''), '空白' + nTrim + '・全角→半角' + nHalf + '・数値化' + nNum);
   }
   // 空行を詰める＊ / 重複行を消す＊
@@ -684,7 +699,7 @@ SHELF['seiri'] = function (ctx, op) {
   if (op.blank_rows && t2) {
     var blanks = [];
     for (var rr = t2.firstData; rr <= t2.lastData; rr++) {
-      var row = sh.getRange(rr, t2.firstCol, 1, t2.lastCol - t2.firstCol + 1).getValues()[0];
+      var row = t2.vals[rr - 1].slice(t2.firstCol - 1, t2.lastCol);
       if (row.every(isBlank_)) blanks.push(rr);
     }
     // 表の途中の空行だけ（findTable_ が最後の非空行までを表とするので、すべて途中）
@@ -698,7 +713,7 @@ SHELF['seiri'] = function (ctx, op) {
   if (op.dedupe && t2) {
     var seen = {}, dups = [];
     for (var d = t2.firstData; d <= t2.lastData; d++) {
-      var key = JSON.stringify(sh.getRange(d, t2.firstCol, 1, t2.lastCol - t2.firstCol + 1).getValues()[0]);
+      var key = JSON.stringify(t2.vals[d - 1].slice(t2.firstCol - 1, t2.lastCol));
       if (seen[key]) dups.push(d); else seen[key] = 1;
     }
     if (dups.length) {
@@ -717,7 +732,7 @@ SHELF['renumber'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh), ci = colIndexOf_(t, op.col), start = op.start === undefined ? 1 : op.start;
   var n = 0, rowsOut = [];
   for (var r = t.firstData; r <= t.lastData; r++) {
-    var row = sh.getRange(r, t.firstCol, 1, t.lastCol - t.firstCol + 1).getValues()[0].filter(function (v, i) { return t.firstCol + i !== ci; });
+    var row = t.vals[r - 1].slice(t.firstCol - 1, t.lastCol).filter(function (v, i) { return t.firstCol + i !== ci; });
     var empty = row.every(isBlank_);
     if (empty) { rowsOut.push(['']); continue; }
     rowsOut.push([start + n]); n++;
@@ -757,16 +772,18 @@ SHELF['total'] = function (ctx, op) {
     if (lc > t.lastCol) lc = t.firstCol;
     sh.getRange(tr, lc).setValue(label);
   }
-  var fixed = [];
-  cols.forEach(function (c) {
-    var f = '=SUM(' + colLetter_(c) + t.firstData + ':' + colLetter_(c) + t.lastData + ')';
-    var cell = sh.getRange(tr, c);
-    if (cell.getFormula() !== f) { cell.setFormula(f); fixed.push(colLetter_(c)); }
-  });
   var nc = t.lastCol - t.firstCol + 1;
   var rowRg = sh.getRange(tr, t.firstCol, 1, nc);
+  // 合計行は 1 回で読み、式と書式を配列にして 1 回ずつ書く（列ごとに API を呼ばない）
+  var fr = rowRg.getFormulas(), vr = rowRg.getValues(), nf = rowRg.getNumberFormats(), al = rowRg.getHorizontalAlignments(), fixed = [];
+  cols.forEach(function (c) {
+    var k = c - t.firstCol, f = '=SUM(' + colLetter_(c) + t.firstData + ':' + colLetter_(c) + t.lastData + ')';
+    if (fr[0][k] !== f) { fr[0][k] = f; fixed.push(colLetter_(c)); }
+    nf[0][k] = STYLE.numFmt; al[0][k] = 'right';
+  });
+  var out = fr[0].map(function (f, k) { return f || vr[0][k]; });
+  rowRg.setValues([out]).setNumberFormats(nf).setHorizontalAlignments(al);
   rowRg.setFontWeight('bold').setBackground(STYLE.totalBg).setBorder(true, true, true, true, true, true, STYLE.border, SpreadsheetApp.BorderStyle.SOLID);
-  cols.forEach(function (c) { sh.getRange(tr, c).setNumberFormat(STYLE.numFmt).setHorizontalAlignment('right'); });
   if (existed && !fixed.length) note_(ctx, '合計行 ' + tr + ' はすでにあります（変更なし）');
   else chg_(ctx, sh, a1_(tr, t.firstCol, 1, nc), existed ? '合計行の範囲を直した（' + fixed.join('・') + '列）' : '合計行を追加');
 };
