@@ -641,6 +641,7 @@ class GasClient:
 
     def _request_with_retry(self, method, url, max_retries=3, retry_5xx=True, **kwargs):
         """429 (Too Many Requests), 500番台エラー、および 401 (失効トークン) 時に自動再試行"""
+        kwargs.setdefault("timeout", 20)
         backoff = 1.0
         for attempt in range(max_retries + 1):
             try:
@@ -1001,6 +1002,24 @@ class GasClient:
             type_names = [f"{f['name']}.{f['type']}" for f in candidates]
             raise ValueError(f"同名のファイルが複数存在します ({len(candidates)}件: {', '.join(type_names)})。拡張子（.gs または .html）を指定して区別してください。")
 
+        # 3. 大文字小文字を区別しないフォールバック (Case-insensitive)
+        ci_candidates = []
+        for f in files:
+            fname = f.get("name", "")
+            ftype = f.get("type", "")
+            if fname.lower() == base_name.lower() or fname.lower() == filename.lower():
+                if expected_type:
+                    if ftype == expected_type:
+                        ci_candidates.append(f)
+                else:
+                    ci_candidates.append(f)
+
+        if len(ci_candidates) == 1:
+            return ci_candidates[0]
+        elif len(ci_candidates) > 1:
+            type_names = [f"{f['name']}.{f['type']}" for f in ci_candidates]
+            raise ValueError(f"大文字小文字の違いで複数のファイル候補が見つかりました ({len(ci_candidates)}件: {', '.join(type_names)})。正確に指定してください。")
+
         raise FileNotFoundError(f"ファイルが見つかりません: '{filename}'")
 
     def get_file(self, script_id, filename, start_line=None, end_line=None):
@@ -1016,6 +1035,8 @@ class GasClient:
         e_val = end_line if (end_line is not None and end_line > 0) else None
 
         if s_val is not None or e_val is not None:
+            if s_val is not None and e_val is not None and s_val > e_val:
+                raise ValueError(f"start_line ({s_val}) は end_line ({e_val}) 以下である必要があります。")
             s_idx = max(0, (s_val or 1) - 1)
             e_idx = min(total_lines, e_val) if e_val else total_lines
             return {
@@ -4260,7 +4281,12 @@ class GasClient:
             if any(part in ignore_dirs or part.startswith(".") for part in parts):
                 continue
             rel = p.relative_to(local_path).as_posix()
-            source = p.read_text(encoding="utf-8")
+            if not (rel == "appsscript.json" or rel.endswith((".html", ".gs", ".js"))):
+                continue
+            try:
+                source = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
 
             if rel == "appsscript.json":
                 local_files_to_push.append({"name": "appsscript", "type": "JSON", "source": source, "rel": rel})

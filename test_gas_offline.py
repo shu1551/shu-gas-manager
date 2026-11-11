@@ -4262,3 +4262,28 @@ const numGen = function* () {
     span = mock_client._find_function_span(code, "idMaker")
     assert span is not None
     assert code[span[0]:span[1]].startswith("function* idMaker")
+
+
+def test_edge_cases_and_robustness(mock_client, tmp_path):
+    # 1. get_file の start_line > end_line 検証
+    mock_client.get_content = MagicMock(return_value={"files": [{"name": "Code", "type": "SERVER_JS", "source": "line1\nline2\nline3"}]})
+    mock_client.resolve_script_id = MagicMock(return_value="mock_sid")
+
+    with pytest.raises(ValueError, match="以下である必要があります"):
+        mock_client.get_file("mock_sid", "Code", start_line=5, end_line=2)
+
+    # 2. _match_file の大文字小文字フォールバック
+    f = mock_client._match_file([{"name": "Index", "type": "HTML", "source": "<h1>Hello</h1>"}], "index")
+    assert f["name"] == "Index"
+
+    # 3. push でバイナリファイルが存在してもクラッシュしないこと
+    bin_file = tmp_path / "image.png"
+    bin_file.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR...")
+    gs_file = tmp_path / "Code.gs"
+    gs_file.write_text("function test() {}", encoding="utf-8")
+
+    mock_client._put_content = MagicMock()
+    mock_client._validate_syntax = MagicMock(return_value="valid")
+    push_res = mock_client.push("mock_sid", local_dir=str(tmp_path), force=True)
+    assert push_res["status"] == "success"
+    assert "Code.gs" in push_res["changed_files"]

@@ -639,7 +639,13 @@ def batch_patch(project: str, operations: str, force: bool = False, dry_run: boo
         deploy: 反映完了後に本番Webアプリを自動デプロイするか (デフォルト: False)
     """
     import json
-    ops_data = json.loads(operations) if isinstance(operations, str) else operations
+    if isinstance(operations, str):
+        try:
+            ops_data = json.loads(operations)
+        except Exception as e:
+            return f"[ERROR] operations 引数の JSON 解析に失敗しました: {e}\n例: '[{{\"op\":\"patch_function\",\"file\":\"main\",\"function\":\"f\",\"target\":\"a\",\"replacement\":\"b\"}}]'"
+    else:
+        ops_data = operations
     client = get_client()
     kwargs = dict(force=force, dry_run=dry_run, deploy=deploy)
     if fast:
