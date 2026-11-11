@@ -2575,5 +2575,48 @@ def py_patch_function(
     )
     return res.get("markdown_report", "")
 
+# ===== Workspace マネージャー（スプレッドシートと文書を会話で作る・直す）。くわしくは WORKSPACE.md =====
+_ws = None
+
+def get_ws():
+    global _ws
+    if _ws is None:
+        import gas_workspace
+        _ws = gas_workspace.WorkspaceManager(client=get_client())
+    return _ws
+
+def _ws_run(fn, **kw):
+    """WorkspaceError（利用者向けの日本語）はそのまま返し、想定外だけ [ERROR] にする"""
+    import gas_workspace
+    try:
+        return fn(**kw)
+    except gas_workspace.WorkspaceError as e:
+        return str(e)
+
+@mcp.tool()
+@safe_tool
+def ws_look(target: str = "", sheet: str = "", range: str = "") -> str:
+    """スプレッドシート・文書を見て、今の相手として覚える（シートの表の形・文書の見出し）。
+    target=URL・ID・名前（空なら今の相手）。range=A1表記で中身も返す。
+    作る・直す前の確認はこれ。手順は WORKSPACE.md。"""
+    return _ws_run(get_ws().look, target=target, sheet=sheet, range=range)
+
+@mcp.tool()
+@safe_tool
+def ws_do(ops: str, target: str = "", ok: bool = False) -> str:
+    """棚（型）の JSON 配列を 1 回で撃って、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
+    ops=[{"shelf":"table.new","headers":[..],"rows":[[..]],"total":["E"]}]。棚名は WORKSPACE.md（外すと一覧が返る）。
+    target="new:名前"で新規。ok=True は「消してよい」の承認があるときだけ。
+    返事は 対象／直した所／残り／URL。"""
+    return _ws_run(get_ws().do, ops=ops, target=target, ok=ok)
+
+@mcp.tool()
+@safe_tool
+def ws_undo(to: str = "", list: bool = False, ok: bool = False) -> str:
+    """直前の ws_do を控えから戻す（空=直前、to=番号、list=True で台帳）。
+    道具が書いた後に人が手で直した所があれば止まる（ok=True で戻す）。
+    新しく作ったファイルは消さない。"""
+    return _ws_run(get_ws().undo, to=to, list=list, ok=ok)
+
 if __name__ == "__main__":
     mcp.run()
