@@ -13,7 +13,7 @@ import json
 import time
 import re
 import copy
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import requests
 import subprocess
@@ -464,7 +464,7 @@ class GasClient:
 
     def __init__(self, clasprc_path=None, backup_dir=None, cache_file=None, aliases_file=None):
         if clasprc_path is None:
-            clasprc_path = os.path.expanduser("~/.clasprc.json")
+            clasprc_path = os.environ.get("CLASPRC_PATH") or os.path.expanduser("~/.clasprc.json")
         self.clasprc_path = Path(clasprc_path)
 
         if backup_dir is None:
@@ -2633,6 +2633,10 @@ class GasClient:
         sid_short = script_id[:12]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_file = self.backup_dir / f"backup_{sid_short}_{timestamp}.json"
+        counter = 1
+        while backup_file.exists():
+            backup_file = self.backup_dir / f"backup_{sid_short}_{timestamp}_{counter}.json"
+            counter += 1
         with open(backup_file, "w", encoding="utf-8") as f:
             json.dump(content_data, f, ensure_ascii=False, separators=(',', ':'))
         # 毎回のディスク全走査を避け、タイムスタンプ末尾判定で約10回に1回のみクリーンアップ実行
@@ -2661,7 +2665,7 @@ class GasClient:
         res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
         if res.status_code != 200:
             raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text}")
-        res_json = res.json()
+        res_json = res.json() if res.content else {}
         now = time.time()
         c_dict = copy.deepcopy(res_json if "files" in res_json else {"files": cleaned_files})
         self._content_cache[sid] = (now, copy.deepcopy(c_dict))
@@ -2670,15 +2674,18 @@ class GasClient:
         disk_cache[sid] = {"ts": now, "content": copy.deepcopy(c_dict)}
         self._save_disk_content_cache(disk_cache)
 
-        # スマートパージ: 関連する古い診断キャッシュを即時無効化
-        self._diag_cache.pop(sid, None)
-        self._dock_cache.pop(sid, None)
-        self._xray_cache.pop(sid, None)
+        # スマートパージ: 該当 sid に関連する古い診断・dock・xrayキャッシュを即時無効化
+        for k in [k for k in self._diag_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
+            self._diag_cache.pop(k, None)
+        for k in [k for k in self._dock_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
+            self._dock_cache.pop(k, None)
+        for k in [k for k in self._xray_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
+            self._xray_cache.pop(k, None)
         self._tokenize_cache.clear()
         self._extract_funcs_cache.clear()
 
         # projects_list キャッシュ内の該当プロジェクトの modifiedTime を現在日時に即時更新
-        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         pl_disk = self._cache_data.get("projects_list", {})
         if isinstance(pl_disk, dict) and "files" in pl_disk:
             for p in pl_disk.get("files", []):
@@ -2820,6 +2827,7 @@ class GasClient:
 
         matched_file = self._match_file(files, filename)
         source = matched_file.get("source", "")
+        new_source = "" if new_source is None else str(new_source)
         src_lines = source.splitlines(keepends=True)
         new_lines = new_source.splitlines(keepends=True)
         diff_iter = list(difflib.unified_diff(
@@ -2868,11 +2876,13 @@ class GasClient:
 
     def add_file(self, script_id, filename, file_type, source="", force=False):
         """新規ファイルを追加"""
-        sid = self.resolve_script_id(script_id)
-        content = self.get_content(sid, use_cache=False)
-        files = content.get("files", [])
-
-        base_name = os.path.splitext(filename)[0]
+        if not filename or not str(filename).strip():
+            raise ValueError("ファイル名を指定してください。")
+        raw_name = str(filename).strip()
+        base_name, ext = os.path.splitext(raw_name)
+        base_name = base_name.strip()
+        if not base_name or base_name in (".js", ".html", ".gs"):
+            raise ValueError(f"無効なファイル名です: '{filename}'")
         if base_name == "appsscript":
             raise ValueError("マニフェストファイル 'appsscript' は新規追加できません。更新する場合は replace_file または patch_code を使用してください。")
 
@@ -2883,6 +2893,10 @@ class GasClient:
             ftype = "HTML"
         else:
             raise ValueError(f"無効なファイル種別です: '{file_type}' (js または html を指定してください)")
+
+        sid = self.resolve_script_id(script_id)
+        content = self.get_content(sid, use_cache=False)
+        files = content.get("files", [])
 
         for f in files:
             if f.get("name") == base_name and f.get("type") == ftype:
@@ -5065,6 +5079,8 @@ class GasClient:
         diag_res["grade"] = grade
         diag_res["prescriptions"] = prescriptions
         if not is_mocked_diag:
+            if len(self._diag_cache) >= 32:
+                self._diag_cache.pop(next(iter(self._diag_cache)), None)
             self._diag_cache[(sid, files_sig)] = copy.deepcopy(diag_res)
         return diag_res
 
@@ -5363,6 +5379,8 @@ class GasClient:
             "prescriptions": prescriptions,
             "markdown_report": md_report
         }
+        if len(self._dock_cache) >= 32:
+            self._dock_cache.pop(next(iter(self._dock_cache)), None)
         self._dock_cache[dock_key] = copy.deepcopy(dock_res)
         if not is_mocked:
             dock_disk_entry = {
@@ -6182,12 +6200,17 @@ sandbox.self = sandbox;
             },
             "markdown_report": md_report
         }
+        if len(self._xray_cache) >= 32:
+            self._xray_cache.pop(next(iter(self._xray_cache)), None)
         self._xray_cache[xray_key] = copy.deepcopy(xray_res)
         return xray_res
 
 
     def create_project(self, title: str) -> dict:
         """新しい GAS プロジェクトを Google ドライブ上に作成する"""
+        if not title or not str(title).strip():
+            raise ValueError("プロジェクト名を指定してください。")
+        title = str(title).strip()
         url = "https://script.googleapis.com/v1/projects"
         payload = {"title": title}
         res = self._request_with_retry("POST", url, headers=self._headers(), json=payload, timeout=15)

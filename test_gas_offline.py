@@ -4312,3 +4312,63 @@ def test_corrupted_cache_resilience_and_blank_script_id(tmp_path):
         # 3. 前後の余白付きスクリプトIDは安全にトリム解決される
         long_id = "1" * 35
         assert client.resolve_script_id(f"  {long_id}  ") == long_id
+
+
+def test_robustness_cycle_improvements(tmp_path, monkeypatch):
+    from datetime import datetime
+    custom_clasprc = tmp_path / "custom_clasprc.json"
+    custom_clasprc.write_text(json.dumps({"tokens": {"default": {"client_id": "c", "client_secret": "s", "refresh_token": "r"}}}), encoding="utf-8")
+    backup_dir = tmp_path / ".backups"
+
+    # 1. CLASPRC_PATH 環境変数の優先取得テスト
+    monkeypatch.setenv("CLASPRC_PATH", str(custom_clasprc))
+    with patch.object(GasClient, "get_access_token", return_value="dummy"):
+        client = GasClient(backup_dir=str(backup_dir))
+        assert client.clasprc_path == custom_clasprc
+
+        # 2. create_project の空タイトル拒絶
+        with pytest.raises(ValueError, match="プロジェクト名を指定してください"):
+            client.create_project("")
+        with pytest.raises(ValueError, match="プロジェクト名を指定してください"):
+            client.create_project("   ")
+
+        # 3. add_file の不正ファイル名拒絶
+        client.get_content = MagicMock(return_value={"files": [{"name": "appsscript", "type": "JSON", "source": "{}"}]})
+        with pytest.raises(ValueError, match="ファイル名を指定してください"):
+            client.add_file("dummy_sid", "", "js")
+        with pytest.raises(ValueError, match="ファイル名を指定してください"):
+            client.add_file("dummy_sid", "   ", "js")
+        with pytest.raises(ValueError, match="無効なファイル名です"):
+            client.add_file("dummy_sid", ".js", "js")
+
+        # 4. _save_backup の同一タイムスタンプ衝突回避
+        sid = "1" * 35
+        sid_short = sid[:12]
+        fixed_dt = datetime(2026, 11, 11, 12, 0, 0, 123456)
+        ts_str = fixed_dt.strftime("%Y%m%d_%H%M%S_%f")
+        existing_bak = backup_dir / f"backup_{sid_short}_{ts_str}.json"
+        existing_bak.write_text("{}", encoding="utf-8")
+
+        with patch("gas_client.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_dt
+            new_bak = client._save_backup(sid, {"files": []})
+            assert new_bak.name == f"backup_{sid_short}_{ts_str}_1.json"
+            assert new_bak.exists()
+
+        # 5. _put_content のスマートパージ (タプルキー対応)
+        client._diag_cache[(sid, "sig1")] = {"score": 100}
+        client._dock_cache[(sid, "file1", "sig1")] = {"score": 100}
+        client._xray_cache[(sid, "file1", "sig1")] = {"status": "ok"}
+        client._diag_cache[("other_sid", "sig2")] = {"score": 90}
+
+        fake_res = MagicMock()
+        fake_res.status_code = 200
+        fake_res.content = b'{"files": []}'
+        fake_res.json.return_value = {"files": []}
+        client._request_with_retry = MagicMock(return_value=fake_res)
+
+        client._put_content(sid, [{"name": "Code", "type": "SERVER_JS", "source": ""}])
+        assert (sid, "sig1") not in client._diag_cache
+        assert (sid, "file1", "sig1") not in client._dock_cache
+        assert (sid, "file1", "sig1") not in client._xray_cache
+        assert ("other_sid", "sig2") in client._diag_cache
