@@ -7,3 +7,31 @@ width	A列の幅を広げて
 width	列幅を中身に合わせて自動調整して
 ?width	列が狭くて見えないから広げて
 ?width	幅 列幅 調整
+cf.add	売上が100万以上のセルに条件付き書式を付けて
+cf.add	F列で100以上のセルを赤く目立たせて
+cf.add	E列の点数が80未満は黄色にしてくれる？
+?cf.add	条件付き書式 以上 赤
+cf.dup	C列の重複に色を付けて
+cf.dup	メール列でダブってる行をハイライトして
+cf.dup	B列の重複してるとこ赤くして
+?cf.dup	重複 ダブり 色 ハイライト
+cf.scale	売上列にカラースケールを付けて
+cf.scale	金額の大きいほど濃い青のグラデーションにして
+cf.scale	F2:F20をヒートマップみたいに色の濃淡つけて
+?cf.scale	カラースケール グラデーション ヒートマップ
+cf.clear	設定されている条件付き書式を外して
+cf.clear	表全体の自動でついた色を消して
+cf.clear	F列の条件付き書式を削除して
+?cf.clear	条件付き書式 削除 クリア 解除
+cf.list	シートの条件付き書式を一覧にして
+cf.list	いま設定されてる条件付き書式を確認して
+cf.list	このシートの条件付き書式はどこにあるか調べて
+?cf.list	条件付き書式 一覧 確認 調べる
+banding.add	表に交互の色を付けて
+banding.add	1行おきに薄いグレーの背景色にして
+banding.add	明細を見やすくしましまの縞模様にして
+?banding.add	交互の色 しましま ストライプ 1行おき
+banding.remove	表の交互の色を外して
+banding.remove	1行おきのしましまを消して
+banding.remove	縞模様のストライプを解除して
+?banding.remove	交互の色 解除 消す 外す

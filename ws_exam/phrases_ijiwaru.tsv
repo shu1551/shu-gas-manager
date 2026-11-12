@@ -2,8 +2,8 @@
 # sheet.delete	いらないタブ消しといて	（未実装の棚）
 # freeze	見出しだけ動かないようにして	（未実装の棚）
 seiri+renumber	C列の重複消して連番ふり直して	seiri{renumber,dedupe}
-# cf.dup	重複してるとこ赤くして	（未実装の棚）
-# cf.add	売上が100万以上の行を目立たせて	（未実装の棚）
+cf.dup	重複してるとこ赤くして
+cf.add	売上が100万以上の行を目立たせて
 filter.where	田中さんの行だけ見せて
 (なし)	これ印刷用にA4横で
 (案内)	さっきの戻して
@@ -14,7 +14,7 @@ format	合計のとこ太字で黄色に
 tidy	これ見やすくして
 # split.col	B列を姓と名に分けて	（未実装の棚）
 summary	月ごとの売上の推移を出して
-# validation.list+cf.add	プルダウンで未着手・進行中・完了を選べるようにして、完了は灰色に	（未実装の棚）
+validation.list+cf.add	プルダウンで未着手・進行中・完了を選べるようにして、完了は灰色に
 seiri	全角の数字を半角に
 seiri	空白行を詰めて
 format	1行おきに色つけて、ついでにヘッダーは青

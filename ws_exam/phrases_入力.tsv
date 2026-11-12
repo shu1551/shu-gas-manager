@@ -1,0 +1,21 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+validation.list	C列にプルダウンの入力規則を付けて
+validation.list	ステータス列を選択肢から選べるようにして
+validation.list	D2:D50でリストから選ぶように設定して
+?validation.list	プルダウン ドロップダウン リスト 選択肢
+validation.number	D列に数値だけ入るように入力規則を設定して
+validation.number	年齢列には0以上の数字しか入れられないようにして
+validation.number	数量列に数字以外は入らないように制限して
+?validation.number	数字だけ 数値限定 入力制限
+validation.date	申請日列は日付だけ入るように設定して
+validation.date	B列でカレンダーから日付を選べるようにして
+validation.date	A2:A100に日付以外は入らないようにして
+?validation.date	日付だけ カレンダー 入力制限
+checkbox	完了列にチェックボックスを付けて
+checkbox	F列のセルにチェック欄を設置して
+checkbox	E2:E30に済みの印を入れられるチェックボックスを付けて
+?checkbox	チェックボックス チェック欄 作成
+validation.clear	C列の入力規則を外して
+validation.clear	D列のプルダウンを消して
+validation.clear	表全体の入力規則を解除して
+?validation.clear	入力規則 解除 プルダウン 消す

@@ -4,6 +4,7 @@
 // 題: 範囲の書式を変える
 // 分類: 見た目
 // 語: 書式を|太字に|色を付け|背景色|文字色|中央揃え|罫線|赤く
+// 違い: 条件付きで色を変えるなら cf.add。1行おきに色なら banding.add
 // 引数: range=範囲, col=列, header=真偽, bold=真偽, italic=真偽, color=色, bg=色, size=数, font=文字, number_format=文字, align=文字, valign=文字, wrap=真偽, borders=文字, merge=真偽
 // どれか: range col header
 // 例: 「見出しを太字で青い背景に」 → {"shelf":"format","header":true,"bold":true,"bg":"#1F4E79","color":"#FFFFFF"}
@@ -55,4 +56,211 @@ SHELF['width'] = function (ctx, op) {
   });
   if (!did.length) throw new ArgError('棚「width」に cols・rows・auto のどれかが要ります');
   chg_(ctx, sh, did.join('・'), '幅・高さを変更');
+};
+
+// 棚: cf.add
+// 題: 条件付き書式を付ける
+// 分類: 見た目
+// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|だったら色|を目立たせ|自動で色
+// 違い: いつも同じ色なら format
+// 引数: range*=範囲, when*=選択(gt/ge/lt/le/eq/ne/contains/blank/notblank/formula), value=文字, bg=色, color=色, bold=真偽
+// 例: 「売上が100万以上のセルを赤く」 → {"shelf":"cf.add","range":"F2:F100","when":"ge","value":"1000000","bg":"赤"}
+// 例: 「売上が100万以上の行を目立たせて」 → {"shelf":"cf.add","range":"A2:F100","when":"formula","value":"=$F2>=1000000","bg":"薄赤"}
+// 触る: 条件付き
+// 控え: 今
+SHELF['cf.add'] = function (ctx, op) {
+  need_(op, ['range', 'when']);
+  var sh = sheetCtx_(ctx, op), rg = sh.getRange(op.range);
+  var rule = SpreadsheetApp.newConditionalFormatRule().setRanges([rg]);
+  var w = String(op.when).toLowerCase(), val = op.value !== undefined ? String(op.value) : '';
+  if (w === 'gt') rule.whenNumberGreaterThan(Number(val));
+  else if (w === 'ge') rule.whenNumberGreaterThanOrEqualTo(Number(val));
+  else if (w === 'lt') rule.whenNumberLessThan(Number(val));
+  else if (w === 'le') rule.whenNumberLessThanOrEqualTo(Number(val));
+  else if (w === 'eq') rule.whenNumberEqualTo(Number(val));
+  else if (w === 'ne') rule.whenNumberNotEqualTo(Number(val));
+  else if (w === 'contains') rule.whenTextContains(val);
+  else if (w === 'blank') rule.whenCellEmpty();
+  else if (w === 'notblank') rule.whenCellNotEmpty();
+  else if (w === 'formula') rule.whenFormulaSatisfied(val);
+  else throw new ArgError('知らない when: ' + op.when);
+
+  if (op.bg) rule.setBackground(rgb_(op.bg));
+  if (op.color) rule.setFontColor(rgb_(op.color));
+  if (op.bold) rule.setBold(true);
+
+  var rules = sh.getConditionalFormatRules();
+  rules.push(rule.build());
+  sh.setConditionalFormatRules(rules);
+  chg_(ctx, sh, rg.getA1Notation(), '条件付き書式を付与（when: ' + op.when + '）');
+};
+
+// 棚: cf.dup
+// 題: 重複に色を付ける
+// 分類: 見た目
+// 語: 重複に色|重複を赤|ダブりに色|重複を目立|重複をハイライト|重複してるとこ
+// 違い: 重複した行を消すなら dedupe
+// 引数: range*=範囲, bg=色
+// 例: 「C列の重複を赤く」 → {"shelf":"cf.dup","range":"C2:C100","bg":"赤"}
+// 触る: 条件付き
+// 控え: 今
+SHELF['cf.dup'] = function (ctx, op) {
+  need_(op, ['range']);
+  var sh = sheetCtx_(ctx, op), rg = sh.getRange(op.range);
+  var bg = op.bg ? rgb_(op.bg) : '#FCE4D6';
+  var firstCellA1 = rg.getCell(1, 1).getA1Notation();
+  var startCol = colLetter_(rg.getColumn()), endCol = colLetter_(rg.getLastColumn());
+  var startRow = rg.getRow(), endRow = rg.getLastRow();
+  var absRange = '$' + startCol + '$' + startRow + ':$' + endCol + '$' + endRow;
+  var formula = '=COUNTIF(' + absRange + ', ' + firstCellA1 + ')>1';
+
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .setRanges([rg])
+    .whenFormulaSatisfied(formula)
+    .setBackground(bg)
+    .build();
+
+  var rules = sh.getConditionalFormatRules();
+  rules.push(rule);
+  sh.setConditionalFormatRules(rules);
+  chg_(ctx, sh, rg.getA1Notation(), '重複セルの条件付き書式を付与（' + formula + '）');
+};
+
+// 棚: cf.scale
+// 題: カラースケールを付ける
+// 分類: 見た目
+// 語: カラースケール|色の濃淡|グラデーション|ヒートマップ|大きいほど濃
+// 引数: range*=範囲, low=色, high=色
+// 例: 「売上列を青のグラデーションにして」 → {"shelf":"cf.scale","range":"F2:F100","low":"白","high":"青"}
+// 触る: 条件付き
+// 控え: 今
+SHELF['cf.scale'] = function (ctx, op) {
+  need_(op, ['range']);
+  var sh = sheetCtx_(ctx, op), rg = sh.getRange(op.range);
+  var low = rgb_(op.low || '白');
+  var high = rgb_(op.high || '#2E75B6');
+
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .setRanges([rg])
+    .setGradientMinpoint(low)
+    .setGradientMaxpoint(high)
+    .build();
+
+  var rules = sh.getConditionalFormatRules();
+  rules.push(rule);
+  sh.setConditionalFormatRules(rules);
+  chg_(ctx, sh, rg.getA1Notation(), 'カラースケール条件付き書式を付与');
+};
+
+// 棚: cf.clear
+// 題: 条件付き書式を外す
+// 分類: 見た目
+// 語: 条件付き書式を消|条件付き書式を外|条件付き書式を削除|自動の色を消
+// 引数: range=範囲
+// 例: 「条件付き書式を全部消して」 → {"shelf":"cf.clear"}
+// 触る: 条件付き
+// 控え: 今
+SHELF['cf.clear'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  if (!op.range) {
+    sh.clearConditionalFormatRules();
+    chg_(ctx, sh, 'シート全体', '条件付き書式をすべて解除');
+    return;
+  }
+  var targetRg = sh.getRange(op.range);
+  var tRow = targetRg.getRow(), tLastRow = targetRg.getLastRow();
+  var tCol = targetRg.getColumn(), tLastCol = targetRg.getLastColumn();
+
+  var rules = sh.getConditionalFormatRules();
+  var kept = [];
+  rules.forEach(function (r) {
+    var rRanges = r.getRanges();
+    var hit = rRanges.some(function (rg) {
+      return !(rg.getLastRow() < tRow || rg.getRow() > tLastRow || rg.getLastColumn() < tCol || rg.getColumn() > tLastCol);
+    });
+    if (!hit) kept.push(r);
+  });
+  sh.setConditionalFormatRules(kept);
+  chg_(ctx, sh, targetRg.getA1Notation(), '条件付き書式を解除');
+};
+
+// 棚: cf.list
+// 題: 条件付き書式を一覧にする
+// 分類: 見た目
+// 語: 条件付き書式を一覧|条件付き書式を調べ|条件付き書式はどこ|条件付き書式を確認
+// 引数: なし
+// 例: 「設定されている条件付き書式を教えて」 → {"shelf":"cf.list"}
+// 触る: なし
+// 控え: なし
+SHELF['cf.list'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var rules = sh.getConditionalFormatRules();
+  if (!rules.length) {
+    ctx.notes.push('シート「' + sh.getName() + '」に条件付き書式はありません');
+    return;
+  }
+  var list = rules.map(function (r, i) {
+    var ranges = r.getRanges().map(function (rg) { return rg.getA1Notation(); }).join(', ');
+    var crit = r.getBooleanCondition();
+    var grad = r.getGradientCondition();
+    var desc = crit ? ('条件: ' + crit.getCriteriaType()) : (grad ? 'カラースケール' : '書式ルール');
+    return '#' + (i + 1) + ' ' + ranges + ' (' + desc + ')';
+  });
+  ctx.notes.push('シート「' + sh.getName() + '」の条件付き書式（' + rules.length + ' 件）: ' + list.join('； '));
+};
+
+// 棚: banding.add
+// 題: 交互の色を付ける
+// 分類: 見た目
+// 語: 交互の色|交互に色|しましま|縞模様|1行おきに色|ストライプ
+// 違い: 自分で色を選ぶなら format
+// 引数: range=範囲, theme=選択(gray/blue/green/orange)=gray
+// 例: 「表を1行おきに薄いグレーにして」 → {"shelf":"banding.add","theme":"gray"}
+// 触る: 交互の色
+// 控え: 今
+SHELF['banding.add'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), rg;
+  if (op.range) rg = sh.getRange(op.range);
+  else {
+    var t = needTable_(sh);
+    rg = sh.getRange(t.headerRow, t.firstCol, (t.totalRow || t.lastData) - t.headerRow + 1, t.lastCol - t.firstCol + 1);
+  }
+  rg.getBandings().forEach(function (b) { b.remove(); });
+
+  var themeStr = (op.theme || 'gray').toLowerCase();
+  var theme = SpreadsheetApp.BandingTheme.LIGHT_GREY;
+  if (themeStr === 'blue') theme = SpreadsheetApp.BandingTheme.BLUE;
+  else if (themeStr === 'green') theme = SpreadsheetApp.BandingTheme.GREEN;
+  else if (themeStr === 'orange') theme = SpreadsheetApp.BandingTheme.ORANGE;
+  else if (themeStr === 'gray' || themeStr === 'grey') theme = SpreadsheetApp.BandingTheme.LIGHT_GREY;
+
+  var t2 = findTable_(sh);
+  var hasHeader = t2 ? (rg.getRow() === t2.headerRow) : true;
+  var hasFooter = t2 && t2.totalRow ? (rg.getLastRow() === t2.totalRow) : false;
+
+  rg.applyRowBanding(theme, hasHeader, hasFooter);
+  chg_(ctx, sh, rg.getA1Notation(), '交互の背景色を付与（テーマ: ' + (op.theme || 'gray') + '）');
+};
+
+// 棚: banding.remove
+// 題: 交互の色を外す
+// 分類: 見た目
+// 語: 交互の色を外|交互の色を消|しましまを消|縞模様を消
+// 引数: range=範囲
+// 例: 「1行おきについてる色を外して」 → {"shelf":"banding.remove"}
+// 触る: 交互の色
+// 控え: 今
+SHELF['banding.remove'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), rg;
+  if (op.range) rg = sh.getRange(op.range);
+  else {
+    var t = findTable_(sh);
+    rg = t ? sh.getRange(t.headerRow, t.firstCol, (t.totalRow || t.lastData) - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
+  }
+  var bandings = rg.getBandings();
+  if (!bandings.length) {
+    bandings = sh.getBandings();
+  }
+  bandings.forEach(function (b) { b.remove(); });
+  chg_(ctx, sh, rg.getA1Notation(), '交互の背景色を解除');
 };

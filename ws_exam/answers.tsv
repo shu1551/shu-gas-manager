@@ -1,15 +1,18 @@
 # 前回の検査の控え（頼みの文 → 上位の札）。道具が書く。手で直さない
-C列の重複消して連番ふり直して	seiri,dedupe,replace,renumber,doc.table
+C列の重複消して連番ふり直して	seiri,dedupe,replace,renumber,cf.dup
+重複してるとこ赤くして	cf.dup,format,dedupe
+売上が100万以上の行を目立たせて	cf.add,validation.number,write,copy
 田中さんの行だけ見せて	filter.where
 これ印刷用にA4横で	
 さっきの戻して	
 A列とB列入れ替えて	cols.move,width,fill.series,rows.move,sheet.move
 合計のとこ太字で黄色に	format
 これ見やすくして	tidy
-月ごとの売上の推移を出して	pivot.new
-全角の数字を半角に	seiri
+月ごとの売上の推移を出して	cf.add,pivot.new
+プルダウンで未着手・進行中・完了を選べるようにして、完了は灰色に	validation.list,validation.clear
+全角の数字を半角に	seiri,validation.number
 空白行を詰めて	seiri
-1行おきに色つけて、ついでにヘッダーは青	filter.on,format,freeze,doc.new,doc.section,doc.style
+1行おきに色つけて、ついでにヘッダーは青	banding.add,filter.on,format,banding.remove,doc.new,doc.section,doc.style
 これを PDF にしてメールで送って	dedupe
 3行目から5行目を消して	rows.delete,rows.insert,rows.move
 見積書つくって	doc.new
@@ -17,13 +20,13 @@ A列とB列入れ替えて	cols.move,width,fill.series,rows.move,sheet.move
 空のシートを1枚足して	sheet.add,sheet.rename,cols.insert,sheet.move,sheet.delete
 新しいタブ欲しいな	sheet.add,sheet.delete,sheet.rename,sheet.move,sheet.copy
 シート 追加 来月分	sheet.add,sheet.copy,sheet.rename,sheet.move,sheet.delete
-シート1の名前を売上に変更して	sheet.rename,sheet.copy,sheet.add,sheet.move,sheet.delete
+シート1の名前を売上に変更して	sheet.rename,sheet.copy,cf.scale,sheet.add,sheet.move
 タブの名前を付け替えたい	sheet.rename,sheet.copy,sheet.move,sort,filter.on
 このシート、名前を集計に変えて	sheet.rename,sheet.add,sheet.move,replace,copy.values
 シート 改名 名前変更	sheet.rename,sheet.copy,replace,sheet.add,sheet.move
 集計シートを一番左に移動して	sheet.move,sheet.delete,sheet.add,sheet.rename,sheet.copy
 シートの順番を入れ替えたい	sheet.move,cols.move,rows.move,sort,sheet.rename
-売上のタブを先頭にして	sheet.move,sheet.add,sheet.rename,sheet.copy,fill.down
+売上のタブを先頭にして	sheet.move,sheet.add,sheet.rename,sheet.copy,cf.add
 シート 並び順 移動	sheet.move,sheet.add,sheet.rename,sheet.delete,sheet.copy
 集計シートを削除して	sheet.delete,sheet.add,sheet.move,dedupe,sheet.rename
 「メモ」のシートはいらないので削除して	rows.delete,cols.delete,sheet.add,sheet.delete,doc.section
@@ -31,17 +34,37 @@ A列とB列入れ替えて	cols.move,width,fill.series,rows.move,sheet.move
 シート 削除 不要	sheet.delete,rows.delete,cols.delete,sheet.add,sheet.rename
 テンプレートのシートを複製して	sheet.copy,sheet.add,sheet.rename,sheet.move,sheet.delete
 同じシートをもう1枚作って	sheet.copy,sheet.add,sheet.rename,sheet.move,sheet.delete
-売上シートを複製して来月分を作っておいて	sheet.copy,sheet.rename,pivot.new,sheet.add,sheet.move
+売上シートを複製して来月分を作っておいて	sheet.copy,sheet.rename,cf.scale,pivot.new,sheet.add
 シート コピー 複製	sheet.copy,fill.down,copy,copy.format,sheet.add
 見出しが氏名と電話番号の表を新しく作って	table.new,doc.new,doc.section,doc.style,renumber
 名簿みたいな一覧表を用意して	table.new
 名前と金額の表ほしいんだけど	table.new,sort,format,total,summary
 テーブル 新規 作成 見出し 合計行付き	table.new,total,doc.new,doc.section,doc.style
+C列にプルダウンの入力規則を付けて	validation.list,validation.clear,checkbox,cf.dup,copy.values
+ステータス列を選択肢から選べるようにして	validation.list
+D2:D50でリストから選ぶように設定して	validation.list,filter.on,fill.down
+プルダウン ドロップダウン リスト 選択肢	validation.list,validation.clear
+D列に数値だけ入るように入力規則を設定して	validation.number,validation.list,validation.clear,filter.on,validation.date
+年齢列には0以上の数字しか入れられないようにして	validation.number,seiri,cf.add,fill.series
+数量列に数字以外は入らないように制限して	validation.number,validation.date
+数字だけ 数値限定 入力制限	validation.number,clear.values,seiri
+申請日列は日付だけ入るように設定して	validation.date,filter.on,validation.number
+B列でカレンダーから日付を選べるようにして	fill.date,validation.list,validation.date
+A2:A100に日付以外は入らないようにして	validation.date,validation.number,copy,filter.on,width
+日付だけ カレンダー 入力制限	fill.date,validation.date
+完了列にチェックボックスを付けて	checkbox,validation.list
+F列のセルにチェック欄を設置して	checkbox,doc.table,cf.add,write,find
+E2:E30に済みの印を入れられるチェックボックスを付けて	checkbox,copy,filter.on,total,copy.format
+チェックボックス チェック欄 作成	checkbox
+C列の入力規則を外して	validation.clear,validation.list,width,cf.dup,copy.values
+D列のプルダウンを消して	validation.clear,validation.list
+表全体の入力規則を解除して	validation.clear,validation.list,unfreeze
+入力規則 解除 プルダウン 消す	validation.clear,validation.list,clear.values
 表の見た目を整えて	tidy,copy.format
 罫線と列幅を揃えて綺麗にして	tidy,format,width
 この表、見やすくして	tidy
 表 体裁 整形	tidy,doc.style
-全角の数字を半角に直して	seiri,replace,doc.replace,renumber
+全角の数字を半角に直して	seiri,replace,doc.replace,renumber,validation.number
 空白を取り除いてデータを整理して	seiri,dedupe,clear.values,rows.delete,cols.delete
 空行を詰めて	seiri
 重複 削除 整理	dedupe,seiri
@@ -49,12 +72,12 @@ A列とB列入れ替えて	cols.move,width,fill.series,rows.move,sheet.move
 No列を連番に直して	renumber,replace,doc.replace,seiri
 通し番号をつけ直して	renumber,replace,fill.series
 番号 連番 振り直し	renumber,fill.series
-重複した行を削除して	rows.delete,dedupe
+重複した行を削除して	rows.delete,dedupe,cf.dup
 同じ行がダブっているのを取り除いて	dedupe,rows.delete,cols.delete
-ダブりを消しといて	dedupe
+ダブりを消しといて	dedupe,cf.dup
 重複行 削除 クレンジング	dedupe,rows.delete,seiri
 名前の列を姓と名に分割して	split.col
-C列をカンマで区切って別の列に分けて	split.col,format,cols.insert
+C列をカンマで区切って別の列に分けて	split.col,validation.list,format,cols.insert
 D列の名前をスペースで姓と名に分けといて	split.col,sheet.rename
 列 分割 区切り テキスト分流	split.col,format
 見出しと箇条書きの文書を作って	doc.new,doc.section,doc.style,table.new,doc.replace
@@ -81,7 +104,7 @@ D列の名前をスペースで姓と名に分けといて	split.col,sheet.renam
 行間を広げて見やすく	tidy,width,doc.style
 文書の見た目を整えて	tidy,doc.style,doc.new,doc.replace,doc.section
 文書 書式 フォント	doc.style,doc.new,format
-B2に100を入れて	write,fill.series,clear.values,clear.all
+B2に100を入れて	write,fill.series,cf.add,clear.values,clear.all
 セルA1へ合計と書き込んで	write,find,copy.values
 A1に3って書いといて	write,copy.format
 セル 値 入力 書き込み	write
@@ -90,19 +113,19 @@ A1に3って書いといて	write,copy.format
 表記ゆれを一括で直したい	replace,doc.replace
 文字 置き換え 検索 一括	replace,doc.replace,find
 セルから合計という文字を検索して	find
-未払いがどのセルにあるか探して	find,doc.table,write,fill.down
+未払いがどのセルにあるか探して	find,doc.table,cf.add,write,fill.down
 完了って入っているセルはどこ？	find
 文字 検索 セル 番地	find
 F2からG10の値をクリアして	clear.values,clear.all,clear.format,copy.values
 B列の中身を空っぽにして	clear.values,width,doc.table,cols.move
-この表の数字だけ消しといて	seiri,clear.values,doc.table,tidy,renumber
+この表の数字だけ消しといて	seiri,clear.values,validation.number,doc.table,tidy
 値 クリア 消去	clear.values,clear.format,clear.all
 A1からE21の書式をクリアして	clear.format,format,clear.all,copy.format,filter.on
 B2:E20に付けた色や罫線を消して元に戻して	clear.format,format,copy,renumber,filter.on
 ここの書式リセットしといて	clear.format,format,doc.style,copy.format
 書式 リセット 色 クリア	clear.format,format,clear.values,clear.all
 J2:K9をすべてクリアして	clear.format,clear.all,clear.values
-G1:H10を書式ごと全部消して白紙にして	clear.all,format,clear.values,copy,copy.values
+G1:H10を書式ごと全部消して白紙にして	clear.all,format,cf.clear,clear.values,cf.add
 この枠の中まっさらにしといて	clear.all
 すべて消去 全部クリア	clear.all,clear.values,clear.format
 セル範囲をコピーして別の場所に貼り付けて	copy,copy.format,fill.down,copy.values,format
@@ -110,19 +133,19 @@ A1:E21をG1に写して	copy,copy.format,clear.format,copy.values
 A1からB10をD列にコピーしといて	copy,copy.format,fill.down,copy.values,fill.series
 範囲 複製 コピー 貼り付け	copy,copy.format,copy.values,sheet.copy,format
 E2:E20の数式を値にして固定して	copy.values,clear.format,seiri,freeze,unfreeze
-E列の計算結果を値として貼り付けて	copy.values,copy,copy.format,total,fill.down
+E列の計算結果を値として貼り付けて	copy.values,copy,copy.format,checkbox,cf.dup
 ここ式を値に変えといて	copy.values,sheet.rename
 値貼り付け 数式 値化	copy.values,copy,copy.format
 A1:E1の書式をA21:E21にコピーして貼り付けて	copy,copy.format,format,copy.values,clear.format
 B列をA列と同じ見た目に揃えて	copy.format,tidy,width,cols.move
 ここの書式だけ写しといて	format,copy.format,doc.style,clear.format,copy
-書式 コピー 貼り付け	copy.format,copy,format,copy.values,fill.down
-A列に1から連番を入れて	fill.series,renumber,write,cols.move,sheet.move
+書式 コピー 貼り付け	copy.format,copy,format,copy.values,cf.add
+A列に1から連番を入れて	fill.series,renumber,validation.number,write,cols.move
 通し番号を下まで埋めて	fill.series,renumber,fill.date
 A2からA20に1から順に番号振っといて	fill.series,renumber,fill.date,filter.on,width
 連番 入力 自動採番	fill.series
-A列に日付を連続で埋めて	fill.date,fill.series
-カレンダー用に毎日の日付をB2からB20に入れて	fill.date,write,width,clear.values,clear.all
+A列に日付を連続で埋めて	fill.date,fill.series,validation.date
+カレンダー用に毎日の日付をB2からB20に入れて	fill.date,validation.date,write,width,clear.values
 1日ずつ日付下まで伸ばしといて	fill.date,fill.down
 日付 連続データ フィル	fill.date,seiri,filter.where,filter.on,clear.values
 E2の計算式をE20まで下方向にコピーして	fill.down,copy,copy.format,copy.values,clear.format
@@ -131,7 +154,7 @@ D2の内容をD3からD20まで下に写して	copy,fill.down
 下 コピー オートフィル	fill.down,filter.on,sheet.copy,filter.where,copy
 金額の大きい順に並べ替えて	sort,cols.move,format,table.new,total
 日付の新しい順にソートして	sort,sheet.add
-売上が高い順に並べて	sort
+売上が高い順に並べて	sort,cf.add
 並べ替え 昇順 降順	sort,cols.move,rows.move,sheet.move
 部署が営業の行だけ表示して	filter.where
 条件に合う行だけ見せて	filter.where
@@ -147,14 +170,14 @@ D2の内容をD3からD20まで下に写して	copy,fill.down
 行 追加 挿入 差し込み	rows.insert,cols.insert
 3行目を削除して	rows.delete,dedupe,rows.insert
 この行いらないから消して	rows.delete,cols.delete
-10行目は不要なので取り除いて	rows.delete,cols.delete,dedupe
+10行目は不要なので取り除いて	rows.delete,cols.delete,dedupe,cf.add
 行 削除 消去	rows.delete,dedupe
 5行目を2行目に移動して	rows.move,rows.insert,rows.delete
 3行目と4行目の順番を入れ替えたい	sheet.move,rows.move,cols.move,rows.insert,doc.table
 この行を上に動かして	rows.move,sheet.move
 行 移動 並べ替え	sort,rows.move,cols.move,sheet.move
-C列の前に列を挿入して	cols.insert,rows.insert,doc.table,width,copy.values
-B列とC列の間に空の列を足して	cols.insert,width,cols.move,total,copy.values
+C列の前に列を挿入して	cols.insert,rows.insert,doc.table,validation.clear,width
+B列とC列の間に空の列を足して	cols.insert,width,cols.move,validation.clear,cf.dup
 列を1つ増やしたい	cols.insert
 列 追加 挿入	cols.insert,rows.insert
 B列を削除して	cols.delete,dedupe
@@ -169,7 +192,7 @@ E列をA列の位置に動かして	cols.move,width,rows.move,freeze,sheet.move
 スクロールしても見出しが動かないようにして	freeze,doc.new,doc.section,doc.style,filter.on
 ウィンドウ枠の固定しといて	freeze,unfreeze
 行固定 列固定 枠固定	freeze,unfreeze
-行と列の固定を解除して	unfreeze,freeze
+行と列の固定を解除して	unfreeze,freeze,validation.clear
 見出しの固定を外して自由にスクロールできるようにして	unfreeze,freeze,doc.new,doc.section,doc.style
 枠固定やめて	unfreeze,freeze
 固定解除 フリーズ解除	unfreeze
@@ -181,6 +204,34 @@ A列の幅を広げて	width,cols.move
 列幅を中身に合わせて自動調整して	width
 列が狭くて見えないから広げて	width
 幅 列幅 調整	width
+売上が100万以上のセルに条件付き書式を付けて	cf.add,format,cf.clear,cf.list,write
+F列で100以上のセルを赤く目立たせて	cf.add,format,validation.number,write,fill.down
+E列の点数が80未満は黄色にしてくれる？	cf.add
+条件付き書式 以上 赤	cf.add,format,cf.clear,cf.list
+C列の重複に色を付けて	cf.dup,format,banding.add,copy.values,validation.list
+メール列でダブってる行をハイライトして	cf.dup,dedupe
+B列の重複してるとこ赤くして	cf.dup,format,dedupe,width,cols.move
+重複 ダブり 色 ハイライト	cf.dup,dedupe
+売上列にカラースケールを付けて	cf.scale,split.col,validation.list,checkbox,cf.add
+金額の大きいほど濃い青のグラデーションにして	cf.scale,sort,format,table.new,total
+F2:F20をヒートマップみたいに色の濃淡つけて	cf.scale,fill.down
+カラースケール グラデーション ヒートマップ	cf.scale,sheet.copy
+設定されている条件付き書式を外して	cf.clear,cf.add,cf.list,format
+表全体の自動でついた色を消して	clear.format,cf.clear,cf.add,banding.remove
+F列の条件付き書式を削除して	cf.clear,cf.add,format,cf.list,dedupe
+条件付き書式 削除 クリア 解除	cf.clear,cf.add,format,cf.list,clear.values
+シートの条件付き書式を一覧にして	cf.list,cf.add,format,cf.clear,sheet.rename
+いま設定されてる条件付き書式を確認して	cf.list,cf.add,format,cf.clear
+このシートの条件付き書式はどこにあるか調べて	cf.list,cf.add,find,format,cf.clear
+条件付き書式 一覧 確認 調べる	cf.list,cf.add,format,cf.clear
+表に交互の色を付けて	banding.add,format,banding.remove,filter.on,cf.dup
+1行おきに薄いグレーの背景色にして	format,banding.add,banding.remove
+明細を見やすくしましまの縞模様にして	banding.add,tidy,banding.remove
+交互の色 しましま ストライプ 1行おき	banding.add,banding.remove
+表の交互の色を外して	banding.remove,banding.add
+1行おきのしましまを消して	banding.remove,banding.add
+縞模様のストライプを解除して	banding.add,banding.remove,unfreeze
+交互の色 解除 消す 外す	banding.add,banding.remove,validation.clear,cf.clear,unfreeze
 表の下に合計行を足して	total,rows.insert,doc.append,summary
 金額の合計を出して	total,summary,format,table.new,sort
 合計も入れといて	total
@@ -189,7 +240,7 @@ A列の幅を広げて	width,cols.move
 部署別に件数を集計して	summary,pivot.new
 担当ごとの売上をまとめて	summary,pivot.new
 集計 項目別 部署ごと	summary,pivot.new
-売上のピボットテーブルを作って	pivot.new,table.new,summary
+売上のピボットテーブルを作って	pivot.new,table.new,cf.add,summary
 部署と商品でクロス集計表を作成して	pivot.new,summary,table.new
 縦と横で集計してくれる？	pivot.new
 ピボット クロス集計 新規作成	pivot.new
@@ -211,24 +262,36 @@ A1からE50にフィルタを設定して	filter.on,filter.where,clear.format,fi
 メールアドレス列が同じ重複行を消して	dedupe,rows.delete,seiri,renumber
 氏名列を姓と名にスペースで分けて	split.col
 住所列をカンマで列に分割して	split.col
+C列に未着手、進行中、完了のプルダウンを付けて	validation.list,validation.clear,checkbox,find
+D列には0以上の数字だけ入れられるようにして	validation.number,seiri,cf.add,clear.values,fill.series
+A列は日付だけ入るようにして	validation.date,validation.number
+E列にチェックボックスを付けて	checkbox,validation.list
+C列のプルダウンを外して	validation.clear,validation.list,width,cf.dup,copy.values
 見出しを太字で青い背景に	format,doc.new,doc.section,doc.style,filter.on
 金額の列を桁区切りに	format,sort,table.new,total,summary
 A列を幅200にして	width,write
-B列とC列の幅を中身に合わせて	width,cols.move,total,copy.values,cols.insert
+B列とC列の幅を中身に合わせて	width,cols.move,validation.clear,cf.dup,total
+売上が100万以上のセルを赤く	cf.add,format,write,find,fill.down
+C列の重複を赤く	cf.dup,format,validation.clear,width,copy.values
+売上列を青のグラデーションにして	cf.scale,sheet.copy
+条件付き書式を全部消して	cf.add,cf.clear,clear.all,format,cf.list
+設定されている条件付き書式を教えて	cf.add,cf.list,format,cf.clear
+表を1行おきに薄いグレーにして	banding.add,banding.remove
+1行おきについてる色を外して	banding.remove,banding.add
 見出しが名前と金額の表を作って	table.new,format,summary,total,doc.new
 部署別・月別の売上ピボットテーブルを作って	pivot.new,table.new,summary,copy,sheet.rename
 商品ごとの数量ピボットを作って	pivot.new
-B2に100、B3に200を入れて	write,fill.series,doc.table,clear.values,clear.all,width
+B2に100、B3に200を入れて	write,fill.series,doc.table,cf.add,clear.values,width
 営業部を営業課に置き換えて	replace,doc.replace
-売上合計が入っているセルを探して	find
-A列から完了のセルを検索して	find,doc.table,fill.down
+売上合計が入っているセルを探して	find,cf.add
+A列から完了のセルを検索して	find,doc.table,validation.list,cf.add,fill.down
 B2からD10の中身を消して	clear.values,clear.all,copy.values,renumber,write
-数字だけ消して式は残して	clear.values,seiri
+数字だけ消して式は残して	clear.values,seiri,validation.number
 A1からE20の書式をクリアして	clear.format,format,clear.values,clear.all,filter.on
 B2からD10を全部クリアして	clear.all,clear.values,clear.format,write,copy
 A1:B10をD1:E10にコピーして	copy,copy.format,copy.values,fill.down,filter.on
 売上表を別の場所に写して	copy,pivot.new,sheet.rename,sheet.copy
-C列の計算式を値に変えて	copy.values,width,fill.down,cols.insert,sheet.rename
+C列の計算式を値に変えて	copy.values,width,fill.down,validation.clear,cf.dup
 A1:B10の値をD1へ値貼り付けして	copy.values,copy,copy.format,clear.values,clear.all
 A1の書式をB1:E1にコピーして	copy,copy.format,format,fill.down,clear.format
 10から5刻みで番号を埋めて	fill.series
@@ -237,14 +300,14 @@ A2からA31まで5月の日付を埋めて	fill.date
 C2の計算式をC2:C50まで下へコピーして	fill.down,copy,copy.values,copy.format,sheet.copy
 3行目の前に2行足して	rows.insert,rows.move,doc.table,cols.insert,doc.append
 5行目を2行目の前に動かして	rows.move,rows.insert,freeze,doc.table,rows.delete
-C列の前に列を1つ足して	cols.insert,rows.insert,doc.table,width,total
+C列の前に列を1つ足して	cols.insert,rows.insert,doc.table,validation.clear,width
 B列を消して	cols.delete
 1行目の見出しを固定して	freeze,filter.on,doc.new,doc.section,doc.style
 見出し行とA列を固定して	freeze,filter.on,doc.new,doc.section,doc.style
 ウィンドウ枠の固定を解除して	freeze,unfreeze
 集計というシートを足して	sheet.add,sheet.move,sheet.delete,sheet.rename,sheet.copy
-シート1の名前を売上に変えて	sheet.rename,sheet.copy,sheet.move,replace,copy.values
+シート1の名前を売上に変えて	sheet.rename,sheet.copy,sheet.move,cf.scale,replace
 集計を先頭に動かして	sheet.move,rows.move
 古い集計シートを消して	sheet.delete,sheet.add,sheet.move,sheet.rename,sheet.copy
-売上シートを複製して	sheet.copy,sheet.rename,sheet.add,sheet.move,sheet.delete
-売上シートを写して名前を来月売上にして	sheet.copy,copy,sheet.rename,sheet.add,sheet.move
+売上シートを複製して	sheet.copy,sheet.rename,cf.scale,sheet.add,sheet.move
+売上シートを写して名前を来月売上にして	sheet.copy,copy,sheet.rename,cf.scale,sheet.add
