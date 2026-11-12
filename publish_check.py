@@ -46,6 +46,8 @@ PUBLIC_FILES = [
     "test_gas_ws_catalog.py",
     "gas_ws_find.py",
     "gas_ws_check.py",
+    "gas_ws_exam.py",
+    "test_gas_ws_exam.py",
     "ws_shelves/guide.txt",
     "ws_shelves/synonyms.txt",
     "ws_exam/answers.tsv",

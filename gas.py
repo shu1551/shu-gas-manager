@@ -447,6 +447,10 @@ def main():
     wsf_p.add_argument("ask", nargs="?", default="", help="頼みの文・語（分類:名前 / 棚:名前 / 空で分類の一覧）")
     wsf_p.add_argument("--kind", default="", help="sheet|doc（空なら両方）")
     wsf_p.add_argument("--why", action="store_true", help="点の内訳を出す")
+    wse_p = subparsers.add_parser("ws-exam", help="Workspace の AI を通した試験（問題集の頼みを AI に渡し、棚と引数の検査を数える）。既定の AI はヘッドレスの Claude Code（sonnet）")
+    wse_p.add_argument("--ai", action="store_true", help="AI を呼んで試験する（付けないと何もしない＝AI を呼ぶのは明示のときだけ）")
+    wse_p.add_argument("--n", type=int, default=30, help="問題数（既定 30）")
+    wse_p.add_argument("--model", default="sonnet", help="ヘッドレスの Claude Code のモデル（既定 sonnet）")
     wsc_p = subparsers.add_parser("ws-check", help="Workspace の棚の検査（札の形・引く試験・説明の量。通信なし）")
     wsc_p.add_argument("--no-write", action="store_true", help="ws_exam/answers.tsv を書き換えない")
 
@@ -485,6 +489,12 @@ def main():
             for tot, name, d in f.why(args.ask, args.kind):
                 print(f"  {tot:3d} {name}  語{d['語']} 字{d['字']} 名{d['名']}")
         return
+    if args.command == "ws-exam":
+        if not args.ai:
+            print("ws-exam は --ai を付けたときだけ AI を呼びます（例: py gas.py ws-exam --ai --n 30）。")
+            return
+        import gas_ws_exam
+        sys.exit(gas_ws_exam.main(n=args.n, model=args.model))
     if args.command == "ws-check":
         import gas_ws_check
         sys.exit(gas_ws_check.main(write=not args.no_write))
