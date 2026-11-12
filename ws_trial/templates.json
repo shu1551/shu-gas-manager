@@ -929,5 +929,35 @@
    ]
   ],
   "may_change": []
+ },
+ "chart.new": {
+  "templates": [
+   [
+    {
+     "shelf": "chart.new",
+     "range": "{表}",
+     "type": "column",
+     "title": "試験グラフ"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "chart.delete": {
+  "templates": [
+   [
+    {
+     "shelf": "chart.new",
+     "range": "{表}",
+     "type": "column",
+     "title": "試験グラフ"
+    },
+    {
+     "shelf": "chart.delete",
+     "title": "試験グラフ"
+    }
+   ]
+  ],
+  "may_change": []
  }
 }
