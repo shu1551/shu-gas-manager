@@ -149,12 +149,12 @@ function trialSeed_(req) {
   var problems = [];
   sheets.forEach(function (sd) {
     var sh = ss.insertSheet(sd.name);
-    var grid = sd.grid || [], nr = grid.length, nc = 0;
+    var grid = sd.grid || [], nr = grid.length, nc = 0, cells = [];
     grid.forEach(function (r) { if (r.length > nc) nc = r.length; });
     if (nr > 0 && nc > 0) {
       if (sh.getMaxRows() < nr) sh.insertRowsAfter(sh.getMaxRows(), nr - sh.getMaxRows());
       if (sh.getMaxColumns() < nc) sh.insertColumnsAfter(sh.getMaxColumns(), nc - sh.getMaxColumns());
-      var cells = grid.map(function (r) { var o = []; for (var c = 0; c < nc; c++) o.push(trialCell_(r[c])); return o; });
+      cells = grid.map(function (r) { var o = []; for (var c = 0; c < nc; c++) o.push(trialCell_(r[c])); return o; });
       var rg = sh.getRange(1, 1, nr, nc);
       var curNf = rg.getNumberFormats();   // 文字のまま・日付の所だけ書式を替える（そのほかは今の書式のまま）
       rg.setNumberFormats(cells.map(function (r, i) { return r.map(function (x, j) { return x.nf || curNf[i][j]; }); }));
@@ -167,7 +167,11 @@ function trialSeed_(req) {
       if (f.bg) r.setBackground(f.bg);
       if (f.color) r.setFontColor(f.color);
       if (f.size) r.setFontSize(f.size);
-      if (f.number_format) r.setNumberFormat(f.number_format);
+      if (f.number_format) {
+        // {"text":…}（文字のまま）のセルには数の書式を掛けない。掛けると Sheets が文字を数に読み直して化ける
+        var nfr = r.getNumberFormats(), r0 = r.getRow(), c0 = r.getColumn();
+        r.setNumberFormats(nfr.map(function (row, i) { return row.map(function (x, j) { var cc = cells[r0 - 1 + i] && cells[r0 - 1 + i][c0 - 1 + j]; return (cc && cc.nf === '@') ? x : f.number_format; }); }));
+      }
       if (f.align) r.setHorizontalAlignment(f.align);
       if (f.wrap !== undefined) r.setWrap(!!f.wrap);
     });
@@ -207,6 +211,14 @@ function trialSeed_(req) {
     (sd.hidden && sd.hidden.rows || []).forEach(function (r) { sh.hideRows(r); });
     (sd.hidden && sd.hidden.cols || []).forEach(function (c) { sh.hideColumns(colNum_(c)); });
     if (sd.tab_color) sh.setTabColor(sd.tab_color);
+    // ふつうの文字（{"text"} でない）が日付や数に読まれたセルは、そのセルだけ文字のままに直す（"2026年11月" が日付になる等。ほかのセルの書式は動かさない）
+    if (nr > 0 && nc > 0) {
+      var rgH = sh.getRange(1, 1, nr, nc), valsH = rgH.getValues();
+      for (var rh = 0; rh < nr; rh++) for (var ch = 0; ch < nc; ch++) {
+        var eh = grid[rh][ch];
+        if (typeof eh === 'string' && eh.charAt(0) !== '=' && valsH[rh][ch] !== eh) { var cellH = sh.getRange(rh + 1, ch + 1); cellH.setNumberFormat('@'); cellH.setValue(eh); }
+      }
+    }
     // 型の確かめ: 読み戻して、化けたセルを番地で返す
     if (nr > 0 && nc > 0) {
       var rg3 = sh.getRange(1, 1, nr, nc), vals = rg3.getValues(), fs = rg3.getFormulas();
