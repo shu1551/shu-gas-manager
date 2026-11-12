@@ -11,3 +11,11 @@ renumber	番号の列を1から振り直して
 renumber	No列を連番に直して
 renumber	通し番号をつけ直して
 renumber	番号 連番 振り直し
+dedupe	重複した行を削除して
+dedupe	同じ行がダブっているのを取り除いて
+dedupe	ダブりを消しといて
+dedupe	重複行 削除 クレンジング
+split.col	氏名の列を姓と名に分割して
+split.col	カンマで区切って別の列に分けて
+split.col	スペースで列を分けといて
+split.col	列 分割 区切り テキスト分流

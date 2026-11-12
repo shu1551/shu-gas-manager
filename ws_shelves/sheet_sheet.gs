@@ -56,3 +56,53 @@ SHELF['sheet.rename'] = function (ctx, op) {
 SHELF['sheet.move'] = function (ctx, op) {
   SHELF['sheet.add'](ctx, { shelf: 'sheet.add', move: { name: op.name, index: op.index } });
 };
+
+// 棚: sheet.delete
+// 題: シートを消す
+// 分類: シート
+// 語: シートを削除|シートを消|シートごと消|いらないシート|シートを捨て|タブを消
+// 違い: 名前変更は sheet.rename、シート追加は sheet.add
+// 引数: name*=シート
+// 例: 「古い集計シートを消して」 → {"shelf":"sheet.delete","name":"古い集計"}
+// 危ない: 消す
+// 触る: シート構成
+// 控え: 名前,全部
+SHELF['sheet.delete'] = function (ctx, op) {
+  need_(op, ['name']);
+  var ss = ctx.ss;
+  var s = sheetOf_(ss, op.name, '');
+  if (ss.getSheets().length <= 1) throw new ArgError('シートが1枚しかないため削除できません');
+  guardDelete_(ctx, 'シート「' + op.name + '」を削除します');
+  ss.deleteSheet(s);
+  chg_(ctx, null, '', 'シート「' + op.name + '」を削除');
+};
+
+// 棚: sheet.copy
+// 題: シートを複製する
+// 分類: シート
+// 語: シートを複製|シートをコピー|シートの写し|同じシートをもう|来月分を作|シートを複製して
+// 違い: シートの追加は sheet.add、名前変更は sheet.rename
+// 引数: name*=シート, as=文字, before=シート
+// 例: 「売上シートを複製して」 → {"shelf":"sheet.copy","name":"売上"}
+// 例: 「売上シートを写して名前を来月売上にして」 → {"shelf":"sheet.copy","name":"売上","as":"来月売上"}
+// 触る: シート構成
+// 控え: 名前,全部
+SHELF['sheet.copy'] = function (ctx, op) {
+  need_(op, ['name']);
+  var ss = ctx.ss;
+  var s = sheetOf_(ss, op.name, '');
+  var c = s.copyTo(ss);
+  var targetName = op.as;
+  if (targetName) {
+    if (ss.getSheetByName(targetName)) throw new ArgError('シート「' + targetName + '」はすでにあります');
+    c.setName(targetName);
+  }
+  if (op.before) {
+    var bs = sheetOf_(ss, op.before, '');
+    ss.setActiveSheet(c);
+    ss.moveActiveSheet(bs.getIndex());
+  }
+  ctx.createdSheets.push(c.getName());
+  ctx.curSheet = c.getName();
+  chg_(ctx, c, '', 'シート「' + op.name + '」を複製' + (targetName ? '（名前: ' + targetName + '）' : ''));
+};

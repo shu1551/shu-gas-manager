@@ -7,3 +7,43 @@ replace	営業部を営業課に置換して
 replace	全部の株を(株)に書き換えて
 replace	表記ゆれを一括で直したい
 replace	文字 置き換え 検索 一括
+find	セルから合計という文字を検索して
+find	未払いがどのセルにあるか探して
+find	完了って入っているセルはどこ？
+find	文字 検索 セル 番地
+clear.values	セル範囲の値をクリアして
+clear.values	B列の中身を空っぽにして
+clear.values	この表の数字だけ消しといて
+clear.values	値 クリア 消去
+clear.format	表の書式をクリアして
+clear.format	付けた色や罫線を消して元に戻して
+clear.format	ここの書式リセットしといて
+clear.format	書式 リセット 色 クリア
+clear.all	セル範囲をすべてクリアして
+clear.all	書式ごと全部消して白紙にして
+clear.all	この枠の中まっさらにしといて
+clear.all	すべて消去 全部クリア
+copy	セル範囲をコピーして別の場所に貼り付けて
+copy	同じ表を右の列に写して
+copy	A1からB10をD列にコピーしといて
+copy	範囲 複製 コピー 貼り付け
+copy.values	数式を値にして固定して
+copy.values	計算結果を値として貼り付けて
+copy.values	ここ式を値に変えといて
+copy.values	値貼り付け 数式 値化
+copy.format	見出しの書式をコピーして貼り付けて
+copy.format	A列と同じ見た目に揃えて
+copy.format	ここの書式だけ写しといて
+copy.format	書式 コピー 貼り付け
+fill.series	A列に1から連番を入れて
+fill.series	通し番号を下まで埋めて
+fill.series	1から順に番号振っといて
+fill.series	連番 入力 自動採番
+fill.date	A列に日付を連続で埋めて
+fill.date	カレンダー用に毎日の日付を下まで入れて
+fill.date	1日ずつ日付下まで伸ばしといて
+fill.date	日付 連続データ フィル
+fill.down	先頭の計算式を下方向にコピーして
+fill.down	上のセルの内容を下まで写して
+fill.down	式を下までオートフィルで伸ばしといて
+fill.down	下 コピー オートフィル

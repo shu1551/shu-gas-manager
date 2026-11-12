@@ -191,3 +191,115 @@ SHELF['sort'] = function (ctx, op) {
 SHELF['filter.where'] = function (ctx, op) {
   SHELF['sort'](ctx, { shelf: 'sort', where: { col: op.col, equals: op.equals }, sheet: op.sheet });
 };
+
+// 棚: filter.on
+// 題: フィルタを付ける
+// 分類: 絞る
+// 語: フィルタを付|フィルタをかけ|フィルタを設定|絞り込めるように|見出しに▼|オートフィルタ
+// 違い: 条件で絞り込むなら filter.where、並べ替えなら sort
+// 引数: range=範囲
+// 例: 「表にフィルタを付けて」 → {"shelf":"filter.on"}
+// 例: 「A1からE50にフィルタを設定して」 → {"shelf":"filter.on","range":"A1:E50"}
+// 触る: フィルタ
+// 控え: 今
+SHELF['filter.on'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var full = op.range ? sh.getRange(op.range) : (function () {
+    var t = findTable_(sh);
+    return t ? sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
+  })();
+  var f = sh.getFilter(); if (f) f.remove();
+  full.createFilter();
+  chg_(ctx, sh, full.getA1Notation(), 'フィルタを設定');
+};
+
+// 棚: dedupe
+// 題: 重複した行を消す
+// 分類: 整える
+// 語: 重複を削除|重複を消|重複行|ダブりを消|同じ行を消|重複を取り除|重複行を削除
+// 違い: 全体の整頓なら tidy、空行や全角半角の整理なら seiri
+// 引数: cols=列[]
+// 例: 「重複した行を削除して」 → {"shelf":"dedupe"}
+// 例: 「メールアドレス列が同じ重複行を消して」 → {"shelf":"dedupe","cols":["メールアドレス"]}
+// 危ない: 消す
+// 触る: 値
+// 控え: 今
+SHELF['dedupe'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), t = needTable_(sh);
+  var colIndices = [];
+  if (op.cols) {
+    var cols = Array.isArray(op.cols) ? op.cols : [op.cols];
+    colIndices = cols.map(function (c) { return colIndexOf_(t, c) - 1; });
+  }
+  var seen = {}, dups = [];
+  for (var d = t.firstData; d <= t.lastData; d++) {
+    var row = t.vals[d - 1];
+    var key = colIndices.length
+      ? JSON.stringify(colIndices.map(function (ci) { return row[ci]; }))
+      : JSON.stringify(row.slice(t.firstCol - 1, t.lastCol));
+    if (seen[key]) dups.push(d); else seen[key] = 1;
+  }
+  if (!dups.length) {
+    note_(ctx, '重複行はありませんでした（変更なし）');
+    return;
+  }
+  guardDelete_(ctx, (colIndices.length ? '指定列が同じ' : '全列が同じ') + '重複行 ' + dups.join('・') + ' 行目を消します');
+  for (var k = dups.length - 1; k >= 0; k--) sh.deleteRow(dups[k]);
+  chg_(ctx, sh, dups.join('・') + ' 行目', '重複行を削除（' + dups.length + ' 行）');
+};
+
+// 棚: split.col
+// 題: 文字を列に分ける
+// 分類: 整える
+// 語: 列に分け|列を分割|区切って分|カンマで分|スペースで分|姓と名に分|文字を分割
+// 違い: 列を挿入するだけなら cols.insert
+// 引数: col*=列, by=選択(comma/space/tab/slash/hyphen/custom)=comma, sep=文字
+// 例: 「氏名列を姓と名にスペースで分けて」 → {"shelf":"split.col","col":"氏名","by":"space"}
+// 例: 「住所列をカンマで列に分割して」 → {"shelf":"split.col","col":"住所","by":"comma"}
+// 危ない: 上書き
+// 触る: 値
+// 控え: 今
+SHELF['split.col'] = function (ctx, op) {
+  need_(op, ['col']);
+  var sh = sheetCtx_(ctx, op), t = needTable_(sh);
+  var ci = colIndexOf_(t, op.col);
+  var by = op.by || 'comma';
+  var re;
+  if (by === 'comma') re = ',';
+  else if (by === 'space') re = /\s+/;
+  else if (by === 'tab') re = '\t';
+  else if (by === 'slash') re = '/';
+  else if (by === 'hyphen') re = '-';
+  else if (by === 'custom') re = op.sep !== undefined ? op.sep : ',';
+  else throw new ArgError('棚「split.col」の by の値が不正です: ' + by);
+
+  var numRows = t.lastData - t.firstData + 1;
+  var colVals = sh.getRange(t.firstData, ci, numRows, 1).getValues();
+  var splitRows = [];
+  var maxParts = 1;
+  for (var r = 0; r < numRows; r++) {
+    var str = String(colVals[r][0] !== null && colVals[r][0] !== undefined ? colVals[r][0] : '');
+    var parts = (str === '') ? [''] : str.split(re);
+    if (parts.length > maxParts) maxParts = parts.length;
+    splitRows.push(parts);
+  }
+  if (maxParts <= 1) {
+    note_(ctx, '区切り文字が見つからず、分割されませんでした（変更なし）');
+    return;
+  }
+  var extraCols = maxParts - 1;
+  var checkRg = sh.getRange(t.firstData, ci + 1, numRows, extraCols);
+  guardOverwrite_(ctx, checkRg, '分割先「' + checkRg.getA1Notation() + '」');
+
+  var outVals = [];
+  for (var i = 0; i < numRows; i++) {
+    var p = splitRows[i];
+    var row = [];
+    for (var j = 0; j < maxParts; j++) {
+      row.push(j < p.length ? p[j] : '');
+    }
+    outVals.push(row);
+  }
+  sh.getRange(t.firstData, ci, numRows, maxParts).setValues(outVals);
+  chg_(ctx, sh, a1_(t.firstData, ci, numRows, maxParts), op.col + '列を ' + maxParts + ' 列に分割');
+};

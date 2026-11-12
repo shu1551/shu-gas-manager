@@ -11,3 +11,11 @@ sheet.move	集計シートを一番左に移動して
 sheet.move	シートの順番を入れ替えたい
 sheet.move	売上のタブを先頭にして
 sheet.move	シート 並び順 移動
+sheet.delete	シートを削除して
+sheet.delete	いらないシートを無くして
+sheet.delete	このタブ消しといて
+sheet.delete	シート 削除 不要
+sheet.copy	テンプレートのシートを複製して
+sheet.copy	同じシートをもう1枚作って
+sheet.copy	来月分のシートを作っておいて
+sheet.copy	シート コピー 複製

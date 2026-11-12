@@ -676,6 +676,58 @@ function note_(ctx, s) { ctx.notes.push(s); }
 function chg_(ctx, sh, a1, what) { ctx.changed.push((sh ? sh.getName() + '!' : '') + a1 + (what ? ' ' + what : '')); }
 function need_(op, keys) { keys.forEach(function (k) { if (op[k] === undefined || op[k] === null || op[k] === '') throw new ArgError('棚「' + op.shelf + '」に「' + k + '」が要ります'); }); }
 function guardDelete_(ctx, msg) { if (!ctx.ok) throw new Blocked(msg + '（人の値を消すので、「消してよい」の承認＝ok=True が要ります）'); }
+function guardOverwrite_(ctx, rg, msg) {
+  if (ctx.ok) return;
+  var vals = rg.getValues();
+  var r0 = rg.getRow(), c0 = rg.getColumn();
+  var hit = 0, first3 = [];
+  for (var r = 0; r < vals.length; r++) {
+    for (var c = 0; c < vals[r].length; c++) {
+      var v = vals[r][c];
+      if (v !== '' && v !== null && v !== undefined) {
+        hit++;
+        if (first3.length < 3) first3.push(a1_(r0 + r, c0 + c));
+      }
+    }
+  }
+  if (hit > 0) {
+    var desc = (msg ? msg + '（' : '（') + '書く先に空でないセルが ' + hit + ' 個あります: ' + first3.join('・') + (hit > 3 ? ' など' : '') + '。「上書きしてよい」の承認＝ok=True が要ります）';
+    throw new Blocked(desc);
+  }
+}
+function rgb_(s) {
+  if (s === undefined || s === null || s === '') return null;
+  if (typeof s !== 'string') return s;
+  var str = s.trim();
+  if (str === 'なし' || str.toLowerCase() === 'none' || str.toLowerCase() === 'transparent' || str.toLowerCase() === 'clear') return null;
+  if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(str)) {
+    if (str.length === 4) {
+      return ('#' + str[1] + str[1] + str[2] + str[2] + str[3] + str[3]).toUpperCase();
+    }
+    return str.toUpperCase();
+  }
+  var map = {
+    '黒': '#000000', 'black': '#000000',
+    '白': '#FFFFFF', 'white': '#FFFFFF',
+    '赤': '#FF0000', 'red': '#FF0000',
+    '青': '#0000FF', 'blue': '#0000FF',
+    '緑': '#008000', 'green': '#008000',
+    '黄': '#FFFF00', 'yellow': '#FFFF00',
+    '橙': '#FFA500', 'オレンジ': '#FFA500', 'orange': '#FFA500',
+    '紫': '#800080', 'purple': '#800080',
+    '桃': '#FFC0CB', 'ピンク': '#FFC0CB', 'pink': '#FFC0CB',
+    '灰': '#808080', '灰色': '#808080', 'グレー': '#808080', 'gray': '#808080', 'grey': '#808080',
+    '水色': '#00FFFF', 'シアン': '#00FFFF', 'cyan': '#00FFFF', 'lightblue': '#ADD8E6',
+    '紺': '#000080', 'ネイビー': '#000080', 'navy': '#000080',
+    '茶': '#8B4513', '茶色': '#8B4513', 'brown': '#8B4513',
+    '薄赤': '#FCE4D6', '薄青': '#D9E1F2', '薄緑': '#E2EFDA', '薄黄': '#FFF2CC', '薄灰': '#F2F2F2', '薄灰色': '#F2F2F2',
+    'lightred': '#FCE4D6', 'lightgreen': '#E2EFDA', 'lightyellow': '#FFF2CC', 'lightgray': '#F2F2F2'
+  };
+  var k = str.toLowerCase();
+  if (map[k] !== undefined) return map[k];
+  if (map[str] !== undefined) return map[str];
+  throw new ArgError('知らない色の名前です: 「' + str + '」');
+}
 function shiftFormula_(f, off) {
   if (!off || typeof f !== 'string' || f.charAt(0) !== '=') return f;
   return f.replace(/(\$?[A-Z]{1,3}\$?)(\d+)/g, function (m, c, r) { return c.indexOf('$') >= 0 && /\$$/.test(c) ? m : c + (parseInt(r) + off); });

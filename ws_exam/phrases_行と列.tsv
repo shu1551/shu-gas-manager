@@ -23,3 +23,11 @@ cols.move	A列とB列を入れ替えて
 cols.move	列の順番を変えたい
 ?cols.move	この列を右に動かして
 cols.move	列 移動 並べ替え
+freeze	1行目を固定して
+freeze	スクロールしても見出しが動かないようにして
+freeze	ウィンドウ枠の固定しといて
+freeze	行固定 列固定 枠固定
+unfreeze	行と列の固定を解除して
+unfreeze	見出しの固定を外して自由にスクロールできるようにして
+unfreeze	枠固定やめて
+unfreeze	固定解除 フリーズ解除

@@ -111,3 +111,38 @@ SHELF['cols.delete'] = function (ctx, op) {
 SHELF['cols.move'] = function (ctx, op) {
   SHELF['rows'](ctx, { shelf: 'rows', action: 'move', cols: [op.from], from: op.from, to: op.to, sheet: op.sheet });
 };
+
+// 棚: freeze
+// 題: 見出しを固定する
+// 分類: 行と列
+// 語: 見出しを固定|行を固定|列を固定|枠を固定|動かない|スクロールしても|ウィンドウ枠の固定
+// 違い: 固定を外すなら unfreeze
+// 引数: rows=数=1, cols=数=0
+// 例: 「1行目の見出しを固定して」 → {"shelf":"freeze","rows":1}
+// 例: 「見出し行とA列を固定して」 → {"shelf":"freeze","rows":1,"cols":1}
+// 触る: 固定
+// 控え: 今
+SHELF['freeze'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var r = op.rows !== undefined ? parseInt(op.rows) : 1;
+  var c = op.cols !== undefined ? parseInt(op.cols) : 0;
+  sh.setFrozenRows(r);
+  sh.setFrozenColumns(c);
+  chg_(ctx, sh, '', '行固定: ' + r + '、列固定: ' + c);
+};
+
+// 棚: unfreeze
+// 題: 固定を外す
+// 分類: 行と列
+// 語: 固定を解除|固定を外|固定をやめ|固定をなく|枠固定を解除|固定しない
+// 違い: 固定するなら freeze
+// 引数: なし
+// 例: 「ウィンドウ枠の固定を解除して」 → {"shelf":"unfreeze"}
+// 触る: 固定
+// 控え: 今
+SHELF['unfreeze'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  sh.setFrozenRows(0);
+  sh.setFrozenColumns(0);
+  chg_(ctx, sh, '', '固定を解除');
+};
