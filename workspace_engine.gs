@@ -234,7 +234,7 @@ function restoreSheet_(ss, b) {
   try {
     if (!orig) {
       // 元のシートが消えていた：控えを新しいシートとして戻す
-      tmp.setName(b.name); ss.setActiveSheet(tmp); ss.moveActiveSheet(b.index + 1); tmp = null;
+      tmp.setName(b.name); ss.setActiveSheet(tmp); ss.moveActiveSheet(Math.min(b.index, ss.getNumSheets())); tmp = null;   // b.index は 1 始まり（+1 すると末尾のシートで「引数が無効」）
       return;
     }
     if (orig.getName() !== b.name) orig.setName(b.name);
