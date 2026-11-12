@@ -11,3 +11,13 @@ pivot.new	売上のピボットテーブルを作って
 pivot.new	部署と商品でクロス集計表を作成して
 pivot.new	縦と横で集計してくれる？
 ?pivot.new	ピボット クロス集計 新規作成
+chart.new	売上の棒グラフを作って
+chart.new	月別の推移を折れ線グラフにして
+chart.new	商品別の円グラフを作成して
+chart.new	表をグラフにして
+?chart.new	グラフ 作成 棒グラフ 折れ線
+chart.delete	グラフを消して
+chart.delete	売上推移グラフを削除して
+chart.delete	グラフをなくして
+chart.delete	グラフはいらないから消して
+?chart.delete	グラフ 削除 消去

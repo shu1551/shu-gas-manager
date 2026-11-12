@@ -191,3 +191,88 @@ SHELF['pivot.new'] = function (ctx, op) {
   ctx.curSheet = src.getName();
   chg_(ctx, dst, 'A1', '「' + src.getName() + '」からピボットテーブルを作成');
 };
+
+// 棚: chart.new
+// 題: グラフを作る
+// 分類: 集計
+// 語: グラフを作|グラフにして|グラフを入れ|棒グラフ|折れ線|円グラフ|推移
+// 違い: 式の集計表なら summary。ピボットテーブルなら pivot.new
+// 引数: range=範囲, type=選択(column/bar/line/pie/area/scatter)=column, title=文字, at=範囲
+// 例: 「売上の棒グラフを作って」 → {"shelf":"chart.new","type":"column"}
+// 例: 「売上の推移を折れ線グラフにして」 → {"shelf":"chart.new","type":"line","title":"売上推移"}
+// 触る: グラフ
+// 控え: 今
+SHELF['chart.new'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var full = op.range ? sh.getRange(op.range) : (function () {
+    var t = findTable_(sh);
+    return t ? sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
+  })();
+  if (full.getLastRow() === 0 || full.getLastColumn() === 0) {
+    throw new ArgError('グラフにするデータがありません');
+  }
+  var typeStr = (op.type || 'column').toLowerCase();
+  var typeMap = {
+    column: Charts.ChartType.COLUMN,
+    bar: Charts.ChartType.BAR,
+    line: Charts.ChartType.LINE,
+    pie: Charts.ChartType.PIE,
+    area: Charts.ChartType.AREA,
+    scatter: Charts.ChartType.SCATTER
+  };
+  var chartType = typeMap[typeStr];
+  if (!chartType) throw new ArgError('種類「' + typeStr + '」は使えません（column/bar/line/pie/area/scatter）');
+  var b = sh.newChart().setChartType(chartType);
+  b.addRange(full);
+  if (op.title) b.setOption('title', op.title);
+  if (op.at) {
+    var atRg = sh.getRange(op.at);
+    b.setPosition(atRg.getRow(), atRg.getColumn(), 0, 0);
+  } else {
+    var atRow = full.getRow();
+    var atCol = full.getLastColumn() + 2;
+    b.setPosition(atRow, atCol, 0, 0);
+  }
+  sh.insertChart(b.build());
+  ctx.curSheet = sh.getName();
+  chg_(ctx, sh, full.getA1Notation(), 'グラフを作成（' + typeStr + (op.title ? '・' + op.title : '') + '）');
+};
+
+// 棚: chart.delete
+// 題: グラフを消す
+// 分類: 集計
+// 語: グラフを消|グラフを削除|グラフをなく|グラフはいらない|グラフ削除
+// 違い: ピボットテーブルを消すなら sheet.delete。表の消去なら range.clear
+// 引数: title=文字
+// 例: 「グラフを消して」 → {"shelf":"chart.delete"}
+// 例: 「売上推移グラフを削除して」 → {"shelf":"chart.delete","title":"売上推移"}
+// 危ない: 消す
+// 触る: グラフ
+// 控え: 今
+SHELF['chart.delete'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var charts = sh.getCharts();
+  if (!charts.length) {
+    note_(ctx, 'シート「' + sh.getName() + '」にグラフはありません（変更なし）');
+    return;
+  }
+  var targets = [];
+  if (op.title) {
+    charts.forEach(function (c) {
+      var t = c.getOptions() && c.getOptions().get('title');
+      if (t === op.title) targets.push(c);
+    });
+    if (!targets.length) {
+      note_(ctx, 'グラフ「' + op.title + '」は見つかりませんでした（変更なし）');
+      return;
+    }
+  } else {
+    targets = charts;
+  }
+  guardDelete_(ctx, 'シート「' + sh.getName() + '」のグラフ' + (op.title ? '「' + op.title + '」' : '（' + targets.length + ' 個）') + 'を削除します');
+  targets.forEach(function (c) {
+    sh.removeChart(c);
+  });
+  ctx.curSheet = sh.getName();
+  chg_(ctx, sh, '', 'グラフを削除' + (op.title ? '（' + op.title + '）' : '（' + targets.length + ' 個）'));
+};

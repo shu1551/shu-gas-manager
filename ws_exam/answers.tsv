@@ -5,7 +5,7 @@ APIを直接使って整えて	api
 batchUpdate 棚に無い api	api
 C列の重複消して連番ふり直して	seiri,dedupe,replace,renumber,cf.dup
 重複してるとこ赤くして	cf.dup,format,dedupe
-売上が100万以上の行を目立たせて	cf.add,validation.number,write,copy,rows.hide
+売上が100万以上の行を目立たせて	cf.add,validation.number,chart.new,write,copy
 田中さんの行だけ見せて	filter.where
 これ印刷用にA4横で	
 さっきの戻して	
@@ -13,7 +13,7 @@ A列とB列入れ替えて	cols.move,width,fill.series,rows.move,sheet.move
 合計のとこ太字で黄色に	format
 他の人が触れないようにして、でもB2:B20だけは打てるように	protect.sheet,write
 これ見やすくして	tidy
-月ごとの売上の推移を出して	cf.add,pivot.new,sheet.color
+月ごとの売上の推移を出して	chart.new,cf.add,pivot.new,chart.delete,sheet.color
 プルダウンで未着手・進行中・完了を選べるようにして、完了は灰色に	validation.list,validation.clear
 全角の数字を半角に	seiri,validation.number
 空白行を詰めて	seiri
@@ -63,7 +63,7 @@ C列にプルダウンの入力規則を付けて	validation.list,validation.cle
 D2:D50でリストから選ぶように設定して	validation.list,filter.on,fill.down
 プルダウン ドロップダウン リスト 選択肢	validation.list,validation.clear
 D列に数値だけ入るように入力規則を設定して	validation.number,validation.list,validation.clear,filter.on,validation.date
-年齢列には0以上の数字しか入れられないようにして	validation.number,seiri,cf.add,fill.series
+年齢列には0以上の数字しか入れられないようにして	validation.number,seiri,cf.add,chart.new,fill.series
 数量列に数字以外は入らないように制限して	validation.number,validation.date
 数字だけ 数値限定 入力制限	validation.number,clear.values,seiri
 申請日列は日付だけ入るように設定して	validation.date,filter.on,validation.number
@@ -94,7 +94,7 @@ A1:F20に「売上データ」という名前を付けて	name.add,name.delete,c
 単価の列を名前付き範囲「商品単価」として定義して	name.add,name.delete,name.list,format,sheet.rename
 この範囲に名前をつけて式で呼べるようにしたい	name.add,protect.range,name.delete,name.list,clear.values
 名前付き範囲 作成 定義	name.add,name.delete,name.list,sheet.rename
-「売上データ」という名前付き範囲を削除して	name.delete,name.add,name.list,clear.values,sheet.rename
+「売上データ」という名前付き範囲を削除して	name.delete,name.add,name.list,chart.delete,clear.values
 定義した名前「商品単価」を消して	name.list,name.delete,name.add
 いらない名前付き範囲を消したい	name.delete,name.add,rows.delete,cols.delete,name.list
 名前付き範囲 削除 消す	name.delete,name.add,name.list,dedupe,cf.clear
@@ -114,7 +114,7 @@ A1:F20に「売上データ」という名前を付けて	name.add,name.delete,c
 No列を連番に直して	renumber,replace,doc.replace,seiri
 通し番号をつけ直して	renumber,replace,fill.series
 番号 連番 振り直し	renumber,fill.series
-重複した行を削除して	rows.delete,dedupe,name.delete,cf.dup
+重複した行を削除して	rows.delete,dedupe,name.delete,cf.dup,chart.delete
 同じ行がダブっているのを取り除いて	dedupe,rows.delete,cols.delete
 ダブりを消しといて	dedupe,cf.dup
 重複行 削除 クレンジング	dedupe,rows.delete,seiri
@@ -135,7 +135,7 @@ D列の名前をスペースで姓と名に分けといて	split.col,name.delete
 文書の「株式会社」を全部「(株)」に直して	replace,doc.replace,doc.section,doc.new,doc.table
 文書 置換 語句	doc.replace,replace
 概要の節を書き直して	doc.section,replace
-概要の節を削除して	doc.section,dedupe,name.delete
+概要の節を削除して	doc.section,dedupe,name.delete,chart.delete
 決定事項の節を「保留」の1行に差し替えて	doc.section
 文書 節 差し替え 削除	doc.section
 文書の最後に項目と内容の2列の表を入れて	doc.table,doc.append,doc.new,doc.replace,doc.section
@@ -214,7 +214,7 @@ D2の内容をD3からD20まで下に写して	copy,fill.down
 5行目と6行目の間に空行を1つ入れたい	rows.insert,doc.table,rows.move,group.remove,api
 行を増やしたいんだけど	rows.insert
 行 追加 挿入 差し込み	rows.insert,cols.insert
-3行目を削除して	rows.delete,dedupe,name.delete,rows.insert,group.remove
+3行目を削除して	rows.delete,dedupe,name.delete,chart.delete,rows.insert
 この行いらないから消して	rows.delete,cols.delete
 10行目は不要なので取り除いて	rows.delete,cols.delete,rows.hide,group.rows,group.remove
 行 削除 消去	rows.delete,dedupe
@@ -226,7 +226,7 @@ C列の前に列を挿入して	cols.insert,rows.insert,doc.table,validation.cle
 B列とC列の間に空の列を足して	cols.insert,width,cols.move,validation.clear,cf.dup
 列を1つ増やしたい	cols.insert
 列 追加 挿入	cols.insert,rows.insert
-B列を削除して	cols.delete,dedupe,name.delete
+B列を削除して	cols.delete,dedupe,name.delete,chart.delete
 この列いらないから消して	cols.delete,rows.delete,renumber
 D列は不要なので取り除いて	rows.delete,cols.delete,dedupe
 列 削除 消去	cols.delete
@@ -314,10 +314,20 @@ F列の条件付き書式を削除して	cf.clear,cf.add,format,cf.list,name.del
 部署別に件数を集計して	summary,pivot.new
 担当ごとの売上をまとめて	summary,pivot.new
 集計 項目別 部署ごと	summary,pivot.new
-売上のピボットテーブルを作って	pivot.new,table.new,cf.add,summary
+売上のピボットテーブルを作って	pivot.new,table.new,chart.new,cf.add,summary
 部署と商品でクロス集計表を作成して	pivot.new,summary,table.new
 縦と横で集計してくれる？	pivot.new
 ピボット クロス集計 新規作成	pivot.new
+売上の棒グラフを作って	chart.new,chart.delete,cf.add,cf.scale,pivot.new
+月別の推移を折れ線グラフにして	chart.new,chart.delete,pivot.new
+商品別の円グラフを作成して	chart.new,pivot.new,chart.delete
+表をグラフにして	chart.new,chart.delete
+グラフ 作成 棒グラフ 折れ線	chart.new,chart.delete
+グラフを消して	chart.delete,chart.new
+売上推移グラフを削除して	chart.delete,chart.new,name.delete,dedupe,cf.scale
+グラフをなくして	chart.delete,chart.new
+グラフはいらないから消して	chart.delete,rows.delete,cols.delete,chart.new
+グラフ 削除 消去	chart.delete,chart.new
 棚に無いけど、1 行目のセルを青い背景にして	api,format,doc.table
 見出しと箇条書きの文書を書いて	doc.new,write,doc.section,doc.style,doc.replace
 最後に1行足して	doc.append,rows.insert,total
@@ -339,13 +349,13 @@ A1からE50にフィルタを設定して	filter.on,filter.where,filter.off,clea
 住所列をカンマで列に分割して	split.col
 フィルタを解除して全部表示に戻して	filter.off,filter.where,filter.on,cols.show,group.remove
 C列に未着手、進行中、完了のプルダウンを付けて	validation.list,validation.clear,checkbox,find
-D列には0以上の数字だけ入れられるようにして	validation.number,seiri,cf.add,clear.values,fill.series
+D列には0以上の数字だけ入れられるようにして	validation.number,seiri,cf.add,chart.new,clear.values
 A列は日付だけ入るようにして	validation.date,validation.number
 E列にチェックボックスを付けて	checkbox,validation.list
 C列のプルダウンを外して	validation.clear,validation.list,width,cf.dup,copy.values
 A1からC10の範囲を保護して	protect.range,protect.remove,clear.format,clear.values,copy
 A1:F20に売上データという名前を付けて	name.add,name.delete,copy,sheet.rename,filter.on
-売上データという名前付き範囲を削除して	name.delete,name.add,name.list,clear.values,sheet.rename
+売上データという名前付き範囲を削除して	name.delete,name.add,name.list,chart.delete,clear.values
 定義されている名前付き範囲を教えて	name.add,name.list,name.delete,cf.list,sheet.rename
 見出しを太字で青い背景に	format,api,doc.new,doc.section,doc.style
 金額の列を桁区切りに	format,sort,table.new,total,summary
@@ -353,14 +363,15 @@ A列を幅200にして	width,name.add,write
 B列とC列の幅を中身に合わせて	width,cols.move,validation.clear,cf.dup,total
 売上が100万以上のセルを赤く	cf.add,format,write,find,fill.down
 C列の重複を赤く	cf.dup,format,validation.clear,width,copy.values
-売上列を青のグラデーションにして	cf.scale,name.add,name.delete,sheet.copy
+売上列を青のグラデーションにして	cf.scale,name.add,name.delete,chart.new,chart.delete
 条件付き書式を全部消して	cf.add,cf.clear,clear.all,format,cf.list
 設定されている条件付き書式を教えて	cf.add,cf.list,format,cf.clear,name.list
 表を1行おきに薄いグレーにして	banding.add,banding.remove
 1行おきについてる色を外して	banding.remove,banding.add
 見出しが名前と金額の表を作って	table.new,format,summary,total,doc.new
-部署別・月別の売上ピボットテーブルを作って	pivot.new,table.new,summary,copy,sheet.rename
+部署別・月別の売上ピボットテーブルを作って	pivot.new,table.new,summary,chart.new,copy
 商品ごとの数量ピボットを作って	pivot.new
+売上の推移を折れ線グラフにして	chart.new,chart.delete,cf.add,cf.scale
 B2に100、B3に200を入れて	write,fill.series,doc.table,cf.add,clear.values,width
 営業部を営業課に置き換えて	replace,doc.replace,protect.sheet
 売上合計が入っているセルを探して	find,cf.add
