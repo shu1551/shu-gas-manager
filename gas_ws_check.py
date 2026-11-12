@@ -220,6 +220,11 @@ def run(write=True, exam_dir=EXAM_DIR, answers_path=ANSWERS):
     if over:
         notes.append(f"語が 8 個を超えている札が {len(over)} 本あります（番頭が 8 個に絞るまで止めない）: " + "、".join(f"{n}={c}" for n, c in over))
 
+    # api の使われ方（2 回以上使われた型は、棚に上げる候補）
+    import gas_ws_api
+    for t_, n_, why_ in gas_ws_api.used_types():
+        notes.append(f"api で {n_} 回使われた型: {t_}（棚の候補）" + (f" 例: {why_}" if why_ else ""))
+
     # 手元の記録
     mp = gas_ws_find.MISSES_FILE
     if mp.exists():

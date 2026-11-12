@@ -1,0 +1,5 @@
+# 汎用の手 api（棚に無い頼みの受け皿）。期待の棚<TAB>頼みの文。? ＝聞き返しも正解
+api	棚に無い設定だけどA1:C1の背景をSheetsAPIで青にして
+api	SheetsAPIのbatchUpdateで2行目を隠して
+?api	APIを直接使って整えて
+?api	batchUpdate 棚に無い api

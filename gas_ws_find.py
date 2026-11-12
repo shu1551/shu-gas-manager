@@ -28,9 +28,9 @@ MISSES_MAX = 500
 NAME_BONUS = 20
 CLAUSE_SPLIT = re.compile(r"[。、，,\n]|それから|ついでに|あと|でも")
 
-HEAD_OK = "棚の候補（{n} 本）。合う物を選んで ws_do で撃つ。合わなければ語を変えて ws_find、無ければ「棚にありません」と答える:"
-HEAD_WEAK = "近い棚は見つかりません。語を変えて引くか、棚に無いと答える。いちばん近い候補（{n} 本）:"
-HEAD_NONE = "近い棚は見つかりません。語を変えて引くか、棚に無いと答える。"
+HEAD_OK = "棚の候補（{n} 本）。合う物を選んで ws_do で撃つ。合わなければ語を変えて ws_find、棚に無ければ api（Sheets API の batchUpdate）を使う:"
+HEAD_WEAK = "近い棚は見つかりません。語を変えて引くか、棚に無ければ api（Sheets API の batchUpdate。札は ws_find の ask=\"棚:api\"）を使う。いちばん近い候補（{n} 本）:"
+HEAD_NONE = "近い棚は見つかりません。語を変えて引くか、棚に無ければ api（Sheets API の batchUpdate。札は ws_find の ask=\"棚:api\"）を使う。"
 
 _HIRA = re.compile(r"^[ぁ-ゟ]+$")
 

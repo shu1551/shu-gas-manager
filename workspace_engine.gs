@@ -20,6 +20,7 @@ var STYLE = {
 
 // ---------------------------------------------------------------- 入口
 
+var DYNAMIC = {};   // 棚ごとに、控えるシートと触る物をその呼びの引数から決める口（ふつうは空。棚のファイルが名前で登録する）
 var EXTRA_ACTIONS = {};   // 別の入口を足すときの口（ふつうは空。エンジンに別のファイルを足すと、そこが名前で登録する）
 
 function doGet(e) { return json_({ ok: true, engine: 'shu-workspace-engine', version: ENGINE_VERSION }); }
@@ -294,7 +295,10 @@ function restoreSheet_(ss, b) {
 var SIDE_ITEMS = ['隠し', 'グループ', '保護', '名前', 'タブ色', 'グラフ'];
 function sideItems_(ops) {
   var set = {};
-  ops.forEach(function (o) { var c = CATALOG[o.shelf]; if (c) c.touch.forEach(function (x) { if (SIDE_ITEMS.indexOf(x) >= 0) set[x] = 1; }); });
+  ops.forEach(function (o) {
+    var c = CATALOG[o.shelf], touch = DYNAMIC[o.shelf] ? DYNAMIC[o.shelf].touch(o) : (c ? c.touch : []);
+    touch.forEach(function (x) { if (SIDE_ITEMS.indexOf(x) >= 0) set[x] = 1; });
+  });
   return Object.keys(set);
 }
 function hiddenRuns_(meta) {
@@ -675,6 +679,7 @@ function touchedSheets_(ctx, ops) {
   };
   var def = ctx.sheetName || ss.getSheets()[0].getName();
   ops.forEach(function (op) {
+    if (DYNAMIC[op.shelf]) { DYNAMIC[op.shelf].sheets(ctx, op).forEach(add); return; }   // 控えるシートを引数から決める棚
     var c = CATALOG[op.shelf], bk = c && c.backup ? c.backup : ['今'];
     bk.forEach(function (b) {
       if (b === '今') add(op.sheet || def);

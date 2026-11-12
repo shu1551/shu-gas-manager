@@ -29,6 +29,10 @@ _SHELF_LINE = re.compile(r"^\s*SHELF\[\s*'([^']*)'\s*\]\s*=")
 _HEAD_LINE = re.compile(r"^//\s*([^\s:：]+)\s*[:：]\s?(.*)$")
 
 
+# 棚ごとの追加の形の検査（引数の形の後に呼ぶ）。{棚の名前: 関数(op) → 問題の文 or None}。棚の側のモジュールが自分で登録する
+EXTRA_CHECKS = {}
+
+
 class CatalogError(Exception):
     pass
 

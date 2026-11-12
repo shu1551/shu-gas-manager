@@ -143,6 +143,9 @@ function trialSeed_(req) {
   var ss = trialOpen_(req.id);
   var sheets = req.sheets || [];
   if (!sheets.length) throw new ArgError('sheets が空です');
+  // 名前付き範囲は API で全部消す（シートを消すと SpreadsheetApp からは見えなくなるが、API には残り、同じ名前を足せなくなる）
+  var oldNames = (Sheets.Spreadsheets.get(ss.getId(), { fields: 'namedRanges(namedRangeId)' }).namedRanges || []);
+  if (oldNames.length) Sheets.Spreadsheets.batchUpdate({ requests: oldNames.map(function (n) { return { deleteNamedRange: { namedRangeId: n.namedRangeId } }; }) }, ss.getId());
   var tmp = ss.insertSheet('__seed_tmp__' + Date.now());
   ss.getSheets().forEach(function (s) { if (s.getSheetId() !== tmp.getSheetId()) ss.deleteSheet(s); });
   ss.getNamedRanges().forEach(function (n) { n.remove(); });

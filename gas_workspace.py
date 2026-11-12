@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import gas_ws_api
 import gas_ws_catalog
 import gas_ws_find
 
@@ -51,7 +52,7 @@ class WorkspaceTimeout(WorkspaceError):
 def _engine_texts(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
     """GAS に入れる順の (名前, 本文): 共通部 → Catalog（札から作る）→ 棚のファイル（名前の順）"""
     cat = gas_ws_catalog.load(shelf_dir)
-    out = [("Engine", Path(common_path).read_text(encoding="utf-8")), ("Catalog", gas_ws_catalog.build_catalog_gs(cat))]
+    out = [("Engine", Path(common_path).read_text(encoding="utf-8")), ("Catalog", gas_ws_catalog.build_catalog_gs(cat)), ("ApiTypes", gas_ws_api.build_types_gs())]
     for p in gas_ws_catalog.shelf_files(shelf_dir):
         out.append((p.stem, p.read_text(encoding="utf-8")))
     return out
@@ -119,6 +120,7 @@ class WorkspaceManager:
         self.finder = gas_ws_find.Finder(self.catalog, synonyms=gas_ws_find.load_synonyms(self.shelf_dir / "synonyms.txt"),
                                          guide=gas_ws_find.load_guide(self.shelf_dir / "guide.txt"))
         self.misses_path = HERE / ".ws_misses.tsv"      # 弱かった頼み（git に入れない）
+        self.api_uses_path = gas_ws_api.USES_FILE        # 撃った api の型の記録（git に入れない）
         self.engine_title = ENGINE_TITLE      # エンジンの GAS プロジェクトの名前（別のエンジンを使う道具が差し替える）
         self.extra_texts = []                 # 共通部・棚のあとに足すファイル [(名前, 本文)]（別のエンジンの入口など）
         self.timing = os.environ.get("WS_TIMING", "").lower() in ("1", "true", "yes", "on")   # ws_do の内訳を返事に足す
@@ -304,7 +306,7 @@ class WorkspaceManager:
             if not spec:
                 near = self.finder.near(name)
                 raise WorkspaceError(f"棚「{name}」はありません（{i} 番目）。" + ("\n" + near if near else ""))
-            msg = self.catalog.check_op(i, op)
+            msg = self.catalog.check_op(i, op) or (gas_ws_catalog.EXTRA_CHECKS[name](op) if name in gas_ws_catalog.EXTRA_CHECKS else None)
             if msg:
                 s = self.catalog.by_name[name]
                 raise WorkspaceError(msg + "\nその棚の札:\n" + "\n".join(self.finder.card(s)) + "\n   引数: " + s["args_raw"])
@@ -382,6 +384,8 @@ class WorkspaceManager:
         self._save(st)
         tim.lap("状態")
         res = self._post({"action": "do", "call_id": call_id, "target": body_target, "ops": ops, "ok": bool(ok)})
+        if res.get("ok"):
+            gas_ws_api.log_uses(ops, self.api_uses_path)       # 撃った api の型と頼みの 1 行（棚に上げる候補の材料）
         tim.engine = res.get("ms") or {}
         tim.last = time.perf_counter()
         st = self._load()

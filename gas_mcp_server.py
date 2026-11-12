@@ -2606,7 +2606,7 @@ def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = Fa
 @safe_tool
 def ws_find(ask: str = "", kind: str = "") -> str:
     """頼みの文か語から、棚の札（名前・引数・例）を引く。通信なし。ask="分類:入力" でその分類の全部、ask="棚:名前" でその 1 本、空で分類の一覧。
-    候補が合わなければ語を言い換えて引き直す。無ければ「棚にありません」と答える。
+    候補が合わなければ語を言い換えて引き直す。棚に無ければ api（Sheets API の batchUpdate）を ws_do で撃つ。
     kind=sheet|doc（空なら今の相手の種類）。"""
     return _ws_run(get_ws().find, ask=ask, kind=kind)
 
@@ -2615,7 +2615,7 @@ def ws_find(ask: str = "", kind: str = "") -> str:
 def ws_do(ops: str, target: str = "", ok: bool = False) -> str:
     """棚の JSON 配列を 1 回で撃って、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
     ops=[{"shelf":"棚の名前", …引数}]。棚の名前と引数は ws_look(ask=…)／ws_find の札のとおりに。
-    target="new:名前"で新規。ok=True は「消してよい」の承認があるときだけ。
+    棚に無い設定は shelf="api"（requests は batchUpdate の形）。target="new:名前"で新規。ok=True は「消してよい」の承認があるときだけ。
     返事は 対象／直した所／残り／URL。"""
     return _ws_run(get_ws().do, ops=ops, target=target, ok=ok)
 

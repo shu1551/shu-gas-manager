@@ -28,3 +28,4 @@ queue/
 .ws_misses.tsv
 .ws_trial.json
 ws_trial/runs/
+.ws_api_uses.tsv
