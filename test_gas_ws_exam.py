@@ -172,7 +172,7 @@ import gas_ws_check as chk
 
 def test_prompt_carries_the_sample_look_like_ws_look():
     seen = []
-    qs = [q for q in ex.select_questions(30) if q[1] == "合計のとこ太字で黄色に" or q[0] == ["format"]][:1]
+    qs = [q for q in ex.select_questions(50) if q[1] == "合計のとこ太字で黄色に" or q[0] == ["format"]][:1]
     ex.evaluate(qs, lambda p: seen.append(p) or "[]", extras={})
     p = seen[0]
     assert "【今の相手の様子（ws_look の返事）】" in p and "シート: 売上（21行×5列）" in p
