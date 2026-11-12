@@ -89,6 +89,11 @@ def readout(snap, item):
     raise ValueError(item)
 
 
+def values_of(snap):
+    sh = sheet_named(snap)
+    return {a: c.get("v") for a, c in sh["cells"].items() if c.get("v") not in ("", None)} if sh else {}
+
+
 def empty(v):
     return v in (None, [], {}, "", False)
 
@@ -103,6 +108,10 @@ def judge(r, item):
     undo = r.get("undo") or {}
     if not undo.get("ok"):
         return "undo失敗", "ws_undo が失敗: " + str(undo.get("error"))[:120]
+    vx, vy = values_of(r["x"]), values_of(r["y"])      # 値も付けた直後に戻っているか（フィルタで隠れた行が落ちて値がずれる不具合を見張る）
+    if vx != vy:
+        diff = [k for k in sorted(set(vx) | set(vy)) if vx.get(k) != vy.get(k)]
+        return "戻らない", f"値が違う（{len(diff)} セル。例 {diff[0]}: {vx.get(diff[0])!r} → {vy.get(diff[0])!r}）"
     if r["case"] == "A":
         if z == x:
             return "読めず", "外す・変える手を撃っても撮影が変わらない（変えた効果が読めない）"

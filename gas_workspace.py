@@ -76,7 +76,7 @@ class _Timer:
 
 ENGINE_LAP_NAMES = [("lock", "鍵待ち"), ("cacheGet", "呼び直し確認"), ("open", "ファイルを開く"), ("seq", "台帳の番号"), ("backup", "控え"), ("finger0", "書く前の指紋"), ("ops", "棚の本体"),
                     ("save", "文書の保存"), ("finger", "書いた後の指紋"), ("noop", "変更なしの判定"), ("discard", "控えの破棄"), ("ledger", "台帳の書き込み"),
-                    ("bk_open", "控え:ブックを開く"), ("bk_list", "控え:タブ一覧"), ("bk_copy", "控え:シートの写し"), ("bk_name", "控え:名前付け"), ("bk_prune", "控え:古いタブを消す")]
+                    ("bk_open", "控え:ブックを開く"), ("bk_list", "控え:タブ一覧"), ("bk_copy", "控え:シートの写し"), ("bk_name", "控え:名前付け"), ("bk_prune", "控え:古いタブを消す"), ("bk_side", "控え:脇の状態")]
 
 
 def format_timing(tim):

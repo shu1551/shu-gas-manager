@@ -63,6 +63,7 @@ class Sheet {
   getFrozenRows() { return 1; } getFrozenColumns() { return 0; }
   getIndex() { return this.book.sheets.indexOf(this) + 1; }
   getColumnWidth() { counts.colWidth++; return 100; }
+  getFilter() { return null; }
   copyTo(book) { counts.copyTo++; const s = new Sheet(book, 'Copy of ' + this.name, JSON.parse(JSON.stringify(this.values))); book.sheets.push(s); return s; }
 }
 class Book {

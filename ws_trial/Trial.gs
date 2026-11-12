@@ -256,6 +256,14 @@ EXTRA_ACTIONS['trial'] = function (req) {
 
 
 // ---------------------------------------------------------------- 脇の状態の調べ（試験用のエンジンの中だけ。棚には足さない）
+// 「触る:」に脇の状態の全項目を出している試験用の棚（値を 1 つ書くだけ）。これを撃つと、控えが全項目を記録する
+CATALOG['trial.touch_all'] = { kind: 'sheet', touch: ['値', '隠し', 'グループ', '保護', '名前', 'タブ色', 'グラフ', 'フィルタ'], backup: ['今'], danger: '' };
+SHELF['trial.touch_all'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  sh.getRange('B3').setValue('書換');
+  chg_(ctx, sh, 'B3', '値を書いた（試験用）');
+};
+
 // 項目を付ける・外す手。戻しが約束していない「脇の状態」が ws_undo で戻るかを調べる材料
 function trialSideApply_(ss, sh, item) {
   var B = SpreadsheetApp.BandingTheme;
@@ -313,16 +321,55 @@ EXTRA_ACTIONS['side_case'] = function (req) {
     step = 'snap_x';
     out.x = trialSnap_(ss);
     step = 'do';
-    out.do = actDo_({ target: { id: req.id, kind: 'sheet' }, ops: [{ shelf: 'write', sheet: '名簿', cells: { B3: '書換' } }], ok: true });
+    out.do = actDo_({ target: { id: req.id, kind: 'sheet' }, ops: [req.case === 'A' ? { shelf: 'trial.touch_all', sheet: '名簿' } : { shelf: 'write', sheet: '名簿', cells: { B3: '書換' } }], ok: true });
     if (req.case === 'A') { step = 'change'; ss = trialOpen_(req.id); trialSideChange_(ss, ss.getSheetByName('名簿'), req.item); SpreadsheetApp.flush(); }
     step = 'snap_z';
     out.z = trialSnap_(ss);
     step = 'undo';
+    var origBU = Sheets.Spreadsheets.batchUpdate, logBU = [];
+    if (req.debug) { out.sideRec = getJson_('SIDE_' + (out.do && out.do.backup), null); Sheets.Spreadsheets.batchUpdate = function (b, id) { logBU.push({ req: b.requests }); out.batchLog = logBU; var r = origBU.call(Sheets.Spreadsheets, b, id); logBU[logBU.length - 1].res = r; return r; }; }
     out.undo = actUndo_({ target_id: req.id, ok: true });
+    if (req.debug) { Sheets.Spreadsheets.batchUpdate = origBU; out.batchLog = logBU; }
+    if (req.debug) { var shd = trialOpen_(req.id).getSheetByName('名簿'), fd = shd.getFilter(); out.dbgFilter = { has: !!fd, hidden2: fd && fd.getColumnFilterCriteria(2) ? fd.getColumnFilterCriteria(2).getHiddenValues() : null, rowHidden4: shd.isRowHiddenByFilter(4), b4: shd.getRange('B4').getValue(), rng: fd ? fd.getRange().getA1Notation() : null }; }
     step = 'snap_y';
     out.y = trialSnap_(ss);
     return out;
   } catch (e) {
-    return { ok: false, error: String(e && e.message || e), step: step, stack: String(e && e.stack || '').slice(0, 300) };
+    return { ok: false, error: String(e && e.message || e), step: step, stack: String(e && e.stack || '').slice(0, 300), batchLog: out.batchLog };
   }
+};
+
+// グラフの付け直しが Internal error になる原因の調べ（試験用）。記録した spec をいくつかの形で addChart してみる
+EXTRA_ACTIONS['chart_try'] = function (req) {
+  var ss = trialOpen_(req.id);
+  var sd = trialSeed_(Object.assign({ id: req.id }, req.seed));
+  if (!sd.ok) return { ok: false, error: sd.error };
+  ss = trialOpen_(req.id);
+  var sh = ss.getSheetByName('名簿');
+  trialSideApply_(ss, sh, 'chart');
+  SpreadsheetApp.flush();
+  var r = Sheets.Spreadsheets.get(ss.getId(), { fields: 'sheets(properties(sheetId),charts(chartId,spec,position))' });
+  var x = r.sheets.filter(function (s) { return s.properties.sheetId === sh.getSheetId(); })[0];
+  var rec = x.charts[0];
+  var out = { ok: true, spec: rec.spec, position: rec.position, tries: {} };
+  var attempt = function (name, chart, delFirst) {
+    try {
+      var reqs = [];
+      if (delFirst) reqs.push({ deleteEmbeddedObject: { objectId: rec.chartId } });
+      reqs.push({ addChart: { chart: chart } });
+      Sheets.Spreadsheets.batchUpdate({ requests: reqs }, ss.getId());
+      out.tries[name] = 'ok';
+      var cur = Sheets.Spreadsheets.get(ss.getId(), { fields: 'sheets(properties(sheetId),charts(chartId))' }).sheets.filter(function (s) { return s.properties.sheetId === sh.getSheetId(); })[0].charts || [];
+      cur.forEach(function (c) { if (c.chartId !== rec.chartId) { try { Sheets.Spreadsheets.batchUpdate({ requests: [{ deleteEmbeddedObject: { objectId: c.chartId } }] }, ss.getId()); } catch (e) { } } });
+    } catch (e) { out.tries[name] = String(e.message || e).slice(0, 160); }
+  };
+  // 1: 記録のまま（消してから）
+  attempt('そのまま・消さずに足す', { spec: rec.spec, position: rec.position }, false);
+  var s2 = JSON.parse(JSON.stringify(rec.spec)); delete s2.titleTextFormat; delete s2.fontName; delete s2.hiddenDimensionStrategy;
+  attempt('書式の欄を除く', { spec: s2, position: rec.position }, false);
+  var s3 = JSON.parse(JSON.stringify(s2)); (s3.basicChart.axis || []).forEach(function (a) { delete a.viewWindowOptions; });
+  attempt('書式と軸の窓を除く', { spec: s3, position: rec.position }, false);
+  var p2 = JSON.parse(JSON.stringify(rec.position)); var op = p2.overlayPosition || {}; delete op.widthPixels; delete op.heightPixels;
+  attempt('大きさを除く', { spec: s3, position: { overlayPosition: op } }, false);
+  return out;
 };

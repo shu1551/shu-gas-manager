@@ -185,7 +185,10 @@ function sameFinger_(a, b) { return a && b && a.rows === b.rows && a.cols === b.
 // ---------------------------------------------------------------- 台帳
 
 function ledger_() { return getJson_('LEDGER', { seq: 0, items: [] }); }
-function ledgerSave_(l) { while (l.items.length > LEDGER_MAX) l.items.shift(); setJson_('LEDGER', l); }
+function ledgerSave_(l) {
+  while (l.items.length > LEDGER_MAX) { var x = l.items.shift(); if (x && x.hasSide) { try { props_().deleteProperty('SIDE_' + x.n); } catch (e) { } } }
+  setJson_('LEDGER', l);
+}
 function ledgerBrief_() {
   return ledger_().items.slice().reverse().map(function (it) {
     return { n: it.n, time: it.time, target: it.name, kind: it.kind, what: it.what, undone: !!it.undone };
@@ -211,7 +214,7 @@ function pruneTabs_(book) {
 }
 var BKT = {};   // 控えの中の内訳（ミリ秒）。返事の ms に bk_ を付けて入れる
 function bkLap_(k, t0) { BKT['bk_' + k] = (BKT['bk_' + k] || 0) + (Date.now() - t0); }
-function backupSheets_(ss, sheets, n) {
+function backupSheets_(ss, sheets, n, sideItems) {
   if (!sheets.length) return [];
   var tb = Date.now();
   var book = bkBook_(), out = []; bkLap_('open', tb); tb = Date.now();
@@ -238,6 +241,8 @@ function backupSheets_(ss, sheets, n) {
   var extra = tabs.length - BK_TABS_MAX, left = cur.length, tp = Date.now();
   for (var k = 0; k < extra && left > 1; k++) { book.deleteSheet(tabs[k]); left--; }
   bkLap_('prune', tp);
+  var ts = Date.now();
+  captureSide_(ss, sheets, out, sideItems || []); bkLap_('side', ts);
   return out;
 }
 // 列幅は表のある列だけ記録する（1 回の API 呼びが約 0.1 秒なので、全列・全行は読まない。行の高さは戻しの対象外）
@@ -272,12 +277,202 @@ function restoreSheet_(ss, b) {
     else if (orig.getMaxRows() > lr) orig.deleteRows(lr + 1, orig.getMaxRows() - lr);
     if (orig.getMaxColumns() < lc) orig.insertColumnsAfter(orig.getMaxColumns(), lc - orig.getMaxColumns());
     else if (orig.getMaxColumns() > lc) orig.deleteColumns(lc + 1, orig.getMaxColumns() - lc);
+    // 控えのタブのフィルタを先に外す: 掛かったままだと、フィルタで隠れた行が写されず、あとの行が上へずれて値が狂う
+    try { var tf = tmp.getFilter(); if (tf) tf.remove(); } catch (eF) { }
     tmp.getRange(1, 1, lr, lc).copyTo(orig.getRange(1, 1, lr, lc));
     var widths = b.widths || colWidths_(tab);   // 古い控えは記録を持つ。新しい控えは控えのタブから読む
     for (var c = 0; c < widths.length && c < lc; c++) orig.setColumnWidth(c + 1, widths[c]);
     orig.setFrozenRows(b.frozenR); orig.setFrozenColumns(b.frozenC);
     if (orig.getIndex() !== b.index) { ss.setActiveSheet(orig); ss.moveActiveSheet(b.index); }
   } finally { if (tmp) { try { ss.deleteSheet(tmp); } catch (e) { } } }
+}
+
+// ---------------------------------------------------------------- 脇の状態（控えと戻し）
+// シートの中身と書式は控えのタブの写しで戻る。それ以外（フィルタ・行と列の隠し・シートの隠し・グループ・保護・名前付き範囲・タブの色・グラフ）は
+// 写しに入らないので、控えのとき Sheets API で読んで記録し、戻すとき「今あるのを消してから、記録のとおりに付け直す」。
+// 記録するのは、その回の棚の「触る:」に出た項目だけ（フィルタだけは常に。ただしフィルタの無いシートでは何もしない）。
+var SIDE_ITEMS = ['隠し', 'グループ', '保護', '名前', 'タブ色', 'グラフ'];
+function sideItems_(ops) {
+  var set = {};
+  ops.forEach(function (o) { var c = CATALOG[o.shelf]; if (c) c.touch.forEach(function (x) { if (SIDE_ITEMS.indexOf(x) >= 0) set[x] = 1; }); });
+  return Object.keys(set);
+}
+function hiddenRuns_(meta) {
+  var runs = [], start = -1;
+  (meta || []).forEach(function (m, i) {
+    if (m && m.hiddenByUser) { if (start < 0) start = i; } else if (start >= 0) { runs.push([start, i]); start = -1; }
+  });
+  if (start >= 0) runs.push([start, (meta || []).length]);
+  return runs;
+}
+function stripId_(p) { var c = {}; Object.keys(p).forEach(function (k) { if (k !== 'protectedRangeId') c[k] = p[k]; }); return c; }
+function sideFields_(want, filter) {
+  var sh = ['properties(sheetId' + (want['隠し'] ? ',hidden' : '') + (want['タブ色'] ? ',tabColorStyle' : '') + ')'];
+  if (filter) sh.push('basicFilter');
+  if (want['グループ']) sh.push('rowGroups', 'columnGroups');
+  if (want['保護']) sh.push('protectedRanges(protectedRangeId,range,description,warningOnly,editors,unprotectedRanges)');
+  if (want['グラフ']) sh.push('charts(chartId,spec,position)');
+  return 'sheets(' + sh.join(',') + ')' + (want['名前'] ? ',namedRanges' : '');
+}
+// 控えのとき: bk の各項目に side を付ける（bk.book に名前付き範囲）。要る物が無ければ API を呼ばない
+function captureSide_(ss, sheets, bk, items) {
+  var want = {}; items.forEach(function (i) { want[i] = 1; });
+  var hasFilter = sheets.some(function (s) { return !!s.getFilter(); });
+  if (!items.length && !hasFilter) return;
+  // ranges を付けると、その範囲に重なる保護・グラフ・名前付き範囲しか返らないので、隠しの行と列だけ別の呼びにする
+  var resp = Sheets.Spreadsheets.get(ss.getId(), { fields: sideFields_(want, hasFilter) });
+  var byId = {}; (resp.sheets || []).forEach(function (x) { byId[x.properties.sheetId] = x; });
+  var dataById = {};
+  if (want['隠し']) {
+    var ranges = [];
+    sheets.forEach(function (s) { ranges.push(q_(s.getName()) + '!A:A'); ranges.push(q_(s.getName()) + '!1:1'); });
+    var dr = Sheets.Spreadsheets.get(ss.getId(), { includeGridData: true, ranges: ranges, fields: 'sheets(properties(sheetId),data(rowMetadata(hiddenByUser),columnMetadata(hiddenByUser)))' });
+    (dr.sheets || []).forEach(function (x) { dataById[x.properties.sheetId] = x.data || []; });
+  }
+  bk.forEach(function (b) {
+    var x = byId[b.id]; if (!x) return;
+    var s = {};
+    if (x.basicFilter) s.filter = x.basicFilter;
+    if (want['隠し']) { var d = dataById[b.id] || []; s.hidden = !!x.properties.hidden; s.hr = hiddenRuns_(d[0] && d[0].rowMetadata); s.hc = hiddenRuns_(d[1] && d[1].columnMetadata); }
+    if (want['タブ色']) s.tab = x.properties.tabColorStyle || null;
+    if (want['グループ']) { s.rg = x.rowGroups || []; s.cg = x.columnGroups || []; }
+    if (want['保護']) s.prot = (x.protectedRanges || []).map(stripId_);
+    if (want['グラフ']) s.charts = (x.charts || []).map(function (c) { return { spec: c.spec, position: c.position }; });
+    if (Object.keys(s).length) b.side = s;
+  });
+  if (want['名前']) bk.book = { named: (resp.namedRanges || []).map(function (r) { return { name: r.name, range: r.range }; }) };
+}
+// 台帳に残す形（脇の状態は別のプロパティ SIDE_n に。台帳の記録は小さいまま）
+function packSide_(bk, items) {
+  var sheets = {}, any = false;
+  (bk || []).forEach(function (b) { if (b.side) { sheets[b.id] = b.side; any = true; } });
+  if (bk && bk.book) any = true;
+  return any ? { sheets: sheets, book: (bk && bk.book) || null, items: items || [] } : null;
+}
+function stripSide_(bk) {
+  return bk.map(function (b) { var c = {}; Object.keys(b).forEach(function (k) { if (k !== 'side') c[k] = b[k]; }); return c; });
+}
+function loadSide_(it) {
+  var rec = it.hasSide ? getJson_('SIDE_' + it.n, null) : null;
+  var bks = (it.sheets || []).map(function (b) { var c = {}; Object.keys(b).forEach(function (k) { c[k] = b[k]; }); if (rec && rec.sheets && rec.sheets[b.id]) c.side = rec.sheets[b.id]; return c; });
+  if (rec && rec.book) bks.book = rec.book;
+  return bks;
+}
+// batchUpdate は全部かなにも変えないかなので、Google の一時的な内部エラー（Internal error）だけは 1 回撃ち直す
+function batchRetry_(ss, reqs) {
+  try { return Sheets.Spreadsheets.batchUpdate({ requests: reqs }, ss.getId()); }
+  catch (e) {
+    if (String(e && e.message || e).indexOf('Internal error') < 0) throw e;
+    Utilities.sleep(1000);
+    return Sheets.Spreadsheets.batchUpdate({ requests: reqs }, ss.getId());
+  }
+}
+// 戻すとき: 今ある物を消してから、記録のとおりに付け直す（1 回の batchUpdate）。戻せない物は notes に 1 行出す
+function restoreSide_(ss, bk, notes) {
+  var recs = (bk || []).filter(function (b) { return b.side; });
+  var book = bk && bk.book;
+  if (!recs.length && !book) return;
+  var needCur = !!book, need = {};
+  recs.forEach(function (b) { ['rg', 'cg', 'prot', 'charts'].forEach(function (k) { if (b.side[k] !== undefined) { needCur = true; need[k] = 1; } }); });
+  var cur = {};
+  if (needCur) {
+    var f = ['properties(sheetId)'];
+    if (need.rg) f.push('rowGroups'); if (need.cg) f.push('columnGroups');
+    if (need.prot) f.push('protectedRanges(protectedRangeId)'); if (need.charts) f.push('charts(chartId)');
+    var r = Sheets.Spreadsheets.get(ss.getId(), { fields: 'sheets(' + f.join(',') + ')' + (book ? ',namedRanges(namedRangeId)' : '') });
+    (r.sheets || []).forEach(function (x) { cur[x.properties.sheetId] = x; });
+    cur.__named = r.namedRanges || [];
+  }
+  var build = function (withEditors) {
+    var dels = [], adds = [], props = [];
+    recs.forEach(function (b) {
+      var s = b.side, id = b.id, c = cur[id] || {};
+      if (s.hr !== undefined || s.hc !== undefined) {
+        var sh = byId_(ss, id), mr = sh ? sh.getMaxRows() : 0, mc = sh ? sh.getMaxColumns() : 0;
+        if (s.hr !== undefined && mr) { props.push({ updateDimensionProperties: { range: { sheetId: id, dimension: 'ROWS', startIndex: 0, endIndex: mr }, properties: { hiddenByUser: false }, fields: 'hiddenByUser' } });
+          s.hr.forEach(function (e) { props.push({ updateDimensionProperties: { range: { sheetId: id, dimension: 'ROWS', startIndex: e[0], endIndex: e[1] }, properties: { hiddenByUser: true }, fields: 'hiddenByUser' } }); }); }
+        if (s.hc !== undefined && mc) { props.push({ updateDimensionProperties: { range: { sheetId: id, dimension: 'COLUMNS', startIndex: 0, endIndex: mc }, properties: { hiddenByUser: false }, fields: 'hiddenByUser' } });
+          s.hc.forEach(function (e) { props.push({ updateDimensionProperties: { range: { sheetId: id, dimension: 'COLUMNS', startIndex: e[0], endIndex: e[1] }, properties: { hiddenByUser: true }, fields: 'hiddenByUser' } }); }); }
+      }
+      if (s.tab !== undefined) props.push({ updateSheetProperties: { properties: { sheetId: id, tabColorStyle: s.tab || {} }, fields: 'tabColorStyle' } });
+      ['rg', 'cg'].forEach(function (k) {
+        if (s[k] === undefined) return;
+        (c[k === 'rg' ? 'rowGroups' : 'columnGroups'] || []).forEach(function (g) { dels.push({ deleteDimensionGroup: { range: g.range } }); });
+        s[k].slice().sort(function (a, b2) { return a.depth - b2.depth; }).forEach(function (g) { adds.push({ addDimensionGroup: { range: g.range } }); });
+        s[k].forEach(function (g) { if (g.collapsed) adds.push({ updateDimensionGroup: { dimensionGroup: g, fields: 'collapsed' } }); });
+      });
+      if (s.prot !== undefined) {
+        (c.protectedRanges || []).forEach(function (p) { dels.push({ deleteProtectedRange: { protectedRangeId: p.protectedRangeId } }); });
+        s.prot.forEach(function (p) { var q = JSON.parse(JSON.stringify(p)); if (!withEditors) delete q.editors; adds.push({ addProtectedRange: { protectedRange: q } }); });
+      }
+      if (s.charts !== undefined) {
+        (c.charts || []).forEach(function (ch) { dels.push({ deleteEmbeddedObject: { objectId: ch.chartId } }); });
+        s.charts.forEach(function (ch) { adds.push({ addChart: { chart: { spec: ch.spec, position: ch.position } } }); });
+      }
+      if (s.hidden !== undefined) props.push({ updateSheetProperties: { properties: { sheetId: id, hidden: s.hidden }, fields: 'hidden' } });
+    });
+    if (book) {
+      (cur.__named || []).forEach(function (n) { dels.push({ deleteNamedRange: { namedRangeId: n.namedRangeId } }); });
+      book.named.forEach(function (n) { adds.push({ addNamedRange: { namedRange: { name: n.name, range: n.range } } }); });
+    }
+    // 先にシートの隠しを「出す」側へ寄せないと、最後の見えているシートを隠すとき失敗する。付け直しの後に隠しを合わせる
+    var showFirst = props.filter(function (q) { return q.updateSheetProperties && q.updateSheetProperties.properties.hidden === false; });
+    var rest = props.filter(function (q) { return showFirst.indexOf(q) < 0; });
+    return dels.concat(showFirst, adds, rest);
+  };
+  var reqs = build(true);
+  if (reqs.length) SpreadsheetApp.flush();   // 中身を戻した分を反映してから、脇の状態を付け直す（グラフは中身の範囲を指すため）
+  if (reqs.length) try { batchRetry_(ss, reqs); }
+  catch (e) {
+    var chartReqs = reqs.filter(function (q) { return q.addChart; });
+    if (String(e && e.message || e).indexOf('Internal error') >= 0 && chartReqs.length) {
+      // グラフの付け直しだけが通らないとき（series の無いグラフなど）: ほかを先に通し、グラフは SpreadsheetApp で作り直す。作り直せなければ知らせる
+      batchRetry_(ss, reqs.filter(function (q) { return !q.addChart; }));
+      recs.forEach(function (b) {
+        (b.side.charts || []).forEach(function (ch) {
+          try { restoreChartApp_(byId_(ss, b.id), ch); }
+          catch (e2) { if (notes) notes.push('グラフを付け直せませんでした（種類・範囲・位置・題の記録から作れない形でした）。グラフだけ作り直してください'); }
+        });
+      });
+    } else {
+    var hasEditors = recs.some(function (b) { return (b.side.prot || []).some(function (p) { return p.editors; }); });
+    if (!hasEditors) throw e;
+    batchRetry_(ss, build(false));     // 編集できる人の一覧が戻せないときは、一覧なしで付け直して知らせる
+    if (notes) notes.push('保護の「編集できる人」の一覧は戻せませんでした（保護そのものは付け直しました）');
+    }
+  }
+  recs.forEach(function (b) { if (b.side.filter) restoreFilter_(ss, b.id, b.side.filter, notes); });   // フィルタは SpreadsheetApp で付け直す（API の setBasicFilter では隠す行が反映されない）
+}
+
+// 記録した spec から、種類・範囲・位置・題だけを SpreadsheetApp で作り直す（API の addChart が通らない形のとき）
+function restoreChartApp_(sh, ch) {
+  var spec = ch.spec || {}, srcs = [], type = null;
+  var take = function (x) { if (x && x.sourceRange) (x.sourceRange.sources || []).forEach(function (s) { srcs.push(s); }); };
+  if (spec.basicChart) { type = spec.basicChart.chartType || 'COLUMN'; (spec.basicChart.domains || []).forEach(function (d) { take(d.domain); }); (spec.basicChart.series || []).forEach(function (s) { take(s.series); }); }
+  else if (spec.pieChart) { type = 'PIE'; take(spec.pieChart.domain); take(spec.pieChart.series); }
+  if (!type || !Charts.ChartType[type]) throw new Error('作れない種類: ' + type);
+  var b = sh.newChart().setChartType(Charts.ChartType[type]);
+  srcs.forEach(function (r) { b.addRange(sh.getRange((r.startRowIndex || 0) + 1, (r.startColumnIndex || 0) + 1, (r.endRowIndex || sh.getMaxRows()) - (r.startRowIndex || 0), (r.endColumnIndex || sh.getMaxColumns()) - (r.startColumnIndex || 0))); });
+  var pos = ch.position && ch.position.overlayPosition;
+  if (pos && pos.anchorCell) b.setPosition((pos.anchorCell.rowIndex || 0) + 1, (pos.anchorCell.columnIndex || 0) + 1, pos.offsetXPixels || 0, pos.offsetYPixels || 0);
+  if (spec.title) b.setOption('title', spec.title);
+  sh.insertChart(b.build());
+}
+
+function restoreFilter_(ss, id, f, notes) {
+  var sh = byId_(ss, id);
+  if (!sh || !f || !f.range) return;
+  var g = f.range, r0 = g.startRowIndex || 0, c0 = g.startColumnIndex || 0;
+  var nr = (g.endRowIndex || sh.getMaxRows()) - r0, nc = (g.endColumnIndex || sh.getMaxColumns()) - c0;
+  var old = sh.getFilter(); if (old) old.remove();
+  var filter = sh.getRange(r0 + 1, c0 + 1, nr, nc).createFilter(), hard = false;
+  Object.keys(f.criteria || {}).forEach(function (k) {
+    var c = f.criteria[k];
+    if (c.hiddenValues && c.hiddenValues.length && !c.condition) filter.setColumnFilterCriteria(parseInt(k, 10) + 1, SpreadsheetApp.newFilterCriteria().setHiddenValues(c.hiddenValues).build());
+    else hard = true;
+  });
+  SpreadsheetApp.flush();   // 隠す行を反映してから返す（このあと API で読む人が古い状態を見ない）
+  if (hard && notes) notes.push('フィルタの条件のうち、隠す値の指定以外（条件式・色）は付け直せませんでした（フィルタの範囲と隠す値は戻しました）');
 }
 
 // ---------------------------------------------------------------- 控え（文書）
@@ -381,12 +576,13 @@ function runDo_(req, T0) {
     sheetName: t.sheet || '', ok: !!req.ok, changed: [], notes: [], remaining: [], createdSheets: [], n: n, isNew: !!created };
   var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: file.getId(),
     name: file.getName(), kind: kind, what: summarizeOps_(ops), isNew: !!created, fp: FP_VER };
-  var bk = null;
+  var bk = null, sideItems = [];
   try {
     if (!created) {
       if (kind === 'sheet') {
         var names = touchedSheets_(ctx, ops);
-        bk = backupSheets_(ctx.ss, names, n); lap_(tm, 'backup');
+        sideItems = sideItems_(ops);
+        bk = backupSheets_(ctx.ss, names, n, sideItems); lap_(tm, 'backup');
         entry.sheets = bk;
         entry.before = {}; names.forEach(function (sh0) { entry.before[sh0.getSheetId()] = fingerSheet_(sh0); });
       } else { entry.doc = backupDoc_(ctx.doc, n); lap_(tm, 'backup'); entry.beforeDoc = fingerDoc_(ctx.doc); }
@@ -417,6 +613,8 @@ function runDo_(req, T0) {
       discardBackup_(bk); lap_(tm, 'discard');
       return { ok: true, target: tgt_(ctx, file), changed: [], notes: ['変更はありませんでした（すでにその状態です）'].concat(ctx.notes.filter(function (x) { return x.indexOf('変更なし') < 0; })), remaining: ctx.remaining, backup: 0, ms: msOut_(tm) };
     }
+    var sideRec = (bk && bk.length) ? packSide_(bk, sideItems) : null;
+    if (sideRec) { setJson_('SIDE_' + n, sideRec); entry.hasSide = true; entry.sideItems = sideRec.items; entry.sheets = stripSide_(bk); }
     l.items.push(entry); ledgerSave_(l);
     lap_(tm, 'ledger');
     var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: created ? 0 : n, ms: msOut_(tm) };
@@ -491,6 +689,7 @@ function touchedSheets_(ctx, ops) {
 function restoreAll_(ss, bk, createdNames) {
   (createdNames || []).forEach(function (nm) { var s = ss.getSheetByName(nm); if (s && ss.getSheets().length > 1) ss.deleteSheet(s); });
   (bk || []).forEach(function (b) { restoreSheet_(ss, b); });
+  restoreSide_(ss, bk, null);
 }
 function resetNew_(ctx, kind) {
   if (kind === 'sheet') {
@@ -532,15 +731,18 @@ function actUndo_(req) {
     return { ok: false, needs_ok: true, error: '道具が書いた後に手で直した所があります（戻すと消えます）: ' + hand.join('、') + '。それでも戻すなら ok=True', target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
   // 戻す前の状態も控えに取る（undo の undo）
   l.seq++; var n = l.seq; setJson_('LEDGER', l);
+  var undoNotes = [];
   var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: it.id, name: it.name, kind: it.kind, what: 'undo #' + it.n, isUndo: true, fp: FP_VER };
   try {
     if (it.kind === 'sheet') {
       var ss2 = file, names = [];
       (it.sheets || []).forEach(function (b) { var s = byId_(ss2, b.id); if (s) names.push(s); });
-      entry.sheets = backupSheets_(ss2, names, n);
+      entry.sheets = backupSheets_(ss2, names, n, it.sideItems || []);
       var made = Object.keys(it.created || {});
       made.forEach(function (nm) { var s = ss2.getSheetByName(nm); if (s && ss2.getSheets().length > 1) ss2.deleteSheet(s); });
-      (it.sheets || []).forEach(function (b) { restoreSheet_(ss2, b); });
+      var bks = loadSide_(it);
+      bks.forEach(function (b) { restoreSheet_(ss2, b); });
+      restoreSide_(ss2, bks, undoNotes);
       entry.after = {}; (entry.sheets || []).forEach(function (b) { var s = byId_(ss2, b.id); if (s) entry.after[b.id] = fingerSheet_(s); });
     } else {
       entry.doc = backupDoc_(file, n);
@@ -551,8 +753,10 @@ function actUndo_(req) {
   } catch (err) {
     return { ok: false, error: '戻せませんでした: ' + String(err.message || err), target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
   }
+  var sideRec2 = (entry.sheets && entry.sheets.length) ? packSide_(entry.sheets, it.sideItems || []) : null;
+  if (sideRec2) { setJson_('SIDE_' + n, sideRec2); entry.hasSide = true; entry.sideItems = sideRec2.items; entry.sheets = stripSide_(entry.sheets); }
   it.undone = true; l.items.push(entry); ledgerSave_(l);
-  return { ok: true, undone: it.n, backup: n, what: it.what, target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
+  return { ok: true, undone: it.n, backup: n, what: it.what, notes: undoNotes, target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
 }
 
 // ---------------------------------------------------------------- look

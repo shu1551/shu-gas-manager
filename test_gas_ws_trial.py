@@ -31,9 +31,9 @@ def _no_network(monkeypatch):
 
 # ================================================================ 表の形
 def test_six_tables_exist_and_pass_validation():
-    names = T.table_names()
-    assert names == ["meibo_base", "meibo_dirty", "meibo_quirk", "uriage_base", "uriage_dirty", "uriage_quirk"]
-    for n in names:
+    six = ["meibo_base", "meibo_dirty", "meibo_quirk", "uriage_base", "uriage_dirty", "uriage_quirk"]
+    assert set(six) <= set(T.table_names())          # 段 T0 の 6 枚（段 T2 以降で表は増える）
+    for n in six:
         t = T.load_table(n)
         assert T.validate_table(t) == [], n
         assert t["notes"] and t["kind"] in ("base", "dirty", "quirk")
