@@ -50,6 +50,7 @@ PUBLIC_FILES = [
     "ws_shelves/api.gs",
     "ws_exam/phrases_api.tsv",
     "test_gas_ws_api.py",
+    "test_gas_ws_wide.py",
     "gas_ws_exam.py",
     "test_gas_ws_exam.py",
     "ws_shelves/guide.txt",

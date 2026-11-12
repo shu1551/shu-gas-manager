@@ -576,7 +576,7 @@ function runDo_(req, T0) {
   lap_(tm, 'open');
   var l = ledger_(); l.seq++; var n = l.seq;   // 番号は最後の書き込みでまとめて残す（鍵の中なので重ならない。失敗・変更なしでは番号を使い回す）
   lap_(tm, 'seq');
-  var ctx = { kind: kind, file: file, ss: kind === 'sheet' ? file : null, doc: kind === 'doc' ? file : null,
+  var ctx = { wideKey: digest_(file.getId() + '|' + JSON.stringify(ops), FP_VER), kind: kind, file: file, ss: kind === 'sheet' ? file : null, doc: kind === 'doc' ? file : null,
     sheetName: t.sheet || '', ok: !!req.ok, changed: [], notes: [], remaining: [], createdSheets: [], n: n, isNew: !!created };
   var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: file.getId(),
     name: file.getName(), kind: kind, what: summarizeOps_(ops), isNew: !!created, fp: FP_VER };
@@ -1016,7 +1016,33 @@ function sheetCtx_(ctx, op) {
 function note_(ctx, s) { ctx.notes.push(s); }
 function chg_(ctx, sh, a1, what) { ctx.changed.push((sh ? sh.getName() + '!' : '') + a1 + (what ? ' ' + what : '')); }
 function need_(op, keys) { keys.forEach(function (k) { if (op[k] === undefined || op[k] === null || op[k] === '') throw new ArgError('棚「' + op.shelf + '」に「' + k + '」が要ります'); }); }
-function guardDelete_(ctx, msg) { if (!ctx.ok) throw new Blocked(msg + '（人の値を消すので、「消してよい」の承認＝ok=True が要ります）'); }
+// 消す手の守り。wide（広い削除）のときは、ok=True でも道具の側で 1 回止める（試験設計書 第 3.5 節 (1)・第 13 章）
+function guardDelete_(ctx, msg, wide) {
+  if (wide) return guardWide_(ctx, msg);
+  if (!ctx.ok) throw new Blocked(msg + '（人の値を消すので、「消してよい」の承認＝ok=True が要ります）');
+}
+// 広い削除（シートごと・シート全体・表の外まで・明細の半分より多く）: 同じ相手・同じ ops が直前（10 分以内）に 1 回止まっていなければ、ok=True でも止める。
+// ok なしの下見も 1 回目に数える（ふつうの「下見 → 承認 → ok=True」は今までと同じ 2 往復）。止めた ops の指紋だけを覚え、同じ ops が ok=True で来たら通す
+var WIDE_MS = 10 * 60 * 1000;
+function guardWide_(ctx, msg) {
+  var now = Date.now(), map = getJson_('WIDE', {}), key = ctx.wideKey || 'x', live = {};
+  Object.keys(map).forEach(function (k) { if (now - map[k] < WIDE_MS) live[k] = map[k]; });
+  if (ctx.ok && live[key]) { delete live[key]; setJson_('WIDE', live); return; }
+  live[key] = now; setJson_('WIDE', live);
+  throw new Blocked(msg + '（広い削除です。何が消えるかを見て' + (ctx.ok ? '' : '、「消してよい」の承認を得てから') + '、同じ ops をもう一度 ok=True で撃つと通ります）');
+}
+// 広さの目安: 範囲がシートの値のある範囲を全部覆う／表の外まで及ぶ
+function wideRange_(sh, rg) {
+  var dr = sh.getDataRange();
+  if (rg.getRow() <= dr.getRow() && rg.getColumn() <= dr.getColumn() && rg.getLastRow() >= dr.getLastRow() && rg.getLastColumn() >= dr.getLastColumn()) return true;
+  var t = findTable_(sh);
+  if (t) {
+    var last = t.totalRow || t.lastData;
+    if (rg.getRow() < t.headerRow || rg.getLastRow() > last || rg.getColumn() < t.firstCol || rg.getLastColumn() > t.lastCol) return true;
+  }
+  return false;
+}
+function wideRowCount_(t, n) { return !!t && n > (t.lastData - t.firstData + 1) / 2; }
 function guardOverwrite_(ctx, rg, msg) {
   if (ctx.ok) return;
   var vals = rg.getValues();

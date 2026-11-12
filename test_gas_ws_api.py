@@ -141,7 +141,8 @@ const batches = [];
 const mkSheet = function (name, id) { return { getName: function () { return name; }, getSheetId: function () { return id; } }; };
 let sheets = [mkSheet('名簿', 11), mkSheet('売上', 22)];
 const ss = { getId: function () { return 'S'; }, getSheets: function () { return sheets; }, getSheetByName: function (n) { return sheets.filter(function (s) { return s.getName() === n; })[0] || null; } };
-const ctxv = vm.createContext({ console, batches, ss, mkSheet, setSheets: function (a) { sheets = a; },
+const store = {};
+const ctxv = vm.createContext({ console, batches, ss, mkSheet, PropertiesService: { getScriptProperties: function () { return { getProperty: function (k) { return store[k] === undefined ? null : store[k]; }, setProperty: function (k, v) { store[k] = v; }, deleteProperty: function (k) { delete store[k]; } }; } }, setSheets: function (a) { sheets = a; },
   Sheets: { Spreadsheets: { batchUpdate: function (b) { batches.push(b.requests); if (ctxv.__after) ctxv.__after(); return {}; } } },
   DocumentApp: new Proxy({}, { get: function () { return new Proxy({}, { get: function () { return 1; } }); } }) });
 vm.runInContext(input.files.join('\n'), ctxv);
@@ -157,7 +158,7 @@ def _run(script):
     return json.loads(r.stdout.decode("utf-8").strip().splitlines()[-1])
 
 
-CTX = "var ctx = { ss: ss, ok: false, sheetName: '', changed: [], notes: [], createdSheets: [] };\n"
+CTX = "var ctx = { wideKey: 'k1', ss: ss, ok: false, sheetName: '', changed: [], notes: [], createdSheets: [] };\n"
 needs_node = pytest.mark.skipif(not _node_ok(), reason="node が無い")
 
 
@@ -212,16 +213,18 @@ def test_engine_refuses_unknown_types_and_bad_ranges_and_missing_sheets():
 
 
 @needs_node
-def test_engine_stops_delete_types_without_ok_and_fires_with_ok():
+def test_engine_stops_delete_types_without_ok_and_fires_with_ok_after_one_stop():
     out = _run(CTX + """
       var ops = { shelf: 'api', requests: [{ repeatCell: { range: 'A1', fields: 'x' } }, { deleteDimension: { range: { sheetId: '名簿', dimension: 'ROWS', startIndex: 2, endIndex: 3 } } }] };
       var blocked = null; try { SHELF['api'](ctx, ops); } catch (e) { blocked = { msg: String(e.message), isBlocked: !!e.isBlocked }; }
       var fired0 = batches.length;
-      ctx.ok = true; SHELF['api'](ctx, ops);
-      __out = { blocked: blocked, fired0: fired0, fired1: batches.length };
+      ctx.ok = true; SHELF['api'](ctx, ops);       // ok なしの下見が 1 回目に数えられるので、同じ ops を ok=True で撃てば通る
+      var again = null; try { SHELF['api'](ctx, ops); again = 'no error'; } catch (e) { again = String(e.message); }    // 通した後の 3 回目は、また止まる（指紋は 1 回きり）
+      __out = { blocked: blocked, fired0: fired0, fired1: batches.length, again: again };
     """)
     assert out["blocked"]["isBlocked"] and "deleteDimension" in out["blocked"]["msg"] and "ok=True" in out["blocked"]["msg"]
     assert out["fired0"] == 0 and out["fired1"] == 1                                            # ok なしでは 1 つも撃たない
+    assert "広い削除" in out["again"] and "もう一度 ok=True" in out["again"]
 
 
 @needs_node

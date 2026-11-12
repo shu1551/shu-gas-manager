@@ -18,7 +18,7 @@ SHELF['api'] = function (ctx, op) {
   if (!Array.isArray(reqs) || !reqs.length) throw new ArgError('棚「api」の requests は batchUpdate の requests の配列です');
   var info = apiScan_(reqs);
   if (info.bad.length) throw new ArgError('棚「api」: ' + info.bad.slice(0, 3).join(' ／ '));
-  if (info.danger.length) guardDelete_(ctx, 'api の消す型 ' + info.danger.join('・') + ' を撃ちます（' + info.danger.length + ' 件）');
+  if (info.danger.length) guardDelete_(ctx, 'api の消す型 ' + info.danger.join('・') + ' を撃ちます（' + info.danger.length + ' 件）', true);   // api の消す型は広い削除
   var def = apiDefaultSheet_(ctx, op);
   var conv = reqs.map(function (r) { return apiWalk_(ss, r, def.getSheetId(), ''); });
   var before = ss.getSheets().map(function (s) { return s.getName(); });

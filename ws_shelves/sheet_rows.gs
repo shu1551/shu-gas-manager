@@ -26,7 +26,9 @@ SHELF['rows'] = function (ctx, op) {
     var max = isCol ? sh.getMaxColumns() : sh.getMaxRows();
     nums.forEach(function (n) { if (n < 1 || n > max) throw new ArgError((isCol ? '列' : '行') + '番号 ' + n + ' は範囲外です（1〜' + max + '）'); });
     var peek = nums.map(function (n) { var v = isCol ? sh.getRange(1, n, Math.min(sh.getLastRow() || 1, 50), 1).getDisplayValues() : sh.getRange(n, 1, 1, Math.max(1, sh.getLastColumn())).getDisplayValues()[0]; return (isCol ? colLetter_(n) + '列' : n + '行目') + '「' + String(isCol ? v.map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('/') : v.filter(Boolean).slice(0, 3).join('/')).slice(0, 24) + '」'; });
-    guardDelete_(ctx, peek.reverse().join('、') + ' を削除します');
+    var tw = findTable_(sh), wide = false;   // 表の外まで／明細の半分より多くを消す削除は、ok=True でも 1 回止める
+    if (tw) wide = isCol ? nums.some(function (n) { return n < tw.firstCol || n > tw.lastCol; }) : (nums.some(function (n) { return n < tw.headerRow || n > (tw.totalRow || tw.lastData); }) || wideRowCount_(tw, nums.length));
+    guardDelete_(ctx, peek.reverse().join('、') + ' を削除します', wide);
     nums.forEach(function (n) { if (isCol) sh.deleteColumn(n); else sh.deleteRow(n); });
     chg_(ctx, sh, nums.slice().reverse().join('・') + (isCol ? ' 列' : ' 行目'), '削除');
   } else if (act === 'move') {
