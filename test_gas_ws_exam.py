@@ -227,7 +227,7 @@ def test_parse_alternatives_and_question_bank_marks():
     ex_ = chk.load_extras()
     for ask in ("この列いらないから消して", "この行いらないから消して", "この列を右に動かして", "この行を上に動かして"):
         assert ex_[ask]["ask_ok"] is True
-    assert ex_["C列の重複消して連番ふり直して"]["alts"] == [[("seiri", ["renumber", "dedupe"])]]
+    assert ex_["C列の重複消して連番ふり直して"]["alts"] == [[("seiri", ["renumber", "dedupe"])], [("dedupe", []), ("renumber", [])]]
     # 印（?）があっても、問題集は棚の名前として読む（引く試験・ws-check がそのまま通る）
     qs = {ask: exp for exp, ask, _ in chk.load_questions()}
     assert qs["この列いらないから消して"] == ["cols.delete"]

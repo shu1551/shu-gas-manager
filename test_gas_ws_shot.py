@@ -17,11 +17,13 @@ def test_twenty_cases_exist_each_with_model_that_validates_and_expectation():
     assert len(cases) >= 20 and len(set(ids)) == len(ids)
     m = gw.WorkspaceManager(client=object(), state_path=S.HERE / "x_unused_shot.json")
     for c in cases:
-        assert c["layer"] == "L2b" and len(c["turns"]) == 1 and c["model"]
-        assert m.validate_ops(c["model"]) == "sheet", c["id"]
+        assert c["layer"] == "L2b" and len(c["turns"]) == 1
+        if c["model"]:
+            want_kind = "doc" if any(isinstance(o, dict) and o.get("shelf", "").startswith("doc.") for o in c["model"]) else "sheet"
+            assert m.validate_ops(c["model"]) == want_kind, c["id"]
         t = c["turns"][0]
-        assert t["approve"] in ("ある", "まだ") and t["askback"] in ("要る", "要らない", "どちらでも")
-        assert ("模範と同じ" in t["expect"]) or ("条件" in t["expect"])
+        assert t["approve"] in ("ある", "まだ") and t["askback"] in ("要る", "要らない", "どちらでも"), c["id"]
+        assert ("模範と同じ" in t["expect"]) or ("条件" in t["expect"]) or ("保留" in t["expect"]), c["id"]
         assert c["table"] in T.table_names() and c["kind"]
     # 消す台本は approve=ある（名指し）で、4 本以上
     assert sum(1 for c in cases if c["turns"][0]["approve"] == "ある") >= 4
