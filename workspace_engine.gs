@@ -32,7 +32,9 @@ function doPost(e) {
     catch (err) { return json_({ ok: false, error: String(err && err.message || err), version: ENGINE_VERSION }); }
   }
   var lock = LockService.getScriptLock();
+  var tl0 = Date.now();
   if (!lock.tryLock(30000)) return json_({ ok: false, error: '別の処理が走っています。少し待って撃ち直してください。', busy: true });
+  var lockMs = Date.now() - tl0;
   try {
     var res;
     if (a === 'look') res = actLook_(req);
@@ -41,6 +43,7 @@ function doPost(e) {
     else if (a === 'list') res = { ok: true, ledger: ledgerBrief_() };
     else res = { ok: false, error: '知らない action: ' + a };
     res.version = ENGINE_VERSION;
+    res.ms = res.ms || {}; res.ms.lock = lockMs;     // 鍵を待った時間（ほかの処理と重なると伸びる）
     return json_(res);
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err), version: ENGINE_VERSION });
@@ -72,7 +75,11 @@ function a1_(r, c, nr, nc) {
 }
 function wlen_(s) { s = String(s); var n = 0; for (var i = 0; i < s.length; i++) n += s.charCodeAt(i) > 255 ? 2 : 1; return n; }
 function isBlank_(v) { return v === '' || v === null || v === undefined; }
-function digest_(s) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, s)).slice(0, 12); }
+var FP_VER = 2;   // 指紋の版。1＝文字列を既定の文字コードで数えた（日本語が区別できない）、2＝UTF-8
+function digest_(s, v) {
+  var bytes = (v === 1) ? s : Utilities.newBlob(s).getBytes();   // 版 1 は昔の控えの指紋を比べるためだけに残す
+  return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, bytes)).slice(0, 12);
+}
 function q_(name) { return "'" + String(name).replace(/'/g, "''") + "'"; }
 
 // ---------------------------------------------------------------- 対象を開く
@@ -144,19 +151,21 @@ function isNoCol_(t, ci) {
 
 // ---------------------------------------------------------------- 指紋
 
-function fingerSheet_(sh) {
+function fingerSheet_(sh, v) {
+  v = v || FP_VER;
   var lr = sh.getLastRow(), lc = sh.getLastColumn();
   var d = '';
   if (lr > 0 && lc > 0) {
     var rg = sh.getRange(1, 1, lr, lc);
     d = digest_(JSON.stringify(rg.getFormulas()) + JSON.stringify(rg.getDisplayValues()) + JSON.stringify(rg.getBackgrounds()) + JSON.stringify(rg.getFontWeights()) +
-      JSON.stringify(rg.getFontColors()) + JSON.stringify(rg.getNumberFormats()) + JSON.stringify(rg.getHorizontalAlignments()));
+      JSON.stringify(rg.getFontColors()) + JSON.stringify(rg.getNumberFormats()) + JSON.stringify(rg.getHorizontalAlignments()), v);
   }
-  return { rows: lr, cols: lc, d: digest_(d + '|' + sh.getName() + '|' + sh.getFrozenRows()) };
+  return { rows: lr, cols: lc, d: digest_(d + '|' + sh.getName() + '|' + sh.getFrozenRows(), v) };
 }
-function fingerDoc_(doc) {
+function fingerDoc_(doc, v) {
+  v = v || FP_VER;
   var b = doc.getBody();
-  return { n: b.getNumChildren(), d: digest_(b.getText() + '|' + docStructure_(b)) };
+  return { n: b.getNumChildren(), d: digest_(b.getText() + '|' + docStructure_(b), v) };
 }
 function docStructure_(b) {
   var o = [];
@@ -197,21 +206,35 @@ function pruneTabs_(book) {
   var left = book.getSheets().length;
   for (var i = 0; i < extra && left > 1; i++) { book.deleteSheet(tabs[i]); left--; }
 }
+var BKT = {};   // 控えの中の内訳（ミリ秒）。返事の ms に bk_ を付けて入れる
+function bkLap_(k, t0) { BKT['bk_' + k] = (BKT['bk_' + k] || 0) + (Date.now() - t0); }
 function backupSheets_(ss, sheets, n) {
   if (!sheets.length) return [];
-  var book = bkBook_(), out = [];
+  var tb = Date.now();
+  var book = bkBook_(), out = []; bkLap_('open', tb); tb = Date.now();
+  var cur = book.getSheets(); bkLap_('list', tb);   // 控えブックの全タブを 1 回で読み、以降はこの一覧から決める（API 呼びを減らす）
   sheets.forEach(function (sh) {
-    var old = book.getSheetByName(bkTabName_(n, sh.getSheetId()));
-    if (old && book.getSheets().length > 1) book.deleteSheet(old);
-    var c = sh.copyTo(book);
-    c.setName(bkTabName_(n, sh.getSheetId()));
-    out.push({ id: sh.getSheetId(), name: sh.getName(), index: sh.getIndex(), tab: c.getName(),
-      widths: colWidths_(sh), frozenR: sh.getFrozenRows(), frozenC: sh.getFrozenColumns() });
+    var nm = bkTabName_(n, sh.getSheetId());
+    for (var i = 0; i < cur.length; i++) {
+      if (cur[i].getName() === nm) { if (cur.length > 1) { book.deleteSheet(cur[i]); cur.splice(i, 1); } break; }
+    }
+    var tc = Date.now();
+    var c = sh.copyTo(book); bkLap_('copy', tc); tc = Date.now();
+    c.setName(nm); cur.push(c); bkLap_('name', tc);
+    // 列幅は控えのタブ（copyTo が写す）にあるので、戻すときにそこから読む（書く前に列ごとに読まない）
+    out.push({ id: sh.getSheetId(), name: sh.getName(), index: sh.getIndex(), tab: nm, frozenR: sh.getFrozenRows(), frozenC: sh.getFrozenColumns() });
   });
   // 控えブックに最初からある白紙シートを外す
-  var first = book.getSheetByName('シート1') || book.getSheetByName('Sheet1');
-  if (first && book.getSheets().length > 1) { try { book.deleteSheet(first); } catch (e) { } }
-  pruneTabs_(book);
+  for (var j = 0; j < cur.length; j++) {
+    var nj = cur[j].getName();
+    if ((nj === 'シート1' || nj === 'Sheet1') && cur.length > 1) { try { book.deleteSheet(cur[j]); cur.splice(j, 1); } catch (e) { } break; }
+  }
+  // 古い控えのタブを回す（BK_TABS_MAX 枚まで）
+  var tabs = cur.filter(function (s) { return /^ws\d+_/.test(s.getName()); });
+  tabs.sort(function (x, y) { return parseInt(x.getName().slice(2)) - parseInt(y.getName().slice(2)); });
+  var extra = tabs.length - BK_TABS_MAX, left = cur.length, tp = Date.now();
+  for (var k = 0; k < extra && left > 1; k++) { book.deleteSheet(tabs[k]); left--; }
+  bkLap_('prune', tp);
   return out;
 }
 // 列幅は表のある列だけ記録する（1 回の API 呼びが約 0.1 秒なので、全列・全行は読まない。行の高さは戻しの対象外）
@@ -247,7 +270,8 @@ function restoreSheet_(ss, b) {
     if (orig.getMaxColumns() < lc) orig.insertColumnsAfter(orig.getMaxColumns(), lc - orig.getMaxColumns());
     else if (orig.getMaxColumns() > lc) orig.deleteColumns(lc + 1, orig.getMaxColumns() - lc);
     tmp.getRange(1, 1, lr, lc).copyTo(orig.getRange(1, 1, lr, lc));
-    for (var c = 0; c < b.widths.length && c < lc; c++) orig.setColumnWidth(c + 1, b.widths[c]);
+    var widths = b.widths || colWidths_(tab);   // 古い控えは記録を持つ。新しい控えは控えのタブから読む
+    for (var c = 0; c < widths.length && c < lc; c++) orig.setColumnWidth(c + 1, widths[c]);
     orig.setFrozenRows(b.frozenR); orig.setFrozenColumns(b.frozenC);
     if (orig.getIndex() !== b.index) { ss.setActiveSheet(orig); ss.moveActiveSheet(b.index); }
   } finally { if (tmp) { try { ss.deleteSheet(tmp); } catch (e) { } } }
@@ -317,18 +341,26 @@ function restoreDoc_(doc, b, n) {
 
 function summarizeOps_(ops) { return ops.map(function (o) { return o.shelf; }).join('・'); }
 
+function msOut_(tm) { var o = {}; Object.keys(BKT).forEach(function (k) { o[k] = BKT[k]; }); Object.keys(tm).forEach(function (k) { if (k !== 't0' && k !== 'last') o[k] = tm[k]; }); o.total = Date.now() - tm.t0; return o; }
+function lap_(tm, k) { var n = Date.now(); tm[k] = (tm[k] || 0) + (n - tm.last); tm.last = n; }   // 区切りごとのミリ秒（返事の ms。道具が WS_TIMING のときだけ見せる）
+
 function actDo_(req) {
+  var tc = Date.now();
   var cache = CacheService.getScriptCache();
   if (req.call_id) {
     var hit = cache.get('call_' + req.call_id);
     if (hit) { var r0 = JSON.parse(hit); r0.replayed = true; return r0; }
   }
-  var res = runDo_(req);
+  var cacheGetMs = Date.now() - tc;
+  var res = runDo_(req, Date.now());
+  if (res && res.ms) res.ms.cacheGet = cacheGetMs;
   if (req.call_id) { try { var s = JSON.stringify(res); if (s.length < 90000) cache.put('call_' + req.call_id, s, 21600); } catch (e) { } }
   return res;
 }
 
-function runDo_(req) {
+function runDo_(req, T0) {
+  BKT = {};
+  var tm = { t0: T0 || Date.now() }; tm.last = tm.t0;
   var ops = req.ops || [];
   if (!ops.length) return { ok: false, error: 'ops が空です' };
   var t = req.target || {}, created = null, file, kind;
@@ -339,22 +371,24 @@ function runDo_(req) {
   } else {
     var o = openTarget_(t); file = o.file; kind = o.kind;
   }
-  var l = ledger_(); l.seq++; var n = l.seq; setJson_('LEDGER', l);
+  lap_(tm, 'open');
+  var l = ledger_(); l.seq++; var n = l.seq;   // 番号は最後の書き込みでまとめて残す（鍵の中なので重ならない。失敗・変更なしでは番号を使い回す）
+  lap_(tm, 'seq');
   var ctx = { kind: kind, file: file, ss: kind === 'sheet' ? file : null, doc: kind === 'doc' ? file : null,
     sheetName: t.sheet || '', ok: !!req.ok, changed: [], notes: [], remaining: [], createdSheets: [], n: n, isNew: !!created };
   var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: file.getId(),
-    name: file.getName(), kind: kind, what: summarizeOps_(ops), isNew: !!created };
-  var bk = null, tm = { t0: Date.now() };
+    name: file.getName(), kind: kind, what: summarizeOps_(ops), isNew: !!created, fp: FP_VER };
+  var bk = null;
   try {
     if (!created) {
       if (kind === 'sheet') {
         var names = touchedSheets_(ctx, ops);
-        bk = backupSheets_(ctx.ss, names, n);
+        bk = backupSheets_(ctx.ss, names, n); lap_(tm, 'backup');
         entry.sheets = bk;
         entry.before = {}; names.forEach(function (sh0) { entry.before[sh0.getSheetId()] = fingerSheet_(sh0); });
-      } else { entry.doc = backupDoc_(ctx.doc, n); entry.beforeDoc = fingerDoc_(ctx.doc); }
+      } else { entry.doc = backupDoc_(ctx.doc, n); lap_(tm, 'backup'); entry.beforeDoc = fingerDoc_(ctx.doc); }
     }
-    ctx.bk = bk; tm.backup = Date.now() - tm.t0;
+    ctx.bk = bk; lap_(tm, 'finger0');
     for (var i = 0; i < ops.length; i++) {
       var op = ops[i], fn = SHELF[op.shelf];
       if (!fn) throw new ArgError('棚「' + op.shelf + '」はありません');
@@ -363,7 +397,8 @@ function runDo_(req) {
       fn(ctx, op);
     }
     SpreadsheetApp.flush();
-    if (kind === 'doc') { ctx.doc.saveAndClose(); ctx.doc = DocumentApp.openById(entry.id); file = ctx.doc; }
+    lap_(tm, 'ops');
+    if (kind === 'doc') { ctx.doc.saveAndClose(); ctx.doc = DocumentApp.openById(entry.id); file = ctx.doc; lap_(tm, 'save'); }
     // 書き終わりの指紋
     if (kind === 'sheet') {
       entry.after = {};
@@ -372,13 +407,16 @@ function runDo_(req) {
       ctx.createdSheets.forEach(function (nm) { var s = ctx.ss.getSheetByName(nm); if (s) entry.created[nm] = fingerSheet_(s); });
     } else entry.afterDoc = fingerDoc_(ctx.doc);
     // 何も変わらなかった（すでにその状態）なら、記録も控えも残さない（undo が空振りしないように）
-    if (!created && isNoop_(ops, entry, ctx)) {
-      discardBackup_(bk);
-      return { ok: true, target: tgt_(ctx, file), changed: [], notes: ['変更はありませんでした（すでにその状態です）'].concat(ctx.notes.filter(function (x) { return x.indexOf('変更なし') < 0; })), remaining: ctx.remaining, backup: 0, ms: { total: Date.now() - tm.t0 } };
+    lap_(tm, 'finger');
+    var noop = !created && isNoop_(ops, entry, ctx);
+    lap_(tm, 'noop');
+    if (noop) {
+      discardBackup_(bk); lap_(tm, 'discard');
+      return { ok: true, target: tgt_(ctx, file), changed: [], notes: ['変更はありませんでした（すでにその状態です）'].concat(ctx.notes.filter(function (x) { return x.indexOf('変更なし') < 0; })), remaining: ctx.remaining, backup: 0, ms: msOut_(tm) };
     }
-    l = ledger_(); l.items.push(entry); ledgerSave_(l);
-    tm.total = Date.now() - tm.t0;
-    var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: created ? 0 : n, ms: tm };
+    l.items.push(entry); ledgerSave_(l);
+    lap_(tm, 'ledger');
+    var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: created ? 0 : n, ms: msOut_(tm) };
     if (created) { out.created = created; }
     return out;
   } catch (err) {
@@ -480,18 +518,18 @@ function actUndo_(req) {
     var ss = file;
     (it.sheets || []).forEach(function (b) {
       var s = byId_(ss, b.id);
-      if (s && it.after && it.after[b.id] && !sameFinger_(it.after[b.id], fingerSheet_(s))) hand.push(b.name);
+      if (s && it.after && it.after[b.id] && !sameFinger_(it.after[b.id], fingerSheet_(s, it.fp || 1))) hand.push(b.name);
     });
     Object.keys(it.created || {}).forEach(function (nm) {
       var s = ss.getSheetByName(nm);
-      if (s && !sameFinger_(it.created[nm], fingerSheet_(s))) hand.push(nm);
+      if (s && !sameFinger_(it.created[nm], fingerSheet_(s, it.fp || 1))) hand.push(nm);
     });
-  } else if (it.afterDoc && !sameFinger_(it.afterDoc, fingerDoc_(file))) hand.push(file.getName());
+  } else if (it.afterDoc && !sameFinger_(it.afterDoc, fingerDoc_(file, it.fp || 1))) hand.push(file.getName());
   if (hand.length && !req.ok)
     return { ok: false, needs_ok: true, error: '道具が書いた後に手で直した所があります（戻すと消えます）: ' + hand.join('、') + '。それでも戻すなら ok=True', target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
   // 戻す前の状態も控えに取る（undo の undo）
   l.seq++; var n = l.seq; setJson_('LEDGER', l);
-  var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: it.id, name: it.name, kind: it.kind, what: 'undo #' + it.n, isUndo: true };
+  var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: it.id, name: it.name, kind: it.kind, what: 'undo #' + it.n, isUndo: true, fp: FP_VER };
   try {
     if (it.kind === 'sheet') {
       var ss2 = file, names = [];

@@ -11,7 +11,9 @@ gas_workspace.py - Workspace マネージャー（スプレッドシートとド
 
 import hashlib
 import json
+import os
 import re
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +57,43 @@ def _engine_texts(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
     return out
 
 
+class _Timer:
+    """ws_do 1 回の内訳（秒）。WS_TIMING=1 のときだけ返事に出す。普段は計るだけで何も出さない"""
+
+    def __init__(self):
+        self.t0 = self.last = time.perf_counter()
+        self.laps = {}
+        self.engine = {}
+
+    def lap(self, name):
+        n = time.perf_counter()
+        self.laps[name] = self.laps.get(name, 0.0) + (n - self.last)
+        self.last = n
+
+    def total(self):
+        return time.perf_counter() - self.t0
+
+
+ENGINE_LAP_NAMES = [("lock", "鍵待ち"), ("cacheGet", "呼び直し確認"), ("open", "ファイルを開く"), ("seq", "台帳の番号"), ("backup", "控え"), ("finger0", "書く前の指紋"), ("ops", "棚の本体"),
+                    ("save", "文書の保存"), ("finger", "書いた後の指紋"), ("noop", "変更なしの判定"), ("discard", "控えの破棄"), ("ledger", "台帳の書き込み"),
+                    ("bk_open", "控え:ブックを開く"), ("bk_list", "控え:タブ一覧"), ("bk_copy", "控え:シートの写し"), ("bk_name", "控え:名前付け"), ("bk_prune", "控え:古いタブを消す")]
+
+
+def format_timing(tim):
+    """内訳の 2 行（秒）。準備＝Python 側（検査・相手の解決・状態の保存・エンジン版の確認）、往復＝Web アプリの呼び出しの待ち"""
+    L = tim.laps
+    eng = tim.engine or {}
+    roundtrip = L.get("往復", 0.0)
+    eng_total = (eng.get("total") or 0) / 1000.0
+    prep = sum(L.get(k, 0.0) for k in ("検査", "相手", "状態", "版"))
+    line1 = (f"内訳(秒) 合計 {tim.total():.2f}: 準備 {prep:.2f}（検査 {L.get('検査', 0):.2f}・相手 {L.get('相手', 0):.2f}・状態 {L.get('状態', 0):.2f}・版の確認 {L.get('版', 0):.2f}）"
+             f" ／ 往復 {roundtrip:.2f}（エンジン内 {eng_total:.2f}・残り＝通信と起動 {max(roundtrip - eng_total, 0):.2f}）"
+             f" ／ 返事の組み立て {L.get('返事', 0):.2f}")
+    parts = [f"{label} {eng[k] / 1000.0:.2f}" for k, label in ENGINE_LAP_NAMES if k in eng]
+    line2 = "エンジン内(秒): " + ("・".join(parts) if parts else "（エンジンが内訳を返していません）")
+    return line1 + "\n" + line2
+
+
 def _file_hash(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
     """版の指紋: 入れる全ファイルの連結から取る"""
     h = hashlib.sha1()
@@ -80,6 +119,9 @@ class WorkspaceManager:
         self.finder = gas_ws_find.Finder(self.catalog, synonyms=gas_ws_find.load_synonyms(self.shelf_dir / "synonyms.txt"),
                                          guide=gas_ws_find.load_guide(self.shelf_dir / "guide.txt"))
         self.misses_path = HERE / ".ws_misses.tsv"      # 弱かった頼み（git に入れない）
+        self.timing = os.environ.get("WS_TIMING", "").lower() in ("1", "true", "yes", "on")   # ws_do の内訳を返事に足す
+        self.last_timing = None
+        self._tim = None
 
     # ------------------------------------------------------------ 状態
     @property
@@ -157,12 +199,18 @@ class WorkspaceManager:
         return st
 
     def _post(self, body, timeout=90):
+        tim = self._tim
         st = self._ensure_engine()
+        if tim:
+            tim.lap("版")
         url = st["engine_url"]
         try:
             r = self.client.call_webapp(url, body=body, method="POST", use_auth=True, timeout=timeout)
         except TimeoutError as e:
             raise WorkspaceTimeout(str(e))
+        finally:
+            if tim:
+                tim.lap("往復")
         data = r.get("data")
         if isinstance(data, dict):
             ver = data.get("version")
@@ -292,11 +340,24 @@ class WorkspaceManager:
 
     # ------------------------------------------------------------ ws_do
     def do(self, ops, target="", ok=False):
+        tim = _Timer()
+        self._tim = tim
+        try:
+            out = self._do(ops, target, ok, tim)
+        finally:
+            self._tim = None
+        tim.lap("返事")
+        self.last_timing = tim
+        return out + ("\n" + format_timing(tim) if self.timing else "")
+
+    def _do(self, ops, target, ok, tim):
         ops = self.parse_ops(ops)
         kind = self.validate_ops(ops)
         ops = [self.catalog.normalize_op(o) for o in ops]   # 列[]・行[] に 1 つだけ渡された値を配列にそろえる
+        tim.lap("検査")
         st = self._load()
         tgt, is_new = self.resolve_target(target, kind, st)
+        tim.lap("相手")
         if tgt.get("kind") and tgt["kind"] != kind:
             raise WorkspaceError("今の相手は" + ("文書" if tgt["kind"] == "doc" else "スプレッドシート")
                                  + "ですが、頼みの棚は" + ("文書" if kind == "doc" else "シート") + "用です。target を替えてください。")
@@ -316,7 +377,10 @@ class WorkspaceManager:
         call_id = pend["call_id"] if pend.get("hash") == h else uuid.uuid4().hex
         st["pending"] = {"hash": h, "call_id": call_id}
         self._save(st)
+        tim.lap("状態")
         res = self._post({"action": "do", "call_id": call_id, "target": body_target, "ops": ops, "ok": bool(ok)})
+        tim.engine = res.get("ms") or {}
+        tim.last = time.perf_counter()
         st = self._load()
         st.pop("pending", None)
         return self._finish_do(st, res, key)
