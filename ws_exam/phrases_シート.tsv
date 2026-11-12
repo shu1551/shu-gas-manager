@@ -1,21 +1,21 @@
 # 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
 sheet.add	集計用のシートを追加して
 sheet.add	空のシートを1枚足して
-sheet.add	新しいタブ欲しいな
-sheet.add	シート 追加 来月分
+?sheet.add	新しいタブ欲しいな
+?sheet.add	シート 追加 来月分
 sheet.rename	シート1の名前を売上に変更して
-sheet.rename	タブの名前を付け替えたい
+?sheet.rename	タブの名前を付け替えたい
 sheet.rename	このシート、名前を集計に変えて
-sheet.rename	シート 改名 名前変更
+?sheet.rename	シート 改名 名前変更
 sheet.move	集計シートを一番左に移動して
-sheet.move	シートの順番を入れ替えたい
+?sheet.move	シートの順番を入れ替えたい
 sheet.move	売上のタブを先頭にして
-sheet.move	シート 並び順 移動
-sheet.delete	シートを削除して
-sheet.delete	いらないシートを無くして
-sheet.delete	このタブ消しといて
-sheet.delete	シート 削除 不要
+?sheet.move	シート 並び順 移動
+sheet.delete	集計シートを削除して
+sheet.delete	「メモ」のシートはいらないので削除して
+?sheet.delete	このタブ消しといて
+?sheet.delete	シート 削除 不要
 sheet.copy	テンプレートのシートを複製して
-sheet.copy	同じシートをもう1枚作って
-sheet.copy	来月分のシートを作っておいて
-sheet.copy	シート コピー 複製
+?sheet.copy	同じシートをもう1枚作って
+sheet.copy	売上シートを複製して来月分を作っておいて
+?sheet.copy	シート コピー 複製

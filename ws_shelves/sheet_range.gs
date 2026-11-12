@@ -216,9 +216,9 @@ SHELF['copy.format'] = function (ctx, op) {
 // 題: 範囲に連番を埋める
 // 分類: 範囲
 // 語: 連番を入|連番を埋|1から順|通し番号を入|番号を下まで|通し番号を振
-// 違い: 表の番号列を直すなら renumber、日付なら fill.date
+// 違い: 番地の範囲（A2:A20 や A列）を指して、その範囲に連番を書き込む（空の列にも書ける。値があれば上書きなので ok が要る）。表にある番号の列を見出しの名前で直すだけなら renumber、日付なら fill.date
 // 引数: range*=範囲, start=数=1, step=数=1
-// 例: 「A2:A20に1から連番を入れて」 → {"shelf":"fill.series","range":"A2:A20"}
+// 例: 「A列に1から連番を入れて」 → {"shelf":"fill.series","range":"A2:A20"}
 // 例: 「10から5刻みで番号を埋めて」 → {"shelf":"fill.series","range":"B2:B10","start":10,"step":5}
 // 危ない: 上書き
 // 触る: 値

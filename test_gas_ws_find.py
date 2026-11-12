@@ -351,3 +351,34 @@ def test_move_to_means_position_after_the_move():
 def test_move_cards_say_to_is_the_position_after_the_move():
     for n in ("rows.move", "cols.move", "rows"):
         assert "動かした後" in gw.CATALOG.by_name[n]["diff"], n
+
+
+# ---------------------------------------------------------------- 問題集の点検・札の区別（renumber と fill.series）
+def test_every_shelf_keeps_two_fireable_questions():
+    extras = gas_ws_check.load_extras()
+    fire = {}
+    for exp, ask, src in gas_ws_check.load_questions():
+        if "ijiwaru" in src or extras.get(ask, {}).get("ask_ok"):
+            continue
+        for e in exp:
+            fire[e] = fire.get(e, 0) + 1
+    for s in gw.CATALOG.shelves:
+        if s["searchable"]:
+            assert fire.get(s["name"], 0) >= gas_ws_check.MIN_FIREABLE, s["name"]
+
+
+def test_keyword_list_questions_are_marked_as_ask_back_ok():
+    extras = gas_ws_check.load_extras()
+    for exp, ask, src in gas_ws_check.load_questions():
+        if " " in ask and "ijiwaru" not in src:        # 語の並びは頼みの文ではない（指す物が無い）
+            assert extras[ask]["ask_ok"] is True, ask
+
+
+def test_renumber_and_fill_series_cards_tell_each_other_apart():
+    r, f = gw.CATALOG.by_name["renumber"], gw.CATALOG.by_name["fill.series"]
+    assert "表の番号の列" in r["title"] and "fill.series" in r["diff"] and "見出しの名前" in r["diff"]
+    assert "番地の範囲" in f["diff"] and "renumber" in f["diff"]
+    assert f["examples"][0][0] == "A列に1から連番を入れて" and f["examples"][0][1]["range"] == "A2:A20"
+    fd = gas_ws_find.Finder()
+    picks, scores, _ = fd.find("A列に1から連番を入れて")
+    assert picks[0]["name"] == "fill.series"

@@ -131,11 +131,13 @@ SHELF['seiri'] = function (ctx, op) {
 };
 
 // 棚: renumber
-// 題: 番号の列を振り直す
+// 題: 表の番号の列を振り直す
 // 分類: 整える
 // 語: 番号を振り直|連番に直|番号を振り|通し番号|No を振|番号を付け直
+// 違い: すでに表にある番号の列を、見出しの名前（番号・No）で指して 1,2,3… に直す（空の行は飛ばす）。番地の範囲を指して連番を書くなら fill.series
 // 引数: col*=列, start=数
-// 例: 「No列を1から振り直して」 → {"shelf":"renumber","col":"No"}
+// 例: 「番号の列を1から振り直して」 → {"shelf":"renumber","col":"番号"}
+// 例: 「行を消したのでNoを2から付け直して」 → {"shelf":"renumber","col":"No","start":2}
 // 触る: 値
 SHELF['renumber'] = function (ctx, op) {
   need_(op, ['col']);

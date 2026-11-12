@@ -2,8 +2,8 @@
 format	見出しを太字にして背景を青にして
 format	金額の列を桁区切りの書式にして
 ?format	文字を赤くしたいんだけど
-format	書式 太字 色 背景
+?format	書式 太字 色 背景
 width	A列の幅を広げて
 width	列幅を中身に合わせて自動調整して
-width	列が狭くて見えないから広げて
-width	幅 列幅 調整
+?width	列が狭くて見えないから広げて
+?width	幅 列幅 調整

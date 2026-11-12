@@ -2,12 +2,12 @@
 sort	金額の大きい順に並べ替えて
 sort	日付の新しい順にソートして
 sort	売上が高い順に並べて
-sort	並べ替え 昇順 降順
+?sort	並べ替え 昇順 降順
 filter.where	部署が営業の行だけ表示して
-filter.where	条件に合う行だけ見せて
+?filter.where	条件に合う行だけ見せて
 filter.where	営業だけに絞って
-filter.where	絞り込み フィルタ 表示
+?filter.where	絞り込み フィルタ 表示
 filter.on	表にフィルタを設定して
 filter.on	見出しに▼を付けて絞り込めるようにして
 filter.on	オートフィルタかけといて
-filter.on	フィルタ 設定 追加
+?filter.on	フィルタ 設定 追加

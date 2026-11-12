@@ -25,6 +25,7 @@ ANSWERS = EXAM_DIR / "answers.tsv"
 MCP_FILE = HERE / "gas_mcp_server.py"
 DOC_FILES = ["WORKSPACE.md", "SKILL.md"]
 MIN_QUESTIONS = 4
+MIN_FIREABLE = 2       # 棚 1 本につき、指す物が決まる問（? 印の無い問。AI が聞き返さずに撃てる）を 2 問以上
 DOC_LINES_EACH = 4
 DOC_LINES_TOTAL = 16
 DOC_NAMES_MAX = 5
@@ -141,6 +142,17 @@ def run(write=True, exam_dir=EXAM_DIR, answers_path=ANSWERS):
     for n, c in count.items():
         if c < MIN_QUESTIONS:
             problems.append(f"棚「{n}」の問題が {c} 問です（{MIN_QUESTIONS} 問以上）")
+    extras = load_extras(exam_dir)
+    fire = {n: 0 for n in searchable}
+    for exp, ask, src in qs:
+        if "ijiwaru" in src or extras.get(ask, {}).get("ask_ok"):
+            continue
+        for e in exp:
+            if e in fire:
+                fire[e] += 1
+    for n, c in fire.items():
+        if c < MIN_FIREABLE:
+            problems.append(f"棚「{n}」の「指す物が決まる問」（? 印なし）が {c} 問です（{MIN_FIREABLE} 問以上。番地や列名を書いた問を残す）")
     for exp, ask, src in qs:
         for e in exp:
             if e not in ("(なし)", "(案内)") and e not in cat.by_name:

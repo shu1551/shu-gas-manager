@@ -101,7 +101,7 @@ needs_node = pytest.mark.skipif(not _node_ok(), reason="node が無い")
 # ---------------------------------------------------------------- 札・目録
 def test_catalog_loads_all_shelves_and_check_passes():
     c = gw.CATALOG
-    assert sorted(c.names()) == sorted(ALL_NAMES)
+    assert set(ALL_NAMES) <= set(c.names())          # 段 0・1 の棚は残っている（段 3 以降で増える）
     assert cat_mod.check(c) == []
     # 文書の棚は doc、ほかは sheet（分類: 文書 から決まる）
     assert {n for n in c.names() if c.by_name[n]["kind"] == "doc"} == {n for n in ALL_NAMES if n.startswith("doc.")}
@@ -164,14 +164,14 @@ def test_card_parser_rules():
 
 def test_dangerous_cards_match_engine_guards():
     danger = {n for n in gw.CATALOG.names() if gw.CATALOG.by_name[n]["danger"] == "消す"}
-    assert danger == {"seiri", "summary", "rows", "doc.section", "rows.delete", "cols.delete"}   # 別名は呼び先の守りを引き継ぐ
+    assert {"seiri", "summary", "rows", "doc.section", "rows.delete", "cols.delete"} <= danger   # 別名は呼び先の守りを引き継ぐ
 
 
 def test_catalog_gs_content_and_order():
     gs = cat_mod.build_catalog_gs(gw.CATALOG)
     assert gs.startswith("// Catalog.gs") and "var CATALOG = {" in gs
     obj = json.loads(gs[gs.index("{", gs.index("var CATALOG")):gs.rindex("}") + 1])
-    assert sorted(obj) == sorted(ALL_NAMES)
+    assert sorted(obj) == sorted(gw.CATALOG.names()) and set(ALL_NAMES) <= set(obj)
     assert obj["rows"]["danger"] == "消す" and obj["width"]["touch"] == ["幅"] and obj["sheet.add"]["backup"] == ["名前", "全部"]
     assert obj["doc.new"]["kind"] == "doc" and obj["tidy"]["kind"] == "sheet"
 
@@ -201,7 +201,7 @@ def test_engine_files_order_and_fingerprint(tmp_path):
 
 def test_engine_all_file_has_every_shelf():
     text = Path(gw.ENGINE_SOURCE).read_text(encoding="utf-8")
-    assert sorted(re.findall(r"SHELF\['([\w.]+)'\]\s*=", text)) == sorted(ALL_NAMES)
+    assert sorted(re.findall(r"SHELF\['([\w.]+)'\]\s*=", text)) == sorted(gw.CATALOG.names())
 
 
 def test_validate_ops_from_cards_keeps_old_behaviour(tmp_path):

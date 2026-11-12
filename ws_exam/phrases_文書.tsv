@@ -2,24 +2,24 @@
 doc.new	見出しと箇条書きの文書を作って
 doc.new	議事録を書いて
 doc.new	見積書の文章をつくって
-doc.new	文書 新規 本文 作成
-doc.append	文書の最後に1行追記して
-doc.append	決定事項の下に項目を足して
-doc.append	末尾にひとこと足しといて
-doc.append	文書 追記 末尾
+?doc.new	文書 新規 本文 作成
+doc.append	文書の最後に「以上です」と追記して
+doc.append	決定事項の下に「次回は12/2」という項目を足して
+?doc.append	末尾にひとこと足しといて
+?doc.append	文書 追記 末尾
 doc.replace	文書の中の山田を山田（総務）に置き換えて
-doc.replace	文中の表記を統一したい
-doc.replace	この言葉を全部直して
-doc.replace	文書 置換 語句
-doc.section	概要の節を書き直して
-doc.section	この見出しの章ごと消して
-doc.section	見出しの下を差し替えて
-doc.section	文書 節 差し替え 削除
-doc.table	文書に2列の表を入れて
-doc.table	表の2行目のセルを直して
-doc.table	文書へ表を挿入して
-doc.table	文書 表 挿入 セル
+?doc.replace	文中の表記を統一したい
+doc.replace	文書の「株式会社」を全部「(株)」に直して
+?doc.replace	文書 置換 語句
+?doc.section	概要の節を書き直して
+doc.section	概要の節を削除して
+doc.section	決定事項の節を「保留」の1行に差し替えて
+?doc.section	文書 節 差し替え 削除
+doc.table	文書の最後に項目と内容の2列の表を入れて
+doc.table	文書の1つ目の表の2行1列を「新」に直して
+?doc.table	文書へ表を挿入して
+?doc.table	文書 表 挿入 セル
 doc.style	文書のフォントをそろえて
 doc.style	行間を広げて見やすく
 doc.style	文書の見た目を整えて
-doc.style	文書 書式 フォント
+?doc.style	文書 書式 フォント
