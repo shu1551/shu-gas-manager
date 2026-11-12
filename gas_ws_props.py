@@ -23,8 +23,9 @@ RUNS = HERE / "ws_trial" / "runs"
 SKIP_FILE = HERE / "ws_trial" / "props_skip.tsv"
 TABLES = ["meibo_base", "meibo_dirty", "meibo_quirk", "uriage_base", "uriage_dirty", "uriage_quirk"]
 BAD_OP = {"shelf": "write", "sheet": "存在しないシート", "cells": {"A1": 1}}
-QUOTA_RETRIES = 3     # 回数超え（429）が返ったら、待って撃ち直す回数
-QUOTA_WAIT = 20       # 待つ秒（1 回目 20・2 回目 40・3 回目 60）
+QUOTA_RETRIES = 6     # 回数超え（429）が返ったら、待って撃ち直す回数
+QUOTA_WAIT = 20       # 待つ秒（1 回目 20・2 回目 40…）。待つ間は全員が止まる（1 本が 429 を受けたら、みんなで冷ます）
+BUSY_WORDS = ("別の処理が走っています",)
 QUOTA_WORDS = ("quota", "rate limit", "429", "too many", "Service invoked too many", "上限", "Exceeded")
 
 
@@ -333,8 +334,9 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
         q.put(c)
     lock = threading.Lock()
     t_start = time.time()
-    stats = {"n": 0, "quota": 0, "post_fail": 0, "quota_retry": 0, "workers": len(workers)}
+    stats = {"n": 0, "quota": 0, "post_fail": 0, "quota_retry": 0, "busy_retry": 0, "workers": len(workers)}
     stop = threading.Event()
+    cool = {"until": 0.0}        # 429 を受けたら全員がここまで待つ
 
     def work(wi, weng, wfile):
         time.sleep(stagger * wi)                       # 同時に撃ち始めない
@@ -357,6 +359,9 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
             rec = {"shelf": shelf, "table": tname, "ops": ops, "fp": combo_fp(fp, shelf, tname), "lane": getattr(weng, "lane", "")}
             for attempt in range(QUOTA_RETRIES + 1):
                 try:
+                    wait = cool["until"] - time.time()
+                    if wait > 0:
+                        time.sleep(wait)
                     if seeded != tname:
                         r = weng.seed(wfile, table)
                         if not r.get("ok"):
@@ -375,11 +380,15 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
                     msg = str(e)
                     isq = any(w.lower() in msg.lower() for w in QUOTA_WORDS)
                     seeded = None
-                    if isq and attempt < QUOTA_RETRIES:        # 回数超え（429）は待って撃ち直す（並べる数は減らさない）
+                    isb = any(w in msg for w in BUSY_WORDS)
+                    if (isq or isb) and attempt < QUOTA_RETRIES:   # 回数超え（429）・錠の取り合いは待って撃ち直す（並べる数は減らさない）
                         with lock:
-                            stats["quota_retry"] += 1
+                            stats["quota_retry" if isq else "busy_retry"] += 1
+                            if isq:
+                                cool["until"] = max(cool["until"], time.time() + QUOTA_WAIT * (attempt + 1))
                         rec["retries"] = attempt + 1
-                        time.sleep(QUOTA_WAIT * (attempt + 1))
+                        if isb:
+                            time.sleep(3)
                         continue
                     rec.update(p={"P1": "error"}, reasons={"POST": msg[:200]}, post_fail=True, quota=isq)
                     break

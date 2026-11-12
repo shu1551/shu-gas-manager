@@ -41,6 +41,7 @@ LANE_NUMS = [str(i) for i in range(2, 11)]      # 最大 10 枚（既定の並�
 DEFAULT_JOBS = 5
 LANE_SHEETS = {n: f"WS試験_場{n}" for n in LANE_NUMS}
 LANE_BACKUPS = {n: f"WS試験_控え{n}" for n in LANE_NUMS}
+LANE_BACKUPS["1"] = BACKUP_BOOK          # lane 1（WS試験_場）も lane として撃つ（ふつうの錠は全体の錠を持ち続けるので、並べると他の lane が待たされる）
 MAX_JOBS = 10         # GAS の同時実行の上限（ユーザーあたり 30 前後）に十分余裕を残す。Sheets API の読み取りは 1 分 60 回前後（超えたら待って撃ち直す）
 WORD_LIMIT = 8        # 札 1 本の語の数の上限（第 8.4 節）
 
@@ -262,7 +263,7 @@ def init(client=None, out=print, state_path=STATE_FILE):
     if not r.get("ok"):
         out("試験場を登録できません: " + str(r.get("error")))
         return 1
-    for ln in LANE_NUMS:                      # lane ごとの控えのブック（lanes で作った分だけ）
+    for ln in ["1"] + LANE_NUMS:              # lane ごとの控えのブック（lanes で作った分だけ。lane 1 は WS試験_控え）
         if LANE_BACKUPS[ln] in files:
             eng.lane = ln
             try:
@@ -310,7 +311,7 @@ def lane_workers(eng_factory, st=None, jobs=5):
     """(エンジン, 試験場の ID) の並び。lane 1＝WS試験_場、2〜5＝WS試験_場2〜5（lanes で作った分だけ）。jobs 個まで"""
     st = st if st is not None else load_state()
     files = st.get("files", {})
-    ws = [("", files["WS試験_場"])]
+    ws = [("1", files["WS試験_場"])]
     for n in LANE_NUMS:
         if LANE_SHEETS[n] in files and LANE_BACKUPS[n] in files:
             ws.append((n, files[LANE_SHEETS[n]]))
@@ -491,7 +492,7 @@ def props_cmd(args, out=print):
     stats, rf = gas_ws_props.run(eng, st["files"]["WS試験_場"], shelves=a.shelf or None, tables=a.table or None, run_file=a.resume or None,
                                  resume=bool(a.resume), out=out, limit_seconds=a.limit_sec, workers=workers, changed=a.changed, with_engine=a.with_engine)
     rows, fails, p6 = gas_ws_props.summarize(rf) if Path(rf).exists() else ([], [], {})
-    out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}・429 を待って撃ち直した回数 {stats['quota_retry']}）・{stats['workers']} 本で {stats.get('sec', 0):.0f} 秒・記録 {rf}")
+    out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}・429 を待って撃ち直した回数 {stats['quota_retry']}・錠の待ち直し {stats['busy_retry']}）・{stats['workers']} 本で {stats.get('sec', 0):.0f} 秒・記録 {rf}")
     return 1 if fails else 0
 
 

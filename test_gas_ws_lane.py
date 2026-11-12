@@ -237,7 +237,7 @@ def test_run_with_changed_runs_nothing_when_nothing_changed_and_stamp_fills_lega
 def test_lane_workers_use_one_sandbox_per_lane_up_to_the_limit():
     st = {"files": {"WS試験_場": "f1", "WS試験_場2": "f2", "WS試験_控え2": "b2", "WS試験_場3": "f3"}}   # 場 3 は控えが無い＝まだ使えない
     ws = TR.lane_workers(lambda: TR.TrialEngine(client=object(), state_path="x.json"), st, jobs=5)
-    assert [(e.lane, f) for e, f in ws] == [("", "f1"), ("2", "f2")]
+    assert [(e.lane, f) for e, f in ws] == [("1", "f1"), ("2", "f2")]
     assert len(TR.lane_workers(lambda: TR.TrialEngine(client=object(), state_path="x.json"), st, jobs=1)) == 1
 
 
@@ -272,3 +272,23 @@ def test_a_429_is_waited_out_and_retried_without_dropping_workers(tmp_path, monk
 
 def test_default_jobs_is_five_and_lanes_can_go_up_to_ten():
     assert TR.DEFAULT_JOBS == 5 and TR.MAX_JOBS == 10 and len(TR.LANE_NUMS) == 9 and TR.LANE_SHEETS["10"] == "WS試験_場10"
+
+
+def test_a_busy_lock_is_retried_and_a_429_cools_everyone(tmp_path, monkeypatch):
+    _patch_evaluate(monkeypatch)
+    monkeypatch.setattr(P, "RUNS", tmp_path)
+    monkeypatch.setattr(P, "QUOTA_WAIT", 0)
+    log = []
+
+    class Busy(FakeEng):
+        n = 0
+
+        def trial_post(self, action, **kw):
+            Busy.n += 1
+            if Busy.n == 1:
+                raise RuntimeError("別の処理が走っています。少し待って撃ち直してください。")
+            return super().trial_post(action, **kw)
+
+    monkeypatch.setattr(P.time, "sleep", lambda s: None)
+    stats, rf = P.run(Busy("1", 0, log), "f", shelves=["tidy"], tables=["meibo_base"], out=lambda *_: None)
+    assert stats["busy_retry"] == 1 and stats["post_fail"] == 0 and stats["quota_retry"] == 0
