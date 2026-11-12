@@ -11,3 +11,7 @@ filter.on	表にフィルタを設定して
 filter.on	見出しに▼を付けて絞り込めるようにして
 filter.on	オートフィルタかけといて
 ?filter.on	フィルタ 設定 追加
+filter.off	表のフィルタを解除して
+filter.off	絞り込みを解除して全部表示に戻して
+?filter.off	絞り込みを解除したい
+?filter.off	フィルタ 解除 外す

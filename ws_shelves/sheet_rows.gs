@@ -148,3 +148,159 @@ SHELF['unfreeze'] = function (ctx, op) {
   sh.setFrozenColumns(0);
   chg_(ctx, sh, '', '固定を解除');
 };
+
+// 棚: rows.hide
+// 題: 行を隠す
+// 分類: 行と列
+// 語: 行を隠|行を非表示|行目を隠|行を見えなく|行を隠して
+// 違い: 行を再表示するなら rows.show。行を消すなら rows.delete
+// 引数: rows*=行[]
+// 例: 「5行目から10行目を隠して」 → {"shelf":"rows.hide","rows":[5,6,7,8,9,10]}
+// 触る: 隠し
+// 控え: 今
+SHELF['rows.hide'] = function (ctx, op) {
+  need_(op, ['rows']);
+  var sh = sheetCtx_(ctx, op);
+  var list = (Array.isArray(op.rows) ? op.rows : [op.rows]).map(function (x) { return parseInt(x, 10); });
+  list.forEach(function (r) { sh.hideRows(r); });
+  chg_(ctx, sh, list.join('・') + ' 行目', '行を非表示');
+};
+
+// 棚: rows.show
+// 題: 隠した行を出す
+// 分類: 行と列
+// 語: 行を再表示|隠した行|非表示の行|行を出|行が見えない
+// 違い: 行を隠すなら rows.hide
+// 引数: rows=行[]
+// 例: 「隠れている5行目を出して」 → {"shelf":"rows.show","rows":[5]}
+// 例: 「非表示の行を全部出して」 → {"shelf":"rows.show"}
+// 触る: 隠し
+// 控え: 今
+SHELF['rows.show'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  if (op.rows) {
+    var list = (Array.isArray(op.rows) ? op.rows : [op.rows]).map(function (x) { return parseInt(x, 10); });
+    list.forEach(function (r) { sh.unhideRow(sh.getRange(r, 1)); });
+    chg_(ctx, sh, list.join('・') + ' 行目', '行を再表示');
+  } else {
+    sh.unhideRow(sh.getRange(1, 1, sh.getMaxRows(), 1));
+    chg_(ctx, sh, '', '全行を再表示');
+  }
+};
+
+// 棚: cols.hide
+// 題: 列を隠す
+// 分類: 行と列
+// 語: 列を隠|列を非表示|列を見えなく|列を隠して
+// 違い: 列を再表示するなら cols.show。列を消すなら cols.delete
+// 引数: cols*=列[]
+// 例: 「C列とD列を隠して」 → {"shelf":"cols.hide","cols":["C","D"]}
+// 触る: 隠し
+// 控え: 今
+SHELF['cols.hide'] = function (ctx, op) {
+  need_(op, ['cols']);
+  var sh = sheetCtx_(ctx, op);
+  var list = Array.isArray(op.cols) ? op.cols : [op.cols];
+  list.forEach(function (c) {
+    var n = typeof c === 'number' ? c : colNum_(c);
+    sh.hideColumns(n);
+  });
+  chg_(ctx, sh, list.join('・') + ' 列', '列を非表示');
+};
+
+// 棚: cols.show
+// 題: 隠した列を出す
+// 分類: 行と列
+// 語: 列を再表示|隠した列|非表示の列|非表示になってる列|列を出
+// 違い: 列を隠すなら cols.hide
+// 引数: cols=列[]
+// 例: 「非表示になっているC列を出して」 → {"shelf":"cols.show","cols":["C"]}
+// 例: 「隠れている列を全部再表示して」 → {"shelf":"cols.show"}
+// 触る: 隠し
+// 控え: 今
+SHELF['cols.show'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  if (op.cols) {
+    var list = Array.isArray(op.cols) ? op.cols : [op.cols];
+    list.forEach(function (c) {
+      var n = typeof c === 'number' ? c : colNum_(c);
+      sh.unhideColumn(sh.getRange(1, n));
+    });
+    chg_(ctx, sh, list.join('・') + ' 列', '列を再表示');
+  } else {
+    sh.unhideColumn(sh.getRange(1, 1, 1, sh.getMaxColumns()));
+    chg_(ctx, sh, '', '全列を再表示');
+  }
+};
+
+// 棚: group.rows
+// 題: 行をグループ化する
+// 分類: 行と列
+// 語: 行をグループ|行をまとめて折|行を折りたた|行を畳|行をグループ化
+// 違い: 列のグループ化は group.cols。グループ解除は group.remove
+// 引数: rows*=行[], collapse=真偽
+// 例: 「5行目から10行目をグループ化して折りたたんで」 → {"shelf":"group.rows","rows":[5,6,7,8,9,10],"collapse":true}
+// 触る: グループ
+// 控え: 今
+SHELF['group.rows'] = function (ctx, op) {
+  need_(op, ['rows']);
+  var sh = sheetCtx_(ctx, op);
+  var list = (Array.isArray(op.rows) ? op.rows : [op.rows]).map(function (x) { return parseInt(x, 10); }).sort(function (a, b) { return a - b; });
+  var start = list[0], count = list[list.length - 1] - start + 1;
+  var rg = sh.getRange(start, 1, count, 1);
+  rg.shiftRowGroupDepth(1);
+  if (op.collapse) rg.collapseGroups();
+  chg_(ctx, sh, start + '〜' + (start + count - 1) + ' 行目', '行をグループ化');
+};
+
+// 棚: group.cols
+// 題: 列をグループ化する
+// 分類: 行と列
+// 語: 列をグループ|列をまとめて折|列を折りたた|列を畳|列をグループ化
+// 違い: 行のグループ化は group.rows。グループ解除は group.remove
+// 引数: cols*=列[], collapse=真偽
+// 例: 「D列からF列をグループ化して」 → {"shelf":"group.cols","cols":["D","E","F"]}
+// 触る: グループ
+// 控え: 今
+SHELF['group.cols'] = function (ctx, op) {
+  need_(op, ['cols']);
+  var sh = sheetCtx_(ctx, op);
+  var list = (Array.isArray(op.cols) ? op.cols : [op.cols]).map(function (x) { return typeof x === 'number' ? x : colNum_(x); }).sort(function (a, b) { return a - b; });
+  var start = list[0], count = list[list.length - 1] - start + 1;
+  var rg = sh.getRange(1, start, 1, count);
+  rg.shiftColumnGroupDepth(1);
+  if (op.collapse) rg.collapseGroups();
+  chg_(ctx, sh, colLetter_(start) + '〜' + colLetter_(start + count - 1) + ' 列', '列をグループ化');
+};
+
+// 棚: group.remove
+// 題: グループ化を外す
+// 分類: 行と列
+// 語: グループを解除|グループ化を解除|グループを外|折りたたみを解除
+// 違い: グループを作るなら group.rows または group.cols
+// 引数: rows=行[], cols=列[]
+// 例: 「5行目から10行目のグループ化を解除して」 → {"shelf":"group.remove","rows":[5,6,7,8,9,10]}
+// 例: 「シート全体のグループを全部外して」 → {"shelf":"group.remove"}
+// 触る: グループ
+// 控え: 今
+SHELF['group.remove'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  if (op.rows) {
+    var list = (Array.isArray(op.rows) ? op.rows : [op.rows]).map(function (x) { return parseInt(x, 10); }).sort(function (a, b) { return a - b; });
+    var start = list[0], count = list[list.length - 1] - start + 1;
+    sh.getRange(start, 1, count, 1).shiftRowGroupDepth(-1);
+    chg_(ctx, sh, start + '〜' + (start + count - 1) + ' 行目', '行グループを解除');
+  } else if (op.cols) {
+    var list2 = (Array.isArray(op.cols) ? op.cols : [op.cols]).map(function (x) { return typeof x === 'number' ? x : colNum_(x); }).sort(function (a, b) { return a - b; });
+    var start2 = list2[0], count2 = list2[list2.length - 1] - start2 + 1;
+    sh.getRange(1, start2, 1, count2).shiftColumnGroupDepth(-1);
+    chg_(ctx, sh, colLetter_(start2) + '〜' + colLetter_(start2 + count2 - 1) + ' 列', '列グループを解除');
+  } else {
+    var all = sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns());
+    for (var d = 0; d < 8; d++) {
+      try { all.shiftRowGroupDepth(-1); } catch (eR) { }
+      try { all.shiftColumnGroupDepth(-1); } catch (eC) { }
+    }
+    chg_(ctx, sh, '', '全グループを解除');
+  }
+};

@@ -107,3 +107,136 @@ SHELF['validation.clear'] = function (ctx, op) {
   rg.clearDataValidations();
   chg_(ctx, sh, rg.getA1Notation(), '入力規則を解除');
 };
+
+// 棚: protect.sheet
+// 題: シートを保護する
+// 分類: 守る
+// 語: シートを保護|編集できないように|触れないように|書き換えられないように|いじれない
+// 違い: 特定の範囲だけ保護するなら protect.range。保護を外すなら protect.remove
+// 引数: name=シート, except=範囲, warn=真偽
+// 例: 「このシートを保護して編集できないようにして」 → {"shelf":"protect.sheet"}
+// 例: 「シートを保護して、でもB2:B20だけは入力できるようにして」 → {"shelf":"protect.sheet","except":"B2:B20"}
+// 触る: 保護
+// 控え: 今
+SHELF['protect.sheet'] = function (ctx, op) {
+  var s = op.name ? sheetOf_(ctx.ss, op.name, '') : sheetCtx_(ctx, op);
+  var p = s.protect();
+  if (op.warn) p.setWarningOnly(true);
+  if (op.except) {
+    var expRg = s.getRange(op.except);
+    p.setUnprotectedRanges([expRg]);
+  }
+  note_(ctx, '持ち主（実行するアカウント）には保護が効かない所があります');
+  chg_(ctx, s, '', 'シート「' + s.getName() + '」を保護' + (op.warn ? '（警告のみ）' : ''));
+};
+
+// 棚: protect.range
+// 題: 範囲を保護する
+// 分類: 守る
+// 語: 範囲を保護|セルを保護|列を保護|行を保護|ここだけ保護
+// 違い: シート全体なら protect.sheet。保護を外すなら protect.remove
+// 引数: range*=範囲, warn=真偽
+// 例: 「A1からC10の範囲を保護して」 → {"shelf":"protect.range","range":"A1:C10"}
+// 触る: 保護
+// 控え: 今
+SHELF['protect.range'] = function (ctx, op) {
+  need_(op, ['range']);
+  var sh = sheetCtx_(ctx, op);
+  var rg = sh.getRange(op.range);
+  var p = rg.protect();
+  if (op.warn) p.setWarningOnly(true);
+  note_(ctx, '持ち主（実行するアカウント）には保護が効かない所があります');
+  chg_(ctx, sh, rg.getA1Notation(), '範囲を保護' + (op.warn ? '（警告のみ）' : ''));
+};
+
+// 棚: protect.remove
+// 題: 保護を外す
+// 分類: 守る
+// 語: 保護を解除|保護を外|編集できるように|保護をやめ
+// 違い: 保護をかけるなら protect.sheet または protect.range
+// 引数: range=範囲
+// 例: 「シートの保護を解除して」 → {"shelf":"protect.remove"}
+// 例: 「A1:C10の保護を外して」 → {"shelf":"protect.remove","range":"A1:C10"}
+// 触る: 保護
+// 控え: 今
+SHELF['protect.remove'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var protections = sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).concat(sh.getProtections(SpreadsheetApp.ProtectionType.RANGE));
+  if (op.range) {
+    var targetRg = sh.getRange(op.range);
+    var targetA1 = targetRg.getA1Notation();
+    var removed = 0;
+    protections.forEach(function (p) {
+      if (p.getProtectionType() === SpreadsheetApp.ProtectionType.RANGE) {
+        if (p.getRange().getA1Notation() === targetA1) { p.remove(); removed++; }
+      }
+    });
+    if (removed) {
+      note_(ctx, '持ち主（実行するアカウント）には保護が効かない所があります');
+      chg_(ctx, sh, targetA1, '範囲の保護を解除（' + removed + ' 件）');
+    } else {
+      note_(ctx, '指定範囲「' + targetA1 + '」の保護は見つかりませんでした（変更なし）');
+    }
+  } else {
+    if (!protections.length) { note_(ctx, 'このシートに保護はありません（変更なし）'); return; }
+    protections.forEach(function (p) { p.remove(); });
+    note_(ctx, '持ち主（実行するアカウント）には保護が効かない所があります');
+    chg_(ctx, sh, '', 'シート内の全保護を解除（' + protections.length + ' 件）');
+  }
+};
+
+// 棚: name.add
+// 題: 名前付き範囲を作る
+// 分類: 守る
+// 語: 名前付き範囲|範囲に名前|名前を付けて|名前を定義|名前で呼べる
+// 違い: 名前を消すなら name.delete、一覧は name.list
+// 引数: name*=文字, range*=範囲
+// 例: 「A1:F20に売上データという名前を付けて」 → {"shelf":"name.add","name":"売上データ","range":"A1:F20"}
+// 触る: 名前
+// 控え: 今
+SHELF['name.add'] = function (ctx, op) {
+  need_(op, ['name', 'range']);
+  var ss = ctx.ss, sh = sheetCtx_(ctx, op);
+  var rg = sh.getRange(op.range);
+  ss.getNamedRanges().forEach(function (nr) { if (nr.getName() === op.name) nr.remove(); });
+  ss.setNamedRange(op.name, rg);
+  chg_(ctx, sh, rg.getA1Notation(), '名前付き範囲「' + op.name + '」を定義');
+};
+
+// 棚: name.delete
+// 題: 名前付き範囲を消す
+// 分類: 守る
+// 語: 名前付き範囲を消|名前付き範囲を削除|範囲の名前を消|定義した名前を消
+// 違い: 作成は name.add、一覧は name.list
+// 引数: name*=文字
+// 例: 「売上データという名前付き範囲を削除して」 → {"shelf":"name.delete","name":"売上データ"}
+// 触る: 名前
+// 控え: 今
+SHELF['name.delete'] = function (ctx, op) {
+  need_(op, ['name']);
+  var ss = ctx.ss;
+  var found = null;
+  ss.getNamedRanges().forEach(function (nr) { if (nr.getName() === op.name) found = nr; });
+  if (!found) { note_(ctx, '名前付き範囲「' + op.name + '」は見つかりませんでした（変更なし）'); return; }
+  found.remove();
+  chg_(ctx, null, '', '名前付き範囲「' + op.name + '」を削除');
+};
+
+// 棚: name.list
+// 題: 名前付き範囲を一覧にする
+// 分類: 守る
+// 語: 名前付き範囲を一覧|名前付き範囲を調べ|名前付き範囲を見|定義した名前
+// 違い: 作成は name.add、削除は name.delete
+// 引数: なし
+// 例: 「定義されている名前付き範囲を教えて」 → {"shelf":"name.list"}
+// 触る: なし
+// 控え: なし
+SHELF['name.list'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var list = ss.getNamedRanges().map(function (nr) {
+    return { name: nr.getName(), sheet: nr.getRange().getSheet().getName(), range: nr.getRange().getA1Notation() };
+  });
+  if (!list.length) { note_(ctx, '名前付き範囲はありません'); return; }
+  var lines = list.map(function (x) { return x.name + ': ' + x.sheet + '!' + x.range; });
+  note_(ctx, '名前付き範囲（' + list.length + ' 件）:\n' + lines.join('\n'));
+};

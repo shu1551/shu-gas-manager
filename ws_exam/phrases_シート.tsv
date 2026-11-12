@@ -19,3 +19,15 @@ sheet.copy	テンプレートのシートを複製して
 ?sheet.copy	同じシートをもう1枚作って
 sheet.copy	売上シートを複製して来月分を作っておいて
 ?sheet.copy	シート コピー 複製
+sheet.hide	「一時保存」シートを隠して
+sheet.hide	設定シートを非表示にして
+?sheet.hide	このタブ見えなくしといて
+?sheet.hide	シート 非表示 隠す
+sheet.show	隠してある「一時保存」シートを再表示して
+sheet.show	非表示になっているシートを全部出して
+?sheet.show	隠したタブを出したい
+?sheet.show	シート 再表示 表示
+sheet.color	売上シートのタブを赤色に変えて
+sheet.color	「集計」のシート見出しの色を青にして
+?sheet.color	タブの色を緑っぽくしたい
+?sheet.color	シート タブ 色 変更

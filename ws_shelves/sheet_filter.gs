@@ -305,3 +305,23 @@ SHELF['split.col'] = function (ctx, op) {
   sh.getRange(t.firstData, ci, numRows, maxParts).setValues(outVals);
   chg_(ctx, sh, a1_(t.firstData, ci, numRows, maxParts), op.col + '列を ' + maxParts + ' 列に分割');
 };
+
+// 棚: filter.off
+// 題: フィルタを外す
+// 分類: 絞る
+// 語: フィルタを外|フィルタを解除|絞り込みを解除|フィルタを消|全部表示に戻|▼を外
+// 違い: フィルタを付けるなら filter.on、条件付き書式を外すなら cf.clear
+// 引数: なし
+// 例: 「フィルタを解除して全部表示に戻して」 → {"shelf":"filter.off"}
+// 触る: フィルタ
+// 控え: 今
+SHELF['filter.off'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var f = sh.getFilter();
+  if (f) {
+    f.remove();
+    chg_(ctx, sh, '', 'フィルタを解除');
+  } else {
+    note_(ctx, 'フィルタは設定されていません（変更なし）');
+  }
+};

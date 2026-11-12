@@ -1,0 +1,25 @@
+# 期待の棚	頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+protect.sheet	このシートを保護して編集できないようにして
+protect.sheet	シートを保護して、でもB2:B20だけは入力できるようにして
+?protect.sheet	他の人が書き換えられないように保護したい
+?protect.sheet	シート 保護 ロック
+protect.range	A1からC10のセル範囲を保護して
+protect.range	見出し行と合計のセルを保護して書き換えられないようにして
+?protect.range	この範囲だけ触れないようにロックしたい
+?protect.range	範囲 保護 ロック
+protect.remove	シートの保護を解除して
+protect.remove	A1:C10の保護を外して
+?protect.remove	ロックを解除して編集できるようにしたい
+?protect.remove	保護 解除 外す
+name.add	A1:F20に「売上データ」という名前を付けて
+name.add	単価の列を名前付き範囲「商品単価」として定義して
+?name.add	この範囲に名前をつけて式で呼べるようにしたい
+?name.add	名前付き範囲 作成 定義
+name.delete	「売上データ」という名前付き範囲を削除して
+name.delete	定義した名前「商品単価」を消して
+?name.delete	いらない名前付き範囲を消したい
+?name.delete	名前付き範囲 削除 消す
+name.list	定義されている名前付き範囲を一覧で教えて
+name.list	名前付き範囲がどこにあるか確認したい
+?name.list	どんな名前がついてるか調べたい
+?name.list	名前付き範囲 一覧 確認

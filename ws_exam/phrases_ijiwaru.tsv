@@ -10,7 +10,7 @@ filter.where	田中さんの行だけ見せて
 # sheet.copy+clear.values	シート1をコピーして来月分作って、中の数字は消しといて	（未実装の棚）
 cols.move	A列とB列入れ替えて
 format	合計のとこ太字で黄色に
-# protect.sheet	他の人が触れないようにして、でもB2:B20だけは打てるように	（未実装の棚）
+protect.sheet	他の人が触れないようにして、でもB2:B20だけは打てるように
 tidy	これ見やすくして
 # split.col	B列を姓と名に分けて	（未実装の棚）
 summary	月ごとの売上の推移を出して
@@ -20,6 +20,6 @@ seiri	空白行を詰めて
 format	1行おきに色つけて、ついでにヘッダーは青
 (なし)	これを PDF にしてメールで送って
 # copy.values	D列の数式を全部値に変えて	（未実装の棚）
-# cols.show	非表示になってる列ない？あったら出して	（未実装の棚）
+cols.show	非表示になってる列ない？あったら出して
 rows.delete	3行目から5行目を消して
 table.new+doc.new	見積書つくって

@@ -31,3 +31,31 @@ unfreeze	行と列の固定を解除して
 unfreeze	見出しの固定を外して自由にスクロールできるようにして
 unfreeze	枠固定やめて
 ?unfreeze	固定解除 フリーズ解除
+rows.hide	5行目から10行目を非表示にして
+rows.hide	不要な3行目と4行目を隠して
+?rows.hide	この行見えなくしといて
+?rows.hide	行 非表示 隠す
+rows.show	隠れている5行目から10行目を再表示して
+rows.show	シート内の非表示の行を全部出して
+?rows.show	隠した行を出したい
+?rows.show	行 再表示 表示
+cols.hide	C列とD列を非表示にして
+cols.hide	不要なF列を隠して
+?cols.hide	この列見えなくしといて
+?cols.hide	列 非表示 隠す
+cols.show	非表示になっているC列を再表示して
+cols.show	隠れている列を全部出して
+?cols.show	隠した列を出したい
+?cols.show	列 再表示 表示
+group.rows	5行目から10行目をグループ化して
+group.rows	内訳の行をまとめて折りたためるようにして
+?group.rows	行を畳めるようにグループにしたい
+?group.rows	行 グループ化 折りたたみ
+group.cols	D列からF列をグループ化して
+group.cols	詳細列をまとめてグループにして
+?group.cols	列を折りたためるようにグループにしたい
+?group.cols	列 グループ化 折りたたみ
+group.remove	5行目から10行目のグループ化を解除して
+group.remove	シート全体のグループを全部外して
+?group.remove	折りたたみのグループをなくしたい
+?group.remove	グループ 解除 外す
