@@ -54,6 +54,6 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 | **別名登録 (エイリアス)** | `set_alias(name, script_id)` / `list_aliases()` | スプレッドシート付属スクリプトの登録・確認 |
 | **バージョン復元** | `diff_version` / `restore_version(project, version_number)` | 差分確認・スナップショット復元 |
 | **環境診断** | `setup_check(open_browser=False)` | 認証・API接続状態の確認 |
-| **スプレッドシート・文書を作る/直す** | `ws_look` / `ws_do(ops, target, ok)` / `ws_undo` | 棚（型）の JSON を撃つ。書く前に控え・失敗なら自動で戻す。手順は `WORKSPACE.md` |
+| **スプレッドシート・文書を作る/直す** | `ws_look(ask=頼みの文)` で見る＋棚の札 → `ws_do(ops, target, ok)` で撃つ → `ws_undo` で戻す（札だけなら `ws_find`） | 棚（型）の名前と引数は札のとおりに。書く前に控え・失敗なら自動で戻す。手順は `WORKSPACE.md` |
 
 > Workspace（`ws_*`）: 初回だけブラウザでエンジンの許可が要ります。人の値を消す手は「消してよい」の承認があるときだけ `ok=True`。

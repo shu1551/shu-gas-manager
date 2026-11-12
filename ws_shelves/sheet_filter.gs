@@ -52,7 +52,7 @@ function tidyRange_(ctx, sh, rangeA1) {
 // 引数: range=範囲
 // 例: 「この表を見やすく整えて」 → {"shelf":"tidy"}
 // 例: 「B列からD列だけ体裁を整えて」 → {"shelf":"tidy","range":"B:D"}
-// 触る: 書式 固定
+// 触る: 書式 幅 固定
 SHELF['tidy'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
   tidyRange_(ctx, sh, op.range || null);
@@ -152,14 +152,14 @@ SHELF['renumber'] = function (ctx, op) {
 };
 
 // 棚: sort
-// 題: 並べ替え・絞り込み
+// 題: 表を並べ替える
 // 分類: 絞る
-// 語: 並べ替え|昇順に|降順に|順番に並べ|絞り込み|フィルタ|だけ表示
+// 語: 並べ替え|昇順に|降順に|順番に並べ|大きい順|小さい順|ソート
+// 違い: 条件に合う行だけ見せるなら filter.where（古い filter・where の引数も今までどおり撃てる）
 // 引数: col=列, desc=真偽, filter=真偽, where=対応
 // どれか: col filter where
 // 例: 「金額の大きい順に並べて」 → {"shelf":"sort","col":"金額","desc":true}
-// 例: 「部署が営業の行だけ見せて」 → {"shelf":"sort","where":{"col":"部署","equals":"営業"}}
-// 触る: 値
+// 触る: 値 フィルタ
 SHELF['sort'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
   var rng = dataRange_(t);
@@ -178,4 +178,16 @@ SHELF['sort'] = function (ctx, op) {
     chg_(ctx, sh, full.getA1Notation(), 'フィルタを設定');
   }
   if (!op.col && !op.filter && !op.where) throw new ArgError('棚「sort」に col か filter が要ります');
+};
+
+// 棚: filter.where
+// 題: 条件に合う行だけ表示
+// 分類: 絞る
+// 語: だけ表示|だけ見せ|だけに絞|行だけ残|絞り込んで|のみ表示|フィルタをかけ
+// 違い: 並べ替えは sort
+// 引数: col*=列, equals=文字
+// 例: 「部署が営業の行だけ見せて」 → {"shelf":"filter.where","col":"部署","equals":"営業"}
+// 触る: 値 フィルタ
+SHELF['filter.where'] = function (ctx, op) {
+  SHELF['sort'](ctx, { shelf: 'sort', where: { col: op.col, equals: op.equals }, sheet: op.sheet });
 };

@@ -442,6 +442,14 @@ def main():
     py_pat_p.add_argument("--code", default="", help="関数丸ごと置換する場合の新しいコード")
     py_pat_p.add_argument("--all", "-a", action="store_true", help="複数箇所すべて置換")
 
+    # Workspace の棚を引く・検査する（通信なし）
+    wsf_p = subparsers.add_parser("ws-find", help="Workspace の棚の札を引く（通信なし）。頼みの文から上位の棚の名前・引数・例を返す")
+    wsf_p.add_argument("ask", nargs="?", default="", help="頼みの文・語（分類:名前 / 棚:名前 / 空で分類の一覧）")
+    wsf_p.add_argument("--kind", default="", help="sheet|doc（空なら両方）")
+    wsf_p.add_argument("--why", action="store_true", help="点の内訳を出す")
+    wsc_p = subparsers.add_parser("ws-check", help="Workspace の棚の検査（札の形・引く試験・説明の量。通信なし）")
+    wsc_p.add_argument("--no-write", action="store_true", help="ws_exam/answers.tsv を書き換えない")
+
     # reload
     reload_p = subparsers.add_parser("reload", help="常駐MCPサーバーおよびモジュールのホットリロード案内・実行")
 
@@ -467,6 +475,19 @@ def main():
             for st in res["steps"]:
                 print(f"  {st}")
         return
+
+    if args.command == "ws-find":
+        import gas_ws_find
+        f = gas_ws_find.Finder()
+        print(f.ask(args.ask, args.kind, log_to=False))
+        if args.why and args.ask.strip():
+            print("\n点の内訳（点 棚 語/字/名）:")
+            for tot, name, d in f.why(args.ask, args.kind):
+                print(f"  {tot:3d} {name}  語{d['語']} 字{d['字']} 名{d['名']}")
+        return
+    if args.command == "ws-check":
+        import gas_ws_check
+        sys.exit(gas_ws_check.main(write=not args.no_write))
 
     client = GasClient()
 

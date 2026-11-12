@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 import gas_ws_catalog
+import gas_ws_find
 
 HERE = Path(__file__).resolve().parent
 ENGINE_COMMON = HERE / "workspace_engine.gs"      # 共通部（入口・控え・戻し・台帳・look・render・手伝い）。棚は置かない
@@ -76,6 +77,9 @@ class WorkspaceManager:
         self.engine_path = Path(engine_path) if engine_path else ENGINE_COMMON
         self.shelf_dir = Path(shelf_dir) if shelf_dir else (self.engine_path.parent / "ws_shelves")
         self.catalog = CATALOG if self.shelf_dir.resolve() == SHELF_DIR.resolve() else gas_ws_catalog.load(self.shelf_dir)
+        self.finder = gas_ws_find.Finder(self.catalog, synonyms=gas_ws_find.load_synonyms(self.shelf_dir / "synonyms.txt"),
+                                         guide=gas_ws_find.load_guide(self.shelf_dir / "guide.txt"))
+        self.misses_path = HERE / ".ws_misses.tsv"      # 弱かった頼み（git に入れない）
 
     # ------------------------------------------------------------ 状態
     @property
@@ -235,7 +239,7 @@ class WorkspaceManager:
         if isinstance(ops, dict):
             ops = [ops]
         if not isinstance(ops, list) or not ops:
-            raise WorkspaceError("ops は棚の JSON 配列です。例: [{\"shelf\":\"棚の名前\", …引数}]。棚の一覧: " + "、".join(SHELVES))
+            raise WorkspaceError("ops は棚の JSON 配列です。例: [{\"shelf\":\"棚の名前\", …引数}]。棚の名前と引数は ws_find（または ws_look の ask）で引けます。")
         return ops
 
     def validate_ops(self, ops):
@@ -243,14 +247,16 @@ class WorkspaceManager:
         kinds = set()
         for i, op in enumerate(ops, 1):
             if not isinstance(op, dict) or not isinstance(op.get("shelf"), str):
-                raise WorkspaceError(f"{i} 番目の ops に \"shelf\"（棚の名前）がありません。棚の一覧: " + "、".join(self.catalog.names()))
+                raise WorkspaceError(f"{i} 番目の ops に \"shelf\"（棚の名前）がありません。棚の名前と引数は ws_find（または ws_look の ask）で引けます。")
             name = op["shelf"]
             spec = self.catalog.spec(name)
             if not spec:
-                raise WorkspaceError(f"棚「{name}」はありません（{i} 番目）。あるのは: " + "、".join(self.catalog.names()))
+                near = self.finder.near(name)
+                raise WorkspaceError(f"棚「{name}」はありません（{i} 番目）。" + ("\n" + near if near else ""))
             msg = self.catalog.check_op(i, op)
             if msg:
-                raise WorkspaceError(msg)
+                s = self.catalog.by_name[name]
+                raise WorkspaceError(msg + "\nその棚の札:\n" + "\n".join(self.finder.card(s)) + "\n   引数: " + s["args_raw"])
             kinds.add(spec["kind"])
         if len(kinds) > 1:
             raise WorkspaceError("スプレッドシートの棚と文書の棚は、同じ ws_do にまとめられません。")
@@ -391,7 +397,24 @@ class WorkspaceManager:
         return "\n".join(lines[:5])
 
     # ------------------------------------------------------------ ws_look
-    def look(self, target="", sheet="", range="", image=False):
+    def _cur_kind(self):
+        return (self._load().get("target") or {}).get("kind") or ""
+
+    def find(self, ask="", kind=""):
+        """棚の札を引く（通信なし）。kind 省略時は今の相手の種類で絞る"""
+        return self.finder.ask(ask, kind or self._cur_kind(), log_to=self.misses_path)
+
+    def look(self, target="", sheet="", range="", image=False, ask=""):
+        if not ask:
+            return self._look_image(target, sheet, range, image)
+        try:
+            text = self._look_image(target, sheet, range, image)
+        except WorkspaceError as e:
+            # 相手が見られなくても、札は引ける（通信なし）
+            raise WorkspaceError(str(e) + "\n\n" + self.find(ask))
+        return text + "\n\n" + self.find(ask)
+
+    def _look_image(self, target="", sheet="", range="", image=False):
         text = self._look(target=target, sheet=sheet, range=range)
         if not image:
             return text

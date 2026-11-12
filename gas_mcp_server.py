@@ -2595,18 +2595,26 @@ def _ws_run(fn, **kw):
 
 @mcp.tool()
 @safe_tool
-def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False) -> str:
-    """スプレッドシート・文書を見て、今の相手として覚える（シートの表の形・文書の見出し）。
-    target=URL・ID・名前（空なら今の相手）。range=A1表記で中身も返す。
-    image=True で見た目を画像に撮って場所を返す（ws_do の後の目視はこれ。画像を開いて確かめる）。
-    作る・直す前の確認はこれ。手順は WORKSPACE.md。"""
-    return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image)
+def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False, ask: str = "") -> str:
+    """スプレッドシート・文書を見て、今の相手として覚える（表の形・文書の見出し）。target=URL・ID・名前（空なら今の相手）。
+    range=A1表記で中身も。image=True で見た目を画像に撮る（ws_do の後の目視。画像を開いて確かめる）。
+    ask="頼みの文" で、使える棚の札（名前・引数・例）も一緒に返す。作る・直す前はこれ。
+    手順は WORKSPACE.md。"""
+    return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image, ask=ask)
+
+@mcp.tool()
+@safe_tool
+def ws_find(ask: str = "", kind: str = "") -> str:
+    """頼みの文か語から、棚の札（名前・引数・例）を引く。通信なし。ask="分類:入力" でその分類の全部、ask="棚:名前" でその 1 本、空で分類の一覧。
+    候補が合わなければ語を言い換えて引き直す。無ければ「棚にありません」と答える。
+    kind=sheet|doc（空なら今の相手の種類）。"""
+    return _ws_run(get_ws().find, ask=ask, kind=kind)
 
 @mcp.tool()
 @safe_tool
 def ws_do(ops: str, target: str = "", ok: bool = False) -> str:
-    """棚（型）の JSON 配列を 1 回で撃って、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
-    ops=[{"shelf":"table.new","headers":[..],"rows":[[..]],"total":["E"]}]。棚名は WORKSPACE.md（外すと一覧が返る）。
+    """棚の JSON 配列を 1 回で撃って、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
+    ops=[{"shelf":"棚の名前", …引数}]。棚の名前と引数は ws_look(ask=…)／ws_find の札のとおりに。
     target="new:名前"で新規。ok=True は「消してよい」の承認があるときだけ。
     返事は 対象／直した所／残り／URL。"""
     return _ws_run(get_ws().do, ops=ops, target=target, ok=ok)

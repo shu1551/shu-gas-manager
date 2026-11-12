@@ -3,7 +3,7 @@
 // 棚: format
 // 題: 範囲の書式を変える
 // 分類: 見た目
-// 語: 書式を|太字に|色を付け|背景色|文字色|中央揃え|罫線
+// 語: 書式を|太字に|色を付け|背景色|文字色|中央揃え|罫線|赤く
 // 引数: range=範囲, col=列, header=真偽, bold=真偽, italic=真偽, color=色, bg=色, size=数, font=文字, number_format=文字, align=文字, valign=文字, wrap=真偽, borders=文字, merge=真偽
 // どれか: range col header
 // 例: 「見出しを太字で青い背景に」 → {"shelf":"format","header":true,"bold":true,"bg":"#1F4E79","color":"#FFFFFF"}
@@ -36,7 +36,7 @@ SHELF['format'] = function (ctx, op) {
 // 棚: width
 // 題: 列の幅・行の高さを変える
 // 分類: 見た目
-// 語: 列幅を|列の幅|幅を広げ|幅を狭め|行の高さ|幅を自動|幅を揃
+// 語: 列幅を|列の幅|幅を広げ|幅を狭め|行の高さ|幅を自動|広げて
 // 引数: cols=対応, col=列, width=数, rows=対応, auto=列[]
 // どれか: cols col rows auto
 // 例: 「A列を幅200にして」 → {"shelf":"width","col":"A","width":200}

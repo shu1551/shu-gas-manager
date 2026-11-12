@@ -273,7 +273,7 @@ SHELF['doc.table'] = docKind_(function (ctx, op) {
 // 語: 書式をそろえ|フォントを|行間を|文字サイズ|見出しをそろえ|体裁を整え|文書を整
 // 引数: font=文字, size=数, line_spacing=数
 // 例: 「文書のフォントをMeiryoに」 → {"shelf":"doc.style","font":"Meiryo"}
-// 触る: 書式 幅
+// 触る: 書式
 SHELF['doc.style'] = docKind_(function (ctx, op) {
   var body = ctx.doc.getBody(), n = body.getNumChildren(), count = 0;
   var hs = { 1: { size: 20, color: '#1F4E79' }, 2: { size: 16, color: '#1F4E79' }, 3: { size: 13, color: '#2F5597' } };

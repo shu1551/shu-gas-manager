@@ -25,6 +25,10 @@ LEGACY_NAMES = [
     "doc.new", "doc.append", "doc.replace", "doc.section", "doc.table", "doc.style",
 ]
 
+# 段 1 で足した束ねた棚の別名 9 本
+ALIAS_NAMES = ["rows.insert", "rows.delete", "rows.move", "cols.insert", "cols.delete", "cols.move", "sheet.rename", "sheet.move", "filter.where"]
+ALL_NAMES = LEGACY_NAMES + ALIAS_NAMES
+
 # 段 0 の前のエンジン（workspace_engine.gs 1297 行版）の、控えるシートと変更なしの判定。棚名の決め打ちのまま写してある
 LEGACY_JS = r"""
 function legacyTouched_(ctx, ops) {
@@ -95,12 +99,12 @@ needs_node = pytest.mark.skipif(not _node_ok(), reason="node が無い")
 
 
 # ---------------------------------------------------------------- 札・目録
-def test_catalog_loads_19_shelves_and_check_passes():
+def test_catalog_loads_all_shelves_and_check_passes():
     c = gw.CATALOG
-    assert sorted(c.names()) == sorted(LEGACY_NAMES)
+    assert sorted(c.names()) == sorted(ALL_NAMES)
     assert cat_mod.check(c) == []
     # 文書の棚は doc、ほかは sheet（分類: 文書 から決まる）
-    assert {n for n in c.names() if c.by_name[n]["kind"] == "doc"} == {n for n in LEGACY_NAMES if n.startswith("doc.")}
+    assert {n for n in c.names() if c.by_name[n]["kind"] == "doc"} == {n for n in ALL_NAMES if n.startswith("doc.")}
 
 
 def test_shelves_table_is_built_from_cards_not_handwritten():
@@ -117,7 +121,7 @@ def test_common_files_have_no_hardcoded_shelf_names():
     # 共通部の 3 ファイルに、19 本の名前が「棚の名前として」出てこないことを、別の書き方でも確かめる
     for fn in cat_mod.HARDCODE_FILES:
         text = (HERE / fn).read_text(encoding="utf-8")
-        for n in LEGACY_NAMES:
+        for n in ALL_NAMES:
             if "." in n:
                 assert f"'{n}'" not in text and f'"{n}"' not in text, (fn, n)
         assert not re.search(r"SHELF\[\s*['\"]", text), fn
@@ -160,14 +164,14 @@ def test_card_parser_rules():
 
 def test_dangerous_cards_match_engine_guards():
     danger = {n for n in gw.CATALOG.names() if gw.CATALOG.by_name[n]["danger"] == "消す"}
-    assert danger == {"seiri", "summary", "rows", "doc.section"}
+    assert danger == {"seiri", "summary", "rows", "doc.section", "rows.delete", "cols.delete"}   # 別名は呼び先の守りを引き継ぐ
 
 
 def test_catalog_gs_content_and_order():
     gs = cat_mod.build_catalog_gs(gw.CATALOG)
     assert gs.startswith("// Catalog.gs") and "var CATALOG = {" in gs
     obj = json.loads(gs[gs.index("{", gs.index("var CATALOG")):gs.rindex("}") + 1])
-    assert sorted(obj) == sorted(LEGACY_NAMES)
+    assert sorted(obj) == sorted(ALL_NAMES)
     assert obj["rows"]["danger"] == "消す" and obj["width"]["touch"] == ["幅"] and obj["sheet.add"]["backup"] == ["名前", "全部"]
     assert obj["doc.new"]["kind"] == "doc" and obj["tidy"]["kind"] == "sheet"
 
@@ -197,7 +201,7 @@ def test_engine_files_order_and_fingerprint(tmp_path):
 
 def test_engine_all_file_has_every_shelf():
     text = Path(gw.ENGINE_SOURCE).read_text(encoding="utf-8")
-    assert sorted(re.findall(r"SHELF\['([\w.]+)'\]\s*=", text)) == sorted(LEGACY_NAMES)
+    assert sorted(re.findall(r"SHELF\['([\w.]+)'\]\s*=", text)) == sorted(ALL_NAMES)
 
 
 def test_validate_ops_from_cards_keeps_old_behaviour(tmp_path):

@@ -25,3 +25,4 @@ queue/
 .ws_state.json
 .ws_ledger.json
 .ws_engine_all.gs
+.ws_misses.tsv

@@ -153,7 +153,7 @@ def _build(f, name_in_code, fname, body):
     cat = f["分類"]
     sh = {
         "name": name, "title": f["題"], "category": cat, "kind": "doc" if cat == "文書" else "sheet",
-        "words": words, "diff": f.get("違い", ""), "args": args, "any": anyof, "danger": danger,
+        "words": words, "args_raw": f["引数"], "diff": f.get("違い", ""), "args": args, "any": anyof, "danger": danger,
         "touch": touch, "backup": backup, "searchable": f.get("検索", "") != "しない",
         "examples": [], "file": fname, "body": body,
     }
@@ -302,7 +302,7 @@ def build_catalog_gs(cat):
 
 
 # ------------------------------------------------------------------ 検査（札の形・守り・決め打ち）
-HARDCODE_FILES = ["workspace_engine.gs", "gas_workspace.py", "gas_ws_catalog.py"]
+HARDCODE_FILES = ["workspace_engine.gs", "gas_workspace.py", "gas_ws_catalog.py", "gas_ws_find.py"]
 
 
 def find_hardcoded_names(cat, root=None):
@@ -336,9 +336,13 @@ def check(cat=None):
     for s in cat.shelves:
         has_delete = GUARD["消す"] in s["body"]
         has_over = GUARD["上書き"] in s["body"]
-        if s["danger"] == "消す" and not has_delete:
+        # 別の棚を呼ぶだけの棚（別名）は、呼び先の守りを引き継ぐ
+        called = [n for n in re.findall(r"SHELF\[\s*'([^']+)'\s*\]\s*\(", s["body"]) if n in cat.by_name and n != s["name"]]
+        inherits_delete = any(GUARD["消す"] in cat.by_name[n]["body"] for n in called)
+        inherits_over = any(GUARD["上書き"] in cat.by_name[n]["body"] for n in called)
+        if s["danger"] == "消す" and not (has_delete or inherits_delete):
             problems.append(f"棚「{s['name']}」は「危ない: 消す」ですが、本文に guardDelete_ がありません")
-        if s["danger"] == "上書き" and not has_over:
+        if s["danger"] == "上書き" and not (has_over or inherits_over):
             problems.append(f"棚「{s['name']}」は「危ない: 上書き」ですが、本文に guardOverwrite_ がありません")
         if has_delete and s["danger"] != "消す":
             problems.append(f"棚「{s['name']}」の本文に guardDelete_ がありますが、札に「危ない: 消す」がありません")

@@ -1,0 +1,25 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+rows.insert	3行目の前に行を挿入して
+rows.insert	間に空行を1つ入れたい
+rows.insert	行を増やしたいんだけど
+rows.insert	行 追加 挿入 差し込み
+rows.delete	3行目を削除して
+rows.delete	この行いらないから消して
+rows.delete	不要な行を取り除いて
+rows.delete	行 削除 消去
+rows.move	5行目を2行目に移動して
+rows.move	行の順番を入れ替えたい
+rows.move	この行を上に動かして
+rows.move	行 移動 並べ替え
+cols.insert	C列の前に列を挿入して
+cols.insert	間に空の列を足して
+cols.insert	列を1つ増やしたい
+cols.insert	列 追加 挿入
+cols.delete	B列を削除して
+cols.delete	この列いらないから消して
+cols.delete	不要な列を取り除いて
+cols.delete	列 削除 消去
+cols.move	A列とB列を入れ替えて
+cols.move	列の順番を変えたい
+cols.move	この列を右に動かして
+cols.move	列 移動 並べ替え

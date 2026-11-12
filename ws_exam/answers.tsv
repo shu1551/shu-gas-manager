@@ -1,0 +1,150 @@
+# 前回の検査の控え（頼みの文 → 上位の札）。道具が書く。手で直さない
+C列の重複消して連番ふり直して	seiri,replace,renumber,doc.table,width
+田中さんの行だけ見せて	filter.where
+これ印刷用にA4横で	
+さっきの戻して	
+A列とB列入れ替えて	cols.move,width,rows.move,sheet.move
+合計のとこ太字で黄色に	format
+これ見やすくして	tidy
+月ごとの売上の推移を出して	
+全角の数字を半角に	seiri
+空白行を詰めて	seiri
+1行おきに色つけて、ついでにヘッダーは青	format,doc.new,doc.section,doc.style
+これを PDF にしてメールで送って	
+3行目から5行目を消して	rows.delete,rows.insert,rows.move
+見積書つくって	doc.new
+集計用のシートを追加して	sheet.add,sheet.move,sheet.rename
+空のシートを1枚足して	sheet.add,sheet.rename,cols.insert,sheet.move
+新しいタブ欲しいな	sheet.add,sheet.rename,sheet.move
+シート 追加 来月分	sheet.add,sheet.rename,sheet.move
+シート1の名前を売上に変更して	sheet.rename,sheet.add,sheet.move
+タブの名前を付け替えたい	sheet.rename,sheet.move,sort,sheet.add
+このシート、名前を集計に変えて	sheet.rename,sheet.add,sheet.move,replace
+シート 改名 名前変更	sheet.rename,replace,sheet.add,sheet.move
+集計シートを一番左に移動して	sheet.move,sheet.add,sheet.rename
+シートの順番を入れ替えたい	sheet.move,cols.move,rows.move,sort,sheet.rename
+売上のタブを先頭にして	sheet.move,sheet.add,sheet.rename
+シート 並び順 移動	sheet.move,sheet.add,sheet.rename
+見出しが氏名と電話番号の表を新しく作って	table.new,doc.new,doc.section,doc.style,renumber
+名簿みたいな一覧表を用意して	table.new
+名前と金額の表ほしいんだけど	table.new,sort,format,total,summary
+テーブル 新規 作成 見出し 合計行付き	table.new,total,doc.new,doc.section,doc.style
+表の見た目を整えて	tidy
+罫線と列幅を揃えて綺麗にして	tidy,format,width
+この表、見やすくして	tidy
+表 体裁 整形	tidy,doc.style
+全角の数字を半角に直して	seiri,replace,doc.replace,renumber
+空白を取り除いてデータを整理して	seiri,rows.delete,cols.delete
+空行を詰めて	seiri
+重複 削除 整理	seiri
+番号の列を1から振り直して	renumber,replace,cols.insert
+No列を連番に直して	renumber,replace,doc.replace,seiri
+通し番号をつけ直して	renumber,replace
+番号 連番 振り直し	renumber
+見出しと箇条書きの文書を作って	doc.new,doc.section,doc.style,table.new,doc.replace
+議事録を書いて	write,doc.new
+見積書の文章をつくって	doc.new,doc.replace
+文書 新規 本文 作成	doc.new
+文書の最後に1行追記して	doc.append,doc.new,doc.replace,doc.section,doc.style
+決定事項の下に項目を足して	doc.append,total
+末尾にひとこと足しといて	doc.append
+文書 追記 末尾	doc.append
+文書の中の山田を山田（総務）に置き換えて	doc.replace,replace,doc.new,doc.section,doc.table
+文中の表記を統一したい	doc.replace
+この言葉を全部直して	replace,doc.replace
+文書 置換 語句	doc.replace,replace
+概要の節を書き直して	doc.section,replace
+この見出しの章ごと消して	doc.section,doc.new,doc.style,format,table.new
+見出しの下を差し替えて	doc.section,doc.new,doc.style,format,table.new
+文書 節 差し替え 削除	doc.section
+文書に2列の表を入れて	doc.table,doc.append,total,write,rows.insert
+表の2行目のセルを直して	doc.table,replace,rows.insert,rows.move,seiri
+文書へ表を挿入して	doc.table
+文書 表 挿入 セル	doc.table
+文書のフォントをそろえて	doc.style,doc.new,doc.replace,doc.section
+行間を広げて見やすく	tidy,width,doc.style
+文書の見た目を整えて	tidy,doc.style,doc.new,doc.replace,doc.section
+文書 書式 フォント	doc.style,doc.new,format
+B2に100を入れて	write
+セルA1へ合計と書き込んで	write
+A1に3って書いといて	write
+セル 値 入力 書き込み	write
+営業部を営業課に置換して	replace
+全部の株を(株)に書き換えて	replace,doc.replace
+表記ゆれを一括で直したい	replace,doc.replace
+文字 置き換え 検索 一括	replace,doc.replace
+金額の大きい順に並べ替えて	sort,cols.move,format,table.new,total
+日付の新しい順にソートして	sort,sheet.add
+売上が高い順に並べて	sort
+並べ替え 昇順 降順	sort,cols.move,rows.move,sheet.move
+部署が営業の行だけ表示して	filter.where
+条件に合う行だけ見せて	filter.where
+営業だけに絞って	filter.where
+絞り込み フィルタ 表示	filter.where
+3行目の前に行を挿入して	rows.insert,rows.move,cols.insert,doc.table,rows.delete
+間に空行を1つ入れたい	doc.table,rows.insert,seiri,cols.insert
+行を増やしたいんだけど	rows.insert
+行 追加 挿入 差し込み	rows.insert,cols.insert
+3行目を削除して	rows.delete,rows.insert
+この行いらないから消して	rows.delete,cols.delete
+不要な行を取り除いて	rows.delete,cols.delete
+行 削除 消去	rows.delete
+5行目を2行目に移動して	rows.move,rows.insert,rows.delete
+行の順番を入れ替えたい	sheet.move,rows.move,cols.move,sort
+この行を上に動かして	rows.move,sheet.move
+行 移動 並べ替え	sort,rows.move,cols.move,sheet.move
+C列の前に列を挿入して	cols.insert,rows.insert,doc.table,width,rows.move
+間に空の列を足して	cols.insert,rows.insert,sheet.add
+列を1つ増やしたい	cols.insert
+列 追加 挿入	cols.insert,rows.insert
+B列を削除して	cols.delete
+この列いらないから消して	cols.delete,rows.delete
+不要な列を取り除いて	cols.delete,rows.delete
+列 削除 消去	cols.delete
+A列とB列を入れ替えて	cols.move,width,rows.move,sheet.move
+列の順番を変えたい	cols.move,sheet.move,width,rows.move
+この列を右に動かして	rows.move,cols.move,sheet.move
+列 移動 並べ替え	sort,cols.move,rows.move,sheet.move
+見出しを太字にして背景を青にして	format,doc.new,doc.section,doc.style,table.new
+金額の列を桁区切りの書式にして	format,doc.style,sort,table.new,total
+文字を赤くしたいんだけど	format
+書式 太字 色 背景	format
+A列の幅を広げて	width,cols.move
+列幅を中身に合わせて自動調整して	width
+列が狭くて見えないから広げて	width
+幅 列幅 調整	width
+表の下に合計行を足して	total,rows.insert,doc.append,summary
+金額の合計を出して	total,summary,format,table.new,sort
+合計も入れといて	total
+合計 行 集計 追加	total,summary,sheet.add
+部署ごとの金額の合計表を作って	table.new,summary,total,sort,format
+項目別に件数を集計して	summary
+担当ごとの売上をまとめて	summary
+集計 項目別 部署ごと	summary
+見出しと箇条書きの文書を書いて	doc.new,write,doc.section,doc.style,doc.replace
+最後に1行足して	doc.append,rows.insert,total
+山田を山田（総務）に直して	doc.replace,replace,seiri,renumber
+「概要」の節を書き直して	doc.section,replace
+文末に2列の表を入れて	doc.table,doc.append,total,write,rows.insert
+1つ目の表の2行1列を直して	doc.table,replace,tidy,seiri,rows.insert
+文書のフォントをMeiryoに	doc.style,doc.new,doc.replace,doc.section
+この表を見やすく整えて	tidy
+B列からD列だけ体裁を整えて	tidy,doc.style
+空行を詰めて重複行も消して	seiri
+No列を1から振り直して	renumber,replace
+金額の大きい順に並べて	sort,format,table.new,total,summary
+部署が営業の行だけ見せて	filter.where
+見出しを太字で青い背景に	format,doc.new,doc.section,doc.style,table.new
+金額の列を桁区切りに	format,sort,table.new,total,summary
+A列を幅200にして	width,write
+B列とC列の幅を中身に合わせて	width,cols.move,total,cols.insert
+見出しが名前と金額の表を作って	table.new,format,summary,total,doc.new
+B2に100、B3に200を入れて	write,doc.table,width
+営業部を営業課に置き換えて	replace,doc.replace
+3行目の前に2行足して	rows.insert,rows.move,doc.table,cols.insert,doc.append
+5行目を2行目の前に動かして	rows.move,rows.insert,doc.table,rows.delete,cols.insert
+C列の前に列を1つ足して	cols.insert,rows.insert,doc.table,width,total
+B列を消して	cols.delete
+集計というシートを足して	sheet.add,sheet.move,sheet.rename
+シート1の名前を売上に変えて	sheet.rename,sheet.move,replace,sheet.add
+集計を先頭に動かして	sheet.move,rows.move

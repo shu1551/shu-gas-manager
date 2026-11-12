@@ -357,7 +357,7 @@ function runDo_(req) {
     ctx.bk = bk; tm.backup = Date.now() - tm.t0;
     for (var i = 0; i < ops.length; i++) {
       var op = ops[i], fn = SHELF[op.shelf];
-      if (!fn) throw new ArgError('棚「' + op.shelf + '」はありません。あるのは: ' + Object.keys(SHELF).join('、'));
+      if (!fn) throw new ArgError('棚「' + op.shelf + '」はありません');
       if (fn.kind && fn.kind !== kind) throw new ArgError('棚「' + op.shelf + '」は' + (fn.kind === 'doc' ? '文書' : 'シート') + '用です（今の相手は' + (kind === 'doc' ? '文書' : 'スプレッドシート') + '）');
       ctx.opNo = i + 1; ctx.opName = op.shelf;
       fn(ctx, op);
@@ -397,18 +397,21 @@ function runDo_(req) {
   }
 }
 
-// 変更なしの判定。棚の「触る:」（CATALOG）がすべて指紋に出る物（値・書式・シート構成・固定）なら指紋で比べる。
-// 指紋に出ない物（幅・フィルタ など）を含む棚があるときは、棚が報告した変更（ctx.changed）が空のときだけ「変更なし」
-var FINGER_ITEMS_ = ['値', '書式', 'シート構成', '固定'];
-function fingerOnly_(ops) {
+// 変更なしの判定。棚の「触る:」（CATALOG）に、指紋に出る物が 1 つでもある棚は指紋で比べる。
+// 指紋に出る物＝値・シート構成・固定、シートでは書式も（文書の指紋は文字と見出し構造だけなので、文書の書式は出ない）。
+// フィルタ・幅 は指紋に出ない（棚が「付随して触る」だけなら、判定は前のまま指紋）。
+// 指紋に出る物が 1 つも無い棚（幅だけ・文書の書式だけ 等）を含むときは、棚が報告した変更（ctx.changed）が空のときだけ「変更なし」
+var FINGER_ITEMS_ = ['値', 'シート構成', '固定'];
+function fingerOnly_(ops, kind) {
+  var vis = kind === 'sheet' ? FINGER_ITEMS_.concat(['書式']) : FINGER_ITEMS_;
   return ops.every(function (o) {
     var c = CATALOG[o.shelf];
-    return !!c && c.touch.every(function (t) { return FINGER_ITEMS_.indexOf(t) >= 0; });
+    return !!c && c.touch.some(function (t) { return vis.indexOf(t) >= 0; });
   });
 }
 function isNoop_(ops, entry, ctx) {
   if (ctx.createdSheets.length) return false;
-  if (!fingerOnly_(ops)) return ctx.changed.length === 0;
+  if (!fingerOnly_(ops, ctx.kind)) return ctx.changed.length === 0;
   if (ctx.kind === 'sheet') {
     if (!entry.sheets || !entry.sheets.length) return false;
     return entry.sheets.every(function (b) { return sameFinger_(entry.before[b.id], entry.after[b.id]); });
