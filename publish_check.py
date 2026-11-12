@@ -137,7 +137,7 @@ def main():
 
     allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
                                                   # 公開しない物（試験の道具・試験場の記録・手元の記録）。公開物に入らないことは、ホワイトリストと上の禁止パターンで見る
-                                                  "ws_exam", "ws_shelves", "ws_trial", "gas_ws_judge.py", "gas_ws_tables.py", "gas_ws_trial.py", "test_gas_ws_trial.py", "gas_ws_props.py", "gas_ws_shot.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_undo_side.py", "test_gas_ws_speed.py",
+                                                  "ws_exam", "ws_shelves", "ws_trial", "gas_ws_judge.py", "gas_ws_tables.py", "gas_ws_trial.py", "test_gas_ws_trial.py", "gas_ws_props.py", "gas_ws_shot.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_undo_side.py", "test_gas_ws_speed.py", "test_gas_ws_lane.py",
                                                   ".ws_engine_all.gs", ".ws_trial.json", ".ws_api_uses.tsv", ".ws_misses.tsv", ".ws_ledger.json"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:

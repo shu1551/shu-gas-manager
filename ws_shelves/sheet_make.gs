@@ -89,6 +89,8 @@ SHELF['total'] = function (ctx, op) {
     if (fr[0][k] !== f) { fr[0][k] = f; fixed.push(colLetter_(c)); }
     nf[0][k] = STYLE.numFmt; al[0][k] = 'right';
   });
+  // すでにある合計行で式が合っているなら、書式も書き直さない（「変更なし」と言いながら書式を変えない）
+  if (existed && !fixed.length) { note_(ctx, '合計行 ' + tr + ' はすでにあります（変更なし）'); return; }
   var out = fr[0].map(function (f, k) { return f || vr[0][k]; });
   rowRg.setValues([out]).setNumberFormats(nf).setHorizontalAlignments(al);
   rowRg.setFontWeight('bold').setBackground(STYLE.totalBg).setBorder(true, true, true, true, true, true, STYLE.border, SpreadsheetApp.BorderStyle.SOLID);

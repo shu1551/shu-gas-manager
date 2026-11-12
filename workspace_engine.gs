@@ -36,7 +36,17 @@ function doPost(e) {
   }
   var lock = LockService.getScriptLock();
   var tl0 = Date.now();
-  if (!lock.tryLock(30000)) return json_({ ok: false, error: '別の処理が走っています。少し待って撃ち直してください。', busy: true });
+  LANE = '';
+  var laneOn = !!(req.lane && EXTRA_ACTIONS.trial_config);   // 並べて回す入口（試験用のエンジンだけ）。錠と控えと台帳を lane ごとに分ける
+  if (laneOn) {
+    LANE = String(req.lane).replace(/[^0-9A-Za-z]/g, '').slice(0, 8);
+    if (!lock.tryLock(30000)) return json_({ ok: false, error: '別の処理が走っています。少し待って撃ち直してください。', busy: true });
+    try {   // 全体の錠は「lane の錠を取る・返す」一瞬だけ持つ。作業の間は lane の錠（プロパティの印）だけ
+      var held = Number(PropertiesService.getScriptProperties().getProperty('LOCK@' + LANE) || 0);
+      if (held && Date.now() - held < 330000) return json_({ ok: false, error: 'この lane（' + LANE + '）は別の処理が走っています。', busy: true });
+      PropertiesService.getScriptProperties().setProperty('LOCK@' + LANE, String(Date.now()));
+    } finally { lock.releaseLock(); }
+  } else if (!lock.tryLock(30000)) return json_({ ok: false, error: '別の処理が走っています。少し待って撃ち直してください。', busy: true });
   var lockMs = Date.now() - tl0;
   try {
     var res;
@@ -51,7 +61,10 @@ function doPost(e) {
     return json_(res);
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err), version: ENGINE_VERSION });
-  } finally { lock.releaseLock(); }
+  } finally {
+    if (laneOn) { try { PropertiesService.getScriptProperties().deleteProperty('LOCK@' + LANE); } catch (e2) { } }
+    else lock.releaseLock();
+  }
 }
 
 function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
@@ -61,7 +74,13 @@ function Blocked(msg) { this.message = msg; this.isBlocked = true; }
 
 // ---------------------------------------------------------------- 小道具
 
-function props_() { return PropertiesService.getScriptProperties(); }
+var LANE = '';   // 並べて回すときの lane（空＝ふつう）。プロパティの名前に @lane を付けて、台帳・控え・印を lane ごとに分ける（TRIAL_CFG だけ共通）
+function props_() {
+  var p = PropertiesService.getScriptProperties();
+  if (!LANE) return p;
+  var k2 = function (k) { return k === 'TRIAL_CFG' ? k : k + '@' + LANE; };
+  return { getProperty: function (k) { return p.getProperty(k2(k)); }, setProperty: function (k, v) { return p.setProperty(k2(k), v); }, deleteProperty: function (k) { return p.deleteProperty(k2(k)); } };
+}
 function getJson_(k, d) { var v = props_().getProperty(k); if (!v) return d; try { return JSON.parse(v); } catch (e) { return d; } }
 function setJson_(k, v) { props_().setProperty(k, JSON.stringify(v)); }
 

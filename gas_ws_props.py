@@ -211,8 +211,94 @@ def evaluate(resp, shelf, danger, may_change, tinfo):
     return out
 
 
+# ------------------------------------------------------------------ 入力の指紋（変わった所だけ回すため）
+def _h(*parts):
+    import hashlib
+    h = hashlib.sha1()
+    for x in parts:
+        h.update((x if isinstance(x, str) else json.dumps(x, ensure_ascii=False, sort_keys=True, default=list)).encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()[:10]
+
+
+def inputs_fp(root=None, tables=None):
+    """組ごとの入力の指紋。棚（札と関数の中身）・表（JSON）・ひな形（と may_change）・共通部（参考）。root はリポジトリの場所（昔の版の木でも出せる）"""
+    import gas_ws_catalog as C
+    root = Path(root) if root else HERE
+    cat = C.load(root / "ws_shelves")
+    tpl = json.loads((root / "ws_trial" / "templates.json").read_text(encoding="utf-8"))
+    tdir = root / "ws_trial" / "tables"
+    names = tables or sorted(p.stem for p in tdir.glob("*.json"))
+    tfp = {n: _h((tdir / f"{n}.json").read_text(encoding="utf-8")) for n in names}
+    common = _h((root / "workspace_engine.gs").read_text(encoding="utf-8"), (root / "ws_trial" / "Trial.gs").read_text(encoding="utf-8"))
+    shelf = {s["name"]: _h(s) for s in cat.shelves}
+    return {"shelf": shelf, "tpl": {k: _h(v) for k, v in tpl.items()}, "table": tfp, "common": common}
+
+
+def combo_fp(fp, shelf, tname):
+    return {"shelf": fp["shelf"].get(shelf, ""), "tpl": fp["tpl"].get(shelf, ""), "table": fp["table"].get(tname, ""), "common": fp["common"]}
+
+
+def previous_records(runs_dir=None):
+    """これまでの総当たりの記録のうち、組ごとの最新（ファイル名の古い順に読み、後のものが勝つ）"""
+    d = Path(runs_dir) if runs_dir else RUNS
+    prev = {}
+    for f in sorted(d.glob("props_*.jsonl")):
+        for ln in f.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(ln)
+                prev[(r["shelf"], r["table"])] = r
+            except Exception:
+                pass
+    return prev
+
+
+def changed_combos(combos, fp, prev, with_engine=False):
+    """前回の記録と比べて回す組。前回が無い・POST 失敗・指紋が無い・棚/表/ひな形が変わった組（with_engine なら共通部が変わった組も）。返り値は (回す組のリスト, 理由の件数)"""
+    out, why = [], {"新規": 0, "前回失敗": 0, "指紋なし": 0, "棚": 0, "表": 0, "ひな形": 0, "共通部": 0}
+    for t, s in combos:
+        r = prev.get((s, t))
+        cur = combo_fp(fp, s, t)
+        if r is None:
+            why["新規"] += 1
+        elif r.get("post_fail") or r.get("p", {}).get("P1") == "error":
+            why["前回失敗"] += 1
+        elif not r.get("fp"):
+            why["指紋なし"] += 1
+        else:
+            o = r["fp"]
+            bad = [k for k, lab in (("shelf", "棚"), ("table", "表"), ("tpl", "ひな形")) if o.get(k) != cur[k]]
+            if with_engine and o.get("common") != cur["common"]:
+                bad.append("common")
+            if not bad:
+                continue
+            for k in bad:
+                why[{"shelf": "棚", "table": "表", "tpl": "ひな形", "common": "共通部"}[k]] += 1
+        out.append((t, s))
+    return out, {k: v for k, v in why.items() if v}
+
+
+def stamp(rf, fp):
+    """指紋のない昔の記録に、与えた木の指紋を書き足す（その木で回した記録に使う）。書いた件数を返す"""
+    rows, n = [], 0
+    for ln in Path(rf).read_text(encoding="utf-8").splitlines():
+        if not ln.strip():
+            continue
+        r = json.loads(ln)
+        if not r.get("fp"):
+            r["fp"] = combo_fp(fp, r["shelf"], r["table"])
+            n += 1
+        rows.append(json.dumps(r, ensure_ascii=False))
+    Path(rf).write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return n
+
+
 # ------------------------------------------------------------------ 回す
-def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, out=print, limit_seconds=None):
+def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, out=print, limit_seconds=None, workers=None, changed=False, with_engine=False, runs_dir=None, fp=None, stagger=1.5):
+    """workers は [(エンジン, 試験場の ID)] の並び（並べて回す。lane ごとに錠・控え・台帳が分かれる）。無ければ eng・file_id の 1 本。
+    changed なら、前回の記録と比べて変わった組だけ回す"""
+    import queue
+    import threading
     import gas_workspace as gw
     templates = load_templates()
     skips = load_skips()
@@ -230,50 +316,79 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
                 done.add((d["shelf"], d["table"]))
             except Exception:
                 pass
+    combos = [(t, s) for t in tables for s in shelves if (s, t) not in done and (s, t) not in skips and (s, "*") not in skips]
+    fp = fp or inputs_fp(tables=sorted(set(tables) | set(TABLES)))
+    if changed:
+        prev = previous_records(runs_dir)
+        n0 = len(combos)
+        combos, why = changed_combos(combos, fp, prev, with_engine=with_engine)
+        out(f"[変わった所だけ] {n0} 組のうち {len(combos)} 組を回す（理由: " + "・".join(f"{k} {v}" for k, v in why.items()) + "）" if combos else f"[変わった所だけ] 変わった組はありません（{n0} 組を確かめた）")
+        if not with_engine and prev and any(r.get("fp") and r["fp"].get("common") != fp["common"] for r in prev.values()):
+            out("[注意] 共通部（workspace_engine.gs・Trial.gs）が前回から変わっています。全部回すなら --with-engine（節目）")
+    workers = workers or [(eng, file_id)]
+    q = queue.Queue()
+    for c in combos:
+        q.put(c)
+    lock = threading.Lock()
     t_start = time.time()
-    stats = {"n": 0, "quota": 0, "post_fail": 0}
-    for tname in tables:
-        table = T.load_table(tname)
-        tinfo = T.table_info(table)
-        seeded = False
-        for shelf in shelves:
-            if (shelf, tname) in done:
-                continue
-            if (shelf, tname) in skips or (shelf, "*") in skips:
-                continue
+    stats = {"n": 0, "quota": 0, "post_fail": 0, "workers": len(workers)}
+    stop = threading.Event()
+
+    def work(wi, weng, wfile):
+        time.sleep(stagger * wi)                       # 同時に撃ち始めない
+        seeded = None
+        while not stop.is_set():
+            try:
+                tname, shelf = q.get_nowait()
+            except queue.Empty:
+                return
             if limit_seconds and time.time() - t_start > limit_seconds:
-                out("[上限] 全体の時間の上限で止めました（--resume で続きから）")
-                return stats, rf
-            if not seeded:
-                r = eng.seed(file_id, table)
-                if not r.get("ok"):
-                    out(f"[流し込み失敗] {tname}: {str(r.get('error'))[:120]}")
-                    break
-                seeded = True
+                with lock:
+                    out("[上限] 全体の時間の上限で止めました（--resume で続きから）")
+                stop.set()
+                return
+            table = T.load_table(tname)
+            tinfo = T.table_info(table)
             ops, may = build_ops(shelf, table, templates)
             danger = bool(cat.by_name[shelf]["danger"])
             t0 = time.time()
-            rec = {"shelf": shelf, "table": tname, "ops": ops}
+            rec = {"shelf": shelf, "table": tname, "ops": ops, "fp": combo_fp(fp, shelf, tname), "lane": getattr(weng, "lane", "")}
             try:
-                resp = eng.trial_post("seq", id=file_id, steps=build_steps(ops, danger))
+                if seeded != tname:
+                    r = weng.seed(wfile, table)
+                    if not r.get("ok"):
+                        raise RuntimeError("流し込み失敗: " + str(r.get("error"))[:150])
+                    seeded = tname
+                resp = weng.trial_post("seq", id=wfile, steps=build_steps(ops, danger))
                 if not resp.get("ok", True) or "snaps" not in resp:
                     raise RuntimeError(str(resp.get("error") or resp)[:200])
                 ev = evaluate(resp, shelf, danger, may, tinfo)
                 rec.update(ev)
                 if ev["p"]["P1"] == "fail":
-                    seeded = False           # 戻らなかったら、次の組の前に流し込み直す
+                    seeded = None            # 戻らなかったら、次の組の前に流し込み直す
             except Exception as e:           # POST の失敗（時間切れ・Google の上限 等）
                 msg = str(e)
-                rec.update(p={"P1": "error"}, reasons={"POST": msg[:200]}, post_fail=True, quota=any(w.lower() in msg.lower() for w in QUOTA_WORDS))
-                stats["post_fail"] += 1
-                stats["quota"] += 1 if rec["quota"] else 0
-                seeded = False
+                isq = any(w.lower() in msg.lower() for w in QUOTA_WORDS)
+                rec.update(p={"P1": "error"}, reasons={"POST": msg[:200]}, post_fail=True, quota=isq)
+                seeded = None
             rec["sec"] = round(time.time() - t0, 1)
-            with rf.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            stats["n"] += 1
             bad = [k for k, v in rec["p"].items() if v in ("fail", "error")]
-            out(f"{'×' if bad else '○'} {shelf} × {tname} ({rec['sec']}s) " + (" ".join(bad) + " " + "；".join(f"{k}:{v}" for k, v in list(rec.get("reasons", {}).items())[:2])[:160] if bad else rec.get("p5class", "")))
+            line = f"{'×' if bad else '○'} {shelf} × {tname} ({rec['sec']}s{'・場' + rec['lane'] if rec['lane'] else ''}) " + (" ".join(bad) + " " + "；".join(f"{k}:{v}" for k, v in list(rec.get("reasons", {}).items())[:2])[:160] if bad else rec.get("p5class", ""))
+            with lock:
+                with rf.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                stats["n"] += 1
+                if rec.get("post_fail"):
+                    stats["post_fail"] += 1
+                    stats["quota"] += 1 if rec.get("quota") else 0
+                out(line)
+
+    threads = [threading.Thread(target=work, args=(i, e, f), daemon=True) for i, (e, f) in enumerate(workers)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    stats["sec"] = round(time.time() - t_start, 1)
     return stats, rf
 
 
@@ -285,3 +400,54 @@ def summarize(rf):
         for it in r.get("p6", []):
             p6.setdefault((r["shelf"], it), []).append(r["table"])
     return rows, fails, p6
+
+
+def report_md(rows, title="性質の総当たり（P1〜P7）"):
+    """共有メモ用の Markdown: 通らない物・二度撃ちの分け方・P6（脇の状態が戻らなかった物）・広い削除が 1 回止まった棚・秒"""
+    L = [f"# {title}", ""]
+    n = len(rows)
+    fails = [r for r in rows if any(v in ("fail", "error") for v in r["p"].values())]
+    quota = sum(1 for r in rows if r.get("quota"))
+    posts = sum(1 for r in rows if r.get("post_fail"))
+    secs = [r.get("sec", 0) for r in rows]
+    L += [f"- 組 {n}（棚 × 表）・通らない {len(fails)}・POST の失敗 {posts}（うち Google の上限らしい物 {quota}）・1 組の秒 平均 {sum(secs) / n if n else 0:.0f}・合計 {sum(secs) / 3600:.1f} 時間", ""]
+    counts = {}
+    for r in rows:
+        for k, v in r["p"].items():
+            counts.setdefault(k, {}).setdefault(v, 0)
+            counts[k][v] += 1
+    L += ["| 性質 | pass | fail | error | na |", "|---|---|---|---|---|"]
+    for k in ("P1", "P2", "P3", "P4", "P5"):
+        c = counts.get(k, {})
+        L.append(f"| {k} | {c.get('pass', 0)} | {c.get('fail', 0)} | {c.get('error', 0)} | {c.get('na', 0)} |")
+    L += ["", "## 通らない組", ""]
+    if fails:
+        L += ["| 棚 | 表 | 通らない性質 | 理由 |", "|---|---|---|---|"]
+        for r in fails:
+            bad = [k for k, v in r["p"].items() if v in ("fail", "error")]
+            L.append(f"| {r['shelf']} | {r['table']} | {'・'.join(bad)} | " + "；".join(f"{k}: {r.get('reasons', {}).get(k, '')}" for k in bad).replace("|", "/")[:200] + " |")
+    else:
+        L.append("なし")
+    cls = {}
+    for r in rows:
+        if r.get("p5class"):
+            cls.setdefault(r["shelf"], {}).setdefault(r["p5class"], 0)
+            cls[r["shelf"]][r["p5class"]] += 1
+    L += ["", "## P5 二度撃ちの分け方（棚ごと・表の数）", "", "| 棚 | 同じ | 変更なしと言う | 断る | 増える | 内部エラー |", "|---|---|---|---|---|---|"]
+    for shelf in sorted(cls):
+        c = cls[shelf]
+        L.append(f"| {shelf} | " + " | ".join(str(c.get(x, 0)) for x in ("同じ", "変更なしと言う", "断る", "増える", "内部エラー")) + " |")
+    p6 = {}
+    for r in rows:
+        for it in r.get("p6", []):
+            p6.setdefault((r["shelf"], it), []).append(r["table"])
+    L += ["", "## P6 戻した後に戻らなかった脇の状態（表だけ・合否には使わない）", ""]
+    if p6:
+        L += ["| 棚 | 戻らなかった物 | 表 |", "|---|---|---|"]
+        for (shelf, it), tabs in sorted(p6.items()):
+            L.append(f"| {shelf} | {it} | {'・'.join(tabs)} |")
+    else:
+        L.append("なし（今の棚は、触る物がすべて戻る）")
+    wide = sorted({r["shelf"] for r in rows if r.get("wide")})
+    L += ["", "## P7 広い削除が ok=True でも 1 回止まった棚（同じ ops をもう一度撃つと通った）", "", "、".join(wide) if wide else "なし"]
+    return "\n".join(L) + "\n"

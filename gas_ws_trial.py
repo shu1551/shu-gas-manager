@@ -36,6 +36,11 @@ MIME_DOC = gas_workspace.MIME_DOC
 SANDBOX_SHEETS = ["WS試験_場", "WS試験_請求書_10月", "WS試験_請求書_11月", "WS試験_売上"]
 SANDBOX_DOCS = ["WS試験_文書"]
 BACKUP_BOOK = "WS試験_控え"
+# 並べて回すための試験場（lane 2〜5）。場ごとに控えのブックを持ち、エンジンの錠・台帳も lane ごとに分かれる（lane 1＝WS試験_場・WS試験_控え）
+LANE_NUMS = ["2", "3", "4", "5"]
+LANE_SHEETS = {n: f"WS試験_場{n}" for n in LANE_NUMS}
+LANE_BACKUPS = {n: f"WS試験_控え{n}" for n in LANE_NUMS}
+MAX_JOBS = 10         # GAS の同時実行の上限（ユーザーあたり 30 前後）に十分余裕を残す
 WORD_LIMIT = 8        # 札 1 本の語の数の上限（第 8.4 節）
 
 
@@ -156,6 +161,7 @@ class TrialEngine(gas_workspace.WorkspaceManager):
         self.engine_title = TRIAL_ENGINE_TITLE
         self.trial_gs = Path(trial_gs)
         self.prod_state_path = Path(prod_state_path)
+        self.lane = ""      # 並べて回すときの lane（"2"〜"5"。空はふつう）。錠・控え・台帳が lane ごとに分かれる
 
     def _trial_text(self):
         return self.trial_gs.read_text(encoding="utf-8")
@@ -249,12 +255,22 @@ def init(client=None, out=print, state_path=STATE_FILE):
         out("試験用のエンジンが答えません: " + str(e))
         return 1
     # 4. 試験場の登録（登録した ID のファイルにだけ試験の入口が効く）・ロケールと時刻
-    ids = [files[n] for n in SANDBOX_SHEETS]
+    ids = [files[n] for n in SANDBOX_SHEETS] + [files[n] for n in LANE_SHEETS.values() if n in files]      # lanes で足した試験場も外さない
     docs = [files[n] for n in SANDBOX_DOCS]
     r = eng.trial_post("trial_config", ids=ids, docs=docs, bk_book=files[BACKUP_BOOK])
     if not r.get("ok"):
         out("試験場を登録できません: " + str(r.get("error")))
         return 1
+    for ln in LANE_NUMS:                      # lane ごとの控えのブック（lanes で作った分だけ）
+        if LANE_BACKUPS[ln] in files:
+            eng.lane = ln
+            try:
+                rl = eng.trial_post("trial_config", ids=ids, docs=docs, bk_book=files[LANE_BACKUPS[ln]])
+            finally:
+                eng.lane = ""
+            if not rl.get("ok"):
+                out(f"lane {ln} の控えを登録できません: " + str(rl.get("error")))
+                return 1
     info = eng.trial_post("trial_info")
     st = load_state(state_path)
     st["engine_checked"] = {"version": res.get("version"), "ledger_items": info.get("ledger_items"), "ids": len(ids), "docs": len(docs)}
@@ -262,6 +278,46 @@ def init(client=None, out=print, state_path=STATE_FILE):
     out(f"試験用のエンジン: {res.get('version')} ／ 試験場 {len(ids)} 枚＋文書 {len(docs)} 個を登録 ／ 本番のエンジンとは別のプロジェクト")
     return 0
 
+
+
+def lanes(client=None, out=print, state_path=STATE_FILE):
+    """並べて回すための試験場（WS試験_場2〜5）と lane ごとの控えのブックを作り、登録する（あるものは作り直さない）。init の後に撃つ"""
+    from gas_client import GasClient
+    client = client or GasClient()
+    drive = Drive(client)
+    st = load_state(state_path)
+    folder = st.get("folder_id")
+    if not folder:
+        out("先に `py gas.py ws-trial init` を撃ってください（フォルダがありません）")
+        return 1
+    files = st.setdefault("files", {})
+    for name in list(LANE_SHEETS.values()) + list(LANE_BACKUPS.values()):
+        fid = files.get(name)
+        if fid and drive.get(fid) and not drive.get(fid).get("trashed"):
+            continue
+        found = drive.find(name, MIME_SHEET, folder)
+        files[name] = found[0]["id"] if found else drive.create(name, MIME_SHEET, folder)["id"]
+        if not found:
+            out(f"作った: {name}")
+    save_state(st, state_path)
+    rc = init(client=client, out=out, state_path=state_path)       # 登録（ids と lane ごとの控え）を init の中で撃つ
+    return rc
+
+
+def lane_workers(eng_factory, st=None, jobs=5):
+    """(エンジン, 試験場の ID) の並び。lane 1＝WS試験_場、2〜5＝WS試験_場2〜5（lanes で作った分だけ）。jobs 個まで"""
+    st = st if st is not None else load_state()
+    files = st.get("files", {})
+    ws = [("", files["WS試験_場"])]
+    for n in LANE_NUMS:
+        if LANE_SHEETS[n] in files and LANE_BACKUPS[n] in files:
+            ws.append((n, files[LANE_SHEETS[n]]))
+    out = []
+    for lane, fid in ws[:max(1, min(jobs, MAX_JOBS))]:
+        e = eng_factory()
+        e.lane = lane
+        out.append((e, fid))
+    return out
 
 
 # ------------------------------------------------------------------ check（段 T0 の完了の条件を実機で確かめる。許可の後）
@@ -395,27 +451,45 @@ def words_over_limit(catalog=None, limit=WORD_LIMIT):
 
 
 def props_cmd(args, out=print):
-    """py gas.py ws-trial props [--shelf 棚]… [--table 表]… [--all] [--resume ファイル] [--limit-sec 秒]。試験用のエンジンの試験場だけに撃つ"""
+    """py gas.py ws-trial props [--shelf 棚]… [--table 表]… [--all | --changed [--with-engine]] [--jobs N] [--resume ファイル] [--limit-sec 秒] [--stamp ファイル [--root 木]]
+    試験用のエンジンの試験場だけに撃つ。--jobs N は試験場を N 枚（lane）並べて同時に撃つ（既定 1。最大 5＝WS試験_場〜場5。先に `ws-trial lanes`）"""
     import argparse
     import gas_ws_props
     ap = argparse.ArgumentParser(prog="ws-trial props")
     ap.add_argument("--shelf", action="append", default=[])
     ap.add_argument("--table", action="append", default=[])
     ap.add_argument("--all", action="store_true")
+    ap.add_argument("--changed", action="store_true")          # 前回の記録と比べて、変わった棚・表・ひな形にかかる組だけ回す
+    ap.add_argument("--with-engine", action="store_true")      # 共通部（workspace_engine.gs・Trial.gs）が変わった組も回す（節目）
+    ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--resume", default="")
     ap.add_argument("--limit-sec", type=int, default=6 * 3600)        # 全体の時間の上限（既定 6 時間で自分で止まる）
+    ap.add_argument("--stamp", default="")                     # 指紋のない昔の記録に指紋を書き足す（--root の木で回した記録に）
+    ap.add_argument("--root", default="")
     a = ap.parse_args(args)
-    if not (a.all or a.shelf or a.table):
-        out("棚か表を指定してください（--shelf 棚 / --table 表 / --all）")
+    if a.stamp:
+        n = gas_ws_props.stamp(a.stamp, gas_ws_props.inputs_fp(root=a.root or None))
+        out(f"指紋を足した記録: {n} 件（{a.stamp}）")
+        return 0
+    if not (a.all or a.changed or a.shelf or a.table):
+        out("棚か表を指定してください（--shelf 棚 / --table 表 / --all / --changed）")
         return 1
     from gas_client import GasClient
     st = load_state()
-    eng = TrialEngine(client=GasClient())
+    client = GasClient()
+    eng = TrialEngine(client=client)
     eng.assert_not_prod()
+    workers = None
+    if a.jobs > 1:
+        eng._ensure_engine()                 # 版の差し替えは先に 1 回だけ（並べて撃つ前に済ませる）
+        client.get_access_token()
+        workers = lane_workers(lambda: TrialEngine(client=client), st, a.jobs)
+        if len(workers) < a.jobs:
+            out(f"[注意] 試験場が {len(workers)} 枚しか無いので {len(workers)} 本で回します（先に `py gas.py ws-trial lanes`）")
     stats, rf = gas_ws_props.run(eng, st["files"]["WS試験_場"], shelves=a.shelf or None, tables=a.table or None, run_file=a.resume or None,
-                                 resume=bool(a.resume), out=out, limit_seconds=a.limit_sec)
-    rows, fails, p6 = gas_ws_props.summarize(rf)
-    out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}）・記録 {rf}")
+                                 resume=bool(a.resume), out=out, limit_seconds=a.limit_sec, workers=workers, changed=a.changed, with_engine=a.with_engine)
+    rows, fails, p6 = gas_ws_props.summarize(rf) if Path(rf).exists() else ([], [], {})
+    out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}）・{stats['workers']} 本で {stats.get('sec', 0):.0f} 秒・記録 {rf}")
     return 1 if fails else 0
 
 
@@ -461,6 +535,8 @@ def main(argv):
         return init()
     if cmd == "props":
         return props_cmd(argv[1:])
+    if cmd == "lanes":
+        return lanes()
     if cmd in ("golden", "look", "shot"):
         return shot_cmd(cmd, argv[1:])
     if cmd == "check":

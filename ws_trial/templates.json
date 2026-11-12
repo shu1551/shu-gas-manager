@@ -274,7 +274,9 @@
     }
    ]
   ],
-  "may_change": []
+  "may_change": [
+   "シート構成"
+  ]
  },
  "total": {
   "templates": [
@@ -299,7 +301,9 @@
     }
    ]
   ],
-  "may_change": []
+  "may_change": [
+   "シート構成"
+  ]
  },
  "pivot.new": {
   "templates": [
@@ -316,7 +320,9 @@
     }
    ]
   ],
-  "may_change": []
+  "may_change": [
+   "シート構成"
+  ]
  },
  "write": {
   "templates": [
@@ -528,7 +534,9 @@
     }
    ]
   ],
-  "may_change": []
+  "may_change": [
+   "式"
+  ]
  },
  "cols.delete": {
   "templates": [
@@ -541,7 +549,9 @@
     }
    ]
   ],
-  "may_change": []
+  "may_change": [
+   "式"
+  ]
  },
  "cols.move": {
   "templates": [
@@ -553,7 +563,9 @@
     }
    ]
   ],
-  "may_change": []
+  "may_change": [
+   "式"
+  ]
  },
  "freeze": {
   "templates": [
@@ -667,6 +679,252 @@
        }
       }
      ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "filter.off": {
+  "templates": [
+   [
+    {
+     "shelf": "filter.off"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "protect.sheet": {
+  "templates": [
+   [
+    {
+     "shelf": "protect.sheet",
+     "warn": true
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "protect.range": {
+  "templates": [
+   [
+    {
+     "shelf": "protect.range",
+     "range": "{NC明細}",
+     "warn": true
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "protect.remove": {
+  "templates": [
+   [
+    {
+     "shelf": "protect.remove"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "name.add": {
+  "templates": [
+   [
+    {
+     "shelf": "name.add",
+     "name": "試験範囲",
+     "range": "{NC明細}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "name.delete": {
+  "templates": [
+   [
+    {
+     "shelf": "name.add",
+     "name": "試験範囲",
+     "range": "{NC明細}"
+    },
+    {
+     "shelf": "name.delete",
+     "name": "試験範囲"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "name.list": {
+  "templates": [
+   [
+    {
+     "shelf": "name.list"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "rows.hide": {
+  "templates": [
+   [
+    {
+     "shelf": "rows.hide",
+     "rows": [
+      "{R1}",
+      "{R3}"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "rows.show": {
+  "templates": [
+   [
+    {
+     "shelf": "rows.hide",
+     "rows": [
+      "{R1}"
+     ]
+    },
+    {
+     "shelf": "rows.show",
+     "rows": [
+      "{R1}"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cols.hide": {
+  "templates": [
+   [
+    {
+     "shelf": "cols.hide",
+     "cols": [
+      "{SC}"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cols.show": {
+  "templates": [
+   [
+    {
+     "shelf": "cols.hide",
+     "cols": [
+      "{SC}"
+     ]
+    },
+    {
+     "shelf": "cols.show",
+     "cols": [
+      "{SC}"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "group.rows": {
+  "templates": [
+   [
+    {
+     "shelf": "group.rows",
+     "rows": [
+      "{R1}",
+      "{R3}"
+     ],
+     "collapse": true
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "group.cols": {
+  "templates": [
+   [
+    {
+     "shelf": "group.cols",
+     "cols": [
+      "{FC}",
+      "{SC}"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "group.remove": {
+  "templates": [
+   [
+    {
+     "shelf": "group.rows",
+     "rows": [
+      "{R1}",
+      "{R3}"
+     ]
+    },
+    {
+     "shelf": "group.remove",
+     "rows": [
+      "{R1}",
+      "{R3}"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "sheet.hide": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.add",
+     "name": "隠す用"
+    },
+    {
+     "shelf": "sheet.hide",
+     "name": "隠す用"
+    }
+   ]
+  ],
+  "may_change": [
+   "シート構成"
+  ]
+ },
+ "sheet.show": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.add",
+     "name": "隠す用"
+    },
+    {
+     "shelf": "sheet.hide",
+     "name": "隠す用"
+    },
+    {
+     "shelf": "sheet.show",
+     "name": "隠す用"
+    }
+   ]
+  ],
+  "may_change": [
+   "シート構成"
+  ]
+ },
+ "sheet.color": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.color",
+     "name": "{S}",
+     "color": "red"
     }
    ]
   ],

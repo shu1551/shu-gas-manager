@@ -205,6 +205,8 @@ class WorkspaceManager:
 
     def _post(self, body, timeout=90):
         tim = self._tim
+        if getattr(self, "lane", "") and "lane" not in body:
+            body = dict(body, lane=self.lane)       # 並べて回すとき（試験用のエンジンだけが読む）
         st = self._ensure_engine()
         if tim:
             tim.lap("版")
