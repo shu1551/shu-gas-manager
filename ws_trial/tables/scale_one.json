@@ -1,0 +1,83 @@
+{
+ "name": "scale_one",
+ "business": "規模",
+ "kind": "scale",
+ "notes": "規模の試験表（明細 1 行）。見出し 1 行目・明細 2 行目（1 行）・合計 3 行目",
+ "sheets": [
+  {
+   "name": "シート1",
+   "values": [
+    [
+     "ID",
+     "名前",
+     "数量",
+     "単価",
+     "金額"
+    ],
+    [
+     {
+      "text": "0001"
+     },
+     "商品A",
+     10,
+     1500,
+     "=C2*D2"
+    ]
+   ],
+   "total": {
+    "row": "last+1",
+    "label_col": "B",
+    "label": "合計",
+    "sum_cols": [
+     "E"
+    ]
+   },
+   "formats": [
+    {
+     "range": "A1:E1",
+     "bold": true,
+     "bg": "#595959",
+     "color": "#FFFFFF",
+     "align": "center"
+    },
+    {
+     "range": "D2:E3",
+     "number_format": "#,##0"
+    }
+   ],
+   "borders": [
+    "A1:E3"
+   ],
+   "merges": [],
+   "frozen": {
+    "rows": 1,
+    "cols": 0
+   },
+   "hidden": {
+    "rows": [],
+    "cols": []
+   },
+   "widths": {},
+   "validations": [],
+   "cf": [],
+   "filter": null,
+   "protect": [],
+   "tab_color": null,
+   "hide_sheet": false,
+   "tables": [
+    {
+     "header_rows": [
+      1
+     ],
+     "first_col": "A",
+     "last_col": "E",
+     "data": "2-2",
+     "total_row": 3,
+     "key": "A"
+    }
+   ]
+  }
+ ],
+ "named": [],
+ "doc": null
+}

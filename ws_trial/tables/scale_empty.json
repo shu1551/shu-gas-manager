@@ -1,0 +1,48 @@
+{
+ "name": "scale_empty",
+ "business": "規模",
+ "kind": "scale",
+ "notes": "規模の試験表（空のシート）。セル値なし（null 1つ）・明細0行",
+ "sheets": [
+  {
+   "name": "シート1",
+   "values": [
+    [
+     null
+    ]
+   ],
+   "formats": [],
+   "borders": [],
+   "merges": [],
+   "frozen": {
+    "rows": 0,
+    "cols": 0
+   },
+   "hidden": {
+    "rows": [],
+    "cols": []
+   },
+   "widths": {},
+   "validations": [],
+   "cf": [],
+   "filter": null,
+   "protect": [],
+   "tab_color": null,
+   "hide_sheet": false,
+   "tables": [
+    {
+     "header_rows": [
+      1
+     ],
+     "first_col": "A",
+     "last_col": "A",
+     "data": "2-1",
+     "total_row": null,
+     "key": "A"
+    }
+   ]
+  }
+ ],
+ "named": [],
+ "doc": null
+}
