@@ -7,3 +7,7 @@ summary	部署ごとの金額の合計表を作って
 summary	部署別に件数を集計して
 ?summary	担当ごとの売上をまとめて
 ?summary	集計 項目別 部署ごと
+pivot.new	売上のピボットテーブルを作って
+pivot.new	部署と商品でクロス集計表を作成して
+pivot.new	縦と横で集計してくれる？
+?pivot.new	ピボット クロス集計 新規作成

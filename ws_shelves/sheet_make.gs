@@ -100,6 +100,7 @@ SHELF['total'] = function (ctx, op) {
 // 題: 項目ごとの集計表を作る
 // 分類: 集計
 // 語: 項目ごとの集計|まとめて|集計表を|部署ごとに合計|ごとの合計|ごとに集計|ごとの件数
+// 違い: ピボットテーブルを作るなら pivot.new。表自体の合計行なら total
 // 引数: by*=列, values*=列[], func=選択(sum/count/avg)=sum, into=文字
 // 例: 「部署ごとの金額の合計表を作って」 → {"shelf":"summary","by":"部署","values":["金額"]}
 // 危ない: 消す
@@ -141,4 +142,50 @@ SHELF['summary'] = function (ctx, op) {
   ctx.curSheet = src.getName();
   chg_(ctx, dst, a1_(1, 1, grid.length, grid[0].length), '「' + src.getName() + '」の ' + hdr[0] + ' ごとの集計（元の表を直すと追従）');
   tidyRange_(ctx, dst, null);
+};
+
+// 棚: pivot.new
+// 題: ピボットテーブルを作る
+// 分類: 集計
+// 語: ピボット|クロス集計|縦と横で集計|ドラッグで集計|ピボットテーブル
+// 違い: 式の集計表（元を直すと追従）なら summary。表の下に合計行なら total
+// 引数: rows*=列[], values*=列[], cols=列[], func=選択(sum/count/avg)=sum, into=文字
+// 例: 「部署別・月別の売上ピボットテーブルを作って」 → {"shelf":"pivot.new","rows":["部署"],"cols":["月"],"values":["売上"]}
+// 例: 「商品ごとの数量ピボットを作って」 → {"shelf":"pivot.new","rows":["商品"],"values":["数量"]}
+// 触る: シート構成 値
+// 控え: 先
+SHELF['pivot.new'] = function (ctx, op) {
+  need_(op, ['rows', 'values']);
+  var src = sheetOf_(ctx.ss, op.sheet, ctx.sheetName), t = needTable_(src);
+  var into = op.into || ('ピボット_' + src.getName());
+  if (ctx.ss.getSheetByName(into)) {
+    throw new ArgError('シート「' + into + '」はすでにあります（上書きしません）');
+  }
+  var rows = (Array.isArray(op.rows) ? op.rows : [op.rows]).map(function (c) { return colIndexOf_(t, c); });
+  var vals = (Array.isArray(op.values) ? op.values : [op.values]).map(function (c) { return colIndexOf_(t, c); });
+  var cols = op.cols ? (Array.isArray(op.cols) ? op.cols : [op.cols]).map(function (c) { return colIndexOf_(t, c); }) : [];
+  var funcStr = (op.func || 'sum').toLowerCase();
+  var sumFn = SpreadsheetApp.PivotTableSummarizeFunction.SUM;
+  if (funcStr === 'count') sumFn = SpreadsheetApp.PivotTableSummarizeFunction.COUNTA || SpreadsheetApp.PivotTableSummarizeFunction.COUNT;
+  else if (funcStr === 'avg') sumFn = SpreadsheetApp.PivotTableSummarizeFunction.AVERAGE;
+
+  var sourceRange = src.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1);
+  var dst = ctx.ss.insertSheet(into);
+  ctx.createdSheets.push(into);
+
+  var anchor = dst.getRange('A1');
+  var pivotTable = sourceRange.createPivotTable(anchor);
+
+  rows.forEach(function (ci) {
+    pivotTable.addRowGroup(ci - t.firstCol + 1);
+  });
+  cols.forEach(function (ci) {
+    pivotTable.addColumnGroup(ci - t.firstCol + 1);
+  });
+  vals.forEach(function (ci) {
+    pivotTable.addPivotValue(ci - t.firstCol + 1, sumFn);
+  });
+
+  ctx.curSheet = src.getName();
+  chg_(ctx, dst, 'A1', '「' + src.getName() + '」からピボットテーブルを作成');
 };

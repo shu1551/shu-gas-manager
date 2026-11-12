@@ -6,7 +6,7 @@ C列の重複消して連番ふり直して	seiri,dedupe,replace,renumber,doc.ta
 A列とB列入れ替えて	cols.move,width,fill.series,rows.move,sheet.move
 合計のとこ太字で黄色に	format
 これ見やすくして	tidy
-月ごとの売上の推移を出して	
+月ごとの売上の推移を出して	pivot.new
 全角の数字を半角に	seiri
 空白行を詰めて	seiri
 1行おきに色つけて、ついでにヘッダーは青	filter.on,format,freeze,doc.new,doc.section,doc.style
@@ -31,7 +31,7 @@ A列とB列入れ替えて	cols.move,width,fill.series,rows.move,sheet.move
 シート 削除 不要	sheet.delete,rows.delete,cols.delete,sheet.add,sheet.rename
 テンプレートのシートを複製して	sheet.copy,sheet.add,sheet.rename,sheet.move,sheet.delete
 同じシートをもう1枚作って	sheet.copy,sheet.add,sheet.rename,sheet.move,sheet.delete
-売上シートを複製して来月分を作っておいて	sheet.copy,sheet.rename,sheet.add,sheet.move,sheet.delete
+売上シートを複製して来月分を作っておいて	sheet.copy,sheet.rename,pivot.new,sheet.add,sheet.move
 シート コピー 複製	sheet.copy,fill.down,copy,copy.format,sheet.add
 見出しが氏名と電話番号の表を新しく作って	table.new,doc.new,doc.section,doc.style,renumber
 名簿みたいな一覧表を用意して	table.new
@@ -185,10 +185,14 @@ A列の幅を広げて	width,cols.move
 金額の合計を出して	total,summary,format,table.new,sort
 合計も入れといて	total
 合計 行 集計 追加	total,summary,sheet.add
-部署ごとの金額の合計表を作って	table.new,summary,total,sort,format
-部署別に件数を集計して	summary
-担当ごとの売上をまとめて	summary
-集計 項目別 部署ごと	summary
+部署ごとの金額の合計表を作って	table.new,summary,total,pivot.new,sort
+部署別に件数を集計して	summary,pivot.new
+担当ごとの売上をまとめて	summary,pivot.new
+集計 項目別 部署ごと	summary,pivot.new
+売上のピボットテーブルを作って	pivot.new,table.new,summary
+部署と商品でクロス集計表を作成して	pivot.new,summary,table.new
+縦と横で集計してくれる？	pivot.new
+ピボット クロス集計 新規作成	pivot.new
 見出しと箇条書きの文書を書いて	doc.new,write,doc.section,doc.style,doc.replace
 最後に1行足して	doc.append,rows.insert,total
 山田を山田（総務）に直して	doc.replace,replace,seiri,renumber
@@ -212,6 +216,8 @@ A1からE50にフィルタを設定して	filter.on,filter.where,clear.format,fi
 A列を幅200にして	width,write
 B列とC列の幅を中身に合わせて	width,cols.move,total,copy.values,cols.insert
 見出しが名前と金額の表を作って	table.new,format,summary,total,doc.new
+部署別・月別の売上ピボットテーブルを作って	pivot.new,table.new,summary,copy,sheet.rename
+商品ごとの数量ピボットを作って	pivot.new
 B2に100、B3に200を入れて	write,fill.series,doc.table,clear.values,clear.all,width
 営業部を営業課に置き換えて	replace,doc.replace
 売上合計が入っているセルを探して	find
@@ -221,7 +227,7 @@ B2からD10の中身を消して	clear.values,clear.all,copy.values,renumber,wri
 A1からE20の書式をクリアして	clear.format,format,clear.values,clear.all,filter.on
 B2からD10を全部クリアして	clear.all,clear.values,clear.format,write,copy
 A1:B10をD1:E10にコピーして	copy,copy.format,copy.values,fill.down,filter.on
-売上表を別の場所に写して	copy,sheet.rename,sheet.copy
+売上表を別の場所に写して	copy,pivot.new,sheet.rename,sheet.copy
 C列の計算式を値に変えて	copy.values,width,fill.down,cols.insert,sheet.rename
 A1:B10の値をD1へ値貼り付けして	copy.values,copy,copy.format,clear.values,clear.all
 A1の書式をB1:E1にコピーして	copy,copy.format,format,fill.down,clear.format
