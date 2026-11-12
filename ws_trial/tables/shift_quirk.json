@@ -385,7 +385,8 @@
    "cf": [
     {
      "range": "D3:J22",
-     "when": "休",
+     "when": "contains",
+     "value": "休",
      "bg": "#FCE4D6",
      "color": "#C00000"
     }
