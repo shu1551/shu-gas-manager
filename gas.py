@@ -448,7 +448,8 @@ def main():
     wsf_p.add_argument("--kind", default="", help="sheet|doc（空なら両方）")
     wsf_p.add_argument("--why", action="store_true", help="点の内訳を出す")
     wst_p = subparsers.add_parser("ws-trial", help="Workspace の磨き上げの試験（試験用のエンジンと試験場）。init・tables・words・check")
-    wst_p.add_argument("sub", nargs="?", default="", help="init（試験用のエンジンと試験場を作る）／tables（表の形の検査）／words（語が 8 個を超える札）／check（段 T0 の実機の確かめ）")
+    wst_p.add_argument("sub", nargs="?", default="", help="init（試験用のエンジンと試験場を作る）／tables（表の形の検査）／words（語が 8 個を超える札）／check（段 T0 の実機の確かめ）／props（性質の総当たり）／look（本物の ws_look の返事を撮り置く）")
+    wst_p.add_argument("opts", nargs=argparse.REMAINDER, help="props: --shelf 棚 --table 表 --all --resume ファイル --limit-sec 秒")
     wse_p = subparsers.add_parser("ws-exam", help="Workspace の AI を通した試験（問題集の頼みを AI に渡し、棚と引数の検査を数える）。既定の AI はヘッドレスの Claude Code（sonnet）")
     wse_p.add_argument("--ai", action="store_true", help="AI を呼んで試験する（付けないと何もしない＝AI を呼ぶのは明示のときだけ）")
     wse_p.add_argument("--n", type=int, default=30, help="問題数（既定 30）")
@@ -493,7 +494,7 @@ def main():
         return
     if args.command == "ws-trial":
         import gas_ws_trial
-        sys.exit(gas_ws_trial.main([args.sub] if args.sub else []))
+        sys.exit(gas_ws_trial.main(([args.sub] if args.sub else []) + list(args.opts)))
     if args.command == "ws-exam":
         if not args.ai:
             print("ws-exam は --ai を付けたときだけ AI を呼びます（例: py gas.py ws-exam --ai --n 30）。")

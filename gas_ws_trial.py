@@ -394,10 +394,37 @@ def words_over_limit(catalog=None, limit=WORD_LIMIT):
     return [(s["name"], len(s["words"])) for s in cat.shelves if len(s["words"]) > limit]
 
 
+def props_cmd(args, out=print):
+    """py gas.py ws-trial props [--shelf 棚]… [--table 表]… [--all] [--resume ファイル] [--limit-sec 秒]。試験用のエンジンの試験場だけに撃つ"""
+    import argparse
+    import gas_ws_props
+    ap = argparse.ArgumentParser(prog="ws-trial props")
+    ap.add_argument("--shelf", action="append", default=[])
+    ap.add_argument("--table", action="append", default=[])
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--resume", default="")
+    ap.add_argument("--limit-sec", type=int, default=6 * 3600)        # 全体の時間の上限（既定 6 時間で自分で止まる）
+    a = ap.parse_args(args)
+    if not (a.all or a.shelf or a.table):
+        out("棚か表を指定してください（--shelf 棚 / --table 表 / --all）")
+        return 1
+    from gas_client import GasClient
+    st = load_state()
+    eng = TrialEngine(client=GasClient())
+    eng.assert_not_prod()
+    stats, rf = gas_ws_props.run(eng, st["files"]["WS試験_場"], shelves=a.shelf or None, tables=a.table or None, run_file=a.resume or None,
+                                 resume=bool(a.resume), out=out, limit_seconds=a.limit_sec)
+    rows, fails, p6 = gas_ws_props.summarize(rf)
+    out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}）・記録 {rf}")
+    return 1 if fails else 0
+
+
 def main(argv):
     cmd = argv[0] if argv else ""
     if cmd == "init":
         return init()
+    if cmd == "props":
+        return props_cmd(argv[1:])
     if cmd == "check":
         memo = Path(r"C:\Users\shu\AppData\Local\Claude-Data\claude_pzs8sxrjxfjjc\side-session-notes\local_17e23481-3a47-4d0f-ab8c-f1d69e214e19") / "段T0_実機の確かめ.md"
         return check(memo_path=memo if memo.parent.exists() else None)

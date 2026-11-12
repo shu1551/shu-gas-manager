@@ -399,3 +399,39 @@ EXTRA_ACTIONS['side_look'] = function (req) {
   SpreadsheetApp.flush();
   return actLook_({ target: { id: req.id, kind: 'sheet' }, sheet: '名簿' });
 };
+
+// ---------------------------------------------------------------- 性質の総当たり・模範の再生の下回し（棚を 1 組ずつ撃つ）
+// steps: {snap:名前} 撮る／{do:ops, ok, name, retry_wide} 撃つ（retry_wide: 広い削除で止まったら、同じ ops をもう一度撃つ＝P7 の通し方）／{undo_all:true, name} この呼びで取った控えを全部戻す
+function trialSlim_(r) {
+  return { ok: !!r.ok, error: r.error || null, blocked: !!r.blocked, arg: !!r.arg, restored: r.restored, changed: r.changed || [], notes: r.notes || [], backup: r.backup || 0 };
+}
+EXTRA_ACTIONS['seq'] = function (req) {
+  var ss = trialOpen_(req.id);
+  if (req.seed) {
+    var sd = trialSeed_(Object.assign({ id: req.id }, req.seed));
+    if (!sd.ok) return { ok: false, error: sd.error, step: 'seed' };
+    ss = trialOpen_(req.id);
+  }
+  var out = { ok: true, snaps: {}, steps: [] }, made = 0, ledger0 = ledger_().items.length;
+  (req.steps || []).forEach(function (st) {
+    if (st.snap) { out.snaps[st.snap] = trialSnap_(ss); return; }
+    if (st.do) {
+      var go = function () { return actDo_({ target: { id: req.id, kind: 'sheet' }, ops: st.do, ok: !!st.ok }); };
+      var r = go(), wide = false;
+      if (st.retry_wide && !r.ok && r.blocked && String(r.error || '').indexOf('広い削除') >= 0) { wide = true; r = go(); }
+      if (r.ok && r.backup) made++;
+      var o = { name: st.name, res: trialSlim_(r), wide: wide };
+      o.res.error_brief = String(r.error || '').slice(0, 200);
+      out.steps.push(o);
+      return;
+    }
+    if (st.undo_all) {
+      var us = [];
+      for (var i = 0; i < made; i++) { var u = actUndo_({ target_id: req.id, ok: true }); us.push({ ok: !!u.ok, error: u.error || null, notes: u.notes || [] }); }
+      made = 0;
+      out.steps.push({ name: st.name, undo: us });
+    }
+  });
+  out.ledger_added = ledger_().items.length - ledger0;
+  return out;
+};

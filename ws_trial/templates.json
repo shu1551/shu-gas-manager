@@ -1,0 +1,675 @@
+{
+ "tidy": {
+  "templates": [
+   [
+    {
+     "shelf": "tidy"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "seiri": {
+  "templates": [
+   [
+    {
+     "shelf": "seiri"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "renumber": {
+  "templates": [
+   [
+    {
+     "shelf": "renumber",
+     "col": "{FC}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "sort": {
+  "templates": [
+   [
+    {
+     "shelf": "sort",
+     "col": "{NC}",
+     "desc": true
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "filter.where": {
+  "templates": [
+   [
+    {
+     "shelf": "filter.where",
+     "col": "{TC}",
+     "equals": "{TCの値}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "filter.on": {
+  "templates": [
+   [
+    {
+     "shelf": "filter.on",
+     "range": "{表}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "dedupe": {
+  "templates": [
+   [
+    {
+     "shelf": "dedupe"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "split.col": {
+  "templates": [
+   [
+    {
+     "shelf": "split.col",
+     "col": "{TC}",
+     "by": "space"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "validation.list": {
+  "templates": [
+   [
+    {
+     "shelf": "validation.list",
+     "range": "{TC明細}",
+     "items": [
+      "a",
+      "b"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "validation.number": {
+  "templates": [
+   [
+    {
+     "shelf": "validation.number",
+     "range": "{NC明細}",
+     "min": 0
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "validation.date": {
+  "templates": [
+   [
+    {
+     "shelf": "validation.date",
+     "range": "{TC明細}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "checkbox": {
+  "templates": [
+   [
+    {
+     "shelf": "checkbox",
+     "range": "{EC明細}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "validation.clear": {
+  "templates": [
+   [
+    {
+     "shelf": "validation.clear",
+     "range": "{表}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "format": {
+  "templates": [
+   [
+    {
+     "shelf": "format",
+     "range": "{見出し行}",
+     "bold": true,
+     "bg": "#FFFF00"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "width": {
+  "templates": [
+   [
+    {
+     "shelf": "width",
+     "col": "{FC}",
+     "width": 150
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cf.add": {
+  "templates": [
+   [
+    {
+     "shelf": "cf.add",
+     "range": "{NC明細}",
+     "when": "gt",
+     "value": "0",
+     "bg": "#FFFF00"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cf.dup": {
+  "templates": [
+   [
+    {
+     "shelf": "cf.dup",
+     "range": "{FC明細}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cf.scale": {
+  "templates": [
+   [
+    {
+     "shelf": "cf.scale",
+     "range": "{NC明細}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cf.clear": {
+  "templates": [
+   [
+    {
+     "shelf": "cf.clear"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cf.list": {
+  "templates": [
+   [
+    {
+     "shelf": "cf.list"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "banding.add": {
+  "templates": [
+   [
+    {
+     "shelf": "banding.add",
+     "range": "{表}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "banding.remove": {
+  "templates": [
+   [
+    {
+     "shelf": "banding.remove"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "table.new": {
+  "templates": [
+   [
+    {
+     "shelf": "table.new",
+     "headers": [
+      "a",
+      "b"
+     ],
+     "rows": [
+      [
+       1,
+       2
+      ]
+     ],
+     "sheet": "新表"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "total": {
+  "templates": [
+   [
+    {
+     "shelf": "total"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "summary": {
+  "templates": [
+   [
+    {
+     "shelf": "summary",
+     "by": "{TC}",
+     "values": [
+      "{NC}"
+     ],
+     "into": "集計"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "pivot.new": {
+  "templates": [
+   [
+    {
+     "shelf": "pivot.new",
+     "rows": [
+      "{TC}"
+     ],
+     "values": [
+      "{NC}"
+     ],
+     "into": "ピボット"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "write": {
+  "templates": [
+   [
+    {
+     "shelf": "write",
+     "cells": {
+      "{EA}": "試験"
+     }
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "replace": {
+  "templates": [
+   [
+    {
+     "shelf": "replace",
+     "find": "{TCの値}",
+     "with": "置換後"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "find": {
+  "templates": [
+   [
+    {
+     "shelf": "find",
+     "text": "{TCの値}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "clear.values": {
+  "templates": [
+   [
+    {
+     "shelf": "clear.values",
+     "range": "{NC明細}"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "clear.format": {
+  "templates": [
+   [
+    {
+     "shelf": "clear.format",
+     "range": "{表}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "clear.all": {
+  "templates": [
+   [
+    {
+     "shelf": "clear.all",
+     "range": "{先頭行}"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "copy": {
+  "templates": [
+   [
+    {
+     "shelf": "copy",
+     "from": "{見出し行}",
+     "to": "{空き行}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "copy.values": {
+  "templates": [
+   [
+    {
+     "shelf": "copy.values",
+     "from": "{NC明細}"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "copy.format": {
+  "templates": [
+   [
+    {
+     "shelf": "copy.format",
+     "from": "{見出し行}",
+     "to": "{先頭行}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "fill.series": {
+  "templates": [
+   [
+    {
+     "shelf": "fill.series",
+     "range": "{EC明細}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "fill.date": {
+  "templates": [
+   [
+    {
+     "shelf": "fill.date",
+     "range": "{EC明細}",
+     "start": "2026-11-01"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "fill.down": {
+  "templates": [
+   [
+    {
+     "shelf": "fill.down",
+     "range": "{NC明細}"
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "rows": {
+  "templates": [
+   [
+    {
+     "shelf": "rows",
+     "rows": [
+      "{R1}"
+     ]
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "rows.insert": {
+  "templates": [
+   [
+    {
+     "shelf": "rows.insert",
+     "at": "{R1}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "rows.delete": {
+  "templates": [
+   [
+    {
+     "shelf": "rows.delete",
+     "rows": [
+      "{R1}"
+     ]
+    }
+   ]
+  ],
+  "may_change": [
+   "式"
+  ]
+ },
+ "rows.move": {
+  "templates": [
+   [
+    {
+     "shelf": "rows.move",
+     "from": "{R1}",
+     "to": "{R3}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cols.insert": {
+  "templates": [
+   [
+    {
+     "shelf": "cols.insert",
+     "at": "{FC}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cols.delete": {
+  "templates": [
+   [
+    {
+     "shelf": "cols.delete",
+     "cols": [
+      "{EC}"
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "cols.move": {
+  "templates": [
+   [
+    {
+     "shelf": "cols.move",
+     "from": "{FC}",
+     "to": "{SC}"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "freeze": {
+  "templates": [
+   [
+    {
+     "shelf": "freeze",
+     "rows": 2
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "unfreeze": {
+  "templates": [
+   [
+    {
+     "shelf": "unfreeze"
+    }
+   ]
+  ],
+  "may_change": []
+ },
+ "sheet.add": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.add",
+     "name": "追加シート"
+    }
+   ]
+  ],
+  "may_change": [
+   "シート構成"
+  ]
+ },
+ "sheet.rename": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.rename",
+     "name": "{S}",
+     "to": "改名後"
+    }
+   ]
+  ],
+  "may_change": [
+   "シート構成"
+  ]
+ },
+ "sheet.move": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.move",
+     "name": "{S}",
+     "index": 1
+    }
+   ]
+  ],
+  "may_change": [
+   "シート構成"
+  ]
+ },
+ "sheet.delete": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.add",
+     "name": "消す用"
+    },
+    {
+     "shelf": "sheet.delete",
+     "name": "消す用"
+    }
+   ]
+  ],
+  "may_change": [
+   "シート構成"
+  ]
+ },
+ "sheet.copy": {
+  "templates": [
+   [
+    {
+     "shelf": "sheet.copy",
+     "name": "{S}",
+     "as": "写し"
+    }
+   ]
+  ],
+  "may_change": [
+   "シート構成"
+  ]
+ },
+ "api": {
+  "templates": [
+   [
+    {
+     "shelf": "api",
+     "why": "試験",
+     "requests": [
+      {
+       "repeatCell": {
+        "range": "{見出し行}",
+        "cell": {
+         "userEnteredFormat": {
+          "backgroundColor": "#4285F4"
+         }
+        },
+        "fields": "userEnteredFormat.backgroundColor"
+       }
+      }
+     ]
+    }
+   ]
+  ],
+  "may_change": []
+ }
+}
