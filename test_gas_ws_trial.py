@@ -574,6 +574,8 @@ class FakeGoogle2(FakeGoogle):
         if a == "snap":
             cell = {"v": "12,000", "t": "n", "nf": "#,##0", "e": {"bg": "#ffff00", "fg": "#000000", "b": False}, "u": {"bg": "#ffffff", "fg": "#000000", "b": False}, "bd": True}
             return {"status_code": 200, "data": {"ok": True, "snap": {"name": "x", "sheets": [{"name": "名簿", "cells": {"F2": cell}}]}, "version": self._ver}}
+        if a == "trial":
+            return {"status_code": 200, "data": {"ok": True, "a": {"sheets": []}, "b": {"sheets": []}, "do": {"ok": True, "backup": 1}, "backups_added": 1, "undo": {"ok": True}, "version": self._ver}}
         if a == "do":
             self.n += 1
             f = {"id": f"E{self.n:03d}" + "x" * 20, "name": body["target"]["new"], "mimeType": TR.MIME_SHEET, "parents": []}
@@ -596,7 +598,7 @@ def test_check_flow_with_fake_google_never_touches_production_and_trashes_only_g
     text = "\n".join(out)
     assert rc == 0, text
     for want in ("試験場でないファイルへの seed が断られる", "条件付き書式で付けた色が effectiveFormat で撮れる", "ゴミ箱へ送る（守り 3 つを満たす物だけ）",
-                 "本番のエンジンの台帳が前後で同じ", "本番の控えのブックが前後で同じ"):
+                 "本番のエンジンの台帳が試験の前後で同じ", "本番の控えのブックが試験の前後で同じ", "trial（流し込む→撮る→撃つ→撮る→戻す→撮る）が 1 回の POST で通る"):
         assert "[OK] " + want in text, want
     s = TR.load_state(st)
     protected = set(s["files"].values())
@@ -604,6 +606,6 @@ def test_check_flow_with_fake_google_never_touches_production_and_trashes_only_g
     assert trashed and all(n.startswith("WS試験_") for n in trashed)
     assert not any(g.files[i].get("trashed") for i in protected)                       # 試験場の 5 つ・控えのブックは送らない
     assert g.files["PRODBK"].get("trashed") is None                                    # 本番の控えのブックには触らない
-    assert g.prod_posts == ["list", "list"]                                           # 本番のエンジンへは list（読むだけ）を前後 1 回ずつ
+    assert set(g.prod_posts) == {"list"}                                              # 本番のエンジンへ撃ったのは list（読むだけ）だけ
     memo = (tmp_path / "memo.md").read_text(encoding="utf-8")
     assert "条件付き書式" in memo and "[NG]" not in memo

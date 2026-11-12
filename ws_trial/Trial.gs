@@ -48,17 +48,47 @@ function trialCheckCell_(exp, got, gotFormula) {
   return '';
 }
 
+function trialRng_(g) {
+  if (!g) return '';
+  var a = colLetter_((g.startColumnIndex || 0) + 1) + ((g.startRowIndex || 0) + 1);
+  if (g.endColumnIndex === undefined && g.endRowIndex === undefined) return a;
+  return a + ':' + colLetter_(g.endColumnIndex || ((g.startColumnIndex || 0) + 1)) + (g.endRowIndex || ((g.startRowIndex || 0) + 1));
+}
+
+// 脇の状態: 戻しが約束していない物の一覧（約束の指紋には入れず、戻らなかった物として並べる）
+function trialSide_(sh) {
+  var P = sh.properties || {};
+  var bf = sh.basicFilter;
+  var side = {
+    filter: bf ? { range: trialRng_(bf.range), criteria: bf.criteria ? Object.keys(bf.criteria).sort() : [] } : null,
+    cf_rules: (sh.conditionalFormats || []).map(function (r) {
+      var b = r.booleanRule;
+      return { ranges: (r.ranges || []).map(trialRng_), type: b ? b.condition.type : (r.gradientRule ? 'GRADIENT' : ''), values: b ? (b.condition.values || []).map(function (v) { return v.userEnteredValue; }) : [],
+        bg: b && b.format ? trialHex_(b.format.backgroundColor, '') : '' };
+    }),
+    protected: (sh.protectedRanges || []).map(function (r) { return { range: r.range ? trialRng_(r.range) : 'シート全体', warning: !!r.warningOnly }; }),
+    charts: (sh.charts || []).map(function (c) { var s = c.spec || {}; return { title: s.title || '', type: s.basicChart ? s.basicChart.chartType : (s.pieChart ? 'PIE' : 'OTHER') }; }),
+    banded: (sh.bandedRanges || []).map(function (r) { return trialRng_(r.range); }),
+    groups: { rows: (sh.rowGroups || []).map(function (g) { return { range: trialRng_(g.range), depth: g.depth, collapsed: !!g.collapsed }; }),
+      cols: (sh.columnGroups || []).map(function (g) { return { range: trialRng_(g.range), depth: g.depth, collapsed: !!g.collapsed }; }) },
+    tab_color: P.tabColorStyle && P.tabColorStyle.rgbColor ? trialHex_(P.tabColorStyle.rgbColor, '') : '',
+    validations: {}
+  };
+  return side;
+}
+
 // Sheets API の 1 シート（spreadsheets.get の sheets[i]）を、道具が比べやすい形にする（疎: 値か書式のあるセルだけ）
 function trialSnapSheet_(sh) {
   var P = sh.properties || {}, G = P.gridProperties || {};
   var out = { name: P.title, id: P.sheetId, index: P.index, hidden: !!P.hidden, rows: G.rowCount || 0, cols: G.columnCount || 0,
-    frozen: { rows: G.frozenRowCount || 0, cols: G.frozenColumnCount || 0 }, merges: [], hidden_rows: [], filtered_rows: [], hidden_cols: [], widths: [], cells: {}, cf: (sh.conditionalFormats || []).length };
+    frozen: { rows: G.frozenRowCount || 0, cols: G.frozenColumnCount || 0 }, merges: [], hidden_rows: [], filtered_rows: [], hidden_cols: [], widths: [], cells: {}, cf: (sh.conditionalFormats || []).length, side: trialSide_(sh) };
   (sh.merges || []).forEach(function (m) { out.merges.push(colLetter_((m.startColumnIndex || 0) + 1) + ((m.startRowIndex || 0) + 1) + ':' + colLetter_(m.endColumnIndex) + m.endRowIndex); });
   var d = (sh.data || [])[0] || {};
   (d.rowMetadata || []).forEach(function (r, i) { if (r.hiddenByUser) out.hidden_rows.push(i + 1); if (r.hiddenByFilter) out.filtered_rows.push(i + 1); });
   (d.columnMetadata || []).forEach(function (c, i) { if (c.hiddenByUser) out.hidden_cols.push(i + 1); out.widths.push(c.pixelSize || 0); });
   (d.rowData || []).forEach(function (row, r) {
     (row.values || []).forEach(function (cell, c) {
+      if (cell.dataValidation) { var dv = cell.dataValidation, a1v = colLetter_(c + 1) + (r + 1); out.side.validations[a1v] = { type: dv.condition ? dv.condition.type : '', values: dv.condition ? (dv.condition.values || []).map(function (x) { return x.userEnteredValue || x.relativeDate || ''; }) : [], strict: !!dv.strict }; }
       var uv = cell.userEnteredValue || {}, ev = cell.effectiveValue || {}, uf = cell.userEnteredFormat || {}, ef = cell.effectiveFormat || {};
       var fv = cell.formattedValue === undefined ? '' : cell.formattedValue;
       var bd = false, b = ef.borders || {};
@@ -78,14 +108,15 @@ function trialSnapSheet_(sh) {
   return out;
 }
 
-var TRIAL_SNAP_FIELDS = 'sheets(properties(sheetId,title,index,hidden,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount)),merges,conditionalFormats(ranges),' +
+var TRIAL_SNAP_FIELDS = 'namedRanges,sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount)),merges,' +
+  'basicFilter,conditionalFormats,protectedRanges(range,warningOnly),charts(chartId,spec(title,basicChart(chartType),pieChart(legendPosition))),bandedRanges(range),rowGroups,columnGroups,' +
   'data(rowMetadata(hiddenByUser,hiddenByFilter),columnMetadata(hiddenByUser,pixelSize),rowData(values(formattedValue,userEnteredValue,effectiveValue,' +
-  'userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor)),effectiveFormat(backgroundColor,textFormat(bold,foregroundColor),numberFormat,borders)))))';
+  'dataValidation,userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor)),effectiveFormat(backgroundColor,textFormat(bold,foregroundColor),numberFormat,borders)))))';
 
 // 今の状態を撮る（Sheets API の spreadsheets.get を 1 回）
 function trialSnap_(ss) {
   var resp = Sheets.Spreadsheets.get(ss.getId(), { includeGridData: true, fields: TRIAL_SNAP_FIELDS });
-  return { name: ss.getName(), sheets: (resp.sheets || []).map(trialSnapSheet_) };
+  return { name: ss.getName(), sheets: (resp.sheets || []).map(trialSnapSheet_), named: (resp.namedRanges || []).map(function (n) { return { name: n.name, range: trialRng_(n.range) }; }) };
 }
 
 // ---------------------------------------------------------------- 入口

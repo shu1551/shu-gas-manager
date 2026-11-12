@@ -366,12 +366,22 @@ def check(client=None, out=print, state_path=STATE_FILE, prod_state_path=PROD_ST
     st["recorded"] = [k[2] for k in kept]          # 送らなかった物だけ記録に残す
     save_state(st, state_path)
 
-    # 5. 本番のエンジンの台帳と控えのブックが、試験の前後で 1 件も変わらない
-    after = _prod_snapshot(client, drive, prod_state_path)
-    same_ledger = (before["ledger"] or {}).get("raw") == (after["ledger"] or {}).get("raw")
-    same_backup = before.get("backup_modified") == after.get("backup_modified")
-    rec("本番のエンジンの台帳が前後で同じ", same_ledger, f"件数 {(before['ledger'] or {}).get('count')} → {(after['ledger'] or {}).get('count')}")
-    rec("本番の控えのブックが前後で同じ（更新時刻）", same_backup, f"{before.get('backup_modified')} → {after.get('backup_modified')}")
+    # 5. 本番のエンジンの台帳と控えのブックが、試験の前後で 1 件も変わらない。
+    #    試験用のエンジンの trial（流し込む→撮る→撃つ→撮る→戻す→撮る）だけを挟んだ短い窓で見る
+    #    （ほかの人が本番を使っている時間に当たると、長い窓では本番の台帳が動くので、長い窓は参考にとどめる）
+    wide = before
+    pre = _prod_snapshot(client, drive, prod_state_path)
+    payload = gas_ws_tables.seed_payload(gas_ws_tables.load_table("meibo_base"))
+    tr = eng.trial_post("trial", id=sandbox, seed=payload, ops=[{"shelf": "total", "label": "合計"}, {"shelf": "format", "range": "A1:F1", "bold": True}])
+    rec("trial（流し込む→撮る→撃つ→撮る→戻す→撮る）が 1 回の POST で通る", bool(tr.get("ok") and tr.get("a") and tr.get("b")) and "do" in tr,
+        f"控えが {tr.get('backups_added')} 回増えた（試験用の台帳）・戻した: {'ok' if (tr.get('undo') or {}).get('ok') else (tr.get('undo') or {}).get('error', '戻していない')}")
+    post = _prod_snapshot(client, drive, prod_state_path)
+    same_ledger = (pre["ledger"] or {}).get("raw") == (post["ledger"] or {}).get("raw")
+    same_backup = pre.get("backup_modified") == post.get("backup_modified")
+    rec("本番のエンジンの台帳が試験の前後で同じ", same_ledger, f"件数 {(pre['ledger'] or {}).get('count')} → {(post['ledger'] or {}).get('count')}（試験の命令を撃った短い窓）")
+    rec("本番の控えのブックが試験の前後で同じ（更新時刻）", same_backup, f"{pre.get('backup_modified')} → {post.get('backup_modified')}")
+    if (wide["ledger"] or {}).get("raw") != (post["ledger"] or {}).get("raw"):
+        out("[参考] この確かめ全体の間に、本番の台帳が動いています（別の人が本番を使った時間。試験の命令は本番へ撃っていません）")
     if memo_path:
         lines = ["# 段 T0 実機の確かめ", ""] + [("- [OK] " if ok else "- [NG] ") + f"{n} ／ {d}" for n, ok, d in results]
         Path(memo_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
