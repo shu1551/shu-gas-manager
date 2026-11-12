@@ -24,3 +24,4 @@ gas_local_extras.py
 queue/
 .ws_state.json
 .ws_ledger.json
+.ws_engine_all.gs

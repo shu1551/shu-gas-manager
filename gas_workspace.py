@@ -16,36 +16,21 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import gas_ws_catalog
+
 HERE = Path(__file__).resolve().parent
-ENGINE_SOURCE = HERE / "workspace_engine.gs"
+ENGINE_COMMON = HERE / "workspace_engine.gs"      # 共通部（入口・控え・戻し・台帳・look・render・手伝い）。棚は置かない
+SHELF_DIR = HERE / "ws_shelves"                   # 棚（札つき）。道具が *.gs を全部読む
+ENGINE_SOURCE = HERE / ".ws_engine_all.gs"        # 共通部＋Catalog＋棚をつないだ全文（GAS に入れる形・道具が作る・git に入れない）
 ENGINE_TITLE = "shu-workspace-engine"
 RETRY_MAX = 3
 
 MIME_SHEET = "application/vnd.google-apps.spreadsheet"
 MIME_DOC = "application/vnd.google-apps.document"
 
-# 棚: kind = sheet|doc / req = 必須 / any = どれか 1 つ必須 / keys = 使える引数
-SHELVES = {
-    "table.new":   dict(kind="sheet", req=["headers"], keys=["title", "headers", "rows", "sheet", "number", "total", "label", "tidy"]),
-    "sheet.add":   dict(kind="sheet", any=["name", "rename", "move"], keys=["name", "before", "rename", "move"]),
-    "tidy":        dict(kind="sheet", keys=["sheet", "range"]),
-    "seiri":       dict(kind="sheet", keys=["sheet", "trim", "halfwidth", "numbers", "blank_rows", "dedupe", "renumber", "tidy"]),
-    "renumber":    dict(kind="sheet", req=["col"], keys=["sheet", "col", "start"]),
-    "width":       dict(kind="sheet", any=["cols", "col", "rows", "auto"], keys=["sheet", "cols", "col", "width", "rows", "auto"]),
-    "total":       dict(kind="sheet", keys=["sheet", "cols", "label"]),
-    "summary":     dict(kind="sheet", req=["by", "values"], keys=["sheet", "by", "values", "func", "into"]),
-    "sort":        dict(kind="sheet", any=["col", "filter", "where"], keys=["sheet", "col", "desc", "filter", "where"]),
-    "write":       dict(kind="sheet", any=["cells", "tsv"], keys=["sheet", "cells", "range", "tsv"]),
-    "format":      dict(kind="sheet", any=["range", "col", "header"], keys=["sheet", "range", "col", "header", "bold", "italic", "color", "bg", "size", "font", "number_format", "align", "valign", "wrap", "borders", "merge"]),
-    "rows":        dict(kind="sheet", any=["rows", "cols"], keys=["sheet", "action", "rows", "cols", "at", "count", "from", "to"]),
-    "replace":     dict(kind="sheet", req=["find"], keys=["sheet", "find", "with", "range", "match_case", "whole"]),
-    "doc.new":     dict(kind="doc", req=["markdown"], keys=["markdown"]),
-    "doc.append":  dict(kind="doc", req=["markdown"], keys=["markdown", "under"]),
-    "doc.replace": dict(kind="doc", req=["find"], keys=["find", "with", "match_case"]),
-    "doc.section": dict(kind="doc", req=["heading"], keys=["heading", "action", "markdown"]),
-    "doc.table":   dict(kind="doc", any=["rows", "text"], keys=["action", "rows", "under", "table", "row", "col", "text"]),
-    "doc.style":   dict(kind="doc", keys=["font", "size", "line_spacing"]),
-}
+CATALOG = gas_ws_catalog.load(SHELF_DIR)
+# 棚の検査表（kind / req / any / keys）は棚の札から作る。手では書かない
+SHELVES = CATALOG.specs()
 
 
 class WorkspaceError(Exception):
@@ -60,8 +45,21 @@ class WorkspaceTimeout(WorkspaceError):
     pass
 
 
-def _file_hash(path=ENGINE_SOURCE):
-    return hashlib.sha1(Path(path).read_bytes()).hexdigest()[:8]
+def _engine_texts(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
+    """GAS に入れる順の (名前, 本文): 共通部 → Catalog（札から作る）→ 棚のファイル（名前の順）"""
+    cat = gas_ws_catalog.load(shelf_dir)
+    out = [("Engine", Path(common_path).read_text(encoding="utf-8")), ("Catalog", gas_ws_catalog.build_catalog_gs(cat))]
+    for p in gas_ws_catalog.shelf_files(shelf_dir):
+        out.append((p.stem, p.read_text(encoding="utf-8")))
+    return out
+
+
+def _file_hash(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
+    """版の指紋: 入れる全ファイルの連結から取る"""
+    h = hashlib.sha1()
+    for _, text in _engine_texts(common_path, shelf_dir):
+        h.update(text.encode("utf-8"))
+    return h.hexdigest()[:8]
 
 
 def _digest(*parts):
@@ -72,10 +70,12 @@ def _digest(*parts):
 
 
 class WorkspaceManager:
-    def __init__(self, client=None, state_path=None, engine_path=None):
+    def __init__(self, client=None, state_path=None, engine_path=None, shelf_dir=None):
         self._client = client
         self.state_path = Path(state_path) if state_path else HERE / ".ws_state.json"
-        self.engine_path = Path(engine_path) if engine_path else ENGINE_SOURCE
+        self.engine_path = Path(engine_path) if engine_path else ENGINE_COMMON
+        self.shelf_dir = Path(shelf_dir) if shelf_dir else (self.engine_path.parent / "ws_shelves")
+        self.catalog = CATALOG if self.shelf_dir.resolve() == SHELF_DIR.resolve() else gas_ws_catalog.load(self.shelf_dir)
 
     # ------------------------------------------------------------ 状態
     @property
@@ -103,11 +103,13 @@ class WorkspaceManager:
     def engine_version(self):
         text = self.engine_path.read_text(encoding="utf-8")
         m = re.search(r"var ENGINE_VERSION = '([^']*)'", text)
-        return f"{m.group(1) if m else 'ws'}+{_file_hash(self.engine_path)}"
+        return f"{m.group(1) if m else 'ws'}+{_file_hash(self.engine_path, self.shelf_dir)}"
 
-    def _engine_files(self):
-        text = self.engine_path.read_text(encoding="utf-8")
-        text = re.sub(r"var ENGINE_VERSION = '[^']*';", f"var ENGINE_VERSION = '{self.engine_version()}';", text, count=1)
+    def _engine_files(self, split=False):
+        """GAS に入れるファイル。既定は appsscript と、全部をつないだ 1 本の Engine（順番は共通部 → Catalog → 棚）。
+        split=True は共通部・Catalog・棚のファイルごとに分ける（設計書の形）"""
+        texts = _engine_texts(self.engine_path, self.shelf_dir)
+        texts[0] = (texts[0][0], re.sub(r"var ENGINE_VERSION = '[^']*';", f"var ENGINE_VERSION = '{self.engine_version()}';", texts[0][1], count=1))
         manifest = {
             "timeZone": "Asia/Tokyo", "exceptionLogging": "STACKDRIVER", "runtimeVersion": "V8",
             # 目（render）が罫線を読むのに Sheets の高度なサービスを使う（許可は spreadsheets のまま増えない）
@@ -115,8 +117,10 @@ class WorkspaceManager:
             "oauthScopes": ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/documents"],
             "webapp": {"executeAs": "USER_DEPLOYING", "access": "MYSELF"},
         }
-        return [{"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, indent=2)},
-                {"name": "Engine", "type": "SERVER_JS", "source": text}]
+        head = {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, indent=2)}
+        if split:
+            return [head] + [{"name": n, "type": "SERVER_JS", "source": s} for n, s in texts]
+        return [head, {"name": "Engine", "type": "SERVER_JS", "source": "\n".join(s for _, s in texts)}]
 
     def _find_engine_sid(self):
         q = f"mimeType='application/vnd.google-apps.script' and name='{ENGINE_TITLE}' and trashed=false"
@@ -231,44 +235,22 @@ class WorkspaceManager:
         if isinstance(ops, dict):
             ops = [ops]
         if not isinstance(ops, list) or not ops:
-            raise WorkspaceError("ops は棚の JSON 配列です。例: [{\"shelf\":\"tidy\"}]。棚の一覧: " + "、".join(SHELVES))
+            raise WorkspaceError("ops は棚の JSON 配列です。例: [{\"shelf\":\"棚の名前\", …引数}]。棚の一覧: " + "、".join(SHELVES))
         return ops
 
     def validate_ops(self, ops):
+        """棚の札（引数: どれか:）から形を検査する。意味（列があるか・範囲が表の中か）はエンジンが見る"""
         kinds = set()
         for i, op in enumerate(ops, 1):
             if not isinstance(op, dict) or not isinstance(op.get("shelf"), str):
-                raise WorkspaceError(f"{i} 番目の ops に \"shelf\"（棚の名前）がありません。棚の一覧: " + "、".join(SHELVES))
+                raise WorkspaceError(f"{i} 番目の ops に \"shelf\"（棚の名前）がありません。棚の一覧: " + "、".join(self.catalog.names()))
             name = op["shelf"]
-            spec = SHELVES.get(name)
+            spec = self.catalog.spec(name)
             if not spec:
-                raise WorkspaceError(f"棚「{name}」はありません（{i} 番目）。あるのは: " + "、".join(SHELVES))
-            for k in op:
-                if k != "shelf" and k not in spec["keys"]:
-                    raise WorkspaceError(f"棚「{name}」（{i} 番目）に引数「{k}」はありません。使えるのは: " + "、".join(spec["keys"]))
-            for k in spec.get("req", []):
-                if op.get(k) in (None, "", []):
-                    raise WorkspaceError(f"棚「{name}」（{i} 番目）に「{k}」が要ります。")
-            if spec.get("any") and not any(op.get(k) not in (None, "", []) for k in spec["any"]):
-                raise WorkspaceError(f"棚「{name}」（{i} 番目）に " + "・".join(spec["any"]) + " のどれかが要ります。")
-            if name == "table.new":
-                if not isinstance(op["headers"], list):
-                    raise WorkspaceError(f"棚「table.new」の headers は配列です（{i} 番目）。")
-                rows = op.get("rows", [])
-                if not isinstance(rows, list) or any(not isinstance(r, list) for r in rows):
-                    raise WorkspaceError(f"棚「table.new」の rows は行の配列の配列です（{i} 番目）。")
-            if name == "rows" and op.get("action", "delete") not in ("insert", "delete", "move"):
-                raise WorkspaceError("棚「rows」の action は insert・delete・move です。")
-            if name == "rows" and not op.get("rows") and not op.get("cols") and op.get("action") != "insert":
-                raise WorkspaceError("棚「rows」に rows（行番号の配列）か cols が要ります。")
-            if name == "rows":
-                for r in (op.get("rows") or []):
-                    if isinstance(r, int) and r < 1:
-                        raise WorkspaceError(f"棚「rows」の行番号は 1 以上です（{r} は指定できません）。")
-            if name == "doc.section" and op.get("action", "replace") not in ("replace", "delete"):
-                raise WorkspaceError("棚「doc.section」の action は replace・delete です。")
-            if name == "doc.section" and op.get("action", "replace") == "replace" and not op.get("markdown"):
-                raise WorkspaceError("棚「doc.section」の replace には markdown が要ります。")
+                raise WorkspaceError(f"棚「{name}」はありません（{i} 番目）。あるのは: " + "、".join(self.catalog.names()))
+            msg = self.catalog.check_op(i, op)
+            if msg:
+                raise WorkspaceError(msg)
             kinds.add(spec["kind"])
         if len(kinds) > 1:
             raise WorkspaceError("スプレッドシートの棚と文書の棚は、同じ ws_do にまとめられません。")
@@ -306,6 +288,7 @@ class WorkspaceManager:
     def do(self, ops, target="", ok=False):
         ops = self.parse_ops(ops)
         kind = self.validate_ops(ops)
+        ops = [self.catalog.normalize_op(o) for o in ops]   # 列[]・行[] に 1 つだけ渡された値を配列にそろえる
         st = self._load()
         tgt, is_new = self.resolve_target(target, kind, st)
         if tgt.get("kind") and tgt["kind"] != kind:
@@ -495,3 +478,18 @@ class WorkspaceManager:
         if res.get("needs_ok"):
             return "\n".join([self._title(t), "止めました: " + msg])
         return "戻せませんでした: " + msg
+
+
+def write_engine_all(path=ENGINE_SOURCE):
+    """共通部＋Catalog＋棚をつないだ全文を書く（中身が同じなら触らない）。GAS に入れる Engine と同じ並び"""
+    text = "\n".join(s for _, s in _engine_texts())
+    path = Path(path)
+    try:
+        if not path.exists() or path.read_text(encoding="utf-8") != text:
+            path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    return path
+
+
+write_engine_all()
