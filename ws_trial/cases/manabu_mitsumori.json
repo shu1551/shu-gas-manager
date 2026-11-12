@@ -1,0 +1,110 @@
+[
+  {
+    "id": "mit-01",
+    "table": "mitsumori_base",
+    "kind": "集計",
+    "layer": "L2b",
+    "tags": ["K3"],
+    "turns": [{"say": "金額の合計行を下に追加して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"値": {"位置": "最後", "式": "SUM"}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "total", "cols": ["金額"]}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "mit-02",
+    "table": "mitsumori_dirty",
+    "kind": "整える",
+    "layer": "L2b",
+    "tags": ["K4"],
+    "turns": [{"say": "表の空行や全角の数字を直して整えて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"整え済み": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "seiri"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "mit-03",
+    "table": "mitsumori_dirty_low",
+    "kind": "整える",
+    "layer": "L2b",
+    "tags": ["K4"],
+    "turns": [{"say": "下の方にある行も含めて余分な空白と空行を直して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"空白行なし": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "seiri"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "mit-04",
+    "table": "mitsumori_quirk",
+    "kind": "見た目",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "表全体を見やすく整えて列幅も合わせて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"整え済み": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "tidy"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "mit-05",
+    "table": "mitsumori_base",
+    "kind": "守る",
+    "layer": "L2b",
+    "tags": ["K7"],
+    "turns": [{"say": "E2:E15の範囲を書き換えられないように保護して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"保護あり": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "protect.range", "range": "E2:E15"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "mit-06",
+    "table": "mitsumori_base",
+    "kind": "複合",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "しましまの交互の色を付けて、見出し行も固定して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"交互の色あり": true}, {"固定": {"行": 1}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "banding.add"}, {"shelf": "freeze", "rows": 1}],
+    "may_change": [],
+    "max_calls": 6
+  },
+  {
+    "id": "mit-07",
+    "table": "mitsumori_dirty",
+    "kind": "入力",
+    "layer": "L2b",
+    "tags": ["K4"],
+    "turns": [{"say": "C2:C20の数量列には数字しか入らないようにして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"入力規則あり": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "validation.number", "range": "C2:C20"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "mit-08",
+    "table": "mitsumori_base",
+    "kind": "棚なし",
+    "layer": "L2b",
+    "tags": ["K0"],
+    "turns": [{"say": "会社の角印の画像をシートの右下に貼り付けて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"断る": true}]}}],
+    "if_asked": {},
+    "model": [],
+    "may_change": [],
+    "max_calls": 2
+  },
+  {
+    "id": "mit-09",
+    "table": "mitsumori_quirk",
+    "kind": "危ない",
+    "layer": "L2b",
+    "tags": ["K5"],
+    "turns": [{"say": "古い明細行を消して", "approve": "まだ", "askback": "する", "expect": {"条件": [{"聞き返し": true}]}}],
+    "if_asked": {},
+    "model": [],
+    "may_change": [],
+    "max_calls": 2
+  }
+]

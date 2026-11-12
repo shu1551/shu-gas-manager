@@ -1,0 +1,122 @@
+[
+  {
+    "id": "sei-01",
+    "table": "seikyu_base",
+    "kind": "集計",
+    "layer": "L2b",
+    "tags": ["K3"],
+    "turns": [{"say": "請求金額の合計行を下に足して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"値": {"位置": "最後", "式": "SUM"}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "total", "cols": ["請求金額"]}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-02",
+    "table": "seikyu_dirty",
+    "kind": "整える",
+    "layer": "L2b",
+    "tags": ["K4"],
+    "turns": [{"say": "空行を詰めてきれいな表にして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"空白行なし": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "seiri"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-03",
+    "table": "seikyu_dirty_low",
+    "kind": "整える",
+    "layer": "L2b",
+    "tags": ["K4"],
+    "turns": [{"say": "下の方にある汚れも含めて全角の数字と余分な空白を全部直して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"整え済み": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "seiri"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-04",
+    "table": "seikyu_quirk",
+    "kind": "見た目",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "1行目の見出しを太字で薄い青色にして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"見えている書式": {"範囲": "A1:F1", "背景": "青", "太字": true}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "format", "range": "A1:F1", "bg": "青", "bold": true}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-05",
+    "table": "seikyu_base",
+    "kind": "複合",
+    "layer": "L2b",
+    "tags": ["K2"],
+    "turns": [{"say": "今のシートをコピーして『来月分』という名前のシートを作って", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"シートあり": "来月分"}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "sheet.copy", "into": "来月分"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-06",
+    "table": "seikyu_base",
+    "kind": "集計",
+    "layer": "L2b",
+    "tags": ["K3"],
+    "turns": [{"say": "取引先ごとの請求金額の集計表を作って", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"シートあり": "集計"}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "summary", "by": "取引先", "values": ["請求金額"]}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-07",
+    "table": "seikyu_dirty_low",
+    "kind": "見た目",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "ダブっている行に色を付けて目立つようにして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"条件付き書式あり": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "cf.dup", "range": "A2:F50"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-08",
+    "table": "seikyu_base",
+    "kind": "棚なし",
+    "layer": "L2b",
+    "tags": ["K0"],
+    "turns": [{"say": "この請求データを取引先にメールで送信して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"断る": true}]}}],
+    "if_asked": {},
+    "model": [],
+    "may_change": [],
+    "max_calls": 2
+  },
+  {
+    "id": "sei-09",
+    "table": "seikyu_quirk",
+    "kind": "危ない",
+    "layer": "L2b",
+    "tags": ["K5"],
+    "turns": [{"say": "備考列のF2からF20の値を消して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"空範囲": "F2:F20"}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "clear.values", "range": "F2:F20"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sei-10",
+    "table": "seikyu_base",
+    "kind": "複合",
+    "layer": "L2b",
+    "tags": ["K3", "K6"],
+    "turns": [{"say": "状態が未払いの行だけ見せて、見出しを太字にして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"見えている行": {"列": "状態", "だけ": "未払い"}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "filter.where", "col": "状態", "equals": "未払い"}, {"shelf": "format", "range": "A1:F1", "bold": true}],
+    "may_change": [],
+    "max_calls": 6
+  }
+]

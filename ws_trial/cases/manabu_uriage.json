@@ -1,0 +1,122 @@
+[
+  {
+    "id": "uri-01",
+    "table": "uriage_base",
+    "kind": "集計",
+    "layer": "L2b",
+    "tags": ["K3"],
+    "turns": [{"say": "金額の合計行を下に足して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"値": {"位置": "最後", "式": "SUM"}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "total", "cols": ["金額"]}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "uri-02",
+    "table": "uriage_base",
+    "kind": "並べる",
+    "layer": "L2b",
+    "tags": ["K3"],
+    "turns": [{"say": "日付の古い順に並べ替えて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"並び": {"列": "日付", "向き": "昇順"}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "sort", "col": "日付", "desc": false}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "uri-03",
+    "table": "uriage_dirty",
+    "kind": "整える",
+    "layer": "L2b",
+    "tags": ["K4"],
+    "turns": [{"say": "余計な空白や空行をきれいにして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"空白行なし": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "seiri"}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "uri-04",
+    "table": "uriage_dirty",
+    "kind": "複合",
+    "layer": "L2b",
+    "tags": ["K4", "K3"],
+    "turns": [{"say": "表をきれいに整えてから得意先ごとの金額の集計表を作って", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"シートあり": "集計"}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "seiri"}, {"shelf": "summary", "by": "得意先", "values": ["金額"]}],
+    "may_change": [],
+    "max_calls": 6
+  },
+  {
+    "id": "uri-05",
+    "table": "uriage_quirk",
+    "kind": "見た目",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "スクロールしても見出しが動かないようにして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"固定": {"行": 1}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "freeze", "rows": 1}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "uri-06",
+    "table": "uriage_base",
+    "kind": "複合",
+    "layer": "L2b",
+    "tags": ["K6", "K3"],
+    "turns": [{"say": "1行おきに色を付けて、売上の棒グラフも作って", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"グラフあり": "縦棒"}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "banding.add"}, {"shelf": "chart.new", "type": "column"}],
+    "may_change": [],
+    "max_calls": 6
+  },
+  {
+    "id": "uri-07",
+    "table": "uriage_base",
+    "kind": "棚なし",
+    "layer": "L2b",
+    "tags": ["K0"],
+    "turns": [{"say": "このシートをPDFにしてメールで送って", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"断る": true}]}}],
+    "if_asked": {},
+    "model": [],
+    "may_change": [],
+    "max_calls": 2
+  },
+  {
+    "id": "uri-08",
+    "table": "uriage_base",
+    "kind": "危ない",
+    "layer": "L2b",
+    "tags": ["K5"],
+    "turns": [{"say": "3行目と4行目を消して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"行数減": 2}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "rows.delete", "rows": [3, 4]}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "uri-09",
+    "table": "uriage_dirty",
+    "kind": "危ない",
+    "layer": "L2b",
+    "tags": ["K5"],
+    "turns": [{"say": "いらない行を消して", "approve": "まだ", "askback": "する", "expect": {"条件": [{"聞き返し": true}]}}],
+    "if_asked": {},
+    "model": [],
+    "may_change": [],
+    "max_calls": 2
+  },
+  {
+    "id": "uri-10",
+    "table": "uriage_quirk",
+    "kind": "見た目",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "金額が100000以上の行を目立たせて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"条件付き書式あり": true}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "cf.add", "range": "A2:G20", "when": "ge", "value": "100000", "bg": "赤"}],
+    "may_change": [],
+    "max_calls": 4
+  }
+]

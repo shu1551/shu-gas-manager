@@ -1,0 +1,74 @@
+[
+  {
+    "id": "sca-01",
+    "table": "scale_big",
+    "kind": "集計",
+    "layer": "L2b",
+    "tags": ["K3"],
+    "turns": [{"say": "金額の合計行を一番下に追加して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"値": {"位置": "最後", "式": "SUM"}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "total", "cols": ["金額"]}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sca-02",
+    "table": "scale_big",
+    "kind": "並べる",
+    "layer": "L2b",
+    "tags": ["K3"],
+    "turns": [{"say": "金額の大きい順に並べて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"並び": {"列": "金額", "向き": "降順"}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "sort", "col": "金額", "desc": true}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sca-03",
+    "table": "scale_empty",
+    "kind": "作る",
+    "layer": "L2b",
+    "tags": ["K1"],
+    "turns": [{"say": "見出しが『名前』と『金額』の新しい表を作って", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"シートあり": "表"}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "table.new", "headers": ["名前", "金額"]}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sca-04",
+    "table": "scale_header",
+    "kind": "見た目",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "1行目の見出しを太字で青い背景にして", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"見えている書式": {"範囲": "A1:E1", "背景": "青", "太字": true}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "format", "range": "A1:E1", "bg": "青", "bold": true}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sca-05",
+    "table": "scale_one",
+    "kind": "見た目",
+    "layer": "L2b",
+    "tags": ["K6"],
+    "turns": [{"say": "1行目がスクロールしても動かないように固定して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"固定": {"行": 1}}]}}],
+    "if_asked": {},
+    "model": [{"shelf": "freeze", "rows": 1}],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "sca-06",
+    "table": "scale_big",
+    "kind": "棚なし",
+    "layer": "L2b",
+    "tags": ["K0"],
+    "turns": [{"say": "この大きな表を1000行ずつの別々のスプレッドシートファイルに分割して", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"断る": true}]}}],
+    "if_asked": {},
+    "model": [],
+    "may_change": [],
+    "max_calls": 2
+  }
+]
