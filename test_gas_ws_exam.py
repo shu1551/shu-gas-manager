@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 
@@ -162,4 +163,4 @@ def test_default_ai_is_headless_claude_code_sonnet(monkeypatch):
         return R()
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert ex.claude_code_ask("頼み") == '[{"shelf":"tidy"}]'
-    assert seen["cmd"][:4] == ["claude", "-p", "--model", "sonnet"] and seen["input"] == "頼み".encode("utf-8")
+    assert Path(seen["cmd"][0]).stem.lower() == "claude" and seen["cmd"][1:4] == ["-p", "--model", "sonnet"] and seen["input"] == "頼み".encode("utf-8")

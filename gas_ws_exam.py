@@ -13,7 +13,9 @@ gas_ws_exam.py - AI を通した試験 `py gas.py ws-exam --ai [--n 30]`（設�
 """
 
 import json
+import os
 import re
+import shutil
 import subprocess
 
 import gas_workspace
@@ -74,8 +76,11 @@ def parse_ops_from(text):
 
 def claude_code_ask(prompt, model=DEFAULT_MODEL, timeout=AI_TIMEOUT):
     """既定の AI: ヘッドレスの Claude Code（`claude -p`）。鍵は要らない。実在のファイルには触らせない（道具を許さない）"""
-    r = subprocess.run(["claude", "-p", "--model", model, "--disallowedTools", "Bash,Edit,Write,Read"],
-                       input=prompt.encode("utf-8"), capture_output=True, timeout=timeout)
+    exe = shutil.which("claude") or "claude"   # Windows は claude.cmd（npm）なので名前だけでは見つからない
+    # Windows で Bash だけ禁じると「PowerShell も無くなる」で止まるので、PowerShell の道具を有効にしてから両方禁じる
+    env = dict(os.environ, CLAUDE_CODE_USE_POWERSHELL_TOOL="1")
+    r = subprocess.run([exe, "-p", "--model", model, "--disallowedTools", "Bash,PowerShell,Edit,Write,Read"],
+                       input=prompt.encode("utf-8"), capture_output=True, timeout=timeout, env=env)
     if r.returncode != 0:
         raise RuntimeError("claude -p が失敗しました: " + r.stderr.decode("utf-8", "replace")[:200])
     return r.stdout.decode("utf-8", "replace")
