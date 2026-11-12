@@ -761,6 +761,96 @@ function actUndo_(req) {
 
 // ---------------------------------------------------------------- look
 
+
+// ---------------------------------------------------------------- ws_look: 脇の状態（あるときだけ短く 1 行ずつ）
+// AI が「このセルにはもうプルダウンがある」「ここは保護されている」を知らずに撃たないための知らせ。無ければ何も出さない
+function gridA1_(g) {
+  if (!g) return '';
+  var r0 = g.startRowIndex || 0, c0 = g.startColumnIndex || 0;
+  if (g.startRowIndex === undefined && g.endRowIndex === undefined && g.startColumnIndex === undefined && g.endColumnIndex === undefined) return 'シート全体';
+  var a = colLetter_(c0 + 1) + (r0 + 1);
+  var r1 = g.endRowIndex, c1 = g.endColumnIndex;
+  if (r1 === undefined && c1 === undefined) return a;
+  if ((r1 === undefined || r1 === r0 + 1) && (c1 === undefined || c1 === c0 + 1)) return a;
+  return a + ':' + (c1 !== undefined ? colLetter_(c1) : '') + (r1 !== undefined ? r1 : '');
+}
+function numRuns_(idx0) {   // 0 始まりの添字の並び → 「9、20-22」（1 始まり）
+  var out = [], s = -1, prev = -2;
+  idx0.forEach(function (i) { if (i === prev + 1) { prev = i; return; } if (s >= 0) out.push(s === prev ? '' + (s + 1) : (s + 1) + '-' + (prev + 1)); s = i; prev = i; });
+  if (s >= 0) out.push(s === prev ? '' + (s + 1) : (s + 1) + '-' + (prev + 1));
+  return out;
+}
+function colRuns_(idx0) { return numRuns_(idx0).map(function (x) { return x.replace(/\d+/g, function (n) { return colLetter_(parseInt(n, 10)); }); }); }
+function capList_(arr, n) { return arr.length > n ? arr.slice(0, n).concat(['ほか ' + (arr.length - n)]) : arr; }
+var CHART_NAMES = { COLUMN: '縦棒', BAR: '横棒', LINE: '折れ線', PIE: '円', AREA: '面', SCATTER: '散布図', COMBO: '複合', STEPPED_AREA: '階段面' };
+function validationLabel_(v) {
+  var c = v.condition || {}, vals = (c.values || []).map(function (x) { return x.userEnteredValue || ''; });
+  if (c.type === 'ONE_OF_LIST') return 'プルダウン（' + vals.slice(0, 4).join('/') + (vals.length > 4 ? '…' : '') + '）';
+  if (c.type === 'ONE_OF_RANGE') return 'プルダウン（範囲 ' + String(vals[0] || '').replace(/^=/, '') + '）';
+  if (c.type === 'BOOLEAN') return 'チェックボックス';
+  if (/^NUMBER_/.test(c.type)) return '数値の入力規則';
+  if (/^DATE_/.test(c.type)) return '日付の入力規則';
+  return String(c.type || '入力規則');
+}
+function lookSide_(ss, sh) {
+  var lines = [], id = sh.getSheetId();
+  var r1 = Sheets.Spreadsheets.get(ss.getId(), { fields: 'namedRanges,sheets(properties(sheetId),basicFilter,rowGroups,columnGroups,protectedRanges(range,warningOnly),charts(spec(title,basicChart(chartType),pieChart(legendPosition))),bandedRanges(range))' });
+  var x = (r1.sheets || []).filter(function (s) { return s.properties.sheetId === id; })[0] || {};
+  var maxR = Math.min(sh.getLastRow(), 2000), maxC = Math.min(sh.getLastColumn(), 60), d = null;
+  if (maxR > 0 && maxC > 0) {
+    var r2 = Sheets.Spreadsheets.get(ss.getId(), { includeGridData: true, ranges: [q_(sh.getName()) + '!A1:' + colLetter_(maxC) + maxR],
+      fields: 'sheets(properties(sheetId),data(rowMetadata(hiddenByUser),columnMetadata(hiddenByUser),rowData(values(dataValidation))))' });
+    d = (((r2.sheets || [])[0] || {}).data || [])[0] || null;
+  }
+  // 入力規則: 同じ規則のセルを、列ごとの行の連なりにして範囲で書く
+  if (d && d.rowData) {
+    var bySig = {};
+    d.rowData.forEach(function (row, r) { (row.values || []).forEach(function (cell, c) { if (cell.dataValidation) { var k = validationLabel_(cell.dataValidation); (bySig[k] = bySig[k] || []).push([r, c]); } }); });
+    var vparts = [];
+    Object.keys(bySig).forEach(function (k) {
+      var cols = {}; bySig[k].forEach(function (rc) { (cols[rc[1]] = cols[rc[1]] || []).push(rc[0]); });
+      var runsByKey = {};
+      Object.keys(cols).map(Number).sort(function (a, b) { return a - b; }).forEach(function (c) {
+        numRuns_(cols[c]).forEach(function (rr) { var m = rr.split('-'); var key = rr; (runsByKey[key] = runsByKey[key] || { r: m, cols: [] }).cols.push(c); });
+      });
+      Object.keys(runsByKey).forEach(function (key) {
+        var o = runsByKey[key], cs = o.cols, st = cs[0], pv = cs[0];
+        for (var i = 1; i <= cs.length; i++) {
+          if (i < cs.length && cs[i] === pv + 1) { pv = cs[i]; continue; }
+          var a = colLetter_(st + 1) + o.r[0], b = colLetter_(pv + 1) + (o.r[1] || o.r[0]);
+          vparts.push((a === b ? a : a + ':' + b) + ' ' + k); if (i < cs.length) { st = cs[i]; pv = cs[i]; }
+        }
+      });
+    });
+    if (vparts.length) lines.push('入力規則: ' + capList_(vparts, 4).join('、'));
+  }
+  (x.bandedRanges || []).length && lines.push('交互の色: ' + capList_((x.bandedRanges || []).map(function (b) { return gridA1_(b.range); }), 3).join('、'));
+  var prot = (x.protectedRanges || []).map(function (q) { return gridA1_(q.range) + (q.warningOnly ? '（警告のみ）' : ''); });
+  if (prot.length) lines.push('保護: ' + capList_(prot, 3).join('、'));
+  if (x.basicFilter) {
+    var f = x.basicFilter, cr = Object.keys(f.criteria || {}).map(function (k) { return colLetter_(parseInt(k, 10) + 1); });
+    lines.push('フィルタ: ' + gridA1_(f.range) + (cr.length ? '（' + cr.join('・') + ' 列で絞り込み中）' : ''));
+  }
+  if (d) {
+    var hr = [], hc = [];
+    (d.rowMetadata || []).forEach(function (m, i) { if (m && m.hiddenByUser) hr.push(i); });
+    (d.columnMetadata || []).forEach(function (m, i) { if (m && m.hiddenByUser) hc.push(i); });
+    var hp = [];
+    if (hr.length) hp.push('隠した行: ' + capList_(numRuns_(hr), 4).join('、'));
+    if (hc.length) hp.push('隠した列: ' + capList_(colRuns_(hc), 4).join('、'));
+    if (hp.length) lines.push(hp.join(' ／ '));
+  }
+  var gp = [];
+  (x.rowGroups || []).forEach(function (g) { gp.push('行 ' + ((g.range.startIndex || 0) + 1) + '-' + g.range.endIndex + '（深さ' + g.depth + (g.collapsed ? '・畳んである' : '') + '）'); });
+  (x.columnGroups || []).forEach(function (g) { gp.push('列 ' + colLetter_((g.range.startIndex || 0) + 1) + '-' + colLetter_(g.range.endIndex) + '（深さ' + g.depth + (g.collapsed ? '・畳んである' : '') + '）'); });
+  if (gp.length) lines.push('グループ: ' + capList_(gp, 3).join('、'));
+  var nm = (r1.namedRanges || []).map(function (n) { return n.name + '=' + gridA1_(n.range); });
+  if (nm.length) lines.push('名前付き範囲: ' + capList_(nm, 4).join('、'));
+  var ch = (x.charts || []).map(function (c) { var s = c.spec || {}, ty = s.basicChart ? s.basicChart.chartType : (s.pieChart ? 'PIE' : ''); return (CHART_NAMES[ty] || ty || 'グラフ') + (s.title ? '（' + s.title + '）' : ''); });
+  if (ch.length) lines.push('グラフ: ' + capList_(ch, 3).join('、'));
+  return lines;
+}
+
 function actLook_(req) {
   var t = req.target || {}, o = openTarget_(t), out = { ok: true };
   if (o.kind === 'sheet') {
@@ -769,6 +859,7 @@ function actLook_(req) {
     out.sheets = ss.getSheets().map(function (s) { return { name: s.getName(), rows: s.getLastRow(), cols: s.getLastColumn() }; });
     var sh = sheetOf_(ss, req.sheet || t.sheet, '');
     out.target.sheet = sh.getName();
+    try { var side = lookSide_(ss, sh); if (side.length) out.side = side; } catch (eS) { }   // 脇の状態は添え物。読めなくても look は返す
     var tb = findTable_(sh);
     if (tb) {
       out.table = { header_row: tb.headerRow, first_col: colLetter_(tb.firstCol), last_col: colLetter_(tb.lastCol), data: tb.firstData + '-' + tb.lastData,

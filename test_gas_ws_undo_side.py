@@ -281,3 +281,65 @@ def test_chart_that_the_api_cannot_add_is_rebuilt_with_spreadsheetapp_or_reporte
     assert out["made"][0] == [["setChartType", "COLUMN"], ["addRange", "R1,6,20,1"], ["setPosition", 2, 8, 0, 0], ["setOption", "title", "試験"]]
     assert out["notes"] == []
     assert len(out["n2"]) == 1 and "グラフを付け直せませんでした" in out["n2"][0]                # 作れない形は知らせる
+
+
+# ---------------------------------------------------------------- ws_look の脇の状態（あるときだけ 1 行ずつ）
+LOOK_SHEET = """
+function lookSheet() { return { getSheetId: function () { return 1; }, getName: function () { return '名簿'; }, getLastRow: function () { return 21; }, getLastColumn: function () { return 7; } }; }
+"""
+
+
+def _look(side_src, data_src):
+    return _run(FAKE_SHEET + LOOK_SHEET + """
+      var ss = { getId: function () { return 'S'; } };
+      __out = lookSide_(ss, lookSheet());
+    """, get_src=f"if (params.ranges) return {data_src}; return {side_src};")
+
+
+def test_look_side_lists_only_what_exists_in_one_short_line_each():
+    rows = "[" + ",".join(
+        "{ values: [{}, {}, " + ("{ dataValidation: { condition: { type: 'ONE_OF_LIST', values: [{ userEnteredValue: '未着手' }, { userEnteredValue: '完了' }] } } }" if 1 <= r <= 4 else "{}")
+        + ", {}, {}, {}, " + ("{ dataValidation: { condition: { type: 'BOOLEAN' } } }" if 1 <= r <= 4 else "{}") + "] }" for r in range(21)) + "]"
+    data = ("{ sheets: [{ properties: { sheetId: 1 }, data: [{ rowMetadata: [" + ",".join("{ hiddenByUser: true }" if i in (8, 19, 20) else "{}" for i in range(21)) + "], "
+            "columnMetadata: [{}, {}, { hiddenByUser: true }, {}, {}, {}, {}], rowData: " + rows + " }] }] }")
+    side = ("{ namedRanges: [{ name: '金額列', range: { sheetId: 1, startRowIndex: 1, endRowIndex: 20, startColumnIndex: 5, endColumnIndex: 6 } }], "
+            "sheets: [{ properties: { sheetId: 1 }, basicFilter: { range: { sheetId: 1, startRowIndex: 0, endRowIndex: 20, startColumnIndex: 0, endColumnIndex: 6 }, criteria: { '1': {} } }, "
+            "bandedRanges: [{ range: { sheetId: 1, startRowIndex: 0, endRowIndex: 20, startColumnIndex: 0, endColumnIndex: 6 } }], "
+            "protectedRanges: [{ range: { sheetId: 1 }, warningOnly: true }, { range: { sheetId: 1, startRowIndex: 1, endRowIndex: 20, startColumnIndex: 5, endColumnIndex: 6 } }], "
+            "rowGroups: [{ range: { sheetId: 1, dimension: 'ROWS', startIndex: 9, endIndex: 12 }, depth: 1 }], "
+            "columnGroups: [{ range: { sheetId: 1, dimension: 'COLUMNS', startIndex: 3, endIndex: 5 }, depth: 1, collapsed: true }], "
+            "charts: [{ spec: { title: '試験', basicChart: { chartType: 'COLUMN' } } }] }] }")
+    lines = _look(side, data)
+    assert lines == [
+        "入力規則: C2:C5 プルダウン（未着手/完了）、G2:G5 チェックボックス",
+        "交互の色: A1:F20",
+        "保護: シート全体（警告のみ）、F2:F20",
+        "フィルタ: A1:F20（B 列で絞り込み中）",
+        "隠した行: 9、20-21 ／ 隠した列: C",
+        "グループ: 行 10-12（深さ1）、列 D-E（深さ1・畳んである）",
+        "名前付き範囲: 金額列=F2:F20",
+        "グラフ: 縦棒（試験）",
+    ]
+    assert all(len(x) < 90 for x in lines)                                           # 各 1 行・範囲だけ
+
+
+def test_look_side_is_empty_when_nothing_is_there_and_look_still_answers_if_it_cannot_read():
+    assert _look("{ sheets: [{ properties: { sheetId: 1 } }] }", "{ sheets: [{ properties: { sheetId: 1 }, data: [{ rowMetadata: [{}, {}], columnMetadata: [{}], rowData: [{ values: [{}] }] }] }] }") == []
+    out = _run(FAKE_SHEET + LOOK_SHEET + """
+      Sheets.Spreadsheets.get = function () { throw new Error('down'); };
+      var ss = { getId: function () { return 'S'; }, getName: function () { return 'x'; }, getUrl: function () { return 'u'; }, getSheets: function () { return [lookSheet()]; } };
+      var sh = lookSheet(); sh.getLastRow = function () { return 0; };
+      __out = null; try { lookSide_(ss, sh); __out = 'no error'; } catch (e) { __out = 'raised'; }
+    """)
+    assert out == "raised"          # lookSide_ 自体は投げる（actLook_ が握りつぶして look は返す）
+
+
+def test_format_look_prints_side_lines_after_the_table_lines():
+    res = {"target": {"id": "x", "name": "n", "kind": "sheet", "url": "u"}, "sheets": [{"name": "名簿", "rows": 21, "cols": 6}],
+           "table": {"header_row": 1, "first_col": "A", "last_col": "F", "data": "2-20", "total_row": 21, "columns": [{"col": "A", "name": "番号", "number": True}]},
+           "side": ["入力規則: C2:C5 プルダウン（未着手/完了）", "グラフ: 縦棒（試験）"]}
+    text = gw.WorkspaceManager.format_look(res)
+    lines = text.splitlines()
+    assert lines[-2:] == res["side"] and lines.index("入力規則: C2:C5 プルダウン（未着手/完了）") > [i for i, x in enumerate(lines) if x.startswith("列:")][0]
+    res.pop("side")
+    assert "入力規則" not in gw.WorkspaceManager.format_look(res)                      # 無ければ何も出さない

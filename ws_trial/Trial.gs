@@ -385,3 +385,14 @@ EXTRA_ACTIONS['chart_try'] = function (req) {
   attempt('大きさを除く', { spec: s3, position: { overlayPosition: op } }, false);
   return out;
 };
+
+// ws_look の脇の状態の出方を見る（試験用）: 流し込む → 項目を全部付ける → look の返事を返す
+EXTRA_ACTIONS['side_look'] = function (req) {
+  var ss = trialOpen_(req.id);
+  var sd = trialSeed_(Object.assign({ id: req.id }, req.seed));
+  if (!sd.ok) return { ok: false, error: sd.error };
+  ss = trialOpen_(req.id);
+  (req.items || []).forEach(function (it) { trialSideApply_(ss, ss.getSheetByName('名簿'), it); });
+  SpreadsheetApp.flush();
+  return actLook_({ target: { id: req.id, kind: 'sheet' }, sheet: '名簿' });
+};

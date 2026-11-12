@@ -528,6 +528,8 @@ class WorkspaceManager:
                 lines.append("列: " + "、".join(f"{c['col']}={c['name']}{'(数値)' if c['number'] else ''}" for c in tb["columns"]))
             else:
                 lines.append("表: 見つかりません（空のシート、または見出しの行がありません）")
+            for ln in res.get("side") or []:      # 脇の状態（入力規則・交互の色・保護・フィルタ・隠し・グループ・名前付き範囲・グラフ）。あるときだけ 1 行ずつ
+                lines.append(ln)
             if res.get("values"):
                 lines.append(f"中身 {res['range']}:")
                 fm = res.get("formulas") or []
