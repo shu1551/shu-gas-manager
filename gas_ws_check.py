@@ -215,6 +215,11 @@ def run(write=True, exam_dir=EXAM_DIR, answers_path=ANSWERS):
     if none_strong:
         notes.append(f"(なし) の問で 1 位が {gas_ws_find.WEAK_SCORE} 点以上の物が {none_strong} 問あります")
 
+    # 語の数（第 8.4 節: 札 1 本 8 個まで。段 T0 では数えるだけで、止めるのは番頭が絞った後）
+    over = [(s["name"], len(s["words"])) for s in cat.shelves if len(s["words"]) > 8]
+    if over:
+        notes.append(f"語が 8 個を超えている札が {len(over)} 本あります（番頭が 8 個に絞るまで止めない）: " + "、".join(f"{n}={c}" for n, c in over))
+
     # 手元の記録
     mp = gas_ws_find.MISSES_FILE
     if mp.exists():

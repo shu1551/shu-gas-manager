@@ -1,0 +1,124 @@
+{
+ "name": "uriage_base",
+ "business": "売上明細",
+ "kind": "base",
+ "notes": "売上明細の基準。見出し 1 行目・明細 2〜21 行目（20 行・金額は =数量*単価）・合計 22 行目（数量と金額）。汚れ・癖なし",
+ "sheets": [
+  {
+   "name": "売上",
+   "values": [
+    [
+     "日付",
+     "伝票番号",
+     "得意先",
+     "品名",
+     "数量",
+     "単価",
+     "金額"
+    ],
+    [
+     {
+      "date": "2026-11-02"
+     },
+     {
+      "text": "D0001"
+     },
+     "東和商事",
+     "ボルト",
+     10,
+     120,
+     "=E2*F2"
+    ],
+    [
+     {
+      "date": "2026-11-03"
+     },
+     {
+      "text": "D0002"
+     },
+     "北斗工業",
+     "ナット",
+     5,
+     80,
+     "=E3*F3"
+    ]
+   ],
+   "repeat": {
+    "at_row": 4,
+    "count": 18,
+    "start": 3,
+    "row": [
+     {
+      "date": "2026-11-01"
+     },
+     {
+      "text": "D{n:0000}"
+     },
+     "東和商事",
+     "部品{n}",
+     3,
+     120,
+     "=E{r}*F{r}"
+    ]
+   },
+   "total": {
+    "row": "last+1",
+    "label_col": "A",
+    "label": "合計",
+    "sum_cols": [
+     "E",
+     "G"
+    ]
+   },
+   "formats": [
+    {
+     "bold": true,
+     "bg": "#1F4E79",
+     "color": "#FFFFFF",
+     "align": "center",
+     "range": "A1:G1"
+    },
+    {
+     "range": "E2:G22",
+     "number_format": "#,##0"
+    }
+   ],
+   "borders": [
+    "A1:G22"
+   ],
+   "merges": [],
+   "frozen": {
+    "rows": 1,
+    "cols": 0
+   },
+   "hidden": {
+    "rows": [],
+    "cols": []
+   },
+   "widths": {
+    "C": 120,
+    "D": 120
+   },
+   "validations": [],
+   "cf": [],
+   "filter": null,
+   "protect": [],
+   "tab_color": null,
+   "hide_sheet": false,
+   "tables": [
+    {
+     "header_rows": [
+      1
+     ],
+     "first_col": "A",
+     "last_col": "G",
+     "data": "2-21",
+     "total_row": 22,
+     "key": "B"
+    }
+   ]
+  }
+ ],
+ "named": [],
+ "doc": null
+}

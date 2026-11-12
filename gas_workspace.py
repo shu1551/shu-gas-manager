@@ -119,6 +119,8 @@ class WorkspaceManager:
         self.finder = gas_ws_find.Finder(self.catalog, synonyms=gas_ws_find.load_synonyms(self.shelf_dir / "synonyms.txt"),
                                          guide=gas_ws_find.load_guide(self.shelf_dir / "guide.txt"))
         self.misses_path = HERE / ".ws_misses.tsv"      # 弱かった頼み（git に入れない）
+        self.engine_title = ENGINE_TITLE      # エンジンの GAS プロジェクトの名前（別のエンジンを使う道具が差し替える）
+        self.extra_texts = []                 # 共通部・棚のあとに足すファイル [(名前, 本文)]（別のエンジンの入口など）
         self.timing = os.environ.get("WS_TIMING", "").lower() in ("1", "true", "yes", "on")   # ws_do の内訳を返事に足す
         self.last_timing = None
         self._tim = None
@@ -164,12 +166,13 @@ class WorkspaceManager:
             "webapp": {"executeAs": "USER_DEPLOYING", "access": "MYSELF"},
         }
         head = {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, indent=2)}
+        texts = texts + list(self.extra_texts)
         if split:
             return [head] + [{"name": n, "type": "SERVER_JS", "source": s} for n, s in texts]
         return [head, {"name": "Engine", "type": "SERVER_JS", "source": "\n".join(s for _, s in texts)}]
 
     def _find_engine_sid(self):
-        q = f"mimeType='application/vnd.google-apps.script' and name='{ENGINE_TITLE}' and trashed=false"
+        q = f"mimeType='application/vnd.google-apps.script' and name='{self.engine_title}' and trashed=false"
         files = self._drive_list(q, "files(id,name)")
         return files[0]["id"] if files else None
 
@@ -179,7 +182,7 @@ class WorkspaceManager:
         sid = st.get("engine_sid") or self._find_engine_sid()
         created = False
         if not sid:
-            sid = self.client.create_project(ENGINE_TITLE)["scriptId"]
+            sid = self.client.create_project(self.engine_title)["scriptId"]
             created = True
         self.client._put_content(sid, self._engine_files())
         if created or not st.get("engine_url"):

@@ -20,6 +20,8 @@ var STYLE = {
 
 // ---------------------------------------------------------------- 入口
 
+var EXTRA_ACTIONS = {};   // 別の入口を足すときの口（ふつうは空。エンジンに別のファイルを足すと、そこが名前で登録する）
+
 function doGet(e) { return json_({ ok: true, engine: 'shu-workspace-engine', version: ENGINE_VERSION }); }
 
 function doPost(e) {
@@ -41,6 +43,7 @@ function doPost(e) {
     else if (a === 'do') res = actDo_(req);
     else if (a === 'undo') res = actUndo_(req);
     else if (a === 'list') res = { ok: true, ledger: ledgerBrief_() };
+    else if (EXTRA_ACTIONS[a]) res = EXTRA_ACTIONS[a](req);
     else res = { ok: false, error: '知らない action: ' + a };
     res.version = ENGINE_VERSION;
     res.ms = res.ms || {}; res.ms.lock = lockMs;     // 鍵を待った時間（ほかの処理と重なると伸びる）

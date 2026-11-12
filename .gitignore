@@ -26,3 +26,5 @@ queue/
 .ws_ledger.json
 .ws_engine_all.gs
 .ws_misses.tsv
+.ws_trial.json
+ws_trial/runs/

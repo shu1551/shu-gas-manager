@@ -77,6 +77,7 @@ FORBID_PATTERNS = [
     (r"C:\\Users\\shu|C:/Users/shu|D:\\エクセル|shu1551@", "ローカル個人パス・メールアドレス"),
     (r"AIza[0-9A-Za-z_-]{30,}|GOCSPX-[0-9A-Za-z_-]{20,}|ya29\.[0-9A-Za-z_-]{20,}", "Google APIキー / OAuthシークレット"),
     (r"\?{3,}", "文字化け (クエスチョン3連続)"),
+    (r"ws_tria[l]/|Tria[l]\.gs|\.ws_tria[l]\.json|WS試験_", "試験用の物（試験の入口・試験場・ws_trial）"),
 ]
 
 
@@ -100,6 +101,8 @@ def main():
         checked_count += 1
         text = fpath.read_text(encoding="utf-8", errors="replace")
         for pat, reason in FORBID_PATTERNS:
+            if fname == ".gitignore" and reason.startswith("試験用の物"):
+                continue          # .gitignore は試験用の物を git に入れないために名前を書く
             for m in re.finditer(pat, text):
                 line_no = text.count("\n", 0, m.start()) + 1
                 print(f"  [NG] {fname}:{line_no} に禁止パターン ({reason}): 「{m.group(0)}」")
@@ -127,7 +130,10 @@ def main():
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html"}
+    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
+                                                  # 公開しない物（試験の道具・試験場の記録・手元の記録）。公開物に入らないことは、ホワイトリストと上の禁止パターンで見る
+                                                  "ws_exam", "ws_shelves", "ws_trial", "gas_ws_judge.py", "gas_ws_tables.py", "gas_ws_trial.py", "test_gas_ws_trial.py", "test_gas_ws_speed.py",
+                                                  ".ws_engine_all.gs", ".ws_trial.json", ".ws_misses.tsv", ".ws_ledger.json"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")
