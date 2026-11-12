@@ -42,8 +42,41 @@ def load_questions(exam_dir=EXAM_DIR):
             if len(parts) < 2 or not parts[1].strip():
                 continue
             exp = parts[0].strip()
-            qs.append(([exp] if exp in ("(なし)", "(案内)") else [e.strip() for e in exp.split("+") if e.strip()], parts[1].strip(), f"{p.name}:{n}"))
+            qs.append(([exp] if exp in ("(なし)", "(案内)") else [e.strip().lstrip("?") for e in exp.split("+") if e.strip()], parts[1].strip(), f"{p.name}:{n}"))
     return qs
+
+
+def parse_alternatives(text):
+    """別解の書き方: `棚{引数,引数}+棚` を `|` で並べる。返り値は [[(棚, [引数…]), …], …]"""
+    alts = []
+    for alt in (text or "").split("|"):
+        items = []
+        for part in alt.split("+"):
+            m = re.match(r"^\s*([a-z0-9.]+)\s*(?:\{([^}]*)\})?\s*$", part)
+            if m:
+                items.append((m.group(1), [k.strip() for k in (m.group(2) or "").split(",") if k.strip()]))
+        if items:
+            alts.append(items)
+    return alts
+
+
+def load_extras(exam_dir=EXAM_DIR):
+    """問題集の印。{頼みの文: {"ask_ok": 聞き返しも正解, "alts": 別解}}。
+    期待の欄で棚の名前に `?` を付けると、AI が聞き返す（質問: …）のも正解に数える。
+    3 列目に別解を書ける（例 `seiri{renumber,dedupe}`＝seiri に renumber と dedupe の引数が付いていれば、別の棚と組みでなくても正解）"""
+    out = {}
+    for p in sorted(Path(exam_dir).glob("phrases_*.tsv"), key=lambda x: x.name):
+        for ln in p.read_text(encoding="utf-8").splitlines():
+            if not ln.strip() or ln.lstrip().startswith("#"):
+                continue
+            parts = ln.split("\t")
+            if len(parts) < 2:
+                continue
+            ask_ok = "?" in parts[0]
+            alts = parse_alternatives(parts[2]) if len(parts) >= 3 else []
+            if ask_ok or alts:
+                out[parts[1].strip()] = {"ask_ok": ask_ok, "alts": alts}
+    return out
 
 
 def card_questions(cat):

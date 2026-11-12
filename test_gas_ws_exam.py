@@ -164,3 +164,76 @@ def test_default_ai_is_headless_claude_code_sonnet(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert ex.claude_code_ask("頼み") == '[{"shelf":"tidy"}]'
     assert Path(seen["cmd"][0]).stem.lower() == "claude" and seen["cmd"][1:4] == ["-p", "--model", "sonnet"] and seen["input"] == "頼み".encode("utf-8")
+
+
+# ---------------------------------------------------------------- 表の様子・聞き返し・別解
+import gas_ws_check as chk
+
+
+def test_prompt_carries_the_sample_look_like_ws_look():
+    seen = []
+    qs = [q for q in ex.select_questions(30) if q[1] == "合計のとこ太字で黄色に" or q[0] == ["format"]][:1]
+    ex.evaluate(qs, lambda p: seen.append(p) or "[]", extras={})
+    p = seen[0]
+    assert "【今の相手の様子（ws_look の返事）】" in p and "シート: 売上（21行×5列）" in p
+    assert "見出し 1 行目・1〜5 列・明細 2-20 行目・合計行 21 行目" in p and "列: A=番号(数値)、B=日付、C=部署、D=名前、E=金額(数値)" in p
+    assert p.index("今の相手の様子") < p.index("【棚の候補】") < p.index("【頼み】") and "質問: …" in p
+
+
+def test_doc_questions_get_a_sample_document_instead():
+    seen = []
+    qs = [q for q in ex.select_questions(30) if q[0][0].startswith("doc.")][:1]
+    ex.evaluate(qs, lambda p: seen.append(p) or "[]", extras={})
+    assert "見出し: 1:#会議の記録" in seen[0] and "シート: 売上" not in seen[0]
+    assert "シート: 売上" in ex.sample_look("sheet") and "決定事項" in ex.sample_look("doc")
+
+
+def test_ask_back_counts_only_when_the_question_is_marked():
+    qs = [(["cols.delete"], "この列いらないから消して", "t:1"), (["tidy"], "この表、見やすくして", "t:2")]
+    extras = {"この列いらないから消して": {"ask_ok": True, "alts": []}}
+    results, stats = ex.evaluate(qs, lambda p: "質問: どの列を消しますか？", extras=extras)
+    assert results[0]["shelf_ok"] and results[0]["valid"] and results[0]["asked"]            # 印のある問: 聞き返しも正解
+    assert not results[1]["shelf_ok"] and not results[1]["valid"] and "聞き返しを正解に数えない" in results[1]["why"]
+    assert stats["asked"] == 1 and stats["shelf_ok"] == 1
+    assert "うち聞き返し 1 問" in ex.report(results, stats)[0]
+    # 印のある問でも、ops で答えて合っていれば（棚が合い検査を通れば）これまでどおり正解
+    results, stats = ex.evaluate(qs[:1], lambda p: '[{"shelf":"cols.delete","cols":["C"]}]', extras=extras)
+    assert results[0]["shelf_ok"] and results[0]["valid"] and not results[0].get("asked")
+    # 全角コロンの質問も読む
+    assert ex.ASK_BACK.match("質問：どの列ですか")
+
+
+def test_alternative_answer_one_shelf_with_arguments_counts():
+    q = [(["seiri", "renumber"], "C列の重複消して連番ふり直して", "t:1")]
+    extras = {"C列の重複消して連番ふり直して": {"ask_ok": False, "alts": chk.parse_alternatives("seiri{renumber,dedupe}")}}
+    one = '[{"shelf":"seiri","dedupe":true,"renumber":"A"}]'
+    results, stats = ex.evaluate(q, lambda p: one, extras=extras)
+    assert results[0]["shelf_ok"] and results[0]["valid"] and stats["pass"]
+    # 引数が足りなければ別解にならない（renumber だけ・seiri だけ）
+    for bad in ('[{"shelf":"seiri","renumber":"A"}]', '[{"shelf":"seiri","dedupe":true}]', '[{"shelf":"renumber","col":"A"}]'):
+        r, _ = ex.evaluate(q, lambda p, b=bad: b, extras=extras)
+        assert not r[0]["shelf_ok"], bad
+    # 別解が無ければ、これまでどおり 2 本そろわないと正解にならない
+    r, _ = ex.evaluate(q, lambda p: one, extras={})
+    assert not r[0]["shelf_ok"]
+    r, _ = ex.evaluate(q, lambda p: '[{"shelf":"seiri"},{"shelf":"renumber","col":"A"}]', extras={})
+    assert r[0]["shelf_ok"] and r[0]["valid"]
+
+
+def test_parse_alternatives_and_question_bank_marks():
+    assert chk.parse_alternatives("seiri{renumber,dedupe}") == [[("seiri", ["renumber", "dedupe"])]]
+    assert chk.parse_alternatives("a.b+c|d{x}") == [[("a.b", []), ("c", [])], [("d", ["x"])]]
+    assert chk.parse_alternatives("") == []
+    ex_ = chk.load_extras()
+    for ask in ("この列いらないから消して", "この行いらないから消して", "この列を右に動かして", "この行を上に動かして"):
+        assert ex_[ask]["ask_ok"] is True
+    assert ex_["C列の重複消して連番ふり直して"]["alts"] == [[("seiri", ["renumber", "dedupe"])]]
+    # 印（?）があっても、問題集は棚の名前として読む（引く試験・ws-check がそのまま通る）
+    qs = {ask: exp for exp, ask, _ in chk.load_questions()}
+    assert qs["この列いらないから消して"] == ["cols.delete"]
+    assert chk.run(write=False)[0] == []
+
+
+def test_select_questions_still_includes_marked_and_alternative_questions():
+    asks = {q[1] for q in ex.select_questions(200)}
+    assert "この列いらないから消して" in asks and "C列の重複消して連番ふり直して" in asks
