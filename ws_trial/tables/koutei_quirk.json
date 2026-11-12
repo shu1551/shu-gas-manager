@@ -1,0 +1,467 @@
+{
+ "name": "koutei_quirk",
+ "business": "工程表",
+ "kind": "quirk",
+ "notes": "工程表の癖版。1 行目に結合タイトル（A1:L1）、見出しは 2 行目、明細 3〜22 行目（20 行）・合計行なし。癖: 結合（T6）・表の上にタイトル行（T8）・期間を横帯のセル結合で表現（D3:F3等）・ガントチャート風配色",
+ "sheets": [
+  {
+   "name": "ガントチャート",
+   "values": [
+    [
+     "システム移行プロジェクト 週間予定表",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "タスクID",
+     "工程名",
+     "担当",
+     "月",
+     "火",
+     "水",
+     "木",
+     "金",
+     "土",
+     "日",
+     "予定日数",
+     "状態"
+    ],
+    [
+     {
+      "text": "TSK-001"
+     },
+     "企画立案",
+     "佐藤",
+     "要件",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     3,
+     "完了"
+    ],
+    [
+     {
+      "text": "TSK-002"
+     },
+     "要件定義",
+     "佐藤",
+     null,
+     "設計",
+     null,
+     null,
+     null,
+     null,
+     null,
+     5,
+     "完了"
+    ],
+    [
+     {
+      "text": "TSK-003"
+     },
+     "画面設計",
+     "鈴木",
+     null,
+     null,
+     "DB",
+     null,
+     null,
+     null,
+     null,
+     5,
+     "完了"
+    ],
+    [
+     {
+      "text": "TSK-004"
+     },
+     "DB設計",
+     "高橋",
+     "API",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     4,
+     "完了"
+    ],
+    [
+     {
+      "text": "TSK-005"
+     },
+     "API設計",
+     "高橋",
+     null,
+     "UI",
+     null,
+     null,
+     null,
+     null,
+     null,
+     5,
+     "完了"
+    ],
+    [
+     {
+      "text": "TSK-006"
+     },
+     "UIモック作成",
+     "鈴木",
+     null,
+     null,
+     null,
+     "実装",
+     null,
+     null,
+     null,
+     5,
+     "完了"
+    ],
+    [
+     {
+      "text": "TSK-007"
+     },
+     "認証機能実装",
+     "田中",
+     "認証",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     5,
+     "進行中"
+    ],
+    [
+     {
+      "text": "TSK-008"
+     },
+     "一覧画面実装",
+     "渡辺",
+     null,
+     "一覧",
+     null,
+     null,
+     null,
+     null,
+     null,
+     6,
+     "進行中"
+    ],
+    [
+     {
+      "text": "TSK-009"
+     },
+     "詳細画面実装",
+     "渡辺",
+     null,
+     null,
+     "詳細",
+     null,
+     null,
+     null,
+     null,
+     5,
+     "進行中"
+    ],
+    [
+     {
+      "text": "TSK-010"
+     },
+     "登録API実装",
+     "田中",
+     "登録",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     5,
+     "進行中"
+    ],
+    [
+     {
+      "text": "TSK-011"
+     },
+     "更新API実装",
+     "田中",
+     null,
+     "更新",
+     null,
+     null,
+     null,
+     null,
+     null,
+     5,
+     "未着手"
+    ],
+    [
+     {
+      "text": "TSK-012"
+     },
+     "削除API実装",
+     "田中",
+     null,
+     null,
+     "削除",
+     null,
+     null,
+     null,
+     null,
+     3,
+     "未着手"
+    ],
+    [
+     {
+      "text": "TSK-013"
+     },
+     "単体テスト作成",
+     "山本",
+     null,
+     null,
+     null,
+     "単体",
+     null,
+     null,
+     null,
+     8,
+     "進行中"
+    ],
+    [
+     {
+      "text": "TSK-014"
+     },
+     "単体テスト実施",
+     "山本",
+     "結合",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     5,
+     "未着手"
+    ],
+    [
+     {
+      "text": "TSK-015"
+     },
+     "結合テスト設計",
+     "中村",
+     null,
+     "総合",
+     null,
+     null,
+     null,
+     null,
+     null,
+     7,
+     "進行中"
+    ],
+    [
+     {
+      "text": "TSK-016"
+     },
+     "結合テスト実施",
+     "中村",
+     null,
+     null,
+     "試験",
+     null,
+     null,
+     null,
+     null,
+     7,
+     "未着手"
+    ],
+    [
+     {
+      "text": "TSK-017"
+     },
+     "総合テスト設計",
+     "小林",
+     "手順",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     6,
+     "未着手"
+    ],
+    [
+     {
+      "text": "TSK-018"
+     },
+     "総合テスト実施",
+     "小林",
+     null,
+     "構築",
+     null,
+     null,
+     null,
+     null,
+     null,
+     8,
+     "未着手"
+    ],
+    [
+     {
+      "text": "TSK-019"
+     },
+     "マニュアル作成",
+     "加藤",
+     null,
+     null,
+     "移行",
+     null,
+     null,
+     null,
+     null,
+     7,
+     "未着手"
+    ],
+    [
+     {
+      "text": "TSK-020"
+     },
+     "本番環境構築",
+     "吉田",
+     null,
+     null,
+     null,
+     "確認",
+     null,
+     null,
+     null,
+     7,
+     "未着手"
+    ]
+   ],
+   "formats": [
+    {
+     "range": "A1:L1",
+     "bold": true,
+     "bg": "#1F4E79",
+     "color": "#FFFFFF",
+     "size": 12,
+     "align": "center"
+    },
+    {
+     "range": "A2:L2",
+     "bold": true,
+     "bg": "#D9E1F2",
+     "color": "#000000",
+     "align": "center"
+    },
+    {
+     "range": "A3:A22",
+     "align": "center"
+    },
+    {
+     "range": "C3:C22",
+     "align": "center"
+    },
+    {
+     "range": "D3:J22",
+     "bg": "#E2EFDA",
+     "align": "center"
+    },
+    {
+     "range": "K3:K22",
+     "align": "right"
+    },
+    {
+     "range": "L3:L22",
+     "align": "center"
+    }
+   ],
+   "borders": [
+    "A1:L22"
+   ],
+   "merges": [
+    "A1:L1",
+    "D3:F3",
+    "E4:G4",
+    "F5:H5",
+    "D6:G6",
+    "E7:H7",
+    "G8:I8",
+    "D9:F9",
+    "E10:G10",
+    "F11:H11",
+    "D12:G12",
+    "E13:H13",
+    "F14:I14",
+    "G15:J15",
+    "D16:F16",
+    "E17:G17",
+    "F18:H18",
+    "D19:G19",
+    "E20:H20",
+    "F21:I21",
+    "G22:J22"
+   ],
+   "frozen": {
+    "rows": 2,
+    "cols": 0
+   },
+   "hidden": {
+    "rows": [],
+    "cols": []
+   },
+   "widths": {
+    "A": 85,
+    "B": 130,
+    "C": 70,
+    "D": 55,
+    "E": 55,
+    "F": 55,
+    "G": 55,
+    "H": 55,
+    "I": 55,
+    "J": 55,
+    "K": 75,
+    "L": 75
+   },
+   "validations": [],
+   "cf": [],
+   "filter": null,
+   "protect": [],
+   "tab_color": null,
+   "hide_sheet": false,
+   "tables": [
+    {
+     "header_rows": [
+      2
+     ],
+     "first_col": "A",
+     "last_col": "L",
+     "data": "3-22",
+     "total_row": null,
+     "key": "A"
+    }
+   ]
+  }
+ ],
+ "named": [],
+ "doc": null
+}
