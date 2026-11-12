@@ -174,7 +174,7 @@ SHELF['pivot.new'] = function (ctx, op) {
   ctx.createdSheets.push(into);
 
   var anchor = dst.getRange('A1');
-  var pivotTable = sourceRange.createPivotTable(anchor);
+  var pivotTable = anchor.createPivotTable(sourceRange);
 
   rows.forEach(function (ci) {
     pivotTable.addRowGroup(ci - t.firstCol + 1);
