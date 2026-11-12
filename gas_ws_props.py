@@ -23,6 +23,8 @@ RUNS = HERE / "ws_trial" / "runs"
 SKIP_FILE = HERE / "ws_trial" / "props_skip.tsv"
 TABLES = ["meibo_base", "meibo_dirty", "meibo_quirk", "uriage_base", "uriage_dirty", "uriage_quirk"]
 BAD_OP = {"shelf": "write", "sheet": "存在しないシート", "cells": {"A1": 1}}
+QUOTA_RETRIES = 3     # 回数超え（429）が返ったら、待って撃ち直す回数
+QUOTA_WAIT = 20       # 待つ秒（1 回目 20・2 回目 40・3 回目 60）
 QUOTA_WORDS = ("quota", "rate limit", "429", "too many", "Service invoked too many", "上限", "Exceeded")
 
 
@@ -331,7 +333,7 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
         q.put(c)
     lock = threading.Lock()
     t_start = time.time()
-    stats = {"n": 0, "quota": 0, "post_fail": 0, "workers": len(workers)}
+    stats = {"n": 0, "quota": 0, "post_fail": 0, "quota_retry": 0, "workers": len(workers)}
     stop = threading.Event()
 
     def work(wi, weng, wfile):
@@ -353,24 +355,34 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
             danger = bool(cat.by_name[shelf]["danger"])
             t0 = time.time()
             rec = {"shelf": shelf, "table": tname, "ops": ops, "fp": combo_fp(fp, shelf, tname), "lane": getattr(weng, "lane", "")}
-            try:
-                if seeded != tname:
-                    r = weng.seed(wfile, table)
-                    if not r.get("ok"):
-                        raise RuntimeError("流し込み失敗: " + str(r.get("error"))[:150])
-                    seeded = tname
-                resp = weng.trial_post("seq", id=wfile, steps=build_steps(ops, danger))
-                if not resp.get("ok", True) or "snaps" not in resp:
-                    raise RuntimeError(str(resp.get("error") or resp)[:200])
-                ev = evaluate(resp, shelf, danger, may, tinfo)
-                rec.update(ev)
-                if ev["p"]["P1"] == "fail":
-                    seeded = None            # 戻らなかったら、次の組の前に流し込み直す
-            except Exception as e:           # POST の失敗（時間切れ・Google の上限 等）
-                msg = str(e)
-                isq = any(w.lower() in msg.lower() for w in QUOTA_WORDS)
-                rec.update(p={"P1": "error"}, reasons={"POST": msg[:200]}, post_fail=True, quota=isq)
-                seeded = None
+            for attempt in range(QUOTA_RETRIES + 1):
+                try:
+                    if seeded != tname:
+                        r = weng.seed(wfile, table)
+                        if not r.get("ok"):
+                            raise RuntimeError("流し込み失敗: " + str(r.get("error"))[:150])
+                        seeded = tname
+                    resp = weng.trial_post("seq", id=wfile, steps=build_steps(ops, danger))
+                    if not resp.get("ok", True) or "snaps" not in resp:
+                        raise RuntimeError(str(resp.get("error") or resp)[:200])
+                    ev = evaluate(resp, shelf, danger, may, tinfo)
+                    rec.update(ev)
+                    rec.pop("post_fail", None)
+                    if ev["p"]["P1"] == "fail":
+                        seeded = None            # 戻らなかったら、次の組の前に流し込み直す
+                    break
+                except Exception as e:           # POST の失敗（時間切れ・Google の上限 等）
+                    msg = str(e)
+                    isq = any(w.lower() in msg.lower() for w in QUOTA_WORDS)
+                    seeded = None
+                    if isq and attempt < QUOTA_RETRIES:        # 回数超え（429）は待って撃ち直す（並べる数は減らさない）
+                        with lock:
+                            stats["quota_retry"] += 1
+                        rec["retries"] = attempt + 1
+                        time.sleep(QUOTA_WAIT * (attempt + 1))
+                        continue
+                    rec.update(p={"P1": "error"}, reasons={"POST": msg[:200]}, post_fail=True, quota=isq)
+                    break
             rec["sec"] = round(time.time() - t0, 1)
             bad = [k for k, v in rec["p"].items() if v in ("fail", "error")]
             line = f"{'×' if bad else '○'} {shelf} × {tname} ({rec['sec']}s{'・場' + rec['lane'] if rec['lane'] else ''}) " + (" ".join(bad) + " " + "；".join(f"{k}:{v}" for k, v in list(rec.get("reasons", {}).items())[:2])[:160] if bad else rec.get("p5class", ""))

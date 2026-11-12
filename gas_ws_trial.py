@@ -37,10 +37,11 @@ SANDBOX_SHEETS = ["WS試験_場", "WS試験_請求書_10月", "WS試験_請求�
 SANDBOX_DOCS = ["WS試験_文書"]
 BACKUP_BOOK = "WS試験_控え"
 # 並べて回すための試験場（lane 2〜5）。場ごとに控えのブックを持ち、エンジンの錠・台帳も lane ごとに分かれる（lane 1＝WS試験_場・WS試験_控え）
-LANE_NUMS = ["2", "3", "4", "5"]
+LANE_NUMS = [str(i) for i in range(2, 11)]      # 最大 10 枚（既定の並べる数は 5＝場〜場5）
+DEFAULT_JOBS = 5
 LANE_SHEETS = {n: f"WS試験_場{n}" for n in LANE_NUMS}
 LANE_BACKUPS = {n: f"WS試験_控え{n}" for n in LANE_NUMS}
-MAX_JOBS = 10         # GAS の同時実行の上限（ユーザーあたり 30 前後）に十分余裕を残す
+MAX_JOBS = 10         # GAS の同時実行の上限（ユーザーあたり 30 前後）に十分余裕を残す。Sheets API の読み取りは 1 分 60 回前後（超えたら待って撃ち直す）
 WORD_LIMIT = 8        # 札 1 本の語の数の上限（第 8.4 節）
 
 
@@ -280,7 +281,7 @@ def init(client=None, out=print, state_path=STATE_FILE):
 
 
 
-def lanes(client=None, out=print, state_path=STATE_FILE):
+def lanes(client=None, out=print, state_path=STATE_FILE, count=DEFAULT_JOBS):
     """並べて回すための試験場（WS試験_場2〜5）と lane ごとの控えのブックを作り、登録する（あるものは作り直さない）。init の後に撃つ"""
     from gas_client import GasClient
     client = client or GasClient()
@@ -291,7 +292,8 @@ def lanes(client=None, out=print, state_path=STATE_FILE):
         out("先に `py gas.py ws-trial init` を撃ってください（フォルダがありません）")
         return 1
     files = st.setdefault("files", {})
-    for name in list(LANE_SHEETS.values()) + list(LANE_BACKUPS.values()):
+    use = LANE_NUMS[:max(0, min(count, MAX_JOBS) - 1)]
+    for name in [LANE_SHEETS[n] for n in use] + [LANE_BACKUPS[n] for n in use]:
         fid = files.get(name)
         if fid and drive.get(fid) and not drive.get(fid).get("trashed"):
             continue
@@ -452,7 +454,7 @@ def words_over_limit(catalog=None, limit=WORD_LIMIT):
 
 def props_cmd(args, out=print):
     """py gas.py ws-trial props [--shelf 棚]… [--table 表]… [--all | --changed [--with-engine]] [--jobs N] [--resume ファイル] [--limit-sec 秒] [--stamp ファイル [--root 木]]
-    試験用のエンジンの試験場だけに撃つ。--jobs N は試験場を N 枚（lane）並べて同時に撃つ（既定 1。最大 5＝WS試験_場〜場5。先に `ws-trial lanes`）"""
+    試験用のエンジンの試験場だけに撃つ。--jobs N は試験場を N 枚（lane）並べて同時に撃つ（既定 5。最大 10＝WS試験_場〜場10。足りなければ先に `ws-trial lanes --count N`。元の説明: 先に `ws-trial lanes`）"""
     import argparse
     import gas_ws_props
     ap = argparse.ArgumentParser(prog="ws-trial props")
@@ -461,7 +463,7 @@ def props_cmd(args, out=print):
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--changed", action="store_true")          # 前回の記録と比べて、変わった棚・表・ひな形にかかる組だけ回す
     ap.add_argument("--with-engine", action="store_true")      # 共通部（workspace_engine.gs・Trial.gs）が変わった組も回す（節目）
-    ap.add_argument("--jobs", type=int, default=1)
+    ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS)
     ap.add_argument("--resume", default="")
     ap.add_argument("--limit-sec", type=int, default=6 * 3600)        # 全体の時間の上限（既定 6 時間で自分で止まる）
     ap.add_argument("--stamp", default="")                     # 指紋のない昔の記録に指紋を書き足す（--root の木で回した記録に）
@@ -489,7 +491,7 @@ def props_cmd(args, out=print):
     stats, rf = gas_ws_props.run(eng, st["files"]["WS試験_場"], shelves=a.shelf or None, tables=a.table or None, run_file=a.resume or None,
                                  resume=bool(a.resume), out=out, limit_seconds=a.limit_sec, workers=workers, changed=a.changed, with_engine=a.with_engine)
     rows, fails, p6 = gas_ws_props.summarize(rf) if Path(rf).exists() else ([], [], {})
-    out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}）・{stats['workers']} 本で {stats.get('sec', 0):.0f} 秒・記録 {rf}")
+    out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}・429 を待って撃ち直した回数 {stats['quota_retry']}）・{stats['workers']} 本で {stats.get('sec', 0):.0f} 秒・記録 {rf}")
     return 1 if fails else 0
 
 
@@ -536,7 +538,7 @@ def main(argv):
     if cmd == "props":
         return props_cmd(argv[1:])
     if cmd == "lanes":
-        return lanes()
+        return lanes(count=int(argv[argv.index("--count") + 1]) if "--count" in argv else DEFAULT_JOBS)
     if cmd in ("golden", "look", "shot"):
         return shot_cmd(cmd, argv[1:])
     if cmd == "check":

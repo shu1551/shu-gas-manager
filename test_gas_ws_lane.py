@@ -180,6 +180,7 @@ def test_a_failed_post_is_recorded_and_the_worker_reseeds(tmp_path, monkeypatch)
                 raise RuntimeError("Service invoked too many times")
             return super().trial_post(action, **kw)
 
+    monkeypatch.setattr(P, "QUOTA_RETRIES", 0)
     e = Flaky("2", 0, log)
     stats, rf = P.run(e, "f", shelves=["tidy", "seiri", "sort"], tables=["meibo_base"], out=lambda *_: None)
     rows = [json.loads(x) for x in rf.read_text(encoding="utf-8").splitlines()]
@@ -238,3 +239,36 @@ def test_lane_workers_use_one_sandbox_per_lane_up_to_the_limit():
     ws = TR.lane_workers(lambda: TR.TrialEngine(client=object(), state_path="x.json"), st, jobs=5)
     assert [(e.lane, f) for e, f in ws] == [("", "f1"), ("2", "f2")]
     assert len(TR.lane_workers(lambda: TR.TrialEngine(client=object(), state_path="x.json"), st, jobs=1)) == 1
+
+
+def test_a_429_is_waited_out_and_retried_without_dropping_workers(tmp_path, monkeypatch):
+    _patch_evaluate(monkeypatch)
+    monkeypatch.setattr(P, "RUNS", tmp_path)
+    monkeypatch.setattr(P, "QUOTA_WAIT", 0)
+    log = []
+
+    class Hot(FakeEng):
+        n = 0
+
+        def trial_post(self, action, **kw):
+            Hot.n += 1
+            if Hot.n in (1, 2):
+                raise RuntimeError("Service invoked too many times: 429 rate limit")
+            return super().trial_post(action, **kw)
+
+    stats, rf = P.run(Hot("2", 0, log), "f", shelves=["tidy"], tables=["meibo_base"], out=lambda *_: None)
+    r = json.loads(rf.read_text(encoding="utf-8").splitlines()[0])
+    assert stats["quota_retry"] == 2 and stats["post_fail"] == 0 and r["p"]["P1"] == "pass" and r["retries"] == 2
+    Hot.n = -100                                                           # 上限まで撃ち直しても駄目なら、失敗として残す
+    monkeypatch.setattr(P, "QUOTA_RETRIES", 1)
+
+    class Dead(FakeEng):
+        def trial_post(self, action, **kw):
+            raise RuntimeError("429 rate limit")
+
+    stats, rf = P.run(Dead("2", 0, log), "f", shelves=["tidy"], tables=["uriage_base"], out=lambda *_: None)
+    assert stats["post_fail"] == 1 and stats["quota"] == 1 and stats["quota_retry"] == 1
+
+
+def test_default_jobs_is_five_and_lanes_can_go_up_to_ten():
+    assert TR.DEFAULT_JOBS == 5 and TR.MAX_JOBS == 10 and len(TR.LANE_NUMS) == 9 and TR.LANE_SHEETS["10"] == "WS試験_場10"
