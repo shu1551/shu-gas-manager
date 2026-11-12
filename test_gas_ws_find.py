@@ -284,3 +284,70 @@ def test_misses_file_and_engine_all_file_are_ignored_by_git():
 def test_common_files_still_free_of_shelf_names_after_stage1():
     assert cat_mod.find_hardcoded_names(gw.CATALOG) == []
     assert "gas_ws_find.py" in cat_mod.HARDCODE_FILES
+
+
+# ---------------------------------------------------------------- 移動の to は「動かした後の位置」
+MOVE_JS = r"""
+const vm = require('vm'), fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const ctxv = vm.createContext({ console: console, DocumentApp: new Proxy({}, { get: function () { return new Proxy({}, { get: function () { return 1; } }); } }) });
+vm.runInContext(input.files.join('\n'), ctxv);
+vm.runInContext(`
+  var __log = [];
+  var fakeSh = {
+    getName: function () { return 'S'; },
+    getRange: function (r, c, nr, nc) { return { r: r, c: c, nr: nr, nc: nc }; },
+    moveColumns: function (rg, dest) { __log.push(['col', rg.c, dest]); },
+    moveRows: function (rg, dest) { __log.push(['row', rg.r, rg.nr, dest]); }
+  };
+  sheetCtx_ = function () { return fakeSh; };
+  var __res = [];
+  __input.cases.forEach(function (c) {
+    __log = [];
+    SHELF[c.shelf]({ changed: [], notes: [] }, c.op);
+    __res.push(__log);
+  });
+  var __out = JSON.stringify(__res);
+`, Object.assign(ctxv, { __input: input }));
+console.log(ctxv.__out);
+"""
+
+
+@pytest.mark.skipif(not _node_ok(), reason="node が無い")
+def test_move_to_means_position_after_the_move():
+    cases = [
+        # 右へ 1 つ（C を D の位置へ）／左へ 1 つ／同じ位置／離れた右・左
+        {"shelf": "cols.move", "op": {"shelf": "cols.move", "from": "C", "to": "D"}},
+        {"shelf": "cols.move", "op": {"shelf": "cols.move", "from": "D", "to": "C"}},
+        {"shelf": "cols.move", "op": {"shelf": "cols.move", "from": "C", "to": "C"}},
+        {"shelf": "cols.move", "op": {"shelf": "cols.move", "from": "A", "to": "E"}},
+        {"shelf": "cols.move", "op": {"shelf": "cols.move", "from": "E", "to": "A"}},
+        {"shelf": "rows.move", "op": {"shelf": "rows.move", "from": 3, "to": 4}},
+        {"shelf": "rows.move", "op": {"shelf": "rows.move", "from": 4, "to": 3}},
+        {"shelf": "rows.move", "op": {"shelf": "rows.move", "from": 3, "to": 3}},
+        {"shelf": "rows.move", "op": {"shelf": "rows.move", "from": 2, "to": 6, "count": 2}},   # 2 行ぶんを動かすと、先頭が 6 行目に来る
+        {"shelf": "rows", "op": {"shelf": "rows", "action": "move", "from": 3, "to": 4}},         # 旧名もそろえる
+        {"shelf": "rows", "op": {"shelf": "rows", "action": "move", "cols": ["C"], "from": "C", "to": "D"}},
+    ]
+    files = [t for _, t in gw._engine_texts()]
+    r = subprocess.run(["node", "-e", MOVE_JS], input=json.dumps({"files": files, "cases": cases}).encode("utf-8"), capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    res = json.loads(r.stdout.decode("utf-8").strip().splitlines()[-1])
+    assert res == [
+        [["col", 3, 5]],          # C→D（右へ 1）: D の「手前」ではなく E の手前へ
+        [["col", 4, 3]],          # D→C（左へ 1）
+        [["col", 3, 3]],          # 同じ位置（何も起きない）
+        [["col", 1, 6]],
+        [["col", 5, 1]],
+        [["row", 3, 1, 5]],
+        [["row", 4, 1, 3]],
+        [["row", 3, 1, 3]],
+        [["row", 2, 2, 8]],
+        [["row", 3, 1, 5]],
+        [["col", 3, 5]],
+    ]
+
+
+def test_move_cards_say_to_is_the_position_after_the_move():
+    for n in ("rows.move", "cols.move", "rows"):
+        assert "動かした後" in gw.CATALOG.by_name[n]["diff"], n

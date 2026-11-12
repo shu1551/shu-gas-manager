@@ -8,6 +8,7 @@
 // どれか: rows cols
 // 例: 「3行目から5行目を消して」 → {"shelf":"rows","rows":[3,4,5]}
 // 例: 「A列とB列を入れ替えて」 → {"shelf":"rows","action":"move","cols":["A"],"from":"A","to":"B"}
+// 違い: 移動の to は、動かした後にその列・行が来る位置
 // 危ない: 消す
 // 触る: 値 書式
 // 検索: しない
@@ -30,7 +31,9 @@ SHELF['rows'] = function (ctx, op) {
     chg_(ctx, sh, nums.slice().reverse().join('・') + (isCol ? ' 列' : ' 行目'), '削除');
   } else if (act === 'move') {
     need_(op, ['from', 'to']);
-    if (isCol) sh.moveColumns(sh.getRange(1, colNum_(op.from), 1, 1), colNum_(op.to)); else sh.moveRows(sh.getRange(parseInt(op.from), 1, op.count || 1, 1), parseInt(op.to));
+    // to＝動かした後にその列（行）が来る位置。moveColumns/moveRows は「その位置の手前へ」入れるので、右（下）へ動かすときは動かす幅だけ先へ渡す
+    if (isCol) { var f = colNum_(op.from), to = colNum_(op.to); sh.moveColumns(sh.getRange(1, f, 1, 1), to > f ? to + 1 : to); }
+    else { var fr = parseInt(op.from), cn = op.count || 1, tr = parseInt(op.to); sh.moveRows(sh.getRange(fr, 1, cn, 1), tr > fr ? tr + cn : tr); }
     chg_(ctx, sh, op.from + ' → ' + op.to, '移動');
   } else throw new ArgError('棚「rows」の action は insert・delete・move です');
 };
@@ -64,7 +67,7 @@ SHELF['rows.delete'] = function (ctx, op) {
 // 題: 行を移動する
 // 分類: 行と列
 // 語: 行を移動|行を動か|行を上へ|行を下へ|行の順番|行を入れ替|行を並べ替
-// 違い: 列なら cols.move。値で並べ替えるなら sort
+// 違い: to＝動かした後にその行が来る位置。列なら cols.move。値で並べ替えるなら sort
 // 引数: from*=文字, to*=文字, count=数
 // 例: 「5行目を2行目の前に動かして」 → {"shelf":"rows.move","from":5,"to":2}
 // 触る: 値 書式
@@ -101,7 +104,7 @@ SHELF['cols.delete'] = function (ctx, op) {
 // 題: 列を移動する
 // 分類: 行と列
 // 語: 列を移動|列を動か|列を入れ替|列の順番|列を左へ|列を右へ|列を並べ替
-// 違い: 行なら rows.move
+// 違い: to＝動かした後にその列が来る位置。行なら rows.move
 // 引数: from*=列, to*=列
 // 例: 「A列とB列を入れ替えて」 → {"shelf":"cols.move","from":"A","to":"B"}
 // 触る: 値 書式
