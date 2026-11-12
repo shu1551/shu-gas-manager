@@ -1,0 +1,685 @@
+[
+ {
+  "id": "t1-01",
+  "table": "uriage_base",
+  "kind": "並べる",
+  "layer": "L2b",
+  "tags": [
+   "K3"
+  ],
+  "turns": [
+   {
+    "say": "金額の大きい順に並べて",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "条件": [
+      {
+       "並び": {
+        "列": "金額",
+        "向き": "降順"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "sort",
+    "col": "金額",
+    "desc": true
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-02",
+  "table": "uriage_base",
+  "kind": "絞る",
+  "layer": "L2b",
+  "tags": [
+   "K3"
+  ],
+  "turns": [
+   {
+    "say": "得意先が北斗工業の行だけ見せて",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "条件": [
+      {
+       "見えている行": {
+        "列": "得意先",
+        "だけ": "北斗工業"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "filter.where",
+    "col": "得意先",
+    "equals": "北斗工業"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-03",
+  "table": "uriage_base",
+  "kind": "見た目",
+  "layer": "L2b",
+  "tags": [
+   "K6"
+  ],
+  "turns": [
+   {
+    "say": "見出しを太字にして青い背景にして",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "条件": [
+      {
+       "見えている書式": {
+        "範囲": "A1:G1",
+        "背景": "青",
+        "太字": true
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "format",
+    "header": true,
+    "bold": true,
+    "bg": "#4285F4"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-04",
+  "table": "uriage_base",
+  "kind": "見た目",
+  "layer": "L2b",
+  "tags": [
+   "K13"
+  ],
+  "turns": [
+   {
+    "say": "単価の列を円マークつきの表示にして",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "format",
+    "col": "単価",
+    "number_format": "¥#,##0"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-05",
+  "table": "meibo_base",
+  "kind": "見た目",
+  "layer": "L2b",
+  "tags": [
+   "K3"
+  ],
+  "turns": [
+   {
+    "say": "氏名の列を太字にして",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "条件": [
+      {
+       "見えている書式": {
+        "範囲": "B2:B20",
+        "太字": true
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "format",
+    "col": "氏名",
+    "bold": true
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-06",
+  "table": "meibo_dirty",
+  "kind": "行や列を足す・消す",
+  "layer": "L2b",
+  "tags": [
+   "K15"
+  ],
+  "turns": [
+   {
+    "say": "全部の列が同じ行（重複）を消して",
+    "approve": "ある",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "dedupe"
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-07",
+  "table": "meibo_dirty",
+  "kind": "行や列を足す・消す",
+  "layer": "L2b",
+  "tags": [
+   "K15",
+   "K3"
+  ],
+  "turns": [
+   {
+    "say": "会員番号がダブってる行を消して",
+    "approve": "ある",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "dedupe",
+    "cols": [
+     "会員番号"
+    ]
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-08",
+  "table": "meibo_dirty",
+  "kind": "値を直す・計算",
+  "layer": "L2b",
+  "tags": [
+   "K3"
+  ],
+  "turns": [
+   {
+    "say": "空白や全角の混ざりを整理して",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "seiri"
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-09",
+  "table": "uriage_dirty",
+  "kind": "行や列を足す・消す",
+  "layer": "L2b",
+  "tags": [
+   "K3",
+   "K6"
+  ],
+  "turns": [
+   {
+    "say": "空行を詰めて",
+    "approve": "ある",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "seiri",
+    "blank_rows": true
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-10",
+  "table": "uriage_base",
+  "kind": "行や列を足す・消す",
+  "layer": "L2b",
+  "tags": [
+   "K15"
+  ],
+  "turns": [
+   {
+    "say": "3行目を消して",
+    "approve": "ある",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "rows.delete",
+    "rows": [
+     3
+    ]
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-11",
+  "table": "uriage_base",
+  "kind": "行や列を足す・消す",
+  "layer": "L2b",
+  "tags": [
+   "K6"
+  ],
+  "turns": [
+   {
+    "say": "A列とB列を入れ替えて",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "cols.move",
+    "from": "A",
+    "to": "B"
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-12",
+  "table": "meibo_base",
+  "kind": "構成",
+  "layer": "L2b",
+  "tags": [
+   "K3"
+  ],
+  "turns": [
+   {
+    "say": "2行目まで固定して",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "構成",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "freeze",
+    "rows": 2
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-13",
+  "table": "uriage_base",
+  "kind": "値を直す・計算",
+  "layer": "L2b",
+  "tags": [
+   "K9"
+  ],
+  "turns": [
+   {
+    "say": "H列の2行目から21行目に1から連番を入れて",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "fill.series",
+    "range": "H2:H21"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-14",
+  "table": "meibo_base",
+  "kind": "行や列を足す・消す",
+  "layer": "L2b",
+  "tags": [
+   "K9"
+  ],
+  "turns": [
+   {
+    "say": "C列とD列の間に空の列を足して",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "cols.insert",
+    "at": "D"
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-15",
+  "table": "uriage_base",
+  "kind": "値を直す・計算",
+  "layer": "L2b",
+  "tags": [
+   "K3",
+   "K7"
+  ],
+  "turns": [
+   {
+    "say": "得意先ごとの数量と金額の集計表を新しいシートに作って",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "新しいシートに含む"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "summary",
+    "by": "得意先",
+    "values": [
+     "数量",
+     "金額"
+    ]
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-16",
+  "table": "meibo_base",
+  "kind": "値を直す・計算",
+  "layer": "L2b",
+  "tags": [
+   "K15"
+  ],
+  "turns": [
+   {
+    "say": "ふりがなの列の値を消して",
+    "approve": "ある",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "clear.values",
+    "range": "C2:C20"
+   }
+  ],
+  "may_change": [
+   "式"
+  ],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-17",
+  "table": "uriage_base",
+  "kind": "見た目",
+  "layer": "L2b",
+  "tags": [
+   "K8"
+  ],
+  "turns": [
+   {
+    "say": "金額が1000以上のセルを黄色くして",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "見た目",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "cf.add",
+    "range": "G2:G21",
+    "when": "ge",
+    "value": "1000",
+    "bg": "#FFFF00"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-18",
+  "table": "meibo_dirty",
+  "kind": "値を直す・計算",
+  "layer": "L2b",
+  "tags": [
+   "K3"
+  ],
+  "turns": [
+   {
+    "say": "山田を山田（総務）に置き換えて",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "模範と同じ": {
+      "面": "既定",
+      "比べ方": "そのまま"
+     }
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "replace",
+    "find": "山田",
+    "with": "山田（総務）"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-19",
+  "table": "uriage_quirk",
+  "kind": "見た目",
+  "layer": "L2b",
+  "tags": [
+   "K6"
+  ],
+  "turns": [
+   {
+    "say": "見出しの2段目の文字を赤くして",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "条件": [
+      {
+       "見えている書式": {
+        "範囲": "A2:G2",
+        "文字色": "赤"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "format",
+    "range": "A2:G2",
+    "color": "#FF0000"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ },
+ {
+  "id": "t1-20",
+  "table": "meibo_quirk",
+  "kind": "見た目",
+  "layer": "L2b",
+  "tags": [
+   "K6"
+  ],
+  "turns": [
+   {
+    "say": "タイトルの下の見出しの行を黄色の背景にして",
+    "approve": "まだ",
+    "askback": "要らない",
+    "expect": {
+     "条件": [
+      {
+       "見えている書式": {
+        "範囲": "A3:F3",
+        "背景": "黄"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  "if_asked": {},
+  "model": [
+   {
+    "shelf": "format",
+    "range": "A3:F3",
+    "bg": "#FFFF00"
+   }
+  ],
+  "may_change": [],
+  "max_calls": 4
+ }
+]

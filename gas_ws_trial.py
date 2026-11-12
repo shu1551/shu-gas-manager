@@ -419,12 +419,50 @@ def props_cmd(args, out=print):
     return 1 if fails else 0
 
 
+def shot_cmd(cmd, args, out=print):
+    """golden（模範の再生）・look（ws_look の撮り置き）・shot（L2b: AI に 1 回答えさせて撃つ）。試験用のエンジンの試験場だけに撃つ"""
+    import argparse
+    import gas_ws_shot as S
+    ap = argparse.ArgumentParser(prog="ws-trial " + cmd)
+    ap.add_argument("--case", action="append", default=[])
+    ap.add_argument("--model", default="haiku")
+    ap.add_argument("--times", type=int, default=1)
+    ap.add_argument("--resume", default="")
+    ap.add_argument("--limit-sec", type=int, default=6 * 3600)
+    a = ap.parse_args(args)
+    from gas_client import GasClient
+    st = load_state()
+    eng = TrialEngine(client=GasClient())
+    eng.assert_not_prod()
+    fid = st["files"]["WS試験_場"]
+    cases = [c for c in S.load_cases() if not a.case or c["id"] in a.case]
+    if cmd == "look":
+        import gas_ws_props
+        S.capture_looks(eng, fid, sorted({c["table"] for c in cases} | set(gas_ws_props.TABLES)), out=out)
+        return 0
+    if cmd == "golden":
+        bad = 0
+        for c in cases:
+            resp, _ = S.run_model(eng, fid, c)
+            ok, why = S.judge_model(c, resp)
+            bad += not ok
+            out(("○ " if ok else "M ") + f"{c['id']} {c['table']}「{c['turns'][0]['say'][:24]}」" + ("" if ok else " " + "；".join(why)[:160]))
+        out(f"模範の再生 {len(cases)} 本・通らない {bad} 本")
+        return 1 if bad else 0
+    results, rf = S.run_shot(eng, fid, cases, model=a.model, out=out, run_file=a.resume or None, resume=bool(a.resume), times=a.times, limit_seconds=a.limit_sec)
+    sm = S.summarize(results)
+    out(f"L2b {a.model}: {sm['ok']}/{sm['n']}（{sm['rate']:.0f}%）・外れの内訳 {sm['F']}・AI {sm['ai_calls']} 回 {sm['ai_sec']:.0f} 秒（1 回 {sm['sec_each']:.1f} 秒）・入力 {sm['in_tokens']} 出力 {sm['out_tokens']} トークン・API 換算 ${sm['cost_usd']:.3f}・記録 {rf}")
+    return 0
+
+
 def main(argv):
     cmd = argv[0] if argv else ""
     if cmd == "init":
         return init()
     if cmd == "props":
         return props_cmd(argv[1:])
+    if cmd in ("golden", "look", "shot"):
+        return shot_cmd(cmd, argv[1:])
     if cmd == "check":
         memo = Path(r"C:\Users\shu\AppData\Local\Claude-Data\claude_pzs8sxrjxfjjc\side-session-notes\local_17e23481-3a47-4d0f-ab8c-f1d69e214e19") / "段T0_実機の確かめ.md"
         return check(memo_path=memo if memo.parent.exists() else None)
