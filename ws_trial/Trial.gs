@@ -66,7 +66,7 @@ function trialSide_(sh) {
       return { ranges: (r.ranges || []).map(trialRng_), type: b ? b.condition.type : (r.gradientRule ? 'GRADIENT' : ''), values: b ? (b.condition.values || []).map(function (v) { return v.userEnteredValue; }) : [],
         bg: b && b.format ? trialHex_(b.format.backgroundColor, '') : '' };
     }),
-    protected: (sh.protectedRanges || []).map(function (r) { return { range: r.range ? trialRng_(r.range) : 'シート全体', warning: !!r.warningOnly }; }),
+    protected: (sh.protectedRanges || []).map(function (r) { var g = r.range || {}; var whole = g.startRowIndex === undefined && g.endRowIndex === undefined && g.startColumnIndex === undefined && g.endColumnIndex === undefined; return { range: whole ? 'シート全体' : trialRng_(g), warning: !!r.warningOnly }; }),
     charts: (sh.charts || []).map(function (c) { var s = c.spec || {}; return { title: s.title || '', type: s.basicChart ? s.basicChart.chartType : (s.pieChart ? 'PIE' : 'OTHER') }; }),
     banded: (sh.bandedRanges || []).map(function (r) { return trialRng_(r.range); }),
     groups: { rows: (sh.rowGroups || []).map(function (g) { return { range: trialRng_(g.range), depth: g.depth, collapsed: !!g.collapsed }; }),
@@ -252,4 +252,77 @@ EXTRA_ACTIONS['trial'] = function (req) {
     out.c = trialSnap_(ss);
   }
   return out;
+};
+
+
+// ---------------------------------------------------------------- 脇の状態の調べ（試験用のエンジンの中だけ。棚には足さない）
+// 項目を付ける・外す手。戻しが約束していない「脇の状態」が ws_undo で戻るかを調べる材料
+function trialSideApply_(ss, sh, item) {
+  var B = SpreadsheetApp.BandingTheme;
+  if (item === 'frozen') sh.setFrozenRows(2);
+  else if (item === 'validation_list') sh.getRange('C2:C5').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['未着手', '完了'], true).build());
+  else if (item === 'validation_checkbox') sh.getRange('G2:G5').insertCheckboxes();
+  else if (item === 'cf') sh.setConditionalFormatRules([SpreadsheetApp.newConditionalFormatRule().setRanges([sh.getRange('F2:F20')]).whenNumberGreaterThan(11999).setBackground('#ffff00').build()]);
+  else if (item === 'banding') sh.getRange('A1:F20').applyRowBanding(B.LIGHT_GREY);
+  else if (item === 'filter') { var f = sh.getRange('A1:F20').createFilter(); f.setColumnFilterCriteria(2, SpreadsheetApp.newFilterCriteria().setHiddenValues(['会員14']).build()); }
+  else if (item === 'hide_rows') sh.hideRows(9);
+  else if (item === 'hide_cols') sh.hideColumns(3);
+  else if (item === 'hide_sheet') { ss.insertSheet('メモ'); sh.hideSheet(); }
+  else if (item === 'group_rows') sh.getRange('10:12').shiftRowGroupDepth(1);
+  else if (item === 'group_cols') sh.getRange('D:E').shiftColumnGroupDepth(1);
+  else if (item === 'protect_sheet') sh.protect().setDescription('試験').setWarningOnly(true);
+  else if (item === 'protect_range') sh.getRange('F2:F20').protect().setDescription('試験').setWarningOnly(true);
+  else if (item === 'named') ss.setNamedRange('金額列', sh.getRange('F2:F20'));
+  else if (item === 'tab_color') sh.setTabColor('#ff0000');
+  else if (item === 'chart') sh.insertChart(sh.newChart().setChartType(Charts.ChartType.COLUMN).addRange(sh.getRange('F1:F20')).setPosition(2, 8, 0, 0).setOption('title', '試験').build());
+  else throw new ArgError('知らない項目: ' + item);
+}
+
+function trialSideChange_(ss, sh, item) {
+  if (item === 'frozen') sh.setFrozenRows(0);
+  else if (item === 'validation_list') sh.getRange('C2:C5').clearDataValidations();
+  else if (item === 'validation_checkbox') sh.getRange('G2:G5').removeCheckboxes();
+  else if (item === 'cf') sh.setConditionalFormatRules([]);
+  else if (item === 'banding') sh.getBandings().forEach(function (b) { b.remove(); });
+  else if (item === 'filter') { var f = sh.getFilter(); if (f) f.remove(); }
+  else if (item === 'hide_rows') sh.showRows(9);
+  else if (item === 'hide_cols') sh.showColumns(3);
+  else if (item === 'hide_sheet') sh.showSheet();
+  else if (item === 'group_rows') sh.getRange('10:12').shiftRowGroupDepth(-1);
+  else if (item === 'group_cols') sh.getRange('D:E').shiftColumnGroupDepth(-1);
+  else if (item === 'protect_sheet') sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (q) { q.remove(); });
+  else if (item === 'protect_range') sh.getProtections(SpreadsheetApp.ProtectionType.RANGE).forEach(function (q) { q.remove(); });
+  else if (item === 'named') ss.removeNamedRange('金額列');
+  else if (item === 'tab_color') sh.setTabColor(null);
+  else if (item === 'chart') sh.getCharts().forEach(function (c) { sh.removeChart(c); });
+  else throw new ArgError('知らない項目: ' + item);
+}
+
+// 1 回の POST で「流し込む → 項目を付ける → 撮る(x) → 値だけ変える棚を撃つ → [場合 A: 項目を外す・変える] → 撮る(z) → ws_undo → 撮る(y)」
+EXTRA_ACTIONS['side_case'] = function (req) {
+  var step = 'open', out = { ok: true, item: req.item, case: req.case };
+  try {
+    var ss = trialOpen_(req.id);
+    step = 'seed';
+    var sd = trialSeed_(Object.assign({ id: req.id }, req.seed));
+    if (!sd.ok) return { ok: false, error: sd.error, step: step };
+    step = 'apply';
+    ss = trialOpen_(req.id);   // seed が別のハンドルでシートを作り直したので、開き直す
+    trialSideApply_(ss, ss.getSheetByName('名簿'), req.item);
+    SpreadsheetApp.flush();
+    step = 'snap_x';
+    out.x = trialSnap_(ss);
+    step = 'do';
+    out.do = actDo_({ target: { id: req.id, kind: 'sheet' }, ops: [{ shelf: 'write', sheet: '名簿', cells: { B3: '書換' } }], ok: true });
+    if (req.case === 'A') { step = 'change'; ss = trialOpen_(req.id); trialSideChange_(ss, ss.getSheetByName('名簿'), req.item); SpreadsheetApp.flush(); }
+    step = 'snap_z';
+    out.z = trialSnap_(ss);
+    step = 'undo';
+    out.undo = actUndo_({ target_id: req.id, ok: true });
+    step = 'snap_y';
+    out.y = trialSnap_(ss);
+    return out;
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e), step: step, stack: String(e && e.stack || '').slice(0, 300) };
+  }
 };
