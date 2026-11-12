@@ -346,6 +346,206 @@ def check_condition(cond, before, after, tinfo=None):
         if fb != fa or ob != oa:
             return False, "約束の指紋が変わっています: " + "、".join(sorted(k for k in set(fb) | set(fa) if fb.get(k) != fa.get(k)))
         return True, ""
+    if "末尾が式" in cond:
+        spec = cond["末尾が式"]
+        cols_spec = spec["列"] if isinstance(spec, dict) else spec
+        if isinstance(cols_spec, str):
+            cols_spec = [cols_spec]
+        col_map = _columns(sh, tinfo)
+        mr, _ = extent(sh)
+        if mr == 0:
+            return False, "表にデータがありません"
+        for cname in cols_spec:
+            c = col_map.get(cname)
+            if not c:
+                return False, f"列「{cname}」がありません"
+            a1 = f"{col_letter(c)}{mr}"
+            if not sh["cells"].get(a1, {}).get("f"):
+                return False, f"最終行 {a1} に式がありません"
+        return True, ""
+    if "空白行なし" in cond:
+        mr, mc = extent(sh)
+        if mr == 0:
+            return True, ""
+        drows = _data_rows(sh, tinfo)
+        start_r = min(drows) if drows else 1
+        for r in range(start_r, mr + 1):
+            if all(cell_v(sh, f"{col_letter(c)}{r}") == "" for c in range(1, mc + 1)):
+                return False, f"{r} 行目が空白行です"
+        return True, ""
+    if "重複なし" in cond:
+        spec = cond["重複なし"]
+        col_map = _columns(sh, tinfo)
+        _, mc = extent(sh)
+        if isinstance(spec, dict) and "列" in spec:
+            cnames = [spec["列"]] if isinstance(spec["列"], str) else spec["列"]
+            cols = [col_map[n] for n in cnames if n in col_map]
+        else:
+            cols = list(range(1, mc + 1))
+        seen = set()
+        for r in _data_rows(sh, tinfo):
+            row_vals = tuple(cell_v(sh, f"{col_letter(c)}{r}") for c in cols)
+            if all(v == "" for v in row_vals):
+                continue
+            if row_vals in seen:
+                return False, f"{r} 行目が重複しています: {row_vals}"
+            seen.add(row_vals)
+        return True, ""
+    if "連番" in cond:
+        spec = cond["連番"]
+        cname = spec["列"] if isinstance(spec, dict) else spec
+        start = spec.get("開始", 1) if isinstance(spec, dict) else 1
+        c = _columns(sh, tinfo).get(cname)
+        if not c:
+            return False, f"列「{cname}」がありません"
+        for idx, r in enumerate(_data_rows(sh, tinfo)):
+            n = cell_num(sh, f"{col_letter(c)}{r}")
+            want = start + idx
+            if n is None or abs(n - want) > 1e-9:
+                return False, f"{col_letter(c)}{r} が {want} のはずが {cell_v(sh, f'{col_letter(c)}{r}')!r}"
+        return True, ""
+    if "行数" in cond:
+        spec = cond["行数"]
+        sh_b = _first_sheet(before, cond) if before else None
+        mr_b = extent(sh_b)[0] if sh_b else 0
+        mr_a = extent(sh)[0]
+        if isinstance(spec, int):
+            return (mr_a == spec), "" if mr_a == spec else f"行数が {spec} のはずが {mr_a}"
+        if "減った" in spec:
+            diff = mr_b - mr_a
+            want = spec["減った"]
+            ok = (diff == want) if isinstance(want, int) else (diff > 0)
+            return ok, "" if ok else f"行数が {want} 減るはずが {mr_b} -> {mr_a}"
+        if "増えた" in spec:
+            diff = mr_a - mr_b
+            want = spec["増えた"]
+            ok = (diff == want) if isinstance(want, int) else (diff > 0)
+            return ok, "" if ok else f"行数が {want} 増えるはずが {mr_b} -> {mr_a}"
+        return False, "行数の条件が不正です"
+    if "列数" in cond:
+        spec = cond["列数"]
+        sh_b = _first_sheet(before, cond) if before else None
+        mc_b = extent(sh_b)[1] if sh_b else 0
+        mc_a = extent(sh)[1]
+        if isinstance(spec, int):
+            return (mc_a == spec), "" if mc_a == spec else f"列数が {spec} のはずが {mc_a}"
+        if "増えた" in spec:
+            diff = mc_a - mc_b
+            want = spec["増えた"]
+            ok = (diff == want) if isinstance(want, int) else (diff > 0)
+            return ok, "" if ok else f"列数が {want} 増えるはずが {mc_b} -> {mc_a}"
+        if "減った" in spec:
+            diff = mc_b - mc_a
+            want = spec["減った"]
+            ok = (diff == want) if isinstance(want, int) else (diff > 0)
+            return ok, "" if ok else f"列数が {want} 減るはずが {mc_b} -> {mc_a}"
+        return False, "列数の条件が不正です"
+    if "空範囲" in cond:
+        m = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", cond["空範囲"])
+        if not m:
+            return False, f"範囲指定が不正です: {cond['空範囲']}"
+        c1, r1, c2, r2 = col_num(m.group(1)), int(m.group(2)), col_num(m.group(3)), int(m.group(4))
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                if cell_v(sh, f"{col_letter(c)}{r}") != "":
+                    return False, f"{col_letter(c)}{r} が空ではありません"
+        return True, ""
+    if "整え済み" in cond:
+        mr, mc = extent(sh)
+        if mr == 0:
+            return True, ""
+        drows = _data_rows(sh, tinfo)
+        start_r = min(drows) if drows else 1
+        for r in range(start_r, mr + 1):
+            if all(cell_v(sh, f"{col_letter(c)}{r}") == "" for c in range(1, mc + 1)):
+                return False, f"{r} 行目が空白行です"
+        for a1, cell in sh["cells"].items():
+            v = str(cell.get("v", ""))
+            if v != v.strip(" \t\u3000"):
+                return False, f"{a1} に前後の空白があります"
+            if re.search(r"[０-９]", v):
+                return False, f"{a1} に全角数字があります"
+        return True, ""
+    if "シートあり" in cond:
+        name = cond["シートあり"]
+        return (sheet_of(after, name) is not None), "" if sheet_of(after, name) is not None else f"シート「{name}」がありません"
+    if "シートの並び" in cond:
+        want = cond["シートの並び"]
+        got = [s["name"] for s in after["sheets"]]
+        return (got == want), "" if got == want else f"シートの並びが {want} のはずが {got}"
+    if "固定" in cond:
+        spec = cond["固定"]
+        fr = sh.get("frozen", {})
+        if "行" in spec and fr.get("rows", 0) != spec["行"]:
+            return False, f"固定行が {spec['行']} のはずが {fr.get('rows', 0)}"
+        if "列" in spec and fr.get("cols", 0) != spec["列"]:
+            return False, f"固定列が {spec['列']} のはずが {fr.get('cols', 0)}"
+        return True, ""
+    if "入力規則あり" in cond:
+        vals = sh.get("side", {}).get("validations", {})
+        spec = cond["入力規則あり"]
+        if spec is True:
+            return (len(vals) > 0), "" if vals else "入力規則がありません"
+        return (str(spec) in vals), "" if str(spec) in vals else f"{spec} に入力規則がありません"
+    if "条件付き書式あり" in cond:
+        n = sh.get("cf", 0) or len(sh.get("side", {}).get("cf_rules", []))
+        return (n > 0), "" if n > 0 else "条件付き書式がありません"
+    if "交互の色あり" in cond:
+        b = sh.get("side", {}).get("banded", [])
+        return (len(b) > 0), "" if b else "交互の色がありません"
+    if "フィルタあり" in cond:
+        f = sh.get("side", {}).get("filter")
+        return (f is not None), "" if f is not None else "フィルタがありません"
+    if "保護あり" in cond:
+        p = sh.get("side", {}).get("protected", [])
+        return (len(p) > 0), "" if p else "保護がありません"
+    if "名前付き範囲あり" in cond:
+        spec = cond["名前付き範囲あり"]
+        named = after.get("named", [])
+        if spec is True:
+            return (len(named) > 0), "" if named else "名前付き範囲がありません"
+        ok = any(n.get("name") == spec for n in named)
+        return ok, "" if ok else f"名前付き範囲「{spec}」がありません"
+    if "隠し行" in cond:
+        spec = cond["隠し行"]
+        hr = sh.get("hidden_rows", [])
+        if spec is True:
+            return (len(hr) > 0), "" if hr else "隠し行がありません"
+        ok = all(r in hr for r in spec)
+        return ok, "" if ok else f"隠し行 {spec} が設定されていません（実際: {hr}）"
+    if "隠し列" in cond:
+        spec = cond["隠し列"]
+        hc = [col_letter(c) for c in sh.get("hidden_cols", [])]
+        if spec is True:
+            return (len(hc) > 0), "" if hc else "隠し列がありません"
+        ok = all(c in hc for c in spec)
+        return ok, "" if ok else f"隠し列 {spec} が設定されていません（実際: {hc}）"
+    if "グラフあり" in cond:
+        spec = cond["グラフあり"]
+        charts = sh.get("side", {}).get("charts", [])
+        if not charts:
+            return False, "グラフがありません"
+        if spec is True:
+            return True, ""
+        cmap = {"縦棒": "COLUMN", "横棒": "BAR", "折れ線": "LINE", "円": "PIE", "面": "AREA", "散布図": "SCATTER"}
+        want_type = cmap.get(spec, spec) if isinstance(spec, str) else cmap.get(spec.get("種類", ""), spec.get("種類", ""))
+        want_title = spec.get("題", "") if isinstance(spec, dict) else ""
+        for ch in charts:
+            if want_type and ch.get("type") != want_type:
+                continue
+            if want_title and ch.get("title") != want_title:
+                continue
+            return True, ""
+        return False, f"条件に合うグラフがありません（実際: {charts}）"
+    if "聞き返した" in cond or "断った" in cond:
+        if tinfo and isinstance(tinfo, dict):
+            if tinfo.get("ops"):
+                return False, "ops が空であるべきですが実行されました"
+        fb, ob = promise_fingerprints(before)
+        fa, oa = promise_fingerprints(after)
+        if fb != fa or ob != oa:
+            return False, "状態が変わってしまっています"
+        return True, ""
     raise ValueError(f"知らない条件: {list(cond)}")
 
 

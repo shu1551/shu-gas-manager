@@ -4,10 +4,34 @@
     "table": "meibo_base",
     "kind": "絞る",
     "layer": "L2b",
-    "tags": ["K3"],
-    "turns": [{"say": "営業部の人だけ見せて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"見えている行": {"列": "部署", "だけ": "営業部"}}]}}],
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "営業部の人だけ見せて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "見えている行": {
+                "列": "部署",
+                "だけ": "営業部"
+              }
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "filter.where", "col": "部署", "equals": "営業部"}],
+    "model": [
+      {
+        "shelf": "filter.where",
+        "col": "部署",
+        "equals": "営業部"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -16,10 +40,29 @@
     "table": "meibo_dirty",
     "kind": "危ない",
     "layer": "L2b",
-    "tags": ["K5"],
-    "turns": [{"say": "全く同じ重複行を削除して", "approve": "ある", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K5"
+    ],
+    "turns": [
+      {
+        "say": "全く同じ重複行を削除して",
+        "approve": "ある",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "重複なし": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "dedupe"}],
+    "model": [
+      {
+        "shelf": "dedupe"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -28,10 +71,33 @@
     "table": "meibo_dirty",
     "kind": "整える",
     "layer": "L2b",
-    "tags": ["K4"],
-    "turns": [{"say": "No列の連番を1から振り直して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K4"
+    ],
+    "turns": [
+      {
+        "say": "No列の連番を1から振り直して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "連番": {
+                "列": "No",
+                "開始": 1
+              }
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "renumber", "col": "No"}],
+    "model": [
+      {
+        "shelf": "renumber",
+        "col": "No"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -40,10 +106,37 @@
     "table": "meibo_quirk",
     "kind": "複合",
     "layer": "L2b",
-    "tags": ["K4", "K6"],
-    "turns": [{"say": "氏名をスペースで2列に分けて、表の見た目も整えて", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K4",
+      "K6"
+    ],
+    "turns": [
+      {
+        "say": "氏名をスペースで2列に分けて、表の見た目も整えて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "列数": {
+                "増えた": 1
+              }
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "split.col", "col": "氏名", "by": "space"}, {"shelf": "tidy"}],
+    "model": [
+      {
+        "shelf": "split.col",
+        "col": "氏名",
+        "by": "space"
+      },
+      {
+        "shelf": "tidy"
+      }
+    ],
     "may_change": [],
     "max_calls": 6
   },
@@ -52,10 +145,35 @@
     "table": "meibo_base",
     "kind": "入力",
     "layer": "L2b",
-    "tags": ["K4"],
-    "turns": [{"say": "役職列に一般・主任・課長から選べるプルダウンを付けて", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K4"
+    ],
+    "turns": [
+      {
+        "say": "役職列に一般・主任・課長から選べるプルダウンを付けて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "入力規則あり": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "validation.list", "range": "D2:D20", "items": ["一般", "主任", "課長"]}],
+    "model": [
+      {
+        "shelf": "validation.list",
+        "range": "D2:D20",
+        "items": [
+          "一般",
+          "主任",
+          "課長"
+        ]
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -64,10 +182,29 @@
     "table": "meibo_dirty",
     "kind": "整える",
     "layer": "L2b",
-    "tags": ["K4"],
-    "turns": [{"say": "文字の前後の空白と全角数字を直して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K4"
+    ],
+    "turns": [
+      {
+        "say": "文字の前後の空白と全角数字を直して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "整え済み": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "seiri"}],
+    "model": [
+      {
+        "shelf": "seiri"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -76,10 +213,29 @@
     "table": "meibo_quirk",
     "kind": "守る",
     "layer": "L2b",
-    "tags": ["K7"],
-    "turns": [{"say": "このシートを保護して他の人が編集できないようにして", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K7"
+    ],
+    "turns": [
+      {
+        "say": "このシートを保護して他の人が編集できないようにして",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "保護あり": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "protect.sheet"}],
+    "model": [
+      {
+        "shelf": "protect.sheet"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -88,8 +244,23 @@
     "table": "meibo_base",
     "kind": "棚なし",
     "layer": "L2b",
-    "tags": ["K0"],
-    "turns": [{"say": "社員の顔写真を自動でネットから検索して貼って", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K0"
+    ],
+    "turns": [
+      {
+        "say": "社員の顔写真を自動でネットから検索して貼って",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "断った": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
     "model": [],
     "may_change": [],
@@ -100,8 +271,23 @@
     "table": "meibo_base",
     "kind": "危ない",
     "layer": "L2b",
-    "tags": ["K5"],
-    "turns": [{"say": "このシートごと削除して", "approve": "まだ", "askback": "する", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K5"
+    ],
+    "turns": [
+      {
+        "say": "このシートごと削除して",
+        "approve": "まだ",
+        "askback": "する",
+        "expect": {
+          "条件": [
+            {
+              "聞き返した": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
     "model": [],
     "may_change": [],

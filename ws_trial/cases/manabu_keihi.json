@@ -4,10 +4,34 @@
     "table": "keihi_base",
     "kind": "集計",
     "layer": "L2b",
-    "tags": ["K3"],
-    "turns": [{"say": "金額の合計行を一番下に追加して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "金額の合計行を一番下に追加して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "末尾が式": {
+                "列": "金額"
+              }
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "total", "cols": ["金額"]}],
+    "model": [
+      {
+        "shelf": "total",
+        "cols": [
+          "金額"
+        ]
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -16,10 +40,33 @@
     "table": "keihi_base",
     "kind": "集計",
     "layer": "L2b",
-    "tags": ["K3"],
-    "turns": [{"say": "科目ごとの金額をまとめた集計表を作って", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "科目ごとの金額をまとめた集計表を作って",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "シートあり": "集計"
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "summary", "by": "科目", "values": ["金額"]}],
+    "model": [
+      {
+        "shelf": "summary",
+        "by": "科目",
+        "values": [
+          "金額"
+        ]
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -28,10 +75,29 @@
     "table": "keihi_dirty",
     "kind": "整える",
     "layer": "L2b",
-    "tags": ["K4"],
-    "turns": [{"say": "全角数字と余分な空白を直して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K4"
+    ],
+    "turns": [
+      {
+        "say": "全角数字と余分な空白を直して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "整え済み": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "seiri"}],
+    "model": [
+      {
+        "shelf": "seiri"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -40,10 +106,29 @@
     "table": "keihi_dirty_low",
     "kind": "整える",
     "layer": "L2b",
-    "tags": ["K4"],
-    "turns": [{"say": "空行を詰めてきれいにして", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K4"
+    ],
+    "turns": [
+      {
+        "say": "空行を詰めてきれいにして",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "整え済み": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "seiri"}],
+    "model": [
+      {
+        "shelf": "seiri"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -52,10 +137,30 @@
     "table": "keihi_quirk",
     "kind": "入力",
     "layer": "L2b",
-    "tags": ["K4"],
-    "turns": [{"say": "E5:E24に承認用のチェックボックスを付けて", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K4"
+    ],
+    "turns": [
+      {
+        "say": "E5:E24に承認用のチェックボックスを付けて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "入力規則あり": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "checkbox", "range": "E5:E24"}],
+    "model": [
+      {
+        "shelf": "checkbox",
+        "range": "E5:E24"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -64,10 +169,45 @@
     "table": "keihi_base",
     "kind": "複合",
     "layer": "L2b",
-    "tags": ["K3"],
-    "turns": [{"say": "交通費の行だけ絞り込んで、金額の大きい順に並べ替えて", "approve": "まだ", "askback": "要らない", "expect": {"条件": [{"見えている行": {"列": "科目", "だけ": "交通費"}}, {"並び": {"列": "金額", "向き": "降順"}}]}}],
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "交通費の行だけ絞り込んで、金額の大きい順に並べ替えて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "見えている行": {
+                "列": "科目",
+                "だけ": "交通費"
+              }
+            },
+            {
+              "並び": {
+                "列": "金額",
+                "向き": "降順"
+              }
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "filter.where", "col": "科目", "equals": "交通費"}, {"shelf": "sort", "col": "金額", "desc": true}],
+    "model": [
+      {
+        "shelf": "filter.where",
+        "col": "科目",
+        "equals": "交通費"
+      },
+      {
+        "shelf": "sort",
+        "col": "金額",
+        "desc": true
+      }
+    ],
     "may_change": [],
     "max_calls": 6
   },
@@ -76,10 +216,32 @@
     "table": "keihi_base",
     "kind": "集計",
     "layer": "L2b",
-    "tags": ["K3"],
-    "turns": [{"say": "経費の推移を折れ線グラフにして", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "経費の推移を折れ線グラフにして",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "グラフあり": {
+                "種類": "折れ線"
+              }
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "chart.new", "type": "line"}],
+    "model": [
+      {
+        "shelf": "chart.new",
+        "type": "line"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -88,8 +250,23 @@
     "table": "keihi_base",
     "kind": "棚なし",
     "layer": "L2b",
-    "tags": ["K0"],
-    "turns": [{"say": "領収書の画像を読み取って金額を自動で入力して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K0"
+    ],
+    "turns": [
+      {
+        "say": "領収書の画像を読み取って金額を自動で入力して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "断った": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
     "model": [],
     "may_change": [],
@@ -100,10 +277,30 @@
     "table": "keihi_base",
     "kind": "危ない",
     "layer": "L2b",
-    "tags": ["K5"],
-    "turns": [{"say": "B2:C5の値を消して", "approve": "ある", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K5"
+    ],
+    "turns": [
+      {
+        "say": "B2:C5の値を消して",
+        "approve": "ある",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "空範囲": "B2:C5"
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "clear.values", "range": "B2:C5"}],
+    "model": [
+      {
+        "shelf": "clear.values",
+        "range": "B2:C5"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -112,10 +309,29 @@
     "table": "keihi_quirk",
     "kind": "見た目",
     "layer": "L2b",
-    "tags": ["K6"],
-    "turns": [{"say": "表を1行おきに交互の色にして", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K6"
+    ],
+    "turns": [
+      {
+        "say": "表を1行おきに交互の色にして",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "交互の色あり": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "banding.add"}],
+    "model": [
+      {
+        "shelf": "banding.add"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   }

@@ -4,10 +4,26 @@
     "table": "gijiroku_base",
     "kind": "文書",
     "layer": "L2b",
-    "tags": ["K8"],
-    "turns": [{"say": "文書の最後に『次回予定: 来週火曜10時』を書き足して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K8"
+    ],
+    "turns": [
+      {
+        "say": "文書の最後に『次回予定: 来週火曜10時』を書き足して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "保留": "判定の条件が足りない"
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "doc.append", "markdown": "次回予定: 来週火曜10時"}],
+    "model": [
+      {
+        "shelf": "doc.append",
+        "markdown": "次回予定: 来週火曜10時"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -16,10 +32,27 @@
     "table": "gijiroku_base",
     "kind": "文書",
     "layer": "L2b",
-    "tags": ["K8"],
-    "turns": [{"say": "文書の中の『未定』を『調整中』に置き換えて", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K8"
+    ],
+    "turns": [
+      {
+        "say": "文書の中の『未定』を『調整中』に置き換えて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "保留": "判定の条件が足りない"
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "doc.replace", "find": "未定", "with": "調整中"}],
+    "model": [
+      {
+        "shelf": "doc.replace",
+        "find": "未定",
+        "with": "調整中"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -28,10 +61,27 @@
     "table": "gijiroku_quirk",
     "kind": "文書",
     "layer": "L2b",
-    "tags": ["K8"],
-    "turns": [{"say": "文字の大きさを11ptに、行間を1.5にして", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K8"
+    ],
+    "turns": [
+      {
+        "say": "文字の大きさを11ptに、行間を1.5にして",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "保留": "判定の条件が足りない"
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "doc.style", "size": 11, "line_spacing": 1.5}],
+    "model": [
+      {
+        "shelf": "doc.style",
+        "size": 11,
+        "line_spacing": 1.5
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -40,10 +90,32 @@
     "table": "gijiroku_base",
     "kind": "複合",
     "layer": "L2b",
-    "tags": ["K8"],
-    "turns": [{"say": "『決定事項』の節を『合意事項』に差し替えて、最後に『以上』を足して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K8"
+    ],
+    "turns": [
+      {
+        "say": "『決定事項』の節を『合意事項』に差し替えて、最後に『以上』を足して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "保留": "判定の条件が足りない"
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "doc.section", "action": "replace", "heading": "決定事項", "markdown": "合意事項"}, {"shelf": "doc.append", "markdown": "以上"}],
+    "model": [
+      {
+        "shelf": "doc.section",
+        "action": "replace",
+        "heading": "決定事項",
+        "markdown": "合意事項"
+      },
+      {
+        "shelf": "doc.append",
+        "markdown": "以上"
+      }
+    ],
     "may_change": [],
     "max_calls": 6
   },
@@ -52,10 +124,26 @@
     "table": "gijiroku_base",
     "kind": "文書",
     "layer": "L2b",
-    "tags": ["K8"],
-    "turns": [{"say": "文書の中から『参加者』という言葉を探して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K8"
+    ],
+    "turns": [
+      {
+        "say": "文書の中から『参加者』という言葉を探して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "保留": "判定の条件が足りない"
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "find", "text": "参加者"}],
+    "model": [
+      {
+        "shelf": "find",
+        "text": "参加者"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -64,10 +152,26 @@
     "table": "gijiroku_quirk",
     "kind": "文書",
     "layer": "L2b",
-    "tags": ["K8"],
-    "turns": [{"say": "文書のフォントを游ゴシックにそろえて", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K8"
+    ],
+    "turns": [
+      {
+        "say": "文書のフォントを游ゴシックにそろえて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "保留": "判定の条件が足りない"
+        }
+      }
+    ],
     "if_asked": {},
-    "model": [{"shelf": "doc.style", "font": "游ゴシック"}],
+    "model": [
+      {
+        "shelf": "doc.style",
+        "font": "游ゴシック"
+      }
+    ],
     "may_change": [],
     "max_calls": 4
   },
@@ -76,8 +180,23 @@
     "table": "gijiroku_base",
     "kind": "棚なし",
     "layer": "L2b",
-    "tags": ["K0"],
-    "turns": [{"say": "決定事項をSlackの全体チャンネルに投稿して", "approve": "まだ", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K0"
+    ],
+    "turns": [
+      {
+        "say": "決定事項をSlackの全体チャンネルに投稿して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "断った": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
     "model": [],
     "may_change": [],
@@ -88,8 +207,23 @@
     "table": "gijiroku_base",
     "kind": "危ない",
     "layer": "L2b",
-    "tags": ["K5"],
-    "turns": [{"say": "古い議事録の節を消して", "approve": "まだ", "askback": "する", "expect": {"保留": "判定の条件が足りない"}}],
+    "tags": [
+      "K5"
+    ],
+    "turns": [
+      {
+        "say": "古い議事録の節を消して",
+        "approve": "まだ",
+        "askback": "する",
+        "expect": {
+          "条件": [
+            {
+              "聞き返した": true
+            }
+          ]
+        }
+      }
+    ],
     "if_asked": {},
     "model": [],
     "may_change": [],
