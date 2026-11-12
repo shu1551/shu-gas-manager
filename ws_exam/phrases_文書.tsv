@@ -19,7 +19,7 @@ doc.table	文書の最後に項目と内容の2列の表を入れて
 doc.table	文書の1つ目の表の2行1列を「新」に直して
 ?doc.table	文書へ表を挿入して
 ?doc.table	文書 表 挿入 セル
-doc.style	文書のフォントをそろえて
+?doc.style	文書のフォントをそろえて
 doc.style	行間を広げて見やすく
 doc.style	文書の見た目を整えて
 ?doc.style	文書 書式 フォント

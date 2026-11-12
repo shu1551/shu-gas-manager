@@ -23,7 +23,7 @@ clear.all	J2:K9をすべてクリアして
 clear.all	G1:H10を書式ごと全部消して白紙にして
 ?clear.all	この枠の中まっさらにしといて
 ?clear.all	すべて消去 全部クリア
-copy	セル範囲をコピーして別の場所に貼り付けて
+?copy	セル範囲をコピーして別の場所に貼り付けて
 copy	A1:E21をG1に写して
 copy	A1からB10をD列にコピーしといて
 ?copy	範囲 複製 コピー 貼り付け
@@ -39,7 +39,7 @@ fill.series	A列に1から連番を入れて
 ?fill.series	通し番号を下まで埋めて
 fill.series	A2からA20に1から順に番号振っといて
 ?fill.series	連番 入力 自動採番
-fill.date	A列に日付を連続で埋めて
+?fill.date	A列に日付を連続で埋めて
 fill.date	カレンダー用に毎日の日付をB2からB20に入れて
 fill.date	1日ずつ日付下まで伸ばしといて
 ?fill.date	日付 連続データ フィル

@@ -1,7 +1,7 @@
 # 机上の意地悪な 24 問（設計書 第 7 章）。今ある棚で答えられる物だけ有効。未実装の棚が期待の物は # で残してある（棚を足した段で外す）
 # sheet.delete	いらないタブ消しといて	（未実装の棚）
 # freeze	見出しだけ動かないようにして	（未実装の棚）
-seiri+renumber	C列の重複消して連番ふり直して	seiri{renumber,dedupe}
+seiri+renumber	C列の重複消して連番ふり直して	seiri{renumber,dedupe}|dedupe+renumber
 cf.dup	重複してるとこ赤くして
 cf.add	売上が100万以上の行を目立たせて
 filter.where	田中さんの行だけ見せて
