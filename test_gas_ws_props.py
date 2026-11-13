@@ -160,7 +160,7 @@ def test_p7_wide_flag_is_recorded_when_the_first_shot_was_stopped_and_retried():
     assert ev(resp(A0, B1=B_CHANGED))["wide"] is False
 
 
-def wide_resp(msg="シート「x」を削除します（消える数: 1 枚）（広い削除です。何が消えるかを見て、同じ ops をもう一度 ok=True で撃つと通ります）", blocked=True, first_snap=None, retried_kind="ok"):
+def wide_resp(msg="広い削除です。消える数: 1 枚。シート「x」を削除します（何が消えるかを見て、同じ ops をもう一度 ok=True で撃つと通ります）", blocked=True, first_snap=None, retried_kind="ok"):
     r = resp(A0, B1=B_CHANGED, wide=True)
     r["steps"][0]["first"] = {"ok": False, "blocked": blocked, "error_brief": msg}
     r["steps"][0]["res"] = res() if retried_kind == "ok" else res(False, blocked=True, brief="x")

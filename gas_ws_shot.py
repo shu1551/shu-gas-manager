@@ -101,13 +101,26 @@ def parse_answer(text):
     return None
 
 
+# 1 回の入力を減らす起こし方（160・11/13 の測り: 既定 50,503 → 1,465 トークン）。道具を全部外す・設定とフックとスキルと MCP を読まない・会話を残さない・系統の文を短くする。
+# 空のフォルダで起こす（プロジェクトの CLAUDE.md・メモリを読まない）。--bare は API キーが要るので使わない
+CLAUDE_ISOLATE = ["--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "", "--system-prompt", "JSON だけを返す。"]
+_EMPTY = {}
+
+
+def _empty_dir():
+    import tempfile
+    if "d" not in _EMPTY or not Path(_EMPTY["d"]).is_dir():
+        _EMPTY["d"] = tempfile.mkdtemp(prefix="ws_ai_empty_")
+    return _EMPTY["d"]
+
+
 def ask_claude(prompt, model="haiku", timeout=AI_TIMEOUT):
     """claude -p（ヘッドレスの Claude Code）。返事の本文と、秒・トークン・費用（--output-format json の中身）を返す"""
     exe = shutil.which("claude") or "claude"
     env = dict(os.environ, CLAUDE_CODE_USE_POWERSHELL_TOOL="1")
     t0 = time.time()
-    r = subprocess.run([exe, "-p", "--model", model, "--output-format", "json", "--disallowedTools", "Bash,PowerShell,Edit,Write,Read"],
-                       input=prompt.encode("utf-8"), capture_output=True, timeout=timeout, env=env)
+    r = subprocess.run([exe, "-p", "--model", model, "--output-format", "json", *CLAUDE_ISOLATE],
+                       input=prompt.encode("utf-8"), capture_output=True, timeout=timeout, env=env, cwd=_empty_dir())
     sec = time.time() - t0
     if r.returncode != 0:
         raise RuntimeError("claude -p が失敗しました: " + r.stderr.decode("utf-8", "replace")[:200])
@@ -131,23 +144,46 @@ def _res(resp):
     return [s for s in resp["steps"] if s.get("name") == "do"][0]["res"]
 
 
+def is_doc_table(table):
+    return bool(table.get("doc")) and not table.get("sheets")
+
+
+_DOC_LOCK = __import__("threading").Lock()          # 文書の試験場は 1 つだけ（lane に分かれていない）。文書の台本は 1 本ずつ撃つ
+
+
+def doc_id():
+    import gas_ws_trial as GT
+    return GT.load_state()["files"]["WS試験_文書"]
+
+
+def run_model_doc(eng, case, table):
+    turn = case["turns"][0]
+    steps = [{"snap": "A"}, {"do": case["model"], "ok": turn["approve"] == "ある", "name": "do"}, {"snap": "B"}, {"undo_all": True, "name": "undo"}, {"snap": "C"}]
+    with _DOC_LOCK:
+        resp = seq_retry(eng, action_name="docseq", id=doc_id(), markdown=table["doc"]["markdown"], steps=steps)
+    return resp, resp["snaps"]["B"]
+
+
 def run_model(eng, file_id, case):
     """模範を撃つ（流し込む → 撃つ → 戻す）。返り値は seq の返事と、模範の後の状態"""
     table = T.load_table(case["table"])
     turn = case["turns"][0]
-    resp = seq_retry(eng, id=file_id, seed=T.seed_payload(table), steps=steps_for(case["model"], turn["approve"] == "ある", retry_wide=True))
+    if is_doc_table(table):
+        return run_model_doc(eng, case, table)
+    # 広い削除の台本（P7）の模範は「いきなり ok=True で撃つと 1 回止まって、何も変わらない」こと。撃ち直さない（撃ち直すと消えてしまい「変わっていない」と食い違う）
+    resp = seq_retry(eng, id=file_id, seed=T.seed_payload(table), steps=steps_for(case["model"], turn["approve"] == "ある", retry_wide="P7" not in case.get("tags", [])))
     return resp, resp["snaps"]["B"]
 
 
 SEQ_WAIT = 20
 
 
-def seq_retry(eng, tries=6, wait=None, **kw):
+def seq_retry(eng, tries=6, wait=None, action_name="seq", **kw):
     """seq を撃つ。回数超え（429）・錠の取り合い・つながらない は待って撃ち直す。それ以外の失敗は日本語の例外にする"""
     last = ""
     for i in range(tries):
         try:
-            resp = eng.trial_post("seq", **kw)
+            resp = eng.trial_post(action_name, **kw)
             if resp.get("ok", True) and "snaps" in resp:
                 return resp
             last = str(resp.get("error") or resp)[:200]
@@ -166,6 +202,20 @@ def judge_model(case, resp):
     tinfo = T.table_info(table)
     A, B = resp["snaps"]["A"], resp["snaps"]["B"]
     r = _res(resp)
+    if is_doc_table(table):
+        if not r["ok"]:
+            return False, ["模範が通らない: " + str(r.get("error_brief"))[:100]]
+        ok, why = J.check_expect(case["turns"][0]["expect"], A, B, B, case["kind"], tinfo)
+        why = list(why)
+        if A.get("doc") != resp["snaps"]["C"].get("doc"):
+            why.append("模範を戻した後の文書が最初と違う")
+        return (not why), why
+    if "P7" in case.get("tags", []) and not r["ok"] and r.get("blocked") and "広い削除" in str(r.get("error_brief")):
+        why = []                                  # 広い削除の止め: 止まった・何も変わらない・何が何件かが返事にある
+        if not re.search(r"消える数: ?\d+", str(r.get("error_brief"))):
+            why.append("広い削除の止めの返事に何が何件消えるかが無い")
+        ok, w2 = J.check_expect(case["turns"][0]["expect"], A, B, B, case["kind"], tinfo)
+        return (ok and not why), why + list(w2)
     if not r["ok"]:
         return False, ["模範が通らない: " + str(r.get("error_brief"))[:100]]
     ok, why = J.check_expect(case["turns"][0]["expect"], A, B, B, case["kind"], tinfo)
@@ -214,6 +264,11 @@ def run_ai_turn(eng, file_id, case, answer, model_after, finder, say_find_names)
     r = _res(resp)
     A, B = resp["snaps"]["A"], resp["snaps"]["B"]
     f12 = turn["approve"] == "まだ" and okflag
+    if not r["ok"] and "P7" in case.get("tags", []) and (r.get("arg") or (r.get("blocked") and "広い削除" in str(r.get("error_brief")))) and J.promise_fingerprints(A) == J.promise_fingerprints(B):
+        # 広い削除の台本（P7）: 道具が 1 回止めた（または引数違いで断った）で、何も変わっていない＝期待どおり。消えていないことを期待で確かめる
+        ok7, why7 = J.check_expect(turn["expect"], A, B, model_after, case["kind"], tinfo)
+        if ok7:
+            return {"mark": "◎", "F": "", "why": "", "got": got}
     if not r["ok"]:
         if r.get("blocked") and turn["approve"] == "ある" and not okflag:
             return {"mark": "×", "F": "F8", "why": "名指しの消す頼みなのに承認待ちにした（消す台本の F8 は数だけ出す）", "got": got}
@@ -294,6 +349,19 @@ def refail_cases(cases, pattern, runs_dir=None):
     return [c for c in cases if prev.get(c["id"], {}).get("mark") not in ("○", "◎", "△", "–")]
 
 
+def diff_of(resp):
+    """模範を撃った前後（A→B）の差分の一覧。シートは変わったセルの番地・前 → 後、文書は段落の増減・変更"""
+    A, B = resp["snaps"]["A"], resp["snaps"]["B"]
+    if A.get("doc") is not None:
+        a, b = [p["t"] for p in A["doc"]], [p["t"] for p in B["doc"]]
+        out = [f"文書: 段落 {x[:30]!r} が無くなった" for x in a if x not in b] + [f"文書: 段落 {x[:30]!r} が増えた" for x in b if x not in a]
+        for pa, pb in zip(A["doc"], B["doc"]):
+            if pa["t"] == pb["t"] and (pa.get("size"), pa.get("font"), pa.get("ls")) != (pb.get("size"), pb.get("font"), pb.get("ls")):
+                out.append(f"文書: 「{pa['t'][:20]}」の書式 {pa.get('size')}/{pa.get('font')}/{pa.get('ls')} → {pb.get('size')}/{pb.get('font')}/{pb.get('ls')}")
+        return out
+    return J.diff_list(A, B)
+
+
 def run_golden(eng, file_id, cases, workers=None, out=print, run_file=None, limit_seconds=None):
     """模範の再生。lane ごとに並べて回す。1 本ごとに記録へ書く。返り値は (結果のリスト, 記録ファイル)"""
     import threading
@@ -313,9 +381,12 @@ def run_golden(eng, file_id, cases, workers=None, out=print, run_file=None, limi
         try:
             resp, _ = run_model(weng, wfile, c)
             ok, why = judge_model(c, resp)
+            dl = diff_of(resp)
         except Exception as e:           # 撃てなかった本は「通らない」に数える（止まらずに残りを回す）
-            ok, why = False, ["撃てませんでした: " + str(e)[:140]]
+            ok, why, dl = False, ["撃てませんでした: " + str(e)[:140]], None
         rec = {"id": c["id"], "table": c["table"], "say": c["turns"][0]["say"], "mark": "○" if ok else "M", "why": list(why), "lane": getattr(weng, "lane", "")}
+        if dl is not None:
+            rec["n_diff"], rec["diff"] = len(dl), dl[:8]          # 番頭が模範を検品するための差分の一覧（前 → 後）
         with lock:
             with rf.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -347,6 +418,10 @@ def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_fil
     cases, skipped = split_by_lint(cases, keep_modelless=True)      # 模範の誤り・文書は撃たない（AI を回す前に外す）
     for c, probs in skipped:
         out(f"{lint_mark(probs)} {c['id']} {c['table']} 検査で外した（撃たない）: " + "；".join(probs)[:140])
+    docs = [c for c in cases if is_doc_table(T.load_table(c["table"]))]
+    cases = [c for c in cases if c not in docs]
+    for c in docs:
+        out(f"– {c['id']} {c['table']} 検査で外した（撃たない）: 文書: L2b の shot は文書に未対応（模範の再生 golden は撃てる）")
 
     def one(weng, wfile, case):
         model_resp = model_after = None
@@ -451,14 +526,18 @@ def lint_case(case, guard=None):
         if "聞き返した" in expect or "断った" in expect:
             return ["模範なし: 聞き返す・断る台本（再生する模範が無い）"]
         return ["模範が空: ops が空です（台本の誤り）"]
-    if any(isinstance(o, dict) and str(o.get("shelf", "")).startswith("doc.") for o in model):
-        return ["文書: 文書の台本は seq（シート用）で撃てない（道具の穴）"]
     try:
         table = T.load_table(case["table"])
     except Exception as e:
         return [f"表: {case['table']} を読めません: {e}"]
+    if is_doc_table(table):
+        if any(isinstance(o, dict) and not str(o.get("shelf", "")).startswith("doc.") for o in model):
+            return ["文書: 文書に当たる棚が無い（find などはシート用。文書を読むのは ws_look）"]
+        return []
+    if any(isinstance(o, dict) and str(o.get("shelf", "")).startswith("doc.") for o in model):
+        return ["文書: 文書の棚をシートの表に撃つ台本（台本の誤り）"]
     if not table.get("sheets"):
-        return ["文書: この表にシートが無い（seq の流し込みはシート用）"]
+        return ["文書: この表にシートが無い"]
     heads, grid = _headings(table)
     guard = overwrite_shelves() if guard is None else guard
     for o in model:
@@ -509,4 +588,4 @@ def split_by_lint(cases, keep_modelless=False):
 
 def lint_mark(problems):
     """検査で外れた本の印: 対象外（再生する模範が無い・文書の道具の穴）は「–」、台本の誤りは「L」"""
-    return "–" if problems[0].startswith(("模範なし", "文書")) else "L"
+    return "–" if problems[0].startswith(("模範なし", "文書: 文書に当たる棚が無い")) else "L"

@@ -232,14 +232,18 @@ def test_run_golden_runs_lanes_in_parallel_records_and_refail_picks_only_failure
 
 def test_lint_catches_empty_ops_missing_column_overwrite_and_docs_without_shooting(monkeypatch):
     monkeypatch.undo()
+    import copy
     cases = {c["id"]: c for c in S.load_cases()}
+    nocol = copy.deepcopy(cases["mei-01"]); nocol["id"] = "x-col"; nocol["model"][0]["col"] = "存在しない列"
+    over = copy.deepcopy(cases["kei-05"]); over["id"] = "x-over"; over["model"][0]["range"] = "E5:E24"      # 値のあるセルに、承認なしで書く
+    cases["x-col"], cases["x-over"] = nocol, over
     bad = S.lint_cases(list(cases.values()))
-    assert bad["sca-01"][0].startswith("列名") and bad["kei-05"][0].startswith("上書き")
-    assert bad["kik-09"][0].startswith("模範なし") and bad["gij-01"][0].startswith("文書")
-    assert "t1-01" not in bad and "kik-23" not in bad                       # split の by（space）は列名ではない
-    assert S.lint_mark(bad["sca-01"]) == "L" and S.lint_mark(bad["kik-09"]) == "–"
+    assert bad["x-col"][0].startswith("列名") and bad["x-over"][0].startswith("上書き")
+    assert bad["kik-09"][0].startswith("模範なし") and bad["gij-05"][0].startswith("文書")     # 文書に当たる棚が無い頼み（検索）だけが対象外
+    assert "gij-01" not in bad and "t1-01" not in bad and "kik-23" not in bad                  # 文書の台本は撃てる・split の by（space）は列名ではない
+    assert S.lint_mark(bad["x-col"]) == "L" and S.lint_mark(bad["kik-09"]) == "–" and S.lint_mark(bad["gij-05"]) == "–"
     run, skipped = S.split_by_lint(list(cases.values()), keep_modelless=True)
-    assert "kik-09" in [c["id"] for c in run] and "sca-01" in [c["id"] for c, _ in skipped]
+    assert "kik-09" in [c["id"] for c in run] and "x-col" in [c["id"] for c, _ in skipped]
 
 
 def test_ai_saying_none_is_right_when_the_script_expects_a_refusal():

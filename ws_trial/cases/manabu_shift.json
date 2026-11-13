@@ -203,7 +203,9 @@
         "color": "緑"
       }
     ],
-    "may_change": [],
+    "may_change": [
+      "シート構成"
+    ],
     "max_calls": 6
   },
   {

@@ -42,7 +42,16 @@ function tidyRange_(ctx, sh, rangeA1) {
     var mx = 0; disp.forEach(function (row) { mx = Math.max(mx, wlen_(row[c])); });
     sh.setColumnWidth(t.firstCol + c, Math.max(STYLE.colMin, Math.min(STYLE.colMax, mx * STYLE.px + STYLE.pad)));
   }
-  sh.setFrozenRows(t.headerRow);
+  // 見出しの行までを固定する。結合セルが固定の線をまたぐと Google が断るので、またぐ結合の終わりの行まで広げる
+  var fr = t.headerRow;
+  try {
+    for (var pass = 0; pass < 4; pass++) {
+      var fr0 = fr;
+      sh.getRange(1, 1, fr, Math.max(1, sh.getLastColumn())).getMergedRanges().forEach(function (m) { fr = Math.max(fr, m.getLastRow()); });
+      if (fr === fr0) break;
+    }
+  } catch (e) { fr = t.headerRow; }
+  try { sh.setFrozenRows(fr); } catch (e) { note_(ctx, '結合セルをまたぐので、行の固定は変えませんでした'); }
 }
 
 // 棚: tidy

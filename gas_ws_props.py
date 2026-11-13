@@ -156,7 +156,7 @@ def _same(x, y):
     return J.promise_fingerprints(x) == J.promise_fingerprints(y)
 
 
-WIDE_COUNT = re.compile(r"\d+\s*(件|行|列|枚|セル|個)")
+WIDE_COUNT = re.compile(r"消える数: ?\d+")
 
 
 def p7_verdict(st, sn, A):

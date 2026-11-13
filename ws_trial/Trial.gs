@@ -81,7 +81,7 @@ function trialSide_(sh) {
 function trialSnapSheet_(sh) {
   var P = sh.properties || {}, G = P.gridProperties || {};
   var out = { name: P.title, id: P.sheetId, index: P.index, hidden: !!P.hidden, rows: G.rowCount || 0, cols: G.columnCount || 0,
-    frozen: { rows: G.frozenRowCount || 0, cols: G.frozenColumnCount || 0 }, merges: [], hidden_rows: [], filtered_rows: [], hidden_cols: [], widths: [], cells: {}, cf: (sh.conditionalFormats || []).length, side: trialSide_(sh) };
+    frozen: { rows: G.frozenRowCount || 0, cols: G.frozenColumnCount || 0 }, digest: sh._digest || null, merges: [], hidden_rows: [], filtered_rows: [], hidden_cols: [], widths: [], cells: {}, cf: (sh.conditionalFormats || []).length, side: trialSide_(sh) };
   (sh.merges || []).forEach(function (m) { out.merges.push(colLetter_((m.startColumnIndex || 0) + 1) + ((m.startRowIndex || 0) + 1) + ':' + colLetter_(m.endColumnIndex) + m.endRowIndex); });
   var d = (sh.data || [])[0] || {};
   (d.rowMetadata || []).forEach(function (r, i) { if (r.hiddenByUser) out.hidden_rows.push(i + 1); if (r.hiddenByFilter) out.filtered_rows.push(i + 1); });
@@ -114,8 +114,41 @@ var TRIAL_SNAP_FIELDS = 'namedRanges,sheets(properties(sheetId,title,index,hidde
   'dataValidation,userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor)),effectiveFormat(backgroundColor,textFormat(bold,foregroundColor),numberFormat,borders)))))';
 
 // 今の状態を撮る（Sheets API の spreadsheets.get を 1 回）
+var TRIAL_BIG_CELLS = 30000;          // これより大きいシート（5000 行 × 20 列 等）は、全部のセルを Sheets API で取ると返事が大きすぎる（413）・遅い。先頭 60 行と末尾 20 行だけ細かく取り、全体は値と式の要約（digest）で比べる
+var TRIAL_HEAD = 60, TRIAL_TAIL = 20;
+var TRIAL_GRID_FIELDS = 'rowMetadata(hiddenByUser,hiddenByFilter),columnMetadata(hiddenByUser,pixelSize),rowData(values(formattedValue,userEnteredValue,effectiveValue,' +
+  'dataValidation,userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor)),effectiveFormat(backgroundColor,textFormat(bold,foregroundColor),numberFormat,borders)))';
+function trialGetResp_(ss) {
+  var id = ss.getId();
+  var meta = Sheets.Spreadsheets.get(id, { fields: 'sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))' });
+  var big = (meta.sheets || []).some(function (s) { var g = s.properties.gridProperties || {}; return (g.rowCount || 0) * (g.columnCount || 0) > TRIAL_BIG_CELLS; });
+  if (!big) return Sheets.Spreadsheets.get(id, { includeGridData: true, fields: TRIAL_SNAP_FIELDS });
+  var resp = Sheets.Spreadsheets.get(id, { fields: TRIAL_SNAP_FIELDS.replace(/data\(rowMetadata.*$/, '').replace(/,$/, '') + ')' });
+  (resp.sheets || []).forEach(function (sh) {
+    var g = sh.properties.gridProperties || {}, rows = g.rowCount || 0, cols = g.columnCount || 0, isBig = rows * cols > TRIAL_BIG_CELLS;
+    var q = "'" + String(sh.properties.title).replace(/'/g, "''") + "'!", ranges = [];
+    if (!isBig) ranges.push(q + 'A1:' + colLetter_(cols) + rows);
+    else { ranges.push(q + 'A1:' + colLetter_(cols) + Math.min(rows, TRIAL_HEAD)); if (rows > TRIAL_HEAD) ranges.push(q + 'A' + Math.max(TRIAL_HEAD + 1, rows - TRIAL_TAIL + 1) + ':' + colLetter_(cols) + rows); }
+    var merged = { rowMetadata: [], columnMetadata: [], rowData: [] };
+    var part = Sheets.Spreadsheets.get(id, { ranges: ranges, includeGridData: true, fields: 'sheets(data(startRow,' + TRIAL_GRID_FIELDS + '))' });
+    ((part.sheets || [])[0] || {}).data.forEach(function (d) {
+      var s0 = d.startRow || 0;
+      (d.rowMetadata || []).forEach(function (m, i) { merged.rowMetadata[s0 + i] = m; });
+      (d.rowData || []).forEach(function (m, i) { merged.rowData[s0 + i] = m; });
+      if (!merged.columnMetadata.length) merged.columnMetadata = d.columnMetadata || [];
+    });
+    for (var k = 0; k < merged.rowMetadata.length; k++) if (!merged.rowMetadata[k]) merged.rowMetadata[k] = {};
+    for (var k2 = 0; k2 < merged.rowData.length; k2++) if (!merged.rowData[k2]) merged.rowData[k2] = {};
+    sh.data = [merged];
+    if (isBig) {   // 全体の要約: 値（見えている文字）と式を全部読んで、1 つの指紋にする
+      var dr = ss.getSheetByName(sh.properties.title).getDataRange();
+      sh._digest = digest_(JSON.stringify(dr.getDisplayValues()) + JSON.stringify(dr.getFormulas()), FP_VER) + ':' + dr.getNumRows() + 'x' + dr.getNumColumns();
+    }
+  });
+  return resp;
+}
 function trialSnap_(ss) {
-  var resp = Sheets.Spreadsheets.get(ss.getId(), { includeGridData: true, fields: TRIAL_SNAP_FIELDS });
+  var resp = trialGetResp_(ss);
   return { name: ss.getName(), sheets: (resp.sheets || []).map(trialSnapSheet_), named: (resp.namedRanges || []).map(function (n) { return { name: n.name, range: trialRng_(n.range) }; }) };
 }
 
@@ -240,10 +273,17 @@ function trialSeed_(req) {
 }
 EXTRA_ACTIONS['seed'] = trialSeed_;
 
+// 大きい表（5000 行）の返事は 413（response too large）になる。gz=true なら gzip＋base64 にして返す（受け取る側が戻す）
+function trialOut_(req, obj) {
+  if (!req.gz) return obj;
+  var s = JSON.stringify(obj);
+  if (s.length < 2000000) return obj;
+  return { ok: true, gz: Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(s, 'application/json', 'r.json')).getBytes()) };
+}
 EXTRA_ACTIONS['snap'] = function (req) {
   var ss = trialOpen_(req.id);
   var s = trialSnap_(ss);
-  return { ok: true, snap: s };
+  return trialOut_(req, { ok: true, snap: s });
 };
 
 // 1 回の POST で「流し込む → 撮る → ops を撃つ → 撮る → 戻す → 撮る」。試験場にだけ効く
@@ -412,6 +452,7 @@ EXTRA_ACTIONS['seq'] = function (req) {
     if (!sd.ok) return { ok: false, error: sd.error, step: 'seed' };
     ss = trialOpen_(req.id);
   }
+  setJson_('WIDE', {});   // 広い削除の「1 回止めた」の覚えは、組ごとに空にする（前の組・前の走りの覚えで、いきなり通ってしまわないように）
   var out = { ok: true, snaps: {}, steps: [] }, made = 0, ledger0 = ledger_().items.length;
   (req.steps || []).forEach(function (st) {
     if (st.snap) { out.snaps[st.snap] = trialSnap_(ss); return; }
@@ -434,5 +475,57 @@ EXTRA_ACTIONS['seq'] = function (req) {
     }
   });
   out.ledger_added = ledger_().items.length - ledger0;
+  return trialOut_(req, out);
+};
+
+// ---------------------------------------------------------------- 文書（試験場の文書は 1 つ。文書の台本は 1 本ずつ撃つ）
+function trialDocOpen_(id) {
+  var cfg = trialCfg_();
+  if (!id || (cfg.docs || []).indexOf(id) < 0) throw new ArgError('試験場の文書ではありません（登録されていない ID）: ' + id);
+  var d = DocumentApp.openById(id);
+  if (String(d.getName()).indexOf(TRIAL_PREFIX) !== 0) throw new ArgError('試験場の文書ではありません（名前が ' + TRIAL_PREFIX + ' で始まらない）: ' + d.getName());
+  return d;
+}
+// 文書の今を撮る: 段落ごとの {t 文字, k P/L/T, h 見出し, size, font, ls}
+function trialDocSnap_(id) {
+  var b = DocumentApp.openById(id).getBody(), out = [], n = b.getNumChildren();
+  for (var i = 0; i < n; i++) {
+    var ch = b.getChild(i), ty = String(ch.getType());
+    if (ty === 'PARAGRAPH' || ty === 'LIST_ITEM') {
+      var p = ty === 'PARAGRAPH' ? ch.asParagraph() : ch.asListItem(), s = p.getText(), tx = p.editAsText();
+      out.push({ t: s, k: ty === 'PARAGRAPH' ? 'P' : 'L', h: String(p.getHeading()), size: s ? tx.getFontSize(0) : null, font: s ? tx.getFontFamily(0) : null, ls: p.getLineSpacing() });
+    } else if (ty === 'TABLE') {
+      var tb = ch.asTable(), rows = [];
+      for (var r = 0; r < tb.getNumRows(); r++) { var cs = []; for (var c = 0; c < tb.getRow(r).getNumCells(); c++) cs.push(tb.getRow(r).getCell(c).getText()); rows.push(cs.join('\t')); }
+      out.push({ t: rows.join('\n'), k: 'T', h: '', size: null, font: null, ls: null });
+    }
+  }
+  return { name: DocumentApp.openById(id).getName(), doc: out };
+}
+// 1 回の POST で「文書を markdown から作り直す → 撮る → ops を撃つ → 撮る → 戻す → 撮る」（seq の文書版）
+EXTRA_ACTIONS['docseq'] = function (req) {
+  var d = trialDocOpen_(req.id), b = d.getBody();
+  b.clear();
+  emitBlocks_(b, parseMd_(req.markdown || ''), null, null);
+  if (b.getNumChildren() > 1 && b.getChild(0).getType() === DocumentApp.ElementType.PARAGRAPH && b.getChild(0).asParagraph().getText() === '') b.removeChild(b.getChild(0));
+  d.saveAndClose();
+  var out = { ok: true, snaps: {}, steps: [] }, made = 0;
+  (req.steps || []).forEach(function (st) {
+    if (st.snap) { out.snaps[st.snap] = trialDocSnap_(req.id); return; }
+    if (st.do) {
+      var r = actDo_({ target: { id: req.id, kind: 'doc' }, ops: st.do, ok: !!st.ok });
+      if (r.ok && r.backup) made++;
+      var o = { name: st.name, res: trialSlim_(r), wide: false };
+      o.res.error_brief = String(r.error || '').slice(0, 300);
+      out.steps.push(o);
+      return;
+    }
+    if (st.undo_all) {
+      var us = [];
+      for (var i = 0; i < made; i++) { var u = actUndo_({ target_id: req.id, ok: true }); us.push({ ok: !!u.ok, error: u.error || null, notes: u.notes || [] }); }
+      made = 0;
+      out.steps.push({ name: st.name, undo: us });
+    }
+  });
   return out;
 };

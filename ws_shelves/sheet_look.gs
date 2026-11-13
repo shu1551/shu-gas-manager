@@ -20,8 +20,8 @@ SHELF['format'] = function (ctx, op) {
   var set = function (key, fn) { if (op[key] !== undefined) { fn(op[key]); did.push(key); } };
   set('bold', function (v) { rg.setFontWeight(v ? 'bold' : 'normal'); });
   set('italic', function (v) { rg.setFontStyle(v ? 'italic' : 'normal'); });
-  set('color', function (v) { rg.setFontColor(v); });
-  set('bg', function (v) { rg.setBackground(v); });
+  set('color', function (v) { rg.setFontColor(rgb_(v)); });
+  set('bg', function (v) { rg.setBackground(rgb_(v)); });
   set('size', function (v) { rg.setFontSize(v); });
   set('font', function (v) { rg.setFontFamily(v); });
   set('number_format', function (v) { rg.setNumberFormat(v); });

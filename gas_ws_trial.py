@@ -195,7 +195,17 @@ class TrialEngine(gas_workspace.WorkspaceManager):
     def trial_post(self, action, **kw):
         """試験の命令を試験用のエンジンにだけ撃つ"""
         self.assert_not_prod()
-        res = self._post(dict(kw, action=action))
+        if action in ("seq", "snap"):
+            kw.setdefault("gz", True)               # 大きい表（5000 行）の返事は 413（response too large）になるので、gzip にして受け取る
+        res = self._post(dict(kw, action=action), timeout=330 if (action == "seq" and kw.get("seed")) else 90)      # 5000 行の流し込み（約 35 秒）＋ 3 回の撮り＋撃つ＋戻すは 90 秒では足りない
+        return self._ungz(res)
+
+    @staticmethod
+    def _ungz(res):
+        if isinstance(res, dict) and res.get("gz"):
+            import base64
+            import gzip
+            return json.loads(gzip.decompress(base64.b64decode(res["gz"])).decode("utf-8"))
         return res
 
     def seed(self, file_id, table):

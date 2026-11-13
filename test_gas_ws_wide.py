@@ -129,3 +129,11 @@ def test_every_wide_shelf_passes_wide_to_guard_delete_and_cards_still_match_the_
     assert "を撃ちます（' + info.danger.length + ' 件）', true, info.danger.length + ' 件')" in src["api.gs"]           # api の消す型
     import gas_ws_catalog as C
     assert C.check(gw.CATALOG) == []                                                    # 札の「危ない: 消す」と本文の守りの一致は崩れていない
+
+
+def test_stop_message_puts_what_and_how_many_first_so_a_long_list_cannot_push_it_out():
+    out = _run(TRY + """
+      var long = ''; for (var i = 0; i < 40; i++) long += i + '行目「あいう」、';
+      try { guardDelete_(mk(true, 'long'), long, true, '40 行'); __out = 'pass'; } catch (e) { __out = e.message; }
+    """)
+    assert out.startswith("広い削除です。消える数: 40 行。") and len(out) < 330 and "もう一度 ok=True" in out

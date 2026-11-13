@@ -82,7 +82,7 @@
     "turns": [
       {
         "say": "余計な空白や空行をきれいにして",
-        "approve": "まだ",
+        "approve": "ある",
         "askback": "要らない",
         "expect": {
           "条件": [
@@ -96,7 +96,8 @@
     "if_asked": {},
     "model": [
       {
-        "shelf": "seiri"
+        "shelf": "seiri",
+        "blank_rows": true
       }
     ],
     "may_change": [],
@@ -138,7 +139,9 @@
         ]
       }
     ],
-    "may_change": [],
+    "may_change": [
+      "シート構成"
+    ],
     "max_calls": 6
   },
   {

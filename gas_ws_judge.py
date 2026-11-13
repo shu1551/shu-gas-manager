@@ -138,6 +138,8 @@ def _promise_cells(sheet):
 
 def promise_fingerprint(sheet):
     body = {"cells": _promise_cells(sheet), "merges": sorted(sheet.get("merges", [])), "frozen": sheet.get("frozen"), "name": sheet["name"]}
+    if sheet.get("digest"):                 # 大きいシートは先頭と末尾だけ細かく撮るので、全体の値と式の要約も指紋に入れる
+        body["digest"] = sheet["digest"]
     return hashlib.sha1(json.dumps(body, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
@@ -166,7 +168,7 @@ def _norm_rows(rows):
 
 def _face(sheet, face, tinfo):
     if face == "値":
-        return rows_of(sheet)
+        return rows_of(sheet) + ([["要約", sheet["digest"]]] if sheet.get("digest") else [])
     if face == "式がある所":
         return sorted(a for a, c in sheet["cells"].items() if c.get("f"))
     if face == "行数":
@@ -193,6 +195,8 @@ def _face(sheet, face, tinfo):
 def compare_golden(before, actual, model, kind, face="既定", mode="そのまま", tinfo=None):
     """模範の ops を撃った後の状態（model）と、答えの ops を撃った後の状態（actual）を比べる。返り値は (合っているか, 違いの文字のリスト)"""
     faces = KIND_FACES.get(kind, ["値", "式がある所", "行数"]) if face == "既定" else (face if isinstance(face, list) else [face])
+    if isinstance(face, str) and face != "既定" and face in KIND_FACES:      # 面に種類の名前（構成・見た目 …）を書いた台本は、その種類の面に開く
+        faces = list(KIND_FACES[face])
     diffs = []
     before_names = {s["name"] for s in before["sheets"]}
     if mode == "新しいシートに含む":
@@ -267,7 +271,11 @@ def _data_rows(sheet, tinfo, total_label=None):
     mr, mc = extent(sheet)
     rows = list(range(hr + 1, mr + 1))
     if tb.get("total_row"):
-        rows = [r for r in rows if sheet["cells"].get(f"A{r}", {}).get("v") != "合計"]
+        # 合計行は、表の合計の行（最終行と表の JSON の total_row）のうち、どれかの列に「合計・総計・小計」で始まる文字がある行（ラベルは B 列・D 列のこともある）
+        cand = {mr, tb["total_row"]}
+        def is_total(r):
+            return r in cand and any(re.match(r"(合計|総計|小計)", str(c.get("v", ""))) for a1, c in sheet["cells"].items() if split_a1(a1)[1] == r)
+        rows = [r for r in rows if not is_total(r)]
     return rows
 
 
@@ -276,8 +284,47 @@ def _first_sheet(snap, cond):
     return sheet_of(snap, name) if name else snap["sheets"][0]
 
 
+# ------------------------------------------------------------------ 文書（snap = {"doc": [段落…]}。段落は {"t": 文字, "k": P/L/T, "h": 見出し, "size", "font", "ls"}）
+def _doc_paras(snap):
+    return [p for p in (snap.get("doc") or []) if p.get("t")]
+
+
+def check_doc_condition(cond, before, after):
+    """文書の条件。変わっていない／文書{末尾・含む・含まない・置き換え・文字の大きさ・フォント・行間}"""
+    if "変わっていない" in cond:
+        ok = before.get("doc") == after.get("doc")
+        return ok, "" if ok else "文書が変わっています"
+    spec = cond["文書"]
+    ps = _doc_paras(after)
+    body = [p for p in ps if not str(p.get("h", "")).startswith("HEADING") and p.get("k") != "T"]
+    if "末尾" in spec:
+        last = ps[-1]["t"] if ps else ""
+        if last.strip() != spec["末尾"]:
+            return False, f"文書の最後が「{last[:30]}」（「{spec['末尾']}」のはず）"
+    for key, want in (("含む", True), ("含まない", False)):
+        if key in spec:
+            has = any(spec[key] in p["t"] for p in ps)
+            if has != want:
+                return False, f"文書に「{spec[key]}」が{'ありません' if want else 'あります'}"
+    if "置き換え" in spec:
+        a, b = spec["置き換え"]["前"], spec["置き換え"]["後"]
+        n0 = sum(p["t"].count(a) for p in _doc_paras(before))
+        if n0 == 0:
+            return False, f"もとの文書に「{a}」がありません（台本の誤り）"
+        if any(a in p["t"] for p in ps) or sum(p["t"].count(b) for p in ps) < n0:
+            return False, f"「{a}」が「{b}」に置き換わっていません"
+    for key, field in (("文字の大きさ", "size"), ("フォント", "font"), ("行間", "ls")):
+        if key in spec:
+            bad = [p["t"][:12] for p in body if p.get(field) != spec[key]]
+            if bad:
+                return False, f"{key}が {spec[key]} でない段落があります（{bad[0]} など {len(bad)} 個）"
+    return True, ""
+
+
 def check_condition(cond, before, after, tinfo=None):
     """条件 1 つ。返り値は (通った, 理由)"""
+    if (before or {}).get("doc") is not None or (after or {}).get("doc") is not None:
+        return check_doc_condition(cond, before, after)
     if "どれか" in cond:
         reasons = []
         for c in cond["どれか"]:
@@ -307,7 +354,8 @@ def check_condition(cond, before, after, tinfo=None):
         col = _columns(sh, tinfo).get(spec["列"])
         if not col:
             return False, f"列「{spec['列']}」がありません"
-        vals = [cell_num(sh, f"{col_letter(col)}{r}") for r in _data_rows(sh, tinfo)]
+        hid = set(sh.get("hidden_rows", [])) | set(sh.get("filtered_rows", []))      # 絞り込みで隠れた行は並びを見ない（見えている行の並びを見る）
+        vals = [cell_num(sh, f"{col_letter(col)}{r}") for r in _data_rows(sh, tinfo) if r not in hid]
         vals = [v for v in vals if v is not None]
         ok = vals == sorted(vals, reverse=(spec.get("向き") == "降順"))
         return ok, "" if ok else f"列「{spec['列']}」が{spec.get('向き', '昇順')}に並んでいません"

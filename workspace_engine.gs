@@ -98,7 +98,7 @@ function a1_(r, c, nr, nc) {
 }
 function wlen_(s) { s = String(s); var n = 0; for (var i = 0; i < s.length; i++) n += s.charCodeAt(i) > 255 ? 2 : 1; return n; }
 function isBlank_(v) { return v === '' || v === null || v === undefined; }
-var FP_VER = 2;   // 指紋の版。1＝文字列を既定の文字コードで数えた（日本語が区別できない）、2＝UTF-8
+var FP_VER = 3;   // 指紋の版。1＝文字列を既定の文字コードで数えた（日本語が区別できない）、2＝UTF-8、3＝固定の列も入れる（列だけ固定した変更が「変更なし」になり控えが取れなかった）
 function digest_(s, v) {
   var bytes = (v === 1) ? s : Utilities.newBlob(s).getBytes();   // 版 1 は昔の控えの指紋を比べるためだけに残す
   return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, bytes)).slice(0, 12);
@@ -141,7 +141,8 @@ function findTable_(sh) {
   var t = { sheet: sh, headerRow: h + 1, firstCol: fc + 1, lastCol: lcol + 1, firstData: h + 2, lastData: last + 1, totalRow: 0, vals: vals };
   // 合計行：最終行の最初の文字セルが 合計/計 など
   if (last > h) {
-    var first = String(vals[last][fc] === '' ? (vals[last][fc + 1] || '') : vals[last][fc]);
+    var first = '';   // 最終行の最初の文字のセル（ラベルは 2 列目より右にあることもある。「合計金額」が D 列、等）
+    for (var fcx = fc; fcx <= lcol; fcx++) { var fv = vals[last][fcx]; if (!isBlank_(fv)) { first = String(fv); break; } }
     if (/^(合計|総計|小計|計|total|sum)/i.test(first.trim())) { t.totalRow = last + 1; t.lastData = last; }
   }
   return t;
@@ -183,7 +184,7 @@ function fingerSheet_(sh, v) {
     d = digest_(JSON.stringify(rg.getFormulas()) + JSON.stringify(rg.getDisplayValues()) + JSON.stringify(rg.getBackgrounds()) + JSON.stringify(rg.getFontWeights()) +
       JSON.stringify(rg.getFontColors()) + JSON.stringify(rg.getNumberFormats()) + JSON.stringify(rg.getHorizontalAlignments()), v);
   }
-  return { rows: lr, cols: lc, d: digest_(d + '|' + sh.getName() + '|' + sh.getFrozenRows(), v) };
+  return { rows: lr, cols: lc, d: digest_(d + '|' + sh.getName() + '|' + sh.getFrozenRows() + (v >= 3 ? '|' + sh.getFrozenColumns() : ''), v) };
 }
 function fingerDoc_(doc, v) {
   v = v || FP_VER;
@@ -1048,7 +1049,7 @@ function guardWide_(ctx, msg, count) {
   Object.keys(map).forEach(function (k) { if (now - map[k] < WIDE_MS) live[k] = map[k]; });
   if (ctx.ok && live[key]) { delete live[key]; setJson_('WIDE', live); return; }
   live[key] = now; setJson_('WIDE', live);
-  throw new Blocked(msg + (count ? '（消える数: ' + count + '）' : '') + '（広い削除です。何が消えるかを見て' + (ctx.ok ? '' : '、「消してよい」の承認を得てから') + '、同じ ops をもう一度 ok=True で撃つと通ります）');
+  throw new Blocked('広い削除です。' + (count ? '消える数: ' + count + '。' : '') + (msg.length > 150 ? msg.slice(0, 150) + '…' : msg) + '（何が消えるかを見て' + (ctx.ok ? '' : '、「消してよい」の承認を得てから') + '、同じ ops をもう一度 ok=True で撃つと通ります）');
 }
 // 広さの目安: 範囲がシートの値のある範囲を全部覆う／表の外まで及ぶ
 function wideRange_(sh, rg) {

@@ -32,7 +32,7 @@
     "turns": [{"say": "F6からF10の備考の値を消して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"空範囲": "F6:F10"}]}}],
     "if_asked": {},
     "model": [{"shelf": "clear.values", "range": "F6:F10"}],
-    "may_change": [],
+    "may_change": ["式"],
     "max_calls": 4
   },
   {
@@ -44,7 +44,7 @@
     "turns": [{"say": "G列を削除して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"列数": {"減った": 1}}]}}],
     "if_asked": {},
     "model": [{"shelf": "cols.delete", "cols": ["G"]}],
-    "may_change": [],
+    "may_change": ["式"],
     "max_calls": 4
   },
   {
@@ -68,7 +68,7 @@
     "turns": [{"say": "H2からI5の値と書式を全部クリアして", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"空範囲": "H2:I5"}]}}],
     "if_asked": {},
     "model": [{"shelf": "clear.all", "range": "H2:I5"}],
-    "may_change": [],
+    "may_change": ["式"],
     "max_calls": 4
   },
   {
@@ -187,7 +187,7 @@
     "tags": ["K5", "P7"],
     "turns": [{"say": "このシートごと消して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"変わっていない": true}]}}],
     "if_asked": {},
-    "model": [{"shelf": "sheet.delete", "name": "売上"}],
+    "model": [{"shelf": "sheet.add", "name": "控え用"}, {"shelf": "sheet.delete", "name": "売上"}],
     "may_change": [],
     "max_calls": 4
   },
@@ -247,7 +247,7 @@
     "tags": ["K5", "P7"],
     "turns": [{"say": "シート丸ごと削除して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"変わっていない": true}]}}],
     "if_asked": {},
-    "model": [{"shelf": "sheet.delete", "name": "倉庫別在庫"}],
+    "model": [{"shelf": "sheet.add", "name": "控え用"}, {"shelf": "sheet.delete", "name": "倉庫別在庫"}],
     "may_change": [],
     "max_calls": 4
   },
@@ -271,8 +271,8 @@
     "tags": ["K5"],
     "turns": [{"say": "氏名列をスペースで分割して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"列数": {"増えた": 1}}]}}],
     "if_asked": {},
-    "model": [{"shelf": "split.col", "col": "氏名", "by": "space"}],
-    "may_change": [],
+    "model": [{"shelf": "cols.insert", "at": "C"}, {"shelf": "split.col", "col": "氏名", "by": "space"}],
+    "may_change": ["式"],
     "max_calls": 4
   },
   {

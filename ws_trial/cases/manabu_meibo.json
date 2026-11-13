@@ -9,15 +9,15 @@
     ],
     "turns": [
       {
-        "say": "営業部の人だけ見せて",
+        "say": "田中 一郎さんの行だけ見せて",
         "approve": "まだ",
         "askback": "要らない",
         "expect": {
           "条件": [
             {
               "見えている行": {
-                "列": "部署",
-                "だけ": "営業部"
+                "列": "氏名",
+                "だけ": "田中 一郎"
               }
             }
           ]
@@ -28,8 +28,8 @@
     "model": [
       {
         "shelf": "filter.where",
-        "col": "部署",
-        "equals": "営業部"
+        "col": "氏名",
+        "equals": "田中 一郎"
       }
     ],
     "may_change": [],
@@ -68,7 +68,7 @@
   },
   {
     "id": "mei-03",
-    "table": "meibo_dirty",
+    "table": "seikyu_dirty",
     "kind": "整える",
     "layer": "L2b",
     "tags": [
@@ -129,6 +129,10 @@
     "if_asked": {},
     "model": [
       {
+        "shelf": "cols.insert",
+        "at": "C"
+      },
+      {
         "shelf": "split.col",
         "col": "氏名",
         "by": "space"
@@ -137,7 +141,9 @@
         "shelf": "tidy"
       }
     ],
-    "may_change": [],
+    "may_change": [
+      "式"
+    ],
     "max_calls": 6
   },
   {

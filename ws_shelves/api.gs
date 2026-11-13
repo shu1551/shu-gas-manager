@@ -23,7 +23,12 @@ SHELF['api'] = function (ctx, op) {
   var conv = reqs.map(function (r) { return apiWalk_(ss, r, def.getSheetId(), ''); });
   var before = ss.getSheets().map(function (s) { return s.getName(); });
   ctx.curSheet = def.getName();
-  Sheets.Spreadsheets.batchUpdate({ requests: conv }, ss.getId());
+  try { Sheets.Spreadsheets.batchUpdate({ requests: conv }, ss.getId()); }
+  catch (e) {   // requests の中身が Google の形に合わない（未知の欄・範囲外・形の違い）は、道具の失敗ではなく引数違い（何も変わっていない）として返す
+    var gm = String(e && e.message || e);
+    if (/Invalid (JSON payload|requests)|No grid with id|Unknown name|INVALID_ARGUMENT/.test(gm)) throw new ArgError('棚「api」: Google が requests を受け付けませんでした（何も変わっていません）: ' + gm.replace(/\s+/g, ' ').slice(0, 300));
+    throw e;
+  }
   ss.getSheets().forEach(function (s) { if (before.indexOf(s.getName()) < 0) ctx.createdSheets.push(s.getName()); });   // 増えたシートは、失敗・undo で消す
   chg_(ctx, null, 'api', info.types.join('・') + ' を撃った（' + reqs.length + ' 件）' + (op.why ? '：' + op.why : ''));
 };
@@ -58,7 +63,10 @@ function apiDefaultSheet_(ctx, op) {
   return nm ? sheetOf_(ctx.ss, nm, '') : ctx.ss.getSheets()[0];
 }
 function apiSheetId_(ss, v) {
-  if (typeof v === 'number') return v;
+  if (typeof v === 'number') {   // 数の sheetId が、このファイルに無い（Google は「No grid with id: 0」と返す）: シートの名前で指すよう促して、撃つ前に断る
+    if (!byId_(ss, v)) throw new ArgError('sheetId ' + v + ' のシートはありません。sheetId にはシートの名前を書けます（"sheetId":"シート名"）。あるのは: ' + ss.getSheets().map(function (s) { return s.getName() + '（' + s.getSheetId() + '）'; }).join('、'));
+    return v;
+  }
   var s = ss.getSheetByName(String(v));
   if (!s) throw new ArgError('シート「' + v + '」がありません');
   return s.getSheetId();
@@ -97,7 +105,7 @@ function apiWalk_(ss, node, defId, key) {
     var o = {};
     Object.keys(node).forEach(function (k) {
       var v = node[k];
-      if (k === 'sheetId' && typeof v === 'string') o[k] = apiSheetId_(ss, v);
+      if (k === 'sheetId' && (typeof v === 'string' || typeof v === 'number')) o[k] = apiSheetId_(ss, v);
       else if (API_GRID_KEYS[k] && typeof v === 'string') o[k] = apiGrid_(ss, v, defId);
       else if (k === 'anchorCell' && typeof v === 'string') { var g = apiGrid_(ss, v, defId); o[k] = { sheetId: g.sheetId, rowIndex: g.startRowIndex || 0, columnIndex: g.startColumnIndex || 0 }; }
       else if ((k === 'color' || /Color$/.test(k)) && typeof v === 'string') o[k] = apiColor_(v);

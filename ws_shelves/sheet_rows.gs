@@ -135,8 +135,8 @@ SHELF['freeze'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
   var r = op.rows !== undefined ? parseInt(op.rows) : 1;
   var c = op.cols !== undefined ? parseInt(op.cols) : 0;
-  sh.setFrozenRows(r);
-  sh.setFrozenColumns(c);
+  try { sh.setFrozenRows(r); sh.setFrozenColumns(c); }
+  catch (e) { throw new ArgError('結合セルの途中では固定できません（行 ' + r + '・列 ' + c + '）。結合を解除するか、結合をすべて含む行・列までを指定してください'); }
   chg_(ctx, sh, '', '行固定: ' + r + '、列固定: ' + c);
 };
 
