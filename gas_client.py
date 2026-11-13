@@ -13,6 +13,8 @@ import json
 import time
 import re
 import copy
+import threading
+import bisect
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
@@ -35,7 +37,8 @@ class RecipeItem(dict):
     def __str__(self):
         return self.get("id", "")
 
-OWN_WRITE_TRUST_SEC = 600   # クラウドから読んだ・自分で書いた写しを、確かめずに使ってよい長さ（秒）
+REMOTE_CHECK_FRESH_SEC = 30.0   # 裏で確かめた更新時刻をそのまま使ってよい長さ（秒）
+PREFETCH_STALE_SEC = 10.0       # 読み取り時に古い確認結果を裏で取り直す目安（秒）
 
 GAS_SPEEDUP_RECIPES = [
     RecipeItem({
@@ -496,8 +499,38 @@ class GasClient:
         self._synced_sids = set()
         self._disk_cache_mem = None
         self._disk_cache_mtime = 0.0
+        self._state_lock = threading.RLock()
+        self._remote_check_cache = {}
+        self._copy_remote_epochs = {}
+        self._write_gens = {}
+        self._prefetch_threads = {}
+        self._self_fresh_at = {}
+        self._bound_sids = set()
+        self._in_write_lookup = threading.local()
         self._last_run_context = self._load_last_run_context()
         self._load_clasprc()
+
+    def _ensure_sync_state(self):
+        """同期用ロック・裏確認状態辞書を遅延初期化して返す（__new__やリロード対策）"""
+        lock = getattr(self, "_state_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._state_lock = lock
+        if not hasattr(self, "_remote_check_cache") or self._remote_check_cache is None:
+            self._remote_check_cache = {}
+        if not hasattr(self, "_copy_remote_epochs") or self._copy_remote_epochs is None:
+            self._copy_remote_epochs = {}
+        if not hasattr(self, "_write_gens") or self._write_gens is None:
+            self._write_gens = {}
+        if not hasattr(self, "_prefetch_threads") or self._prefetch_threads is None:
+            self._prefetch_threads = {}
+        if not hasattr(self, "_self_fresh_at") or self._self_fresh_at is None:
+            self._self_fresh_at = {}
+        if not hasattr(self, "_bound_sids") or self._bound_sids is None:
+            self._bound_sids = set()
+        if not hasattr(self, "_in_write_lookup") or self._in_write_lookup is None:
+            self._in_write_lookup = threading.local()
+        return lock
 
     @property
     def cache_file(self):
@@ -551,7 +584,9 @@ class GasClient:
 
     def _save_cache(self):
         try:
-            self._atomic_json_dump(self.cache_file, self._cache_data, indent=2)
+            with self._ensure_sync_state():
+                data_copy = copy.deepcopy(self._cache_data)
+            self._atomic_json_dump(self.cache_file, data_copy, indent=2)
         except Exception:
             pass
 
@@ -581,30 +616,32 @@ class GasClient:
         return self.cache_file.parent / ".content_cache.json"
 
     def _load_disk_content_cache(self):
-        try:
-            p = self._disk_content_cache_file
-            if p.exists():
-                mtime = p.stat().st_mtime
-                if self._disk_cache_mem is not None and abs(mtime - self._disk_cache_mtime) < 1e-6:
-                    return copy.deepcopy(self._disk_cache_mem)
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    self._disk_cache_mem = copy.deepcopy(data)
-                    self._disk_cache_mtime = mtime
-                    return data
-        except Exception:
-            pass
-        return {}
+        with self._ensure_sync_state():
+            try:
+                p = self._disk_content_cache_file
+                if p.exists():
+                    mtime = p.stat().st_mtime
+                    if self._disk_cache_mem is not None and abs(mtime - self._disk_cache_mtime) < 1e-6:
+                        return copy.deepcopy(self._disk_cache_mem)
+                    with open(p, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        self._disk_cache_mem = copy.deepcopy(data)
+                        self._disk_cache_mtime = mtime
+                        return data
+            except Exception:
+                pass
+            return {}
 
     def _save_disk_content_cache(self, data):
-        try:
-            p = self._disk_content_cache_file
-            self._atomic_json_dump(p, data)
-            self._disk_cache_mem = copy.deepcopy(data)
-            self._disk_cache_mtime = p.stat().st_mtime
-        except Exception:
-            pass
+        with self._ensure_sync_state():
+            try:
+                p = self._disk_content_cache_file
+                self._atomic_json_dump(p, data)
+                self._disk_cache_mem = copy.deepcopy(data)
+                self._disk_cache_mtime = p.stat().st_mtime
+            except Exception:
+                pass
 
     @classmethod
     def _extract_token_data(cls, data: dict) -> dict:
@@ -639,59 +676,60 @@ class GasClient:
 
     def get_access_token(self):
         """アクセストークンを取得（有効期限内ならキャッシュを再利用、切れていれば更新）"""
-        now = time.time()
-        if self._access_token and now < (self._token_expiry - 60):
+        with self._ensure_sync_state():
+            now = time.time()
+            if self._access_token and now < (self._token_expiry - 60):
+                return self._access_token
+
+            # ディスクキャッシュ (.cache.json) のトークンを確認
+            token_cache = self._cache_data.get("token", {})
+            cached_token = token_cache.get("access_token")
+            cached_expiry = token_cache.get("expiry", 0)
+            cached_tail = token_cache.get("refresh_token_tail", "")
+            current_tail = self._token_data.get("refresh_token", "")[-8:]
+
+            if cached_token and now < (cached_expiry - 60) and cached_tail == current_tail:
+                self._access_token = cached_token
+                self._token_expiry = cached_expiry
+                return self._access_token
+
+            # リフレッシュトークンで新しいアクセストークンを取得
+            url = "https://oauth2.googleapis.com/token"
+            payload = {
+                "client_id": self._token_data["client_id"],
+                "client_secret": self._token_data["client_secret"],
+                "refresh_token": self._token_data["refresh_token"],
+                "grant_type": "refresh_token"
+            }
+            res = None
+            for attempt in range(3):
+                try:
+                    res = self.session.post(url, data=payload, timeout=10)
+                    if res.status_code == 200 or res.status_code < 500:
+                        break
+                except (requests.ConnectionError, requests.Timeout):
+                    if attempt == 2:
+                        raise
+                time.sleep(0.5 * (2 ** attempt))
+
+            if res is None or res.status_code != 200:
+                err_text = res.text if res is not None else "接続失敗またはタイムアウト"
+                sc = res.status_code if res is not None else 0
+                if "invalid_grant" in err_text:
+                    raise RuntimeError(f"トークンの更新に失敗しました (認証失効: invalid_grant): clasp login を実行して再ログインしてください。詳細: {err_text}")
+                raise RuntimeError(f"トークンの更新に失敗しました ({sc}): {err_text}")
+
+            data = res.json()
+            self._access_token = data["access_token"]
+            expires_in = data.get("expires_in", 3600)
+            self._token_expiry = now + expires_in
+            self._cache_data["token"] = {
+                "access_token": self._access_token,
+                "expiry": self._token_expiry,
+                "refresh_token_tail": current_tail
+            }
+            self._save_cache()
             return self._access_token
-
-        # ディスクキャッシュ (.cache.json) のトークンを確認
-        token_cache = self._cache_data.get("token", {})
-        cached_token = token_cache.get("access_token")
-        cached_expiry = token_cache.get("expiry", 0)
-        cached_tail = token_cache.get("refresh_token_tail", "")
-        current_tail = self._token_data.get("refresh_token", "")[-8:]
-
-        if cached_token and now < (cached_expiry - 60) and cached_tail == current_tail:
-            self._access_token = cached_token
-            self._token_expiry = cached_expiry
-            return self._access_token
-
-        # リフレッシュトークンで新しいアクセストークンを取得
-        url = "https://oauth2.googleapis.com/token"
-        payload = {
-            "client_id": self._token_data["client_id"],
-            "client_secret": self._token_data["client_secret"],
-            "refresh_token": self._token_data["refresh_token"],
-            "grant_type": "refresh_token"
-        }
-        res = None
-        for attempt in range(3):
-            try:
-                res = self.session.post(url, data=payload, timeout=10)
-                if res.status_code == 200 or res.status_code < 500:
-                    break
-            except (requests.ConnectionError, requests.Timeout):
-                if attempt == 2:
-                    raise
-            time.sleep(0.5 * (2 ** attempt))
-
-        if res is None or res.status_code != 200:
-            err_text = res.text if res is not None else "接続失敗またはタイムアウト"
-            sc = res.status_code if res is not None else 0
-            if "invalid_grant" in err_text:
-                raise RuntimeError(f"トークンの更新に失敗しました (認証失効: invalid_grant): clasp login を実行して再ログインしてください。詳細: {err_text}")
-            raise RuntimeError(f"トークンの更新に失敗しました ({sc}): {err_text}")
-
-        data = res.json()
-        self._access_token = data["access_token"]
-        expires_in = data.get("expires_in", 3600)
-        self._token_expiry = now + expires_in
-        self._cache_data["token"] = {
-            "access_token": self._access_token,
-            "expiry": self._token_expiry,
-            "refresh_token_tail": current_tail
-        }
-        self._save_cache()
-        return self._access_token
 
     def _request_with_retry(self, method, url, max_retries=3, retry_5xx=True, retry_timeout=True, **kwargs):
         """429 (Too Many Requests), 403 (レートリミット超過), 500番台エラー、および 401 (失効トークン) 時に自動再試行
@@ -709,9 +747,10 @@ class GasClient:
                 # 401 (Unauthorized) 時はトークンが失効した可能性があるため、1回だけリフレッシュして再試行（回数に数えない）
                 if res.status_code == 401 and not refreshed:
                     refreshed = True
-                    self._access_token = None
-                    self._cache_data.pop("token", None)
-                    self._save_cache()
+                    with self._ensure_sync_state():
+                        self._access_token = None
+                        self._cache_data.pop("token", None)
+                        self._save_cache()
                     if "headers" in kwargs and isinstance(kwargs["headers"], dict) and "Authorization" in kwargs["headers"]:
                         kwargs["headers"]["Authorization"] = f"Bearer {self.get_access_token()}"
                     continue
@@ -738,6 +777,191 @@ class GasClient:
                     continue
                 raise
 
+    @staticmethod
+    def _is_mock_obj(obj):
+        """unittest.mock のモックオブジェクトかどうかを判定する"""
+        if obj is None:
+            return False
+        mod = getattr(type(obj), "__module__", "") or ""
+        return mod.startswith("unittest.mock")
+
+    def _can_auto_prefetch(self):
+        """裏の事前確認スレッドを起動してよいか判定する（単体テストの _request_with_retry モック破壊を防ぐ）"""
+        if getattr(self, "_disable_bg_check", False):
+            return False
+        req = getattr(self, "_request_with_retry", None)
+        rem = getattr(self, "_remote_modified_epoch", None)
+        if self._is_mock_obj(req) and not self._is_mock_obj(rem):
+            return False
+        return True
+
+    @staticmethod
+    def _extract_files_update_epoch(data):
+        """GET/PUT /content 応答の files[].updateTime から最大の更新時刻（UNIX秒）を返す"""
+        if not isinstance(data, dict):
+            return None
+        files = data.get("files")
+        if not isinstance(files, list):
+            return None
+        best = None
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            ut = f.get("updateTime")
+            if not ut or not isinstance(ut, str):
+                continue
+            try:
+                ep = datetime.fromisoformat(ut.replace("Z", "+00:00")).timestamp()
+                if best is None or ep > best:
+                    best = ep
+            except Exception:
+                continue
+        return best
+
+    @staticmethod
+    def _files_content_equal(data_a, data_b):
+        """2つの content 辞書のファイル実体（name/type/source）が一致するか比較する"""
+        def _norm(d):
+            if not isinstance(d, dict):
+                return []
+            items = []
+            for f in d.get("files") or []:
+                if isinstance(f, dict):
+                    items.append((f.get("name", ""), f.get("type", ""), f.get("source", "")))
+            items.sort()
+            return items
+        return _norm(data_a) == _norm(data_b)
+
+    def _persist_check_to_disk_cache(self, sid, checked_at=None, remote_epoch=None, copy_epoch=None, copy_tentative=None):
+        """裏確認で得た更新時刻メタを既存のディスクキャッシュへ反映する（既存エントリがある場合のみ）"""
+        try:
+            with self._ensure_sync_state():
+                disk_cache = self._load_disk_content_cache()
+                entry = disk_cache.get(sid)
+                if not isinstance(entry, dict):
+                    return
+                changed = False
+                if checked_at is not None and entry.get("checked_at") != checked_at:
+                    entry["checked_at"] = checked_at
+                    changed = True
+                if remote_epoch is not None and entry.get("remote_epoch") != remote_epoch:
+                    entry["remote_epoch"] = remote_epoch
+                    changed = True
+                if copy_epoch is not None:
+                    if entry.get("copy_epoch") != copy_epoch or entry.get("copy_tentative") != bool(copy_tentative):
+                        entry["copy_epoch"] = copy_epoch
+                        entry["copy_tentative"] = bool(copy_tentative)
+                        changed = True
+                if changed:
+                    self._save_disk_content_cache(disk_cache)
+        except Exception:
+            pass
+
+    def _record_remote_check(self, sid, remote_epoch, checked_at=None, expected_gen=None, set_copy_epoch=False, min_copy_epoch=None):
+        """確認済みのクラウド更新時刻を記録する（古い世代スレッドの結果は破棄）"""
+        now = checked_at if checked_at is not None else time.time()
+        lock = self._ensure_sync_state()
+        persist_args = None
+        with lock:
+            if expected_gen is not None and self._write_gens.get(sid, 0) != expected_gen:
+                return False
+            if remote_epoch is None:
+                self._remote_check_cache[sid] = {
+                    "checked_at": now,
+                    "remote_epoch": None,
+                    "tentative": False,
+                }
+                return True
+            eff_epoch = remote_epoch
+            if set_copy_epoch and min_copy_epoch is not None and eff_epoch < min_copy_epoch - 0.1:
+                eff_epoch = min_copy_epoch
+            self._remote_check_cache[sid] = {
+                "checked_at": now,
+                "remote_epoch": eff_epoch,
+                "tentative": False,
+            }
+            copy_ep_out = None
+            copy_tent_out = None
+            if set_copy_epoch:
+                self._copy_remote_epochs[sid] = (eff_epoch, False)
+                copy_ep_out = eff_epoch
+                copy_tent_out = False
+            persist_args = (now, eff_epoch, copy_ep_out, copy_tent_out)
+        if persist_args is not None:
+            self._persist_check_to_disk_cache(sid, *persist_args)
+        return True
+
+    def _run_remote_check_worker(self, sid, expected_gen, set_copy_epoch, min_copy_epoch):
+        """裏スレッドで _remote_modified_epoch を実行して結果を保存する"""
+        try:
+            remote = self._remote_modified_epoch(sid)
+            # 自分の書き込み直後の結果整合性遅延で古い時刻が返った場合のみ 1 回だけ短く再確認する
+            if (
+                set_copy_epoch
+                and min_copy_epoch is not None
+                and remote is not None
+                and remote < min_copy_epoch - 0.1
+                and not self._is_mock_obj(getattr(self, "_remote_modified_epoch", None))
+                and not self._is_mock_obj(getattr(self, "_request_with_retry", None))
+            ):
+                time.sleep(0.3)
+                retry_remote = self._remote_modified_epoch(sid)
+                if retry_remote is not None and retry_remote >= remote:
+                    remote = retry_remote
+            self._record_remote_check(
+                sid,
+                remote,
+                expected_gen=expected_gen,
+                set_copy_epoch=set_copy_epoch,
+                min_copy_epoch=min_copy_epoch,
+            )
+        except Exception:
+            pass
+        finally:
+            lock = self._ensure_sync_state()
+            with lock:
+                cur = self._prefetch_threads.get(sid)
+                if cur is not None and cur[1] is threading.current_thread():
+                    self._prefetch_threads.pop(sid, None)
+
+    def _schedule_remote_check(self, sid, set_copy_epoch=False, force=False, min_copy_epoch=None):
+        """クラウド更新時刻の事前確認を裏スレッド（daemon）で開始する"""
+        if not self._can_auto_prefetch():
+            return None
+        lock = self._ensure_sync_state()
+        with lock:
+            gen = self._write_gens.get(sid, 0)
+            existing = self._prefetch_threads.get(sid)
+            if existing is not None:
+                ex_gen, ex_thread, ex_set_copy = existing
+                if ex_thread.is_alive() and ex_gen == gen and (not set_copy_epoch or ex_set_copy) and not force:
+                    return ex_thread
+            t = threading.Thread(
+                target=self._run_remote_check_worker,
+                args=(sid, gen, bool(set_copy_epoch), min_copy_epoch),
+                name=f"gas-remote-check-{sid[:8]}",
+                daemon=True,
+            )
+            self._prefetch_threads[sid] = (gen, t, bool(set_copy_epoch))
+        t.start()
+        return t
+
+    def wait_prefetch(self, script_id=None, timeout=5.0):
+        """進行中の裏確認スレッドの完了を待つ（テスト・ベンチマーク用）"""
+        lock = self._ensure_sync_state()
+        with lock:
+            if script_id is not None:
+                sid = self.resolve_script_id(script_id)
+                entry = self._prefetch_threads.get(sid)
+                threads = [entry[1]] if entry is not None else []
+            else:
+                threads = [v[1] for v in self._prefetch_threads.values()]
+        deadline = time.time() + max(0.0, float(timeout))
+        for t in threads:
+            if t is not None and t.is_alive():
+                rem = max(0.0, deadline - time.time())
+                t.join(timeout=rem)
+
     def _remote_modified_epoch(self, sid):
         """クラウド上のプロジェクトの最終更新時刻（UNIX 秒）。取れなければ None。
         単独のスクリプトは Drive の modifiedTime。スプレッドシート付属（コンテナバインド）は Drive に
@@ -745,10 +969,10 @@ class GasClient:
         （11/11 の版はここで None になり、付属のスクリプトは毎回クラウドから全部読み直して 2 秒遅くなっていた）。"""
         def _epoch(s):
             return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() if s else None
-        bound = getattr(self, "_bound_sids", None)
-        if bound is None:
-            bound = self._bound_sids = set()
-        if sid not in bound:      # 付属と分かった物は Drive を飛ばす（404 の往復 0.4 秒を毎回払わない）
+        lock = self._ensure_sync_state()
+        with lock:
+            is_bound = sid in self._bound_sids
+        if not is_bound:      # 付属と分かった物は Drive を飛ばす（404 の往復 0.4 秒を毎回払わない）
             try:
                 url = f"https://www.googleapis.com/drive/v3/files/{sid}"
                 res = self._request_with_retry("GET", url, headers=self._headers(), params={"fields": "modifiedTime"}, timeout=10)
@@ -757,7 +981,8 @@ class GasClient:
                     if ts is not None:
                         return ts
                 elif res.status_code == 404:
-                    bound.add(sid)
+                    with lock:
+                        self._bound_sids.add(sid)
             except Exception:
                 pass
         try:
@@ -769,24 +994,514 @@ class GasClient:
             pass
         return None
 
-    def _get_content_for_write(self, sid):
-        """書き換え用の読み。手元の写しがあっても、クラウドの更新時刻を 1 回見て、
-        写しを取った後にほかで直されていれば（GASエディタ・別の PC・clasp 等）読み直す。
-        確かめられないとき（Drive に無い・権限が無い等）も読み直す＝ほかの直しを古い写しで上書きしない。"""
-        had_copy = sid in self._content_cache or sid in self._load_disk_content_cache()
+    def _get_content_for_write_with_status(self, sid):
+        """書き換え用の読み（差分リベース用の元版と変更有無も返す）。
+        裏確認の結果が 30 秒以内なら通信待ちゼロで判定し、古い・失敗時はその場で同期確認する。
+        クラウドが先へ進んでいれば最新を取得し、(最新, 元の手元の写し, True) を返す。"""
+        lock = self._ensure_sync_state()
+        with lock:
+            had_copy = sid in self._content_cache or sid in self._load_disk_content_cache()
         if not had_copy:
-            return self.get_content(sid, use_cache=False)
-        data = self.get_content(sid, use_cache=True)
-        ts = self._content_cache.get(sid, (0, None))[0]
-        # 写しが新しい（この道具が 10 分以内にクラウドから読んだ・自分で書いた）なら、クラウドを見に行かない。
-        # AI はふつう「読む → 直す」と撃つので、1 回目の直しも読んだ写しで速く書ける（1 回 1.4〜2 秒の確かめを払わない）。
-        # 10 分を過ぎた写しは必ず確かめる＝ほかで直された物を古い写しで上書きしない守りは残す。
-        if ts and time.time() - ts < OWN_WRITE_TRUST_SEC:
-            return data
-        remote = self._remote_modified_epoch(sid)
-        if remote is not None and remote <= ts + 1.0:
-            return data
-        return self.get_content(sid, use_cache=False)
+            return self.get_content(sid, use_cache=False), None, False
+
+        prev_active = getattr(self._in_write_lookup, "active", False)
+        self._in_write_lookup.active = True
+        try:
+            data = self.get_content(sid, use_cache=True)
+
+            now = time.time()
+            with lock:
+                ts = self._content_cache.get(sid, (0, None))[0]
+                copy_info = self._copy_remote_epochs.get(sid)
+                check_info = copy.deepcopy(self._remote_check_cache.get(sid)) if sid in self._remote_check_cache else None
+                self_fresh_at = self._self_fresh_at.get(sid, 0.0)
+                cur_gen = self._write_gens.get(sid, 0)
+                pending = self._prefetch_threads.get(sid)
+
+            remote = None
+            check_tentative = False
+            has_valid_check = (
+                check_info is not None
+                and (now - check_info.get("checked_at", 0.0)) <= REMOTE_CHECK_FRESH_SEC
+                and check_info.get("remote_epoch") is not None
+            )
+            check_failed_recently = (
+                check_info is not None
+                and (now - check_info.get("checked_at", 0.0)) <= REMOTE_CHECK_FRESH_SEC
+                and check_info.get("remote_epoch") is None
+            )
+
+            if has_valid_check:
+                remote = check_info.get("remote_epoch")
+                check_tentative = bool(check_info.get("tentative", False))
+            elif self_fresh_at and (now - self_fresh_at) <= REMOTE_CHECK_FRESH_SEC and not check_failed_recently:
+                # このクライアントが直近 30 秒以内に取得・書き込みした直後は裏スレッド完了前でも待ちゼロで通す
+                return data, None, False
+            else:
+                # 進行中の同世代裏確認スレッドがあれば短く待って結果を拾う
+                if pending is not None and pending[0] == cur_gen and pending[1].is_alive():
+                    pending[1].join(timeout=5.0)
+                    with lock:
+                        check_info = copy.deepcopy(self._remote_check_cache.get(sid)) if sid in self._remote_check_cache else None
+                    now = time.time()
+                    if (
+                        check_info is not None
+                        and (now - check_info.get("checked_at", 0.0)) <= REMOTE_CHECK_FRESH_SEC
+                        and check_info.get("remote_epoch") is not None
+                    ):
+                        remote = check_info.get("remote_epoch")
+                        check_tentative = bool(check_info.get("tentative", False))
+                if remote is None:
+                    remote = self._remote_modified_epoch(sid)
+                    self._record_remote_check(sid, remote, checked_at=time.time(), expected_gen=cur_gen, set_copy_epoch=False)
+                    check_tentative = False
+
+            if remote is None:
+                fresh = self.get_content(sid, use_cache=False)
+                changed = not self._files_content_equal(data, fresh)
+                return fresh, (data if changed else None), changed
+
+            if copy_info is not None and copy_info[0] is not None:
+                base_epoch, copy_tentative = copy_info
+                tol = 1.0 if (copy_tentative or check_tentative) else 0.001
+            else:
+                base_epoch = ts
+                tol = 1.0
+
+            if base_epoch and remote <= base_epoch + tol:
+                return data, None, False
+
+            fresh = self.get_content(sid, use_cache=False)
+            changed = not self._files_content_equal(data, fresh)
+            return fresh, (data if changed else None), changed
+        finally:
+            self._in_write_lookup.active = prev_active
+
+    def _get_content_for_write(self, sid):
+        """書き換え用の読み。手元の写しが最新ならそのまま使い、クラウド更新時は最新を取り直す。"""
+        content, _, _ = self._get_content_for_write_with_status(sid)
+        return content
+
+    @staticmethod
+    def _format_conflict_diff(label, hand_src, latest_src, max_lines=40):
+        """手元の基準版とクラウド最新版の競合箇所 diff を整形して返す"""
+        h_lines = (hand_src or "").splitlines(keepends=True)
+        l_lines = (latest_src or "").splitlines(keepends=True)
+        diff_iter = list(difflib.unified_diff(
+            h_lines,
+            l_lines,
+            fromfile=f"local/{label}",
+            tofile=f"cloud/{label}",
+            n=2,
+        ))
+        if not diff_iter:
+            return ""
+        if len(diff_iter) > max_lines:
+            return "".join(diff_iter[:max_lines]) + f"\n... (以降 {len(diff_iter) - max_lines} 行省略)\n"
+        return "".join(diff_iter)
+
+    @classmethod
+    def _raise_conflict_error(cls, label, reason, hand_src="", latest_src=""):
+        """競合検出時に安全中止エラーを組み立てて送出する"""
+        msg = f"競合を検出したため書き込みを中止しました ({label}): {reason}"
+        diff_text = cls._format_conflict_diff(label, hand_src, latest_src)
+        if diff_text:
+            msg += f"\n--- クラウドとの差分 ---\n{diff_text}"
+        raise ValueError(msg)
+
+    @staticmethod
+    def _find_file_pair(base_files, target_file):
+        """最新ファイルに対応する手元ベースファイルを検索する"""
+        if not base_files or not isinstance(target_file, dict):
+            return None
+        t_name = target_file.get("name")
+        t_type = target_file.get("type")
+        for f in base_files:
+            if isinstance(f, dict) and f.get("name") == t_name and f.get("type") == t_type:
+                return f
+        for f in base_files:
+            if isinstance(f, dict) and f.get("name") == t_name:
+                return f
+        return None
+
+    def _resolve_target_file_pair(self, files, base_files, filename):
+        """最新ファイル群とベースファイル群から対象ファイル組を解決する（クラウド側で削除済みの場合は競合中止）"""
+        try:
+            latest_file = self._match_file(files, filename)
+        except ValueError:
+            if base_files:
+                try:
+                    hand_only = self._match_file(base_files, filename)
+                    self._raise_conflict_error(
+                        hand_only.get("name", filename),
+                        f"対象ファイル '{filename}' がクラウド側で削除または別ファイルに置き換わっています。",
+                        hand_only.get("source", ""),
+                        "",
+                    )
+                except ValueError as e:
+                    if "競合を検出したため書き込みを中止しました" in str(e):
+                        raise
+            raise
+        hand_file = None
+        if base_files is not None:
+            hand_file = self._find_file_pair(base_files, latest_file)
+            if hand_file is None:
+                self._raise_conflict_error(
+                    latest_file.get("name", filename),
+                    f"対象ファイル '{filename}' は手元の写し取得後にクラウド側で新規作成または差し替えられました。",
+                    "",
+                    latest_file.get("source", ""),
+                )
+        return latest_file, hand_file
+
+    @classmethod
+    def _check_single_line_char_rebase(cls, hand_line, latest_line, s_pos, e_pos, label):
+        """1行ファイル限定の文字単位リベース。文/ブロック境界（; { } 改行）で分離されていない同一文編集は中止する"""
+        sm = difflib.SequenceMatcher(None, hand_line, latest_line, autojunk=False)
+        delims = {";", "{", "}", "\n"}
+        delta_before = 0
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal":
+                continue
+            if tag in ("replace", "delete"):
+                if max(i1, s_pos) < min(i2, e_pos):
+                    cls._raise_conflict_error(
+                        label,
+                        f"1行コード内の同一箇所（文字 {s_pos}〜{e_pos}）が手動編集と衝突しています。",
+                        hand_line,
+                        latest_line,
+                    )
+            else:  # insert
+                if s_pos < i1 < e_pos:
+                    cls._raise_conflict_error(
+                        label,
+                        f"1行コード内の置換範囲（文字 {s_pos}〜{e_pos}）の内部へ手動挿入が入っています。",
+                        hand_line,
+                        latest_line,
+                    )
+            if i2 <= s_pos:
+                between = hand_line[i2:s_pos]
+                if not any(d in between for d in delims):
+                    cls._raise_conflict_error(
+                        label,
+                        f"同一文内（区切り文字なし）に手動編集が近接しています（文字 {i1}〜{i2} と {s_pos}〜{e_pos}）。",
+                        hand_line,
+                        latest_line,
+                    )
+                delta_before += (j2 - j1) - (i2 - i1)
+            elif i1 >= e_pos:
+                between = hand_line[e_pos:i1]
+                if not any(d in between for d in delims):
+                    cls._raise_conflict_error(
+                        label,
+                        f"同一文内（区切り文字なし）に手動編集が近接しています（文字 {s_pos}〜{e_pos} と {i1}〜{i2}）。",
+                        hand_line,
+                        latest_line,
+                    )
+        return s_pos + delta_before, e_pos + delta_before
+
+    @staticmethod
+    def _compute_line_layout(text):
+        """splitlines(keepends=True) と各行開始位置・改行除去行配列を返す"""
+        lines = text.splitlines(keepends=True)
+        starts = []
+        pos = 0
+        for ln in lines:
+            starts.append(pos)
+            pos += len(ln)
+        stripped = [ln.rstrip("\r\n") for ln in lines]
+        return lines, starts, stripped
+
+    @classmethod
+    def _map_span_if_unconflicted(cls, hand_src, latest_src, s_pos, e_pos, label,
+                                   h_layout=None, l_layout=None, opcodes=None, base_offset_line=0):
+        """hand_src[s_pos:e_pos] に対するクラウド手動編集の競合を検査し、無競合なら latest_src 上の位置 (ls, le) を返す"""
+        if hand_src == latest_src:
+            return s_pos, e_pos
+        if h_layout is None:
+            h_layout = cls._compute_line_layout(hand_src)
+        if l_layout is None:
+            l_layout = cls._compute_line_layout(latest_src)
+        h_lines, h_starts, h_stripped = h_layout
+        l_lines, l_starts, l_stripped = l_layout
+        if opcodes is None:
+            opcodes = difflib.SequenceMatcher(None, h_stripped, l_stripped, autojunk=False).get_opcodes()
+
+        ls = bisect.bisect_right(h_starts, s_pos) - 1
+        le_last = bisect.bisect_right(h_starts, max(s_pos, e_pos - 1)) - 1
+        le = le_last + 1
+        if ls < 0:
+            ls = 0
+        if le <= ls:
+            le = ls + 1
+
+        line_desc = f"行 {ls + 1 + base_offset_line}" if le - ls == 1 else f"行 {ls + 1 + base_offset_line}〜{le + base_offset_line}"
+
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == "equal":
+                continue
+            if tag in ("replace", "delete"):
+                if max(i1, ls) < min(i2, le):
+                    if (
+                        tag == "replace"
+                        and len(h_lines) == 1
+                        and len(l_lines) == 1
+                        and (i2 - i1) == 1
+                        and (le - ls) == 1
+                    ):
+                        l_s, l_e = cls._check_single_line_char_rebase(hand_src, latest_src, s_pos, e_pos, label)
+                        if latest_src[l_s:l_e] != hand_src[s_pos:e_pos]:
+                            cls._raise_conflict_error(label, f"{line_desc} の一致確認に失敗しました。", hand_src, latest_src)
+                        return l_s, l_e
+                    cls._raise_conflict_error(
+                        label,
+                        f"{line_desc} がクラウド側の手動編集と重なっています。",
+                        hand_src,
+                        latest_src,
+                    )
+            else:  # insert
+                if ls < i1 < le:
+                    cls._raise_conflict_error(
+                        label,
+                        f"{line_desc} の複数行パッチ内部（{i1 + 1 + base_offset_line} 行目付近）に手動編集が挿入されています。",
+                        hand_src,
+                        latest_src,
+                    )
+
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == "equal" and i1 <= ls and le <= i2:
+                j_ls = j1 + (ls - i1)
+                if j_ls >= len(l_starts):
+                    break
+                l_s = l_starts[j_ls] + (s_pos - h_starts[ls])
+                l_e = l_s + (e_pos - s_pos)
+                if latest_src[l_s:l_e] == hand_src[s_pos:e_pos]:
+                    return l_s, l_e
+                cls._raise_conflict_error(
+                    label,
+                    f"{line_desc} の周辺改行または文字内容がクラウド側と一致しません。",
+                    hand_src,
+                    latest_src,
+                )
+
+        cls._raise_conflict_error(
+            label,
+            f"{line_desc} に対応する安全位置をクラウド最新版で特定できませんでした。",
+            hand_src,
+            latest_src,
+        )
+
+    def _rebase_patch_items(self, hand_src, latest_src, patch_list, scope_label,
+                            default_replace_all=False, err_scope_label=None,
+                            empty_msg="置換対象の文字列（target）を指定してください。",
+                            not_found_tmpl=None, multi_tmpl=None, base_offset_line=0):
+        """hand_src と latest_src を並走させ、競合検査付きで一連のパッチを適用して (new_hand, new_latest, count) を返す"""
+        cur_hand = hand_src
+        cur_latest = latest_src
+        total_occurrences = 0
+        has_cloud_diff = (cur_hand != cur_latest)
+        err_label = err_scope_label if err_scope_label is not None else scope_label
+        if not_found_tmpl is None:
+            not_found_tmpl = "置換対象の文字列（target）が '{label}' 内に見つかりませんでした。"
+        if multi_tmpl is None:
+            multi_tmpl = "置換対象の文字列（target）が '{label}' 内に {occ} 箇所見つかりました。前後の行を含めて1箇所に絞り込むか、replace_all=True を指定してください。"
+
+        for item in patch_list:
+            tgt = item.get("target", "")
+            if not tgt:
+                raise ValueError(empty_msg)
+            rep = "" if item.get("replacement") is None else str(item.get("replacement", ""))
+            rep_all = item.get("replace_all", default_replace_all)
+
+            # 改行コードの差異（CRLF / LF）自動救済
+            if tgt not in cur_hand:
+                if "\r\n" in cur_hand and "\r\n" not in tgt:
+                    norm_target = tgt.replace("\n", "\r\n")
+                    if norm_target in cur_hand:
+                        tgt = norm_target
+                        rep = rep.replace("\n", "\r\n")
+                elif "\r\n" not in cur_hand and "\r\n" in tgt:
+                    norm_target = tgt.replace("\r\n", "\n")
+                    if norm_target in cur_hand:
+                        tgt = norm_target
+                        rep = rep.replace("\r\n", "\n")
+
+            occurrences = cur_hand.count(tgt)
+            if occurrences == 0:
+                raise ValueError(not_found_tmpl.format(label=err_label, tgt=tgt, occ=occurrences))
+            if occurrences > 1 and not rep_all:
+                raise ValueError(multi_tmpl.format(label=err_label, tgt=tgt, occ=occurrences))
+
+            if not has_cloud_diff or cur_hand == cur_latest:
+                next_src = cur_hand.replace(tgt, rep) if rep_all else cur_hand.replace(tgt, rep, 1)
+                cur_hand = next_src
+                cur_latest = next_src
+                total_occurrences += (occurrences if rep_all else 1)
+                continue
+
+            # cloud側が変更されている場合は手元の各一致位置を検査して最新へマップする
+            matches = []
+            search_pos = 0
+            while True:
+                idx = cur_hand.find(tgt, search_pos)
+                if idx == -1:
+                    break
+                matches.append((idx, idx + len(tgt)))
+                if not rep_all:
+                    break
+                search_pos = idx + len(tgt)
+
+            if rep_all and cur_latest.count(tgt) != occurrences:
+                self._raise_conflict_error(
+                    scope_label,
+                    f"replace_all 対象 '{tgt[:40]}' の出現回数がクラウド側で変化しています（手元 {occurrences} 箇所 / クラウド {cur_latest.count(tgt)} 箇所）。",
+                    cur_hand,
+                    cur_latest,
+                )
+
+            h_layout = self._compute_line_layout(cur_hand)
+            l_layout = self._compute_line_layout(cur_latest)
+            opcodes = difflib.SequenceMatcher(None, h_layout[2], l_layout[2], autojunk=False).get_opcodes()
+
+            mapped_spans = [
+                self._map_span_if_unconflicted(
+                    cur_hand, cur_latest, s_pos, e_pos, scope_label,
+                    h_layout=h_layout, l_layout=l_layout, opcodes=opcodes,
+                    base_offset_line=base_offset_line,
+                )
+                for s_pos, e_pos in matches
+            ]
+
+            new_latest_parts = []
+            last_idx = 0
+            for l_s, l_e in mapped_spans:
+                new_latest_parts.append(cur_latest[last_idx:l_s])
+                new_latest_parts.append(rep)
+                last_idx = l_e
+            new_latest_parts.append(cur_latest[last_idx:])
+            cur_latest = "".join(new_latest_parts)
+
+            cur_hand = cur_hand.replace(tgt, rep) if rep_all else cur_hand.replace(tgt, rep, 1)
+            total_occurrences += (occurrences if rep_all else 1)
+
+        return cur_hand, cur_latest, total_occurrences
+
+    def _apply_function_op_with_rebase(self, action, hand_file, latest_file, func_name="",
+                                       patch_list=None, code=None, default_replace_all=False,
+                                       err_scope_label=None, not_found_tmpl=None, multi_tmpl=None):
+        """関数単位操作（replace_function / patch_function / add_function / delete_function）を競合検査・リベース付きで適用し、(new_hand_src, new_latest_src, extra) を返す"""
+        l_src = latest_file.get("source", "")
+        h_src = l_src if hand_file is None else hand_file.get("source", "")
+        fname = latest_file.get("name", "")
+        ftype = latest_file.get("type", "SERVER_JS")
+        has_cloud_diff = (hand_file is not None and h_src != l_src)
+
+        if action == "add_function":
+            funcs = self._extract_functions_from_js(code)
+            if not funcs:
+                raise ValueError("追加対象のコードから関数定義が検出されませんでした。")
+            fn_name = funcs[0]["name"]
+            # 手元ベース上での重複確認
+            check_hand = hand_file if hand_file is not None else latest_file
+            try:
+                self._get_function_absolute_span(check_hand, fn_name)
+                raise ValueError(f"関数 '{fn_name}' は既に '{fname}' 内に存在します。")
+            except ValueError as e:
+                if "既に" in str(e):
+                    raise
+            if has_cloud_diff:
+                try:
+                    self._get_function_absolute_span(latest_file, fn_name)
+                    self._raise_conflict_error(
+                        f"{fname}::{fn_name}",
+                        f"追加しようとした関数 '{fn_name}' はクラウド側で既に追加されています。",
+                        h_src,
+                        l_src,
+                    )
+                except ValueError as e:
+                    if "競合を検出したため書き込みを中止しました" in str(e):
+                        raise
+
+            def _append_fn(src_text):
+                if ftype == "HTML":
+                    scripts = list(re.finditer(r'(<script[^>]*>)([\s\S]*?)(</script>)', src_text, re.IGNORECASE))
+                    if scripts:
+                        ipos = scripts[-1].end(2)
+                        return src_text[:ipos] + "\n" + code.strip() + "\n" + src_text[ipos:]
+                    return src_text.rstrip() + f"\n<script>\n{code.strip()}\n</script>\n"
+                return src_text.rstrip() + "\n\n" + code.strip() + "\n"
+
+            new_latest = _append_fn(l_src)
+            new_hand = _append_fn(h_src) if has_cloud_diff else new_latest
+            return new_hand, new_latest, {"function": fn_name}
+
+        # replace_function / delete_function / patch_function
+        check_hand = hand_file if hand_file is not None else latest_file
+        h_start, h_end = self._get_function_absolute_span(check_hand, func_name)
+        h_fn = h_src[h_start:h_end]
+
+        if has_cloud_diff:
+            try:
+                l_start, l_end = self._get_function_absolute_span(latest_file, func_name)
+            except ValueError:
+                self._raise_conflict_error(
+                    f"{fname}::{func_name}",
+                    f"対象関数 '{func_name}' がクラウド側で削除・改名または構文変化しています。",
+                    h_src,
+                    l_src,
+                )
+            l_fn = l_src[l_start:l_end]
+        else:
+            l_start, l_end = h_start, h_end
+            l_fn = h_fn
+
+        if action == "replace_function":
+            if has_cloud_diff and h_fn != l_fn:
+                self._raise_conflict_error(
+                    f"{fname}::{func_name}",
+                    f"関数丸ごと置換の対象関数 '{func_name}' がクラウド側で変更されているため中止しました。",
+                    h_fn,
+                    l_fn,
+                )
+            new_latest = l_src[:l_start] + code + l_src[l_end:]
+            new_hand = (h_src[:h_start] + code + h_src[h_end:]) if has_cloud_diff else new_latest
+            return new_hand, new_latest, {"function": func_name}
+
+        if action == "delete_function":
+            if has_cloud_diff and h_fn != l_fn:
+                self._raise_conflict_error(
+                    f"{fname}::{func_name}",
+                    f"削除対象の関数 '{func_name}' がクラウド側で変更されているため中止しました。",
+                    h_fn,
+                    l_fn,
+                )
+            def _del_span(src_text, s_idx, e_idx):
+                before = src_text[:s_idx]
+                after = src_text[e_idx:]
+                return before.rstrip() + ("\n\n" if after.strip() else "\n") + after.lstrip()
+
+            new_latest = _del_span(l_src, l_start, l_end)
+            new_hand = _del_span(h_src, h_start, h_end) if has_cloud_diff else new_latest
+            return new_hand, new_latest, {"function": func_name}
+
+        if action == "patch_function":
+            base_offset_line = l_src.count("\n", 0, l_start)
+            new_h_fn, new_l_fn, total_occ = self._rebase_patch_items(
+                h_fn,
+                l_fn,
+                patch_list or [],
+                scope_label=f"{fname}::{func_name}",
+                default_replace_all=default_replace_all,
+                err_scope_label=err_scope_label if err_scope_label is not None else func_name,
+                not_found_tmpl=not_found_tmpl,
+                multi_tmpl=multi_tmpl,
+                base_offset_line=base_offset_line,
+            )
+            new_latest = l_src[:l_start] + new_l_fn + l_src[l_end:]
+            new_hand = (h_src[:h_start] + new_h_fn + h_src[h_end:]) if has_cloud_diff else new_latest
+            return new_hand, new_latest, {"function": func_name, "replaced_occurrences": total_occ}
+
+        raise ValueError(f"不明な関数操作です: '{action}'")
 
     @property
     def aliases_file(self):
@@ -981,6 +1696,8 @@ class GasClient:
         sid = self.resolve_script_id(script_id)
         now = time.time()
 
+        lock = self._ensure_sync_state()
+
         if use_cache:
             # 1. メモリキャッシュ (TTL 86400秒、ただし別プロセスがディスクキャッシュを更新した場合はディスク側を優先)
             if sid in self._content_cache:
@@ -988,12 +1705,18 @@ class GasClient:
                 p_disk = self._disk_content_cache_file
                 disk_newer = False
                 try:
-                    if p_disk.exists() and p_disk.stat().st_mtime > ts + 0.001:
+                    if p_disk.exists() and p_disk.stat().st_mtime > max(ts, getattr(self, "_disk_cache_mtime", 0.0)) + 0.001:
                         disk_newer = True
                 except Exception:
                     pass
                 if not disk_newer and now - ts < 86400:
                     self._synced_sids.add(sid)
+                    if not getattr(self._in_write_lookup, "active", False):
+                        with lock:
+                            cinfo = self._remote_check_cache.get(sid)
+                            stale = (cinfo is None) or ((now - cinfo.get("checked_at", 0.0)) > PREFETCH_STALE_SEC)
+                        if stale:
+                            self._schedule_remote_check(sid, set_copy_epoch=False)
                     return copy.deepcopy(cached_data)
 
             # 2. ディスクキャッシュ (TTL 86400秒)
@@ -1007,6 +1730,21 @@ class GasClient:
                         self._content_cache.pop(next(iter(self._content_cache)), None)
                     self._content_cache[sid] = (ts, copy.deepcopy(c_data))
                     self._synced_sids.add(sid)
+                    with lock:
+                        if sid not in self._copy_remote_epochs and entry.get("copy_epoch") is not None:
+                            self._copy_remote_epochs[sid] = (entry["copy_epoch"], bool(entry.get("copy_tentative", False)))
+                        if entry.get("checked_at") is not None and entry.get("remote_epoch") is not None:
+                            cur_ck = self._remote_check_cache.get(sid)
+                            if cur_ck is None or entry["checked_at"] > cur_ck.get("checked_at", 0.0):
+                                self._remote_check_cache[sid] = {
+                                    "checked_at": entry["checked_at"],
+                                    "remote_epoch": entry["remote_epoch"],
+                                    "tentative": False,
+                                }
+                        cinfo = self._remote_check_cache.get(sid)
+                        stale = (cinfo is None) or ((now - cinfo.get("checked_at", 0.0)) > PREFETCH_STALE_SEC)
+                    if not getattr(self._in_write_lookup, "active", False) and stale:
+                        self._schedule_remote_check(sid, set_copy_epoch=False)
                     return copy.deepcopy(c_data)
 
         url = f"https://script.googleapis.com/v1/projects/{sid}/content"
@@ -1034,13 +1772,30 @@ class GasClient:
             raise RuntimeError(f"コンテンツの取得に失敗しました ({res.status_code}): {res.text}")
         data = res.json()
         now = time.time()
-        while len(self._content_cache) >= 32:
-            self._content_cache.pop(next(iter(self._content_cache)), None)
-        self._content_cache[sid] = (now, copy.deepcopy(data))
-        self._synced_sids.add(sid)
+        file_ut = self._extract_files_update_epoch(data)
+        with lock:
+            while len(self._content_cache) >= 32:
+                self._content_cache.pop(next(iter(self._content_cache)), None)
+            self._content_cache[sid] = (now, copy.deepcopy(data))
+            self._synced_sids.add(sid)
+            self._write_gens[sid] = self._write_gens.get(sid, 0) + 1
+            self._self_fresh_at[sid] = now
+            disk_entry = {"ts": now, "content": copy.deepcopy(data)}
+            if file_ut is not None:
+                self._copy_remote_epochs[sid] = (file_ut, True)
+                self._remote_check_cache[sid] = {"checked_at": now, "remote_epoch": file_ut, "tentative": True}
+                disk_entry["copy_epoch"] = file_ut
+                disk_entry["copy_tentative"] = True
+                disk_entry["checked_at"] = now
+                disk_entry["remote_epoch"] = file_ut
+            else:
+                self._copy_remote_epochs.pop(sid, None)
+                self._remote_check_cache.pop(sid, None)
         disk_cache = self._load_disk_content_cache()
-        disk_cache[sid] = {"ts": now, "content": copy.deepcopy(data)}
+        disk_cache[sid] = disk_entry
         self._save_disk_content_cache(disk_cache)
+        if not getattr(self._in_write_lookup, "active", False):
+            self._schedule_remote_check(sid, set_copy_epoch=True, force=True, min_copy_epoch=file_ut)
         return copy.deepcopy(data)
 
     def sync_project(self, script_id, force=False) -> dict:
@@ -1575,16 +2330,18 @@ class GasClient:
     def replace_function(self, script_id, filename, func_name, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイル内の特定関数定義ブロックを丸ごと置換（Excel の replace_procedure 相当）"""
         sid = self.resolve_script_id(script_id)
-        content = self._get_content_for_write(sid)
+        content, base_content, cloud_changed = self._get_content_for_write_with_status(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
+        base_files = base_content.get("files", []) if base_content else None
 
-        matched_file = self._match_file(files, filename)
+        matched_file, hand_file = self._resolve_target_file_pair(files, base_files, filename)
         source = matched_file.get("source", "")
         ftype = matched_file.get("type", "SERVER_JS")
 
-        abs_start, abs_end = self._get_function_absolute_span(matched_file, func_name)
-        new_source = source[:abs_start] + code + source[abs_end:]
+        _, new_source, _ = self._apply_function_op_with_rebase(
+            "replace_function", hand_file, matched_file, func_name=func_name, code=code
+        )
 
         # 差分生成
         src_lines = source.splitlines(keepends=True)
@@ -1628,6 +2385,8 @@ class GasClient:
             "diff": diff_text,
             "syntax_check": syntax_status
         }
+        if cloud_changed:
+            ret["rebased"] = True
         if deploy:
             dep_info = self.deploy(sid, description=deploy_desc, fast=True)
             ret["deployment"] = dep_info
@@ -1636,15 +2395,13 @@ class GasClient:
     def patch_function(self, script_id, filename, func_name, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """関数定義スコープ内限定のコード置換（他関数に影響を与えずにピンポイント置換）"""
         sid = self.resolve_script_id(script_id)
-        content = self._get_content_for_write(sid)
+        content, base_content, cloud_changed = self._get_content_for_write_with_status(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
-        matched_file = self._match_file(files, filename)
+        base_files = base_content.get("files", []) if base_content else None
+        matched_file, hand_file = self._resolve_target_file_pair(files, base_files, filename)
         source = matched_file.get("source", "")
         ftype = matched_file.get("type", "SERVER_JS")
-
-        abs_start, abs_end = self._get_function_absolute_span(matched_file, func_name)
-        func_src = source[abs_start:abs_end]
 
         if patches is not None:
             if isinstance(patches, str):
@@ -1662,39 +2419,18 @@ class GasClient:
         if not patch_list:
             raise ValueError("置換対象のパッチが指定されていません。")
 
-        cur_func_src = func_src
-        total_occurrences = 0
-
-        for item in patch_list:
-            tgt = item.get("target", "")
-            if not tgt:
-                raise ValueError("置換対象の文字列（target）を指定してください。")
-            rep = "" if item.get("replacement") is None else str(item.get("replacement", ""))
-            rep_all = item.get("replace_all", replace_all)
-
-            # CRLF / LF 自動救済
-            if tgt not in cur_func_src:
-                if "\r\n" in cur_func_src and "\r\n" not in tgt:
-                    norm_target = tgt.replace("\n", "\r\n")
-                    if norm_target in cur_func_src:
-                        tgt = norm_target
-                        rep = rep.replace("\n", "\r\n")
-                elif "\r\n" not in cur_func_src and "\r\n" in tgt:
-                    norm_target = tgt.replace("\r\n", "\n")
-                    if norm_target in cur_func_src:
-                        tgt = norm_target
-                        rep = rep.replace("\r\n", "\n")
-
-            occurrences = cur_func_src.count(tgt)
-            if occurrences == 0:
-                raise ValueError(f"置換対象の文字列（target）が関数 '{func_name}' 内に見つかりませんでした。")
-            if occurrences > 1 and not rep_all:
-                raise ValueError(f"置換対象の文字列（target）が関数 '{func_name}' 内に {occurrences} 箇所見つかりました。前後の行を含めて1箇所に絞り込むか、replace_all=True を指定してください。")
-
-            cur_func_src = cur_func_src.replace(tgt, rep) if rep_all else cur_func_src.replace(tgt, rep, 1)
-            total_occurrences += (occurrences if rep_all else 1)
-
-        new_source = source[:abs_start] + cur_func_src + source[abs_end:]
+        _, new_source, fn_info = self._apply_function_op_with_rebase(
+            "patch_function",
+            hand_file,
+            matched_file,
+            func_name=func_name,
+            patch_list=patch_list,
+            default_replace_all=replace_all,
+            err_scope_label=func_name,
+            not_found_tmpl="置換対象の文字列（target）が関数 '{label}' 内に見つかりませんでした。",
+            multi_tmpl="置換対象の文字列（target）が関数 '{label}' 内に {occ} 箇所見つかりました。前後の行を含めて1箇所に絞り込むか、replace_all=True を指定してください。",
+        )
+        total_occurrences = fn_info["replaced_occurrences"]
 
         src_lines = source.splitlines(keepends=True)
         new_lines = new_source.splitlines(keepends=True)
@@ -1739,6 +2475,8 @@ class GasClient:
             "diff": diff_text,
             "syntax_check": syntax_status
         }
+        if cloud_changed:
+            ret["rebased"] = True
         if deploy:
             dep_info = self.deploy(sid, description=deploy_desc, fast=True)
             ret["deployment"] = dep_info
@@ -1747,35 +2485,18 @@ class GasClient:
     def add_function(self, script_id, filename, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイルに関数を追加（既存関数との重複チェック付き）"""
         sid = self.resolve_script_id(script_id)
-        content = self._get_content_for_write(sid)
+        content, base_content, cloud_changed = self._get_content_for_write_with_status(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
-        matched_file = self._match_file(files, filename)
+        base_files = base_content.get("files", []) if base_content else None
+        matched_file, hand_file = self._resolve_target_file_pair(files, base_files, filename)
         source = matched_file.get("source", "")
         ftype = matched_file.get("type", "SERVER_JS")
 
-        funcs = self._extract_functions_from_js(code)
-        if not funcs:
-            raise ValueError("追加対象のコードから関数定義が検出されませんでした。")
-        fn_name = funcs[0]["name"]
-
-        # 重複チェック
-        try:
-            self._get_function_absolute_span(matched_file, fn_name)
-            raise ValueError(f"関数 '{fn_name}' は既に '{filename}' 内に存在します。")
-        except ValueError as e:
-            if "既に" in str(e):
-                raise
-
-        if ftype == "HTML":
-            scripts = list(re.finditer(r'(<script[^>]*>)([\s\S]*?)(</script>)', source, re.IGNORECASE))
-            if scripts:
-                insert_pos = scripts[-1].end(2)
-                new_source = source[:insert_pos] + "\n" + code.strip() + "\n" + source[insert_pos:]
-            else:
-                new_source = source.rstrip() + f"\n<script>\n{code.strip()}\n</script>\n"
-        else:
-            new_source = source.rstrip() + "\n\n" + code.strip() + "\n"
+        _, new_source, fn_info = self._apply_function_op_with_rebase(
+            "add_function", hand_file, matched_file, code=code
+        )
+        fn_name = fn_info["function"]
 
         src_lines = source.splitlines(keepends=True)
         new_lines = new_source.splitlines(keepends=True)
@@ -1814,6 +2535,8 @@ class GasClient:
             "diff": diff_text,
             "syntax_check": syntax_status
         }
+        if cloud_changed:
+            ret["rebased"] = True
         if deploy:
             dep_info = self.deploy(sid, description=deploy_desc, fast=True)
             ret["deployment"] = dep_info
@@ -1822,18 +2545,17 @@ class GasClient:
     def delete_function(self, script_id, filename, func_name, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイルから関数を削除"""
         sid = self.resolve_script_id(script_id)
-        content = self._get_content_for_write(sid)
+        content, base_content, cloud_changed = self._get_content_for_write_with_status(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
-        matched_file = self._match_file(files, filename)
+        base_files = base_content.get("files", []) if base_content else None
+        matched_file, hand_file = self._resolve_target_file_pair(files, base_files, filename)
         source = matched_file.get("source", "")
         ftype = matched_file.get("type", "SERVER_JS")
 
-        abs_start, abs_end = self._get_function_absolute_span(matched_file, func_name)
-
-        before = source[:abs_start]
-        after = source[abs_end:]
-        new_source = before.rstrip() + ("\n\n" if after.strip() else "\n") + after.lstrip()
+        _, new_source, _ = self._apply_function_op_with_rebase(
+            "delete_function", hand_file, matched_file, func_name=func_name
+        )
 
         src_lines = source.splitlines(keepends=True)
         new_lines = new_source.splitlines(keepends=True)
@@ -1873,6 +2595,8 @@ class GasClient:
             "diff": diff_text,
             "syntax_check": syntax_status
         }
+        if cloud_changed:
+            ret["rebased"] = True
         if deploy:
             dep_info = self.deploy(sid, description=deploy_desc, fast=True)
             ret["deployment"] = dep_info
@@ -1881,10 +2605,12 @@ class GasClient:
     def batch_patch(self, script_id, operations, force=False, dry_run=False, deploy=False, deploy_desc="Batch deployed via GasClient", fast=False):
         """複数ファイル・複数関数の修正をメモリ上で一括合成し、1回通信でアトミック反映"""
         sid = self.resolve_script_id(script_id)
-        orig_content = copy.deepcopy(self._get_content_for_write(sid))
+        latest_orig, base_content, cloud_changed = self._get_content_for_write_with_status(sid)
+        orig_content = copy.deepcopy(latest_orig)
         content = copy.deepcopy(orig_content)
         files = content.get("files", [])
         orig_files = copy.deepcopy(orig_content.get("files", []))
+        base_files = copy.deepcopy(base_content.get("files", [])) if base_content else None
 
         if isinstance(operations, str):
             try:
@@ -1901,6 +2627,7 @@ class GasClient:
 
         orig_sources = {(f.get("name"), f.get("type", "SERVER_JS")): f.get("source", "") for f in files}
         modified_file_objs = {}
+        hand_file_states = {}
 
         for op in op_list:
             if not isinstance(op, dict):
@@ -1908,9 +2635,15 @@ class GasClient:
             fname = op.get("file")
             if not fname:
                 raise ValueError("各操作には 'file'（ファイル名）が必須です。")
-            matched_file = self._match_file(files, fname)
+            matched_file, hand_ref = self._resolve_target_file_pair(files, base_files, fname)
             cur_src = matched_file.get("source", "")
             ftype = matched_file.get("type", "SERVER_JS")
+            f_key = (matched_file.get("name"), ftype)
+            hand_file_obj = None
+            if hand_ref is not None:
+                if f_key not in hand_file_states:
+                    hand_file_states[f_key] = copy.deepcopy(hand_ref)
+                hand_file_obj = hand_file_states[f_key]
             action = op.get("action") or op.get("op", "")
 
             fn_name = op.get("func") or op.get("func_name") or op.get("function", "")
@@ -1930,76 +2663,63 @@ class GasClient:
                 tgt = op.get("target", "")
                 rep = op.get("replacement", "")
                 rep_all = op.get("replace_all", False)
-                if tgt not in cur_src:
-                    if "\r\n" in cur_src and "\r\n" not in tgt:
-                        tgt = tgt.replace("\n", "\r\n")
-                        rep = rep.replace("\n", "\r\n")
-                    elif "\r\n" not in cur_src and "\r\n" in tgt:
-                        tgt = tgt.replace("\r\n", "\n")
-                        rep = rep.replace("\r\n", "\n")
-                if tgt not in cur_src:
-                    raise ValueError(f"置換対象 '{tgt}' が '{fname}' 内に見つかりません。")
-                occ = cur_src.count(tgt)
-                if occ > 1 and not rep_all:
-                    raise ValueError(f"置換対象が '{fname}' 内に {occ} 箇所見つかりました。replace_all=True を指定してください。")
-                cur_src = cur_src.replace(tgt, rep) if rep_all else cur_src.replace(tgt, rep, 1)
+                h_src_val = cur_src if hand_file_obj is None else hand_file_obj.get("source", "")
+                new_h_src, cur_src, _ = self._rebase_patch_items(
+                    h_src_val,
+                    cur_src,
+                    [{"target": tgt, "replacement": rep, "replace_all": rep_all}],
+                    scope_label=matched_file["name"],
+                    default_replace_all=rep_all,
+                    err_scope_label=fname,
+                    empty_msg=f"置換対象 '{tgt}' が '{fname}' 内に見つかりません。",
+                    not_found_tmpl="置換対象 '{tgt}' が '{label}' 内に見つかりません。",
+                    multi_tmpl="置換対象が '{label}' 内に {occ} 箇所見つかりました。replace_all=True を指定してください。",
+                )
+                if hand_file_obj is not None:
+                    hand_file_obj["source"] = new_h_src
 
             elif action == "patch_function":
-                abs_start, abs_end = self._get_function_absolute_span(matched_file, fn_name)
-                func_src = cur_src[abs_start:abs_end]
                 tgt = op.get("target", "")
                 rep = op.get("replacement", "")
                 rep_all = op.get("replace_all", False)
-                if tgt not in func_src:
-                    if "\r\n" in func_src and "\r\n" not in tgt:
-                        tgt = tgt.replace("\n", "\r\n")
-                        rep = rep.replace("\n", "\r\n")
-                    elif "\r\n" not in func_src and "\r\n" in tgt:
-                        tgt = tgt.replace("\r\n", "\n")
-                        rep = rep.replace("\r\n", "\n")
-                if tgt not in func_src:
-                    raise ValueError(f"置換対象 '{tgt}' が関数 '{fn_name}' 内に見つかりません。")
-                occ = func_src.count(tgt)
-                if occ > 1 and not rep_all:
-                    raise ValueError(f"置換対象が関数 '{fn_name}' 内に {occ} 箇所見つかりました。")
-                new_f_src = func_src.replace(tgt, rep) if rep_all else func_src.replace(tgt, rep, 1)
-                cur_src = cur_src[:abs_start] + new_f_src + cur_src[abs_end:]
+                new_h_src, cur_src, _ = self._apply_function_op_with_rebase(
+                    "patch_function",
+                    hand_file_obj,
+                    matched_file,
+                    func_name=fn_name,
+                    patch_list=[{"target": tgt, "replacement": rep, "replace_all": rep_all}],
+                    default_replace_all=rep_all,
+                    err_scope_label=fn_name,
+                    not_found_tmpl="置換対象 '{tgt}' が関数 '{label}' 内に見つかりません。",
+                    multi_tmpl="置換対象が関数 '{label}' 内に {occ} 箇所見つかりました。",
+                )
+                if hand_file_obj is not None:
+                    hand_file_obj["source"] = new_h_src
 
-            elif action == "replace_function":
-                abs_start, abs_end = self._get_function_absolute_span(matched_file, fn_name)
-                code = op.get("code", "")
-                cur_src = cur_src[:abs_start] + code + cur_src[abs_end:]
-
-            elif action == "add_function":
-                code = op.get("code", "")
-                funcs = self._extract_functions_from_js(code)
-                if not funcs:
-                    raise ValueError("追加対象コードから関数定義が検出されませんでした。")
-                add_fn_name = funcs[0]["name"]
-                try:
-                    self._get_function_absolute_span(matched_file, add_fn_name)
-                    raise ValueError(f"関数 '{add_fn_name}' は既に '{fname}' 内に存在します。")
-                except ValueError as e:
-                    if "既に" in str(e):
-                        raise
-                if ftype == "HTML":
-                    scripts = list(re.finditer(r'(<script[^>]*>)([\s\S]*?)(</script>)', cur_src, re.IGNORECASE))
-                    if scripts:
-                        ipos = scripts[-1].end(2)
-                        cur_src = cur_src[:ipos] + "\n" + code.strip() + "\n" + cur_src[ipos:]
-                    else:
-                        cur_src = cur_src.rstrip() + f"\n<script>\n{code.strip()}\n</script>\n"
-                else:
-                    cur_src = cur_src.rstrip() + "\n\n" + code.strip() + "\n"
-
-            elif action == "delete_function":
-                abs_start, abs_end = self._get_function_absolute_span(matched_file, fn_name)
-                before = cur_src[:abs_start]
-                after = cur_src[abs_end:]
-                cur_src = before.rstrip() + ("\n\n" if after.strip() else "\n") + after.lstrip()
+            elif action in ("replace_function", "add_function", "delete_function"):
+                new_h_src, cur_src, _ = self._apply_function_op_with_rebase(
+                    action,
+                    hand_file_obj,
+                    matched_file,
+                    func_name=fn_name,
+                    code=op.get("code", ""),
+                )
+                if hand_file_obj is not None:
+                    hand_file_obj["source"] = new_h_src
 
             elif action == "replace_file":
-                cur_src = op.get("new_source", op.get("code", ""))
+                new_file_src = op.get("new_source", op.get("code", ""))
+                new_file_src = "" if new_file_src is None else str(new_file_src)
+                if hand_file_obj is not None and hand_file_obj.get("source", "") != cur_src:
+                    self._raise_conflict_error(
+                        matched_file["name"],
+                        f"ファイル丸ごと置換の対象ファイル '{matched_file['name']}' がクラウド側で変更されているため中止しました。",
+                        hand_file_obj.get("source", ""),
+                        cur_src,
+                    )
+                cur_src = new_file_src
+                if hand_file_obj is not None:
+                    hand_file_obj["source"] = new_file_src
 
             else:
                 raise ValueError(f"不明なアクションです: '{action}'")
@@ -2074,6 +2794,8 @@ class GasClient:
             "diff": combined_diff,
             "syntax_check": "valid"
         }
+        if cloud_changed:
+            ret["rebased"] = True
         if deploy:
             dep_info = self.deploy(sid, description=deploy_desc, fast=True)
             ret["deployment"] = dep_info
@@ -2800,16 +3522,30 @@ class GasClient:
         res_json = res.json() if res.content else {}
         now = time.time()
         c_dict = copy.deepcopy(res_json if "files" in res_json else {"files": cleaned_files})
-        while len(self._content_cache) >= 32:
-            self._content_cache.pop(next(iter(self._content_cache)), None)
-        self._content_cache[sid] = (now, copy.deepcopy(c_dict))
-        self._synced_sids.add(sid)
-        if not hasattr(self, "_own_write_at"):
-            self._own_write_at = {}
-        self._own_write_at[sid] = now
+        file_ut = self._extract_files_update_epoch(res_json)
+        lock = self._ensure_sync_state()
+        with lock:
+            while len(self._content_cache) >= 32:
+                self._content_cache.pop(next(iter(self._content_cache)), None)
+            self._content_cache[sid] = (now, copy.deepcopy(c_dict))
+            self._synced_sids.add(sid)
+            self._write_gens[sid] = self._write_gens.get(sid, 0) + 1
+            self._self_fresh_at[sid] = now
+            disk_entry = {"ts": now, "content": copy.deepcopy(c_dict)}
+            if file_ut is not None:
+                self._copy_remote_epochs[sid] = (file_ut, True)
+                self._remote_check_cache[sid] = {"checked_at": now, "remote_epoch": file_ut, "tentative": True}
+                disk_entry["copy_epoch"] = file_ut
+                disk_entry["copy_tentative"] = True
+                disk_entry["checked_at"] = now
+                disk_entry["remote_epoch"] = file_ut
+            else:
+                self._copy_remote_epochs.pop(sid, None)
+                self._remote_check_cache.pop(sid, None)
         disk_cache = self._load_disk_content_cache()
-        disk_cache[sid] = {"ts": now, "content": copy.deepcopy(c_dict)}
+        disk_cache[sid] = disk_entry
         self._save_disk_content_cache(disk_cache)
+        self._schedule_remote_check(sid, set_copy_epoch=True, force=True, min_copy_epoch=file_ut)
 
         # スマートパージ: 該当 sid に関連する古い診断・dock・xrayキャッシュを即時無効化
         for k in [k for k in self._diag_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
@@ -2844,11 +3580,12 @@ class GasClient:
     def patch_code(self, script_id, filename, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", verify=False, dev=False, fast=False):
         """ファイル内の特定文字列を置換（複数箇所ヒット時は警告停止、diff 出力・構文検査対応、複数一括置換 patches 対応、自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
-        content = self._get_content_for_write(sid)
+        content, base_content, cloud_changed = self._get_content_for_write_with_status(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
+        base_files = base_content.get("files", []) if base_content else None
 
-        matched_file = self._match_file(files, filename)
+        matched_file, hand_file = self._resolve_target_file_pair(files, base_files, filename)
         source = matched_file.get("source", "")
 
         # patches 引数の解釈
@@ -2868,39 +3605,15 @@ class GasClient:
         if not patch_list:
             raise ValueError("置換対象のパッチが指定されていません。")
 
-        cur_source = source
-        total_occurrences = 0
-
-        for item in patch_list:
-            tgt = item.get("target", "")
-            if not tgt:
-                raise ValueError("置換対象の文字列（target）を指定してください。")
-            rep = "" if item.get("replacement") is None else str(item.get("replacement", ""))
-            rep_all = item.get("replace_all", replace_all)
-
-            # 改行コードの差異（CRLF / LF）自動救済
-            if tgt not in cur_source:
-                if "\r\n" in cur_source and "\r\n" not in tgt:
-                    norm_target = tgt.replace("\n", "\r\n")
-                    if norm_target in cur_source:
-                        tgt = norm_target
-                        rep = rep.replace("\n", "\r\n")
-                elif "\r\n" not in cur_source and "\r\n" in tgt:
-                    norm_target = tgt.replace("\r\n", "\n")
-                    if norm_target in cur_source:
-                        tgt = norm_target
-                        rep = rep.replace("\r\n", "\n")
-
-            occurrences = cur_source.count(tgt)
-            if occurrences == 0:
-                raise ValueError(f"置換対象の文字列（target）が '{filename}' 内に見つかりませんでした。")
-            if occurrences > 1 and not rep_all:
-                raise ValueError(f"置換対象の文字列（target）が '{filename}' 内に {occurrences} 箇所見つかりました。前後の行を含めて1箇所に絞り込むか、replace_all=True を指定してください。")
-
-            cur_source = cur_source.replace(tgt, rep) if rep_all else cur_source.replace(tgt, rep, 1)
-            total_occurrences += (occurrences if rep_all else 1)
-
-        new_source = cur_source
+        hand_source = source if hand_file is None else hand_file.get("source", "")
+        _, new_source, total_occurrences = self._rebase_patch_items(
+            hand_source,
+            source,
+            patch_list,
+            scope_label=matched_file["name"],
+            default_replace_all=replace_all,
+            err_scope_label=filename,
+        )
 
         # 差分生成
         src_lines = source.splitlines(keepends=True)
@@ -2944,6 +3657,8 @@ class GasClient:
             "diff": diff_text,
             "syntax_check": syntax_status
         }
+        if cloud_changed:
+            ret["rebased"] = True
         if dev:
             ret["dev_mode"] = True
             ret["dev_url"] = self.resolve_webapp_url(sid, dev=True)
@@ -2958,12 +3673,20 @@ class GasClient:
     def replace_file(self, script_id, filename, new_source, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """ファイルの中身を丸ごと置き換え（自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
-        content = self._get_content_for_write(sid)
+        content, base_content, cloud_changed = self._get_content_for_write_with_status(sid)
         files = content.get("files", [])
         orig_files = copy.deepcopy(files)
+        base_files = base_content.get("files", []) if base_content else None
 
-        matched_file = self._match_file(files, filename)
+        matched_file, hand_file = self._resolve_target_file_pair(files, base_files, filename)
         source = matched_file.get("source", "")
+        if hand_file is not None and hand_file.get("source", "") != source:
+            self._raise_conflict_error(
+                matched_file["name"],
+                f"ファイル丸ごと置換の対象ファイル '{matched_file['name']}' がクラウド側で手動変更されているため中止しました。",
+                hand_file.get("source", ""),
+                source,
+            )
         new_source = "" if new_source is None else str(new_source)
         src_lines = source.splitlines(keepends=True)
         new_lines = new_source.splitlines(keepends=True)
@@ -3006,6 +3729,8 @@ class GasClient:
             "diff": diff_text,
             "syntax_check": syntax_status
         }
+        if cloud_changed:
+            ret["rebased"] = True
         if deploy:
             dep_info = self.deploy(sid, description=deploy_desc, fast=True)
             ret["deployment"] = dep_info

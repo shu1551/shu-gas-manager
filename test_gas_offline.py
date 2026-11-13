@@ -6226,3 +6226,369 @@ def test_1112_undo_sends_current_target(tmp_path):
     out = ws.undo()
     assert sent["target_id"] == "FILE1"
     assert "戻せる記録がありません" in out
+
+
+
+# ---------------------------------------------------------------------------
+# 指示書 157: 裏確認・差分リベース・競合中止 疑似クラウド単体テスト
+# ---------------------------------------------------------------------------
+class _FakeGasCloud:
+    """Drive + Apps Script API を模倣するオフライン疑似クラウド"""
+
+    def __init__(self, files_init, base_epoch=1700000000.0, bound=False):
+        import copy as _copy
+        import threading as _th
+        from datetime import datetime as _dt, timezone as _tz
+        self._copy = _copy
+        self._dt = _dt
+        self._tz = _tz
+        self.epoch = float(base_epoch)
+        self.bound = bound
+        self.files = _copy.deepcopy(files_init)
+        self.counts = {"drive": 0, "script_get": 0, "content_get": 0, "content_put": 0}
+        self._lock = _th.Lock()
+
+    def _iso(self, ep):
+        return self._dt.fromtimestamp(ep, tz=self._tz.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    def _with_meta(self, files):
+        ft = self._iso(max(0.0, self.epoch - 0.25))
+        out = []
+        for f in files:
+            item = dict(f)
+            item["updateTime"] = ft
+            out.append(item)
+        return out
+
+    def human_edit(self, name, new_source, bump=5.0, ftype="SERVER_JS"):
+        with self._lock:
+            self.epoch += bump
+            for f in self.files:
+                if f["name"] == name:
+                    f["source"] = new_source
+                    return
+            self.files.append({"name": name, "type": ftype, "source": new_source})
+
+    def attach(self, client, sid="fake_sid_157"):
+        cloud = self
+
+        class _Resp:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+                self.content = json.dumps(payload).encode("utf-8") if payload is not None else b""
+                self.text = self.content.decode("utf-8", errors="ignore")
+
+            def json(self):
+                return self._payload
+
+        def _request(method, url, **kwargs):
+            with cloud._lock:
+                if method == "GET" and f"/drive/v3/files/{sid}" in url:
+                    cloud.counts["drive"] += 1
+                    if cloud.bound:
+                        return _Resp(404, {"error": {"code": 404, "message": "not found"}})
+                    return _Resp(200, {"id": sid, "modifiedTime": cloud._iso(cloud.epoch)})
+                if method == "GET" and url.endswith(f"/projects/{sid}"):
+                    cloud.counts["script_get"] += 1
+                    return _Resp(200, {"scriptId": sid, "updateTime": cloud._iso(cloud.epoch)})
+                if method == "GET" and url.endswith(f"/projects/{sid}/content"):
+                    cloud.counts["content_get"] += 1
+                    return _Resp(200, {"scriptId": sid, "files": cloud._with_meta(cloud.files)})
+                if method == "PUT" and url.endswith(f"/projects/{sid}/content"):
+                    cloud.counts["content_put"] += 1
+                    req_files = kwargs.get("json", {}).get("files", [])
+                    cloud.epoch += 2.0
+                    cloud.files = cloud._copy.deepcopy(req_files)
+                    return _Resp(200, {"scriptId": sid, "files": cloud._with_meta(cloud.files)})
+                return _Resp(404, {"error": "unhandled url"})
+
+        client.session = MagicMock()
+        client.session.request = _request
+        client.resolve_script_id = lambda x: sid
+        client._validate_syntax = lambda *a, **kw: "valid"
+        client._verify_and_rollback_if_broken = lambda *a, **kw: None
+        return sid
+
+
+def test_157_unchanged_fast_write_and_post_write_bg_check(mock_client):
+    """変更なし時は再取得なし＆裏確認キャッシュ有効期間（30秒以内）は同期チェック待ちゼロで連続書き込みできる"""
+    cloud = _FakeGasCloud([
+        {"name": "Code", "type": "SERVER_JS", "source": "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n"},
+    ], bound=True)
+    sid = cloud.attach(mock_client)
+
+    mock_client.get_file(sid, "Code")
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    assert cloud.counts["content_get"] == 1
+    assert cloud.counts["drive"] == 1
+    assert cloud.counts["script_get"] == 1
+    assert sid in mock_client._copy_remote_epochs
+    assert mock_client._copy_remote_epochs[sid][1] is False
+
+    before_checks = cloud.counts["drive"] + cloud.counts["script_get"]
+    import threading as _th
+    main_calls = []
+    _orig_rem = mock_client._remote_modified_epoch
+
+    def _spy_rem(s_id):
+        if _th.current_thread() is _th.main_thread():
+            main_calls.append(s_id)
+        return _orig_rem(s_id)
+
+    with patch.object(mock_client, "_remote_modified_epoch", _spy_rem):
+        res1 = mock_client.patch_code(sid, "Code", target="return 1;", replacement="return 10;")
+        assert res1["status"] == "success"
+        assert "rebased" not in res1
+        mock_client.wait_prefetch(sid, timeout=3.0)
+        assert main_calls == []   # 書き込みを待たせる側（本流）では確かめない
+    assert cloud.counts["content_get"] == 1
+    assert cloud.counts["content_put"] == 1
+    # 書いた直後に裏で 1 回だけ確かめ直す（次の書き込み用）。本流では 0 回（上の main_calls）
+    assert cloud.counts["drive"] + cloud.counts["script_get"] == before_checks + 1
+    assert cloud.counts["drive"] == 1
+    assert cloud.counts["script_get"] == 2
+
+    res2 = mock_client.patch_function(sid, "Code", "b", target="return 2;", replacement="return 20;")
+    assert res2["status"] == "success"
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    res3 = mock_client.batch_patch(sid, [{"file": "Code", "action": "patch_function", "func": "a", "target": "return 10;", "replacement": "return 11;"}])
+    assert res3["status"] == "success"
+    assert cloud.counts["content_get"] == 1
+    assert cloud.counts["content_put"] == 3
+
+
+def test_157_manual_edit_elsewhere_rebases_safely(mock_client):
+    """別関数・別行・別ファイル・EOF手動編集時は再取得してリベースし、双方の変更を保持する"""
+    cloud = _FakeGasCloud([
+        {"name": "Code", "type": "SERVER_JS", "source": "function a() {\n  var x = 1;\n  var y = 2;\n  return x + y;\n}\n\nfunction b() {\n  return 10;\n}"},
+        {"name": "Other", "type": "SERVER_JS", "source": "function other() { return 1; }\n"},
+    ])
+    sid = cloud.attach(mock_client)
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+
+    cloud.human_edit(
+        "Code",
+        "// manual header\nfunction a() {\n  var x = 1;\n  var y = 2;\n  return x + y;\n}\n\nfunction b() {\n  return 999;\n}\n\nfunction dupHelper() {\n  var x = 1;\n  return x;\n}",
+    )
+    mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 60
+    mock_client._self_fresh_at[sid] = time.time() - 60
+
+    res = mock_client.patch_code(sid, "Code", target="  var x = 1;", replacement="  var x = 5;")
+    assert res["status"] == "success"
+    assert res["rebased"] is True
+    final_src = cloud.files[0]["source"]
+    assert "// manual header" in final_src
+    assert "return 999;" in final_src
+    assert "var x = 5;" in final_src
+    assert "function dupHelper() {\n  var x = 1;" in final_src
+
+    mock_client.wait_prefetch(sid, timeout=3.0)
+
+    cloud.human_edit(
+        "Code",
+        final_src.replace("  var y = 2;", "  var y = 200;"),
+    )
+    mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 60
+    mock_client._self_fresh_at[sid] = time.time() - 60
+    res_fn = mock_client.patch_function(sid, "Code", "a", target="return x + y;", replacement="return x * y;")
+    assert res_fn["status"] == "success"
+    assert res_fn["rebased"] is True
+    src_after_fn = cloud.files[0]["source"]
+    assert "var y = 200;" in src_after_fn
+    assert "return x * y;" in src_after_fn
+
+    mock_client.wait_prefetch(sid, timeout=3.0)
+
+    cloud.human_edit("Other", "function other() { return 777; }\n")
+    mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 60
+    mock_client._self_fresh_at[sid] = time.time() - 60
+    res_rep = mock_client.replace_function(sid, "Code", "b", "function b() {\n  return 888;\n}")
+    assert res_rep["rebased"] is True
+    assert cloud.files[1]["source"] == "function other() { return 777; }\n"
+    assert "return 888;" in cloud.files[0]["source"]
+
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cloud.human_edit("Code", cloud.files[0]["source"] + "\nfunction c() { return 3; }\n")
+    mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 60
+    mock_client._self_fresh_at[sid] = time.time() - 60
+    res_add = mock_client.add_function(sid, "Code", "function d() {\n  return 4;\n}")
+    assert res_add["rebased"] is True
+    assert "function c() { return 3; }" in cloud.files[0]["source"]
+    assert "function d() {" in cloud.files[0]["source"]
+
+
+def test_157_manual_edit_same_place_aborts_with_diff(mock_client):
+    """同じ場所・行・関数への手動編集や対象消失・単一行同一文衝突では書き込まず diff 付きで中止する"""
+    orig = "function a() {\n  var x = 1;\n  var y = 2;\n  return x + y;\n}\n\nfunction b() {\n  return 10;\n}\n"
+    cloud = _FakeGasCloud([{"name": "Code", "type": "SERVER_JS", "source": orig}])
+    sid = cloud.attach(mock_client)
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+
+    def _stale():
+        mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 60
+        mock_client._self_fresh_at[sid] = time.time() - 60
+
+    cloud.human_edit("Code", orig.replace("var x = 1;", "var x = 99;"))
+    _stale()
+    puts_before = cloud.counts["content_put"]
+    with pytest.raises(ValueError, match="競合"):
+        mock_client.patch_code(sid, "Code", target="var x = 1;", replacement="var x = 2;")
+    assert cloud.counts["content_put"] == puts_before
+
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    base_src = cloud.files[0]["source"]
+    cloud.human_edit("Code", base_src.replace("  var x = 99;\n  var y = 2;", "  var x = 99;\n  Logger.log(x);\n  var y = 2;"))
+    _stale()
+    with pytest.raises(ValueError) as exc_ins:
+        mock_client.patch_code(sid, "Code", target="  var x = 99;\n  var y = 2;", replacement="  var x = 99;\n  var y = 3;")
+    assert "競合" in str(exc_ins.value)
+    assert "Logger.log(x);" in str(exc_ins.value)
+    assert cloud.counts["content_put"] == puts_before
+
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cur_src = cloud.files[0]["source"]
+    cloud.human_edit("Code", cur_src.replace("return 10;", "return 42;"))
+    _stale()
+    with pytest.raises(ValueError, match="競合"):
+        mock_client.patch_function(sid, "Code", "b", target="return 10;", replacement="return 20;")
+    assert cloud.counts["content_put"] == puts_before
+
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cur_src = cloud.files[0]["source"]
+    cloud.human_edit("Code", cur_src.replace("return 42;", "return 43;"))
+    _stale()
+    with pytest.raises(ValueError, match="競合"):
+        mock_client.batch_patch(sid, [
+            {"file": "Code", "action": "patch_function", "func": "a", "target": "var y = 2;", "replacement": "var y = 3;"},
+            {"file": "Code", "action": "patch_function", "func": "b", "target": "return 42;", "replacement": "return 50;"},
+        ])
+    assert cloud.counts["content_put"] == puts_before
+    assert "var y = 2;" in cloud.files[0]["source"]
+
+    one_line = "function a(){var x=1;} function b(){var y=2;}"
+    cloud.human_edit("Code", one_line)
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cloud.human_edit("Code", "function a(){var x=1;} function b(){var y=999;}")
+    _stale()
+    res_ol = mock_client.patch_code(sid, "Code", target="var x=1;", replacement="var x=7;")
+    assert res_ol["status"] == "success"
+    assert cloud.files[0]["source"] == "function a(){var x=7;} function b(){var y=999;}"
+
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cloud.human_edit("Code", "function a(){var x=7;} function b(){var y=999+1;}")
+    _stale()
+    puts_before_ol = cloud.counts["content_put"]
+    with pytest.raises(ValueError, match="競合"):
+        mock_client.patch_code(sid, "Code", target="var y=999;", replacement="var y=888;")
+    assert cloud.counts["content_put"] == puts_before_ol
+
+
+def test_157_whole_replace_changed_aborts(mock_client):
+    """丸ごと置換（replace_file / replace_function / delete_function）は対象変更時に中止し、別ファイル変更時はリベースする"""
+    cloud = _FakeGasCloud([
+        {"name": "Code", "type": "SERVER_JS", "source": "function a() { return 1; }\n\nfunction b() { return 2; }\n"},
+        {"name": "Extra", "type": "SERVER_JS", "source": "function ext() { return 9; }\n"},
+    ])
+    sid = cloud.attach(mock_client)
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+
+    def _stale():
+        mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 60
+        mock_client._self_fresh_at[sid] = time.time() - 60
+
+    cloud.human_edit("Code", "function a() { return 100; }\n\nfunction b() { return 2; }\n")
+    _stale()
+    puts_before = cloud.counts["content_put"]
+    with pytest.raises(ValueError, match="競合"):
+        mock_client.replace_file(sid, "Code", "function a() { return 0; }\n")
+    assert cloud.counts["content_put"] == puts_before
+
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cloud.human_edit("Code", "function a() { return 101; }\n\nfunction b() { return 2; }\n")
+    _stale()
+    with pytest.raises(ValueError, match="競合"):
+        mock_client.replace_function(sid, "Code", "a", "function a() { return 5; }")
+    assert cloud.counts["content_put"] == puts_before
+
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cloud.human_edit("Code", "function a() { return 102; }\n\nfunction b() { return 2; }\n")
+    _stale()
+    with pytest.raises(ValueError, match="競合"):
+        mock_client.delete_function(sid, "Code", "a")
+    assert cloud.counts["content_put"] == puts_before
+
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cloud.human_edit("Extra", "function ext() { return 777; }\n")
+    _stale()
+    res_rf = mock_client.replace_file(sid, "Code", "function a() { return 555; }\n")
+    assert res_rf["status"] == "success"
+    assert res_rf["rebased"] is True
+    assert cloud.files[1]["source"] == "function ext() { return 777; }\n"
+
+
+def test_157_stale_check_syncs_and_prefetches(mock_client, tmp_path):
+    """30秒超の古い確認はその場で同期確認し、10秒超の再読み時は裏確認、世代管理や定数削除も正しい"""
+    import gas_client as gc_mod
+    assert not hasattr(gc_mod, "OWN_WRITE_TRUST_SEC")
+
+    cloud = _FakeGasCloud([
+        {"name": "Code", "type": "SERVER_JS", "source": "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n"},
+    ])
+    sid = cloud.attach(mock_client)
+    mock_client.get_content(sid, use_cache=False)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    assert not hasattr(mock_client, "_own_write_at")
+
+    mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 31.0
+    mock_client._self_fresh_at[sid] = time.time() - 31.0
+    sc_before = cloud.counts["drive"]
+    cg_before = cloud.counts["content_get"]
+    res1 = mock_client.patch_code(sid, "Code", target="return 1;", replacement="return 2;")
+    assert res1["status"] == "success"
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    # 古い確認はその場で 1 回確かめ、書いた直後の裏確認でもう 1 回（合計 2）
+    assert cloud.counts["drive"] == sc_before + 2
+    assert cloud.counts["content_get"] == cg_before
+
+    cloud.human_edit("Code", cloud.files[0]["source"].replace("function b() {\n  return 2;", "function b() {\n  return 99;"))
+    mock_client._remote_check_cache[sid]["checked_at"] = time.time() - 11.0
+    dr_before = cloud.counts["drive"]
+    mock_client.get_content(sid, use_cache=True)
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    assert cloud.counts["drive"] == dr_before + 1
+    res2 = mock_client.patch_function(sid, "Code", "a", target="return 2;", replacement="return 3;")
+    assert res2["rebased"] is True
+    assert "return 99;" in cloud.files[0]["source"]
+    assert "return 3;" in cloud.files[0]["source"]
+
+    mock_client.wait_prefetch(sid, timeout=3.0)
+    cur_gen = mock_client._write_gens[sid]
+    recorded = mock_client._record_remote_check(sid, 1234.0, expected_gen=cur_gen - 1, set_copy_epoch=True)
+    assert recorded is False
+    assert mock_client._copy_remote_epochs[sid][0] != 1234.0
+
+    c2 = GasClient(
+        clasprc_path=mock_client.clasprc_path,
+        backup_dir=str(tmp_path / ".backups2"),
+        cache_file=str(mock_client.cache_file),
+        aliases_file=str(mock_client.aliases_file),
+    )
+    c2._token_expiry = time.time() + 3600
+    c2._access_token = "dummy"
+    sid2 = cloud.attach(c2, sid=sid)
+    cg_disk = cloud.counts["content_get"]
+    c2.get_content(sid2, use_cache=True)
+    assert cloud.counts["content_get"] == cg_disk
+    assert sid2 in c2._copy_remote_epochs
+    assert sid2 in c2._remote_check_cache
