@@ -35,7 +35,7 @@ class RecipeItem(dict):
     def __str__(self):
         return self.get("id", "")
 
-OWN_WRITE_TRUST_SEC = 600   # 自分で書いた直後の写しを、クラウドに確かめずに使ってよい長さ（秒）
+OWN_WRITE_TRUST_SEC = 600   # クラウドから読んだ・自分で書いた写しを、確かめずに使ってよい長さ（秒）
 
 GAS_SPEEDUP_RECIPES = [
     RecipeItem({
@@ -778,10 +778,10 @@ class GasClient:
             return self.get_content(sid, use_cache=False)
         data = self.get_content(sid, use_cache=True)
         ts = self._content_cache.get(sid, (0, None))[0]
-        # 続けての直し: この道具が 10 分以内に自分で書いた物で、写しがその書き込み以後なら、クラウドを見に行かない
-        # （1 回 1.4〜2 秒の確かめを、AI が続けて直すたびに払わない。10 分を過ぎたら必ず確かめる）
-        own = getattr(self, "_own_write_at", {}).get(sid)
-        if own and ts >= own and time.time() - own < OWN_WRITE_TRUST_SEC:
+        # 写しが新しい（この道具が 10 分以内にクラウドから読んだ・自分で書いた）なら、クラウドを見に行かない。
+        # AI はふつう「読む → 直す」と撃つので、1 回目の直しも読んだ写しで速く書ける（1 回 1.4〜2 秒の確かめを払わない）。
+        # 10 分を過ぎた写しは必ず確かめる＝ほかで直された物を古い写しで上書きしない守りは残す。
+        if ts and time.time() - ts < OWN_WRITE_TRUST_SEC:
             return data
         remote = self._remote_modified_epoch(sid)
         if remote is not None and remote <= ts + 1.0:
