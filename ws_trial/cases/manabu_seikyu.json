@@ -1,7 +1,7 @@
 [
   {
     "id": "sei-01",
-    "table": "seikyu_base",
+    "table": "koutei_quirk",
     "kind": "集計",
     "layer": "L2b",
     "tags": [
@@ -9,14 +9,14 @@
     ],
     "turns": [
       {
-        "say": "請求金額の合計行を下に足して",
+        "say": "予定日数の合計行を下に足して",
         "approve": "まだ",
         "askback": "要らない",
         "expect": {
           "条件": [
             {
               "末尾が式": {
-                "列": "金額"
+                "列": "予定日数"
               }
             }
           ]
@@ -28,7 +28,7 @@
       {
         "shelf": "total",
         "cols": [
-          "金額"
+          "予定日数"
         ]
       }
     ],

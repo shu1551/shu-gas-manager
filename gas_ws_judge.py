@@ -344,6 +344,11 @@ def check_condition(cond, before, after, tinfo=None):
             elif str(got) != str(want):
                 return False, f"{a1} が {want!r} のはずが {got!r}"
         return True, ""
+    if "式でない" in cond:
+        for a1 in cond["式でない"]:
+            if sh["cells"].get(a1, {}).get("f"):
+                return False, f"{a1} がまだ式のままです"
+        return True, ""
     if "式である" in cond:
         for a1 in cond["式である"]:
             if not sh["cells"].get(a1, {}).get("f"):

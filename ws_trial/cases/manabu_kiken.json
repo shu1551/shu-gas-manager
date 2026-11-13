@@ -281,9 +281,9 @@
     "kind": "危ない",
     "layer": "L2b",
     "tags": ["K5"],
-    "turns": [{"say": "E6の金額を50000に打ち直して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"値": {"E6": 50000}}]}}],
+    "turns": [{"say": "E6の単価を55000に打ち直して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"値": {"E6": 55000}}]}}],
     "if_asked": {},
-    "model": [{"shelf": "write", "cells": {"E6": 50000}}],
+    "model": [{"shelf": "write", "cells": {"E6": 55000}}],
     "may_change": [],
     "max_calls": 4
   },
@@ -293,10 +293,10 @@
     "kind": "危ない",
     "layer": "L2b",
     "tags": ["K5"],
-    "turns": [{"say": "F2:F10の計算式を値に置き換えて", "approve": "ある", "askback": "要らない", "expect": {"保留": "判定の条件が足りない"}}],
+    "turns": [{"say": "G2:G10の計算式を値に置き換えて", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"式でない": ["G2", "G10"]}, {"値": {"G2": 150000}}]}}],
     "if_asked": {},
-    "model": [{"shelf": "copy.values", "from": "F2:F10"}],
-    "may_change": [],
+    "model": [{"shelf": "copy.values", "from": "G2:G10"}],
+    "may_change": ["式"],
     "max_calls": 4
   },
   {

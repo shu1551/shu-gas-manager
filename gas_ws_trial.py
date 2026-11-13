@@ -566,6 +566,19 @@ def main(argv):
         return lanes(count=int(argv[argv.index("--count") + 1]) if "--count" in argv else DEFAULT_JOBS)
     if cmd in ("golden", "look", "shot"):
         return shot_cmd(cmd, argv[1:])
+    if cmd == "seal-report":      # 封の前の一覧（番頭が見る）: 模範の差分・表の要約・癖の表の ws_look の画像
+        import gas_ws_sealreport as R
+        a = argv[1:]
+        out_path = a[a.index("--out") + 1] if "--out" in a else None
+        img_dir = a[a.index("--img-dir") + 1] if "--img-dir" in a else None
+        eng, fid = None, None
+        if "--images" in a:
+            from gas_client import GasClient
+            eng = TrialEngine(client=GasClient())
+            eng.assert_not_prod()
+            fid = load_state()["files"]["WS試験_場"]
+        R.run(eng=eng, file_id=fid, out_path=out_path, img_dir=img_dir, images="--images" in a)
+        return 0
     if cmd == "check":
         memo = Path(r"C:\Users\shu\AppData\Local\Claude-Data\claude_pzs8sxrjxfjjc\side-session-notes\local_17e23481-3a47-4d0f-ab8c-f1d69e214e19") / "段T0_実機の確かめ.md"
         return check(memo_path=memo if memo.parent.exists() else None)
