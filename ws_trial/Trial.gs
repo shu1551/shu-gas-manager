@@ -118,19 +118,34 @@ var TRIAL_BIG_CELLS = 30000;          // これより大きいシート（5000 �
 var TRIAL_HEAD = 60, TRIAL_TAIL = 20;
 var TRIAL_GRID_FIELDS = 'rowMetadata(hiddenByUser,hiddenByFilter),columnMetadata(hiddenByUser,pixelSize),rowData(values(formattedValue,userEnteredValue,effectiveValue,' +
   'dataValidation,userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor)),effectiveFormat(backgroundColor,textFormat(bold,foregroundColor),numberFormat,borders)))';
+// Sheets API の読み（spreadsheets.get）は 1 分 60 回の枠がある。枠切れはこの呼びの中で待って読み直す
+// （seq ごと失敗させると、道具の側が表の流し込みからやり直して 1 組が数分に膨らむ）。読んだ回数と待った秒を数える
+var TRIAL_IO = { reads: 0, wait_ms: 0, retries: 0 };
+var TRIAL_QUOTA_WAITS = [5000, 10000, 15000, 20000, 30000];
+function trialIsQuota_(e) { return /quota|rate limit|429|too many/i.test(String((e && e.message) || e)); }
+function trialGet_(id, opts) {
+  for (var i = 0; ; i++) {
+    try { TRIAL_IO.reads++; return Sheets.Spreadsheets.get(id, opts); }
+    catch (e) {
+      if (!trialIsQuota_(e) || i >= TRIAL_QUOTA_WAITS.length) throw e;
+      TRIAL_IO.retries++; TRIAL_IO.wait_ms += TRIAL_QUOTA_WAITS[i];
+      Utilities.sleep(TRIAL_QUOTA_WAITS[i]);
+    }
+  }
+}
 function trialGetResp_(ss) {
   var id = ss.getId();
-  var meta = Sheets.Spreadsheets.get(id, { fields: 'sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))' });
-  var big = (meta.sheets || []).some(function (s) { var g = s.properties.gridProperties || {}; return (g.rowCount || 0) * (g.columnCount || 0) > TRIAL_BIG_CELLS; });
-  if (!big) return Sheets.Spreadsheets.get(id, { includeGridData: true, fields: TRIAL_SNAP_FIELDS });
-  var resp = Sheets.Spreadsheets.get(id, { fields: TRIAL_SNAP_FIELDS.replace(/data\(rowMetadata.*$/, '').replace(/,$/, '') + ')' });
+  // 大きさは SpreadsheetApp で見る（Sheets API の枠を使わない。前は大きさを見るだけに 1 回読んでいた）
+  var big = ss.getSheets().some(function (s) { return s.getMaxRows() * s.getMaxColumns() > TRIAL_BIG_CELLS; });
+  if (!big) return trialGet_(id, { includeGridData: true, fields: TRIAL_SNAP_FIELDS });
+  var resp = trialGet_(id, { fields: TRIAL_SNAP_FIELDS.replace(/data\(rowMetadata.*$/, '').replace(/,$/, '') + ')' });
   (resp.sheets || []).forEach(function (sh) {
     var g = sh.properties.gridProperties || {}, rows = g.rowCount || 0, cols = g.columnCount || 0, isBig = rows * cols > TRIAL_BIG_CELLS;
     var q = "'" + String(sh.properties.title).replace(/'/g, "''") + "'!", ranges = [];
     if (!isBig) ranges.push(q + 'A1:' + colLetter_(cols) + rows);
     else { ranges.push(q + 'A1:' + colLetter_(cols) + Math.min(rows, TRIAL_HEAD)); if (rows > TRIAL_HEAD) ranges.push(q + 'A' + Math.max(TRIAL_HEAD + 1, rows - TRIAL_TAIL + 1) + ':' + colLetter_(cols) + rows); }
     var merged = { rowMetadata: [], columnMetadata: [], rowData: [] };
-    var part = Sheets.Spreadsheets.get(id, { ranges: ranges, includeGridData: true, fields: 'sheets(data(startRow,' + TRIAL_GRID_FIELDS + '))' });
+    var part = trialGet_(id, { ranges: ranges, includeGridData: true, fields: 'sheets(data(startRow,' + TRIAL_GRID_FIELDS + '))' });
     ((part.sheets || [])[0] || {}).data.forEach(function (d) {
       var s0 = d.startRow || 0;
       (d.rowMetadata || []).forEach(function (m, i) { merged.rowMetadata[s0 + i] = m; });
@@ -177,7 +192,7 @@ function trialSeed_(req) {
   var sheets = req.sheets || [];
   if (!sheets.length) throw new ArgError('sheets が空です');
   // 名前付き範囲は API で全部消す（シートを消すと SpreadsheetApp からは見えなくなるが、API には残り、同じ名前を足せなくなる）
-  var oldNames = (Sheets.Spreadsheets.get(ss.getId(), { fields: 'namedRanges(namedRangeId)' }).namedRanges || []);
+  var oldNames = (trialGet_(ss.getId(), { fields: 'namedRanges(namedRangeId)' }).namedRanges || []);
   if (oldNames.length) Sheets.Spreadsheets.batchUpdate({ requests: oldNames.map(function (n) { return { deleteNamedRange: { namedRangeId: n.namedRangeId } }; }) }, ss.getId());
   var tmp = ss.insertSheet('__seed_tmp__' + Date.now());
   ss.getSheets().forEach(function (s) { if (s.getSheetId() !== tmp.getSheetId()) ss.deleteSheet(s); });
@@ -446,6 +461,7 @@ function trialSlim_(r) {
   return { ok: !!r.ok, error: r.error || null, blocked: !!r.blocked, arg: !!r.arg, restored: r.restored, changed: r.changed || [], notes: r.notes || [], backup: r.backup || 0 };
 }
 EXTRA_ACTIONS['seq'] = function (req) {
+  req._t0 = Date.now();
   var ss = trialOpen_(req.id);
   if (req.seed) {
     var sd = trialSeed_(Object.assign({ id: req.id }, req.seed));
@@ -454,7 +470,15 @@ EXTRA_ACTIONS['seq'] = function (req) {
   }
   setJson_('WIDE', {});   // 広い削除の「1 回止めた」の覚えは、組ごとに空にする（前の組・前の走りの覚えで、いきなり通ってしまわないように）
   var out = { ok: true, snaps: {}, steps: [] }, made = 0, ledger0 = ledger_().items.length;
+  var t00 = Date.now(), ms = { open_seed: t00 - req._t0, snap: 0, do: 0, undo: 0 };   // 段ごとの秒（どこが遅いかを数字で見る）
   (req.steps || []).forEach(function (st) {
+    var t1 = Date.now();
+    try { stepOne_(st); } finally { var k = st.snap ? 'snap' : (st.do ? 'do' : 'undo'); ms[k] += Date.now() - t1; }
+  });
+  out.ledger_added = ledger_().items.length - ledger0;
+  out.io = { reads: TRIAL_IO.reads, quota_retries: TRIAL_IO.retries, quota_wait_ms: TRIAL_IO.wait_ms, ms: ms, ms_total: Date.now() - (req._t0 || t00) };
+  return trialOut_(req, out);
+  function stepOne_(st) {
     if (st.snap) { out.snaps[st.snap] = trialSnap_(ss); return; }
     if (st.do) {
       var go = function () { return actDo_({ target: { id: req.id, kind: 'sheet' }, ops: st.do, ok: !!st.ok }); };
@@ -473,9 +497,7 @@ EXTRA_ACTIONS['seq'] = function (req) {
       made = 0;
       out.steps.push({ name: st.name, undo: us });
     }
-  });
-  out.ledger_added = ledger_().items.length - ledger0;
-  return trialOut_(req, out);
+  }
 };
 
 // ---------------------------------------------------------------- 文書（試験場の文書は 1 つ。文書の台本は 1 本ずつ撃つ）

@@ -1,7 +1,7 @@
 [
   {
     "id": "kei-01",
-    "table": "koutei_base",
+    "table": "keihi_base",
     "kind": "集計",
     "layer": "L2b",
     "tags": [
@@ -9,14 +9,17 @@
     ],
     "turns": [
       {
-        "say": "予定日数の合計行を一番下に追加して",
+        "say": "金額の合計行を一番下に追加して",
         "approve": "まだ",
         "askback": "要らない",
         "expect": {
           "条件": [
             {
+              "変わっていない": true
+            },
+            {
               "末尾が式": {
-                "列": "予定日数"
+                "列": "金額"
               }
             }
           ]
@@ -28,7 +31,7 @@
       {
         "shelf": "total",
         "cols": [
-          "予定日数"
+          "金額"
         ]
       }
     ],
@@ -332,6 +335,78 @@
     "model": [
       {
         "shelf": "banding.add"
+      }
+    ],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "kei-11",
+    "table": "shift_base",
+    "kind": "集計",
+    "layer": "L2b",
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "出勤日数の合計行を一番下に追加して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "末尾が式": {
+                "列": "出勤日数"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "if_asked": {},
+    "model": [
+      {
+        "shelf": "total",
+        "cols": [
+          "出勤日数"
+        ]
+      }
+    ],
+    "may_change": [],
+    "max_calls": 4
+  },
+  {
+    "id": "kei-12",
+    "table": "keihi_base",
+    "kind": "並べる",
+    "layer": "L2b",
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "金額の大きい順に並べて",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "並び": {
+                "列": "金額",
+                "向き": "降順"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "if_asked": {},
+    "model": [
+      {
+        "shelf": "sort",
+        "col": "金額",
+        "desc": true
       }
     ],
     "may_change": [],

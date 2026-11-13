@@ -136,3 +136,28 @@ def run(eng=None, file_id=None, out_path=None, img_dir=None, images=False, out=p
     if out_path:
         Path(out_path).write_text(md, encoding="utf-8")
     return md
+
+
+def seal(out_path=None, out=print):
+    """封: 全部の台本の最新の golden が ○（または模範なしの –）のときだけ ws_trial/sealed.tsv を書く。
+    列: id・表・頼み・印・台本の指紋（台本 JSON の sha1 先頭 12 桁）。後で台本が変わったかを見分ける用"""
+    import hashlib
+    cases = S.load_cases()
+    prev = S.latest_records("golden_")
+    rows, bad = [], []
+    for c in cases:
+        r = prev.get(c["id"], {})
+        mark = r.get("mark", "")
+        if mark not in ("○", "◎", "–"):
+            bad.append(f"{c['id']}（{mark or '記録なし'}）")
+            continue
+        fp = hashlib.sha1(json.dumps(c, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+        rows.append([c["id"], c["table"], c["turns"][0]["say"].replace("\t", " "), mark, fp])
+    if bad:
+        out("封できません。通っていない本: " + "・".join(bad))
+        return 1
+    p = Path(out_path) if out_path else HERE / "ws_trial" / "sealed.tsv"
+    p.write_text("id\ttable\tsay\tmark\tfp\n" + "\n".join("\t".join(x) for x in rows) + "\n", encoding="utf-8")
+    n_ok = sum(1 for x in rows if x[3] != "–")
+    out(f"封した: {len(rows)} 本（○ {n_ok}・対象外 {len(rows) - n_ok}）→ {p}")
+    return 0

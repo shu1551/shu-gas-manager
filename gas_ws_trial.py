@@ -197,7 +197,7 @@ class TrialEngine(gas_workspace.WorkspaceManager):
         self.assert_not_prod()
         if action in ("seq", "snap"):
             kw.setdefault("gz", True)               # 大きい表（5000 行）の返事は 413（response too large）になるので、gzip にして受け取る
-        res = self._post(dict(kw, action=action), timeout=330 if (action == "seq" and kw.get("seed")) else 90)      # 5000 行の流し込み（約 35 秒）＋ 3 回の撮り＋撃つ＋戻すは 90 秒では足りない
+        res = self._post(dict(kw, action=action), timeout=330 if action in ("seq", "seed") else 90)      # seq は撃つ 3〜4 回＋戻す＋撮る 6〜8 回で、重い棚（seiri 等）は 90 秒を超える。打ち切ると GAS は走ったまま錠を持ち、次の組が錠待ちと流し込み直しで数分に膨らむ（11/13 実測）
         return self._ungz(res)
 
     @staticmethod
@@ -566,6 +566,9 @@ def main(argv):
         return lanes(count=int(argv[argv.index("--count") + 1]) if "--count" in argv else DEFAULT_JOBS)
     if cmd in ("golden", "look", "shot"):
         return shot_cmd(cmd, argv[1:])
+    if cmd == "seal":      # 封: 全部の最新の golden が ○ か対象外のときだけ ws_trial/sealed.tsv を書く
+        import gas_ws_sealreport as R
+        return R.seal()
     if cmd == "seal-report":      # 封の前の一覧（番頭が見る）: 模範の差分・表の要約・癖の表の ws_look の画像
         import gas_ws_sealreport as R
         a = argv[1:]

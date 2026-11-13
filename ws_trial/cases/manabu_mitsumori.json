@@ -1,7 +1,7 @@
 [
   {
     "id": "mit-01",
-    "table": "koutei_dirty",
+    "table": "mitsumori_base",
     "kind": "集計",
     "layer": "L2b",
     "tags": [
@@ -9,14 +9,17 @@
     ],
     "turns": [
       {
-        "say": "予定日数の合計行を下に追加して",
+        "say": "金額の合計行を下に追加して",
         "approve": "まだ",
         "askback": "要らない",
         "expect": {
           "条件": [
             {
+              "変わっていない": true
+            },
+            {
               "末尾が式": {
-                "列": "予定日数"
+                "列": "金額"
               }
             }
           ]
@@ -28,7 +31,7 @@
       {
         "shelf": "total",
         "cols": [
-          "予定日数"
+          "金額"
         ]
       }
     ],
@@ -287,5 +290,41 @@
     "model": [],
     "may_change": [],
     "max_calls": 2
+  },
+  {
+    "id": "mit-10",
+    "table": "shift_dirty",
+    "kind": "集計",
+    "layer": "L2b",
+    "tags": [
+      "K3"
+    ],
+    "turns": [
+      {
+        "say": "出勤日数の合計行を下に追加して",
+        "approve": "まだ",
+        "askback": "要らない",
+        "expect": {
+          "条件": [
+            {
+              "末尾が式": {
+                "列": "出勤日数"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "if_asked": {},
+    "model": [
+      {
+        "shelf": "total",
+        "cols": [
+          "出勤日数"
+        ]
+      }
+    ],
+    "may_change": [],
+    "max_calls": 4
   }
 ]

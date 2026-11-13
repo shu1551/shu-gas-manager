@@ -24,7 +24,7 @@ SKIP_FILE = HERE / "ws_trial" / "props_skip.tsv"
 TABLES = ["meibo_base", "meibo_dirty", "meibo_quirk", "uriage_base", "uriage_dirty", "uriage_quirk"]
 BAD_OP = {"shelf": "write", "sheet": "存在しないシート", "cells": {"A1": 1}}
 QUOTA_RETRIES = 6     # 回数超え（429）が返ったら、待って撃ち直す回数
-QUOTA_WAIT = 20       # 待つ秒（1 回目 20・2 回目 40…）。待つ間は全員が止まる（1 本が 429 を受けたら、みんなで冷ます）
+QUOTA_WAIT = 10       # 待つ秒（1 回目 10・2 回目 20…）。待つ間は全員が止まる（1 本が 429 を受けたら、みんなで冷ます）。撮影の読みの枠切れは GAS の中で待って読み直すので、ここに来るのはまれ
 BUSY_WORDS = ("別の処理が走っています",)
 QUOTA_WORDS = ("quota", "rate limit", "429", "too many", "Service invoked too many", "上限", "Exceeded")
 
@@ -431,20 +431,30 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
                     if wait > 0:
                         time.sleep(wait)
                     if seeded != tname:
+                        ts = time.time()
                         r = weng.seed(wfile, table)
                         if not r.get("ok"):
                             raise RuntimeError("流し込み失敗: " + str(r.get("error"))[:150])
                         seeded = tname
+                        rec["seed_sec"] = round(time.time() - ts, 1)
+                    ts = time.time()
                     resp = weng.trial_post("seq", id=wfile, steps=build_steps(ops, danger))
                     if not resp.get("ok", True) or "snaps" not in resp:
                         raise RuntimeError(str(resp.get("error") or resp)[:200])
+                    rec["seq_sec"] = round(time.time() - ts, 1)
+                    if resp.get("io"):
+                        rec["io"] = resp["io"]          # GAS の中の段ごとの ms・Sheets API の読みの回数・枠切れで待った ms
                     ev = evaluate(resp, shelf, danger, may, tinfo)
                     wops = build_ops_wide(shelf, table, templates)
                     if wops:
                         rec["wide_ops"] = wops
+                        ts = time.time()
                         w = weng.trial_post("seq", id=wfile, steps=build_steps_wide(wops))
                         if not w.get("ok", True) or "snaps" not in w:
                             raise RuntimeError(str(w.get("error") or w)[:200])
+                        rec["wide_sec"] = round(time.time() - ts, 1)
+                        if w.get("io"):
+                            rec["wide_io"] = w["io"]
                         wv, wwhy = evaluate_wide(w)
                         rec["wide_msg"] = ((_step(w["steps"], "w1") or {}).get("first") or {}).get("error_brief", "")
                         ev["p"]["P7"] = "fail" if "fail" in (wv, ev["p"]["P7"]) else ("pass" if "pass" in (wv, ev["p"]["P7"]) else "na")
