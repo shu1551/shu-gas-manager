@@ -79,12 +79,14 @@ def run_turn(case, answer, eng):
 
 
 @pytest.fixture(autouse=True)
-def _patch_tables(monkeypatch):
+def _patch_tables(monkeypatch, request):
     """試験用の表の代わりに、手で作った状態を使う（TI は表の範囲）"""
     real = T.load_table
     monkeypatch.setattr(S.T, "load_table", lambda n: {"name": n, "sheets": [{"name": "名簿", "tables": TI["名簿"], "values": [[1]], "hidden": {"rows": [], "cols": []}}], "named": []})
     monkeypatch.setattr(S.T, "seed_payload", lambda t: {"sheets": []})
     monkeypatch.setattr(S.T, "table_info", lambda t: TI)
+    if "lint" not in request.node.name:
+        monkeypatch.setattr(S, "lint_case", lambda case, guard=None: [])         # 撃つ前の検査は専用の試験で見る
     yield
 
 
@@ -205,3 +207,42 @@ def test_capture_looks_writes_the_real_look_format_without_the_file_id(tmp_path)
     S.capture_looks(E(), "FILEID123", ["meibo_base"], looks_dir=tmp_path, out=out.append)
     text = (tmp_path / "meibo_base.txt").read_text(encoding="utf-8")
     assert "FILEID123" not in text and "<試験場>" in text and "シート: 名簿（21行×6列）" in text and "表: 見出し 1 行目" in text
+
+
+def test_run_golden_runs_lanes_in_parallel_records_and_refail_picks_only_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "RUNS_DIR", tmp_path)
+    import time
+    monkeypatch.setattr(S, "STAGGER", 0)
+    cases = [case_sort(id=f"g-{i}") for i in range(4)]
+
+    class Slow(FakeEng):
+        def trial_post(self, action, **kw):
+            time.sleep(0.05)
+            return super().trial_post(action, **kw)
+    good, bad = Slow(BEFORE, lambda ops: SORTED), Slow(BEFORE, lambda ops: BEFORE)
+    good.lane, bad.lane = "1", "2"
+    out = []
+    results, rf = S.run_golden(good, "F1", cases, workers=[(good, "F1"), (bad, "F2")], out=out.append, run_file=tmp_path / "golden_t.jsonl")
+    assert len(results) == 4 and good.calls and bad.calls                                      # 2 本とも使った
+    rows = [json.loads(x) for x in rf.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 4 and {r["mark"] for r in rows} == {"○", "M"}
+    left = S.refail_cases(cases, "golden_", runs_dir=tmp_path)
+    assert sorted(c["id"] for c in left) == sorted(r["id"] for r in rows if r["mark"] == "M")
+
+
+def test_lint_catches_empty_ops_missing_column_overwrite_and_docs_without_shooting(monkeypatch):
+    monkeypatch.undo()
+    cases = {c["id"]: c for c in S.load_cases()}
+    bad = S.lint_cases(list(cases.values()))
+    assert bad["sca-01"][0].startswith("列名") and bad["kei-05"][0].startswith("上書き")
+    assert bad["kik-09"][0].startswith("模範なし") and bad["gij-01"][0].startswith("文書")
+    assert "t1-01" not in bad and "kik-23" not in bad                       # split の by（space）は列名ではない
+    assert S.lint_mark(bad["sca-01"]) == "L" and S.lint_mark(bad["kik-09"]) == "–"
+    run, skipped = S.split_by_lint(list(cases.values()), keep_modelless=True)
+    assert "kik-09" in [c["id"] for c in run] and "sca-01" in [c["id"] for c, _ in skipped]
+
+
+def test_ai_saying_none_is_right_when_the_script_expects_a_refusal():
+    c = case_sort()
+    c["turns"][0]["expect"] = {"条件": [{"断った": True}]}
+    assert S.run_ai_turn(None, "FID", c, {"無い": "棚が無い"}, None, None, [])["mark"] == "△"

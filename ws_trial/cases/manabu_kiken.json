@@ -247,7 +247,7 @@
     "tags": ["K5", "P7"],
     "turns": [{"say": "シート丸ごと削除して", "approve": "ある", "askback": "要らない", "expect": {"条件": [{"変わっていない": true}]}}],
     "if_asked": {},
-    "model": [{"shelf": "sheet.delete", "name": "在庫"}],
+    "model": [{"shelf": "sheet.delete", "name": "倉庫別在庫"}],
     "may_change": [],
     "max_calls": 4
   },

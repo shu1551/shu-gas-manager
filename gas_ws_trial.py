@@ -509,30 +509,38 @@ def shot_cmd(cmd, args, out=print):
     ap.add_argument("--times", type=int, default=1)
     ap.add_argument("--resume", default="")
     ap.add_argument("--limit-sec", type=int, default=6 * 3600)
+    ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS)      # 試験場を N 枚（lane）並べて同時に撃つ（props と同じ）
+    ap.add_argument("--refail", action="store_true")               # 前回 M・×・撃てなかった本だけ（golden・shot）
     a = ap.parse_args(args)
     from gas_client import GasClient
     st = load_state()
-    eng = TrialEngine(client=GasClient())
+    client = GasClient()
+    eng = TrialEngine(client=client)
     eng.assert_not_prod()
     fid = st["files"]["WS試験_場"]
     cases = [c for c in S.load_cases() if not a.case or c["id"] in a.case]
+    workers = None
+    if cmd in ("golden", "shot"):
+        if a.refail:
+            n0 = len(cases)
+            cases = S.refail_cases(cases, "golden_" if cmd == "golden" else f"shot_{a.model}_")
+            out(f"[前回通らなかった本だけ] {n0} 本のうち {len(cases)} 本を回す")
+        if a.jobs > 1 and len(cases) > 1:
+            eng._ensure_engine()                 # 版の差し替えは先に 1 回だけ
+            client.get_access_token()
+            workers = lane_workers(lambda: TrialEngine(client=client), st, a.jobs)
+            if len(workers) < a.jobs:
+                out(f"[注意] 試験場が {len(workers)} 枚しか無いので {len(workers)} 本で回します（先に `py gas.py ws-trial lanes`）")
     if cmd == "look":
         import gas_ws_props
         S.capture_looks(eng, fid, sorted({c["table"] for c in cases} | set(gas_ws_props.TABLES)), out=out)
         return 0
     if cmd == "golden":
-        bad = 0
-        for c in cases:
-            try:
-                resp, _ = S.run_model(eng, fid, c)
-                ok, why = S.judge_model(c, resp)
-            except Exception as e:           # 撃てなかった本は「通らない」に数える（止まらずに残りを回す）
-                ok, why = False, ["撃てませんでした: " + str(e)[:140]]
-            bad += not ok
-            out(("○ " if ok else "M ") + f"{c['id']} {c['table']}「{c['turns'][0]['say'][:24]}」" + ("" if ok else " " + "；".join(why)[:160]))
-        out(f"模範の再生 {len(cases)} 本・通らない {bad} 本")
+        results, rf = S.run_golden(eng, fid, cases, workers=workers, out=out, limit_seconds=a.limit_sec)
+        bad = sum(r["mark"] in ("M", "L") for r in results)         # 「–」（対象外）は通らないに数えない
+        out(f"模範の再生 {len(cases)} 本・通らない {bad} 本・記録 {rf}")
         return 1 if bad else 0
-    results, rf = S.run_shot(eng, fid, cases, model=a.model, out=out, run_file=a.resume or None, resume=bool(a.resume), times=a.times, limit_seconds=a.limit_sec)
+    results, rf = S.run_shot(eng, fid, cases, model=a.model, out=out, run_file=a.resume or None, resume=bool(a.resume), times=a.times, limit_seconds=a.limit_sec, workers=workers)
     sm = S.summarize(results)
     out(f"L2b {a.model}: {sm['ok']}/{sm['n']}（{sm['rate']:.0f}%）・外れの内訳 {sm['F']}・AI {sm['ai_calls']} 回 {sm['ai_sec']:.0f} 秒（1 回 {sm['sec_each']:.1f} 秒）・入力 {sm['in_tokens']} 出力 {sm['out_tokens']} トークン・API 換算 ${sm['cost_usd']:.3f}・記録 {rf}")
     return 0

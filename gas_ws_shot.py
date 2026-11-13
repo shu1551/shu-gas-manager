@@ -194,6 +194,8 @@ def run_ai_turn(eng, file_id, case, answer, model_after, finder, say_find_names)
             return {"mark": "△", "F": "", "why": "期待どおりに聞き返した", "got": []}
         return {"mark": "×", "F": "F8", "why": "聞かなくてよい頼みを聞き返した: " + str(answer["質問"])[:60], "got": []}
     if "無い" in answer:
+        if "断った" in json.dumps(turn.get("expect"), ensure_ascii=False):
+            return {"mark": "△", "F": "", "why": "期待どおりに断った", "got": []}
         return {"mark": "×", "F": "F6", "why": "有効な台本で「無い」と答えた", "got": []}
     ops = answer.get("ops")
     okflag = bool(answer.get("ok"))
@@ -235,8 +237,98 @@ def candidates_have_model(finder, say, want):
     return all(w in names for w in want), names
 
 
-def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_file=None, resume=False, times=1, limit_seconds=None):
-    """L2b。台本ごとに 模範（期待の比べ先）→ AI の答え → 撃って判定。1 本ごとに書き出す。返り値は (結果のリスト, 記録ファイル)"""
+STAGGER = 1.5
+
+
+def _parallel(cases, workers, fn, stagger=None, limit_seconds=None, out=print):
+    """cases を workers（[(エンジン, 試験場の ID)]・lane ごと）に配って同時に回す。fn(エンジン, 試験場, case)。上限の時間を過ぎたら新しい本は始めない"""
+    import queue
+    import threading
+    stagger = STAGGER if stagger is None else stagger
+    q = queue.Queue()
+    for c in cases:
+        q.put(c)
+    t_start = time.time()
+    stop = threading.Event()
+    lock = threading.Lock()
+
+    def work(wi, weng, wfile):
+        time.sleep(stagger * wi)
+        while not stop.is_set():
+            try:
+                case = q.get_nowait()
+            except queue.Empty:
+                return
+            if limit_seconds and time.time() - t_start > limit_seconds:
+                with lock:
+                    out("[上限] 全体の時間の上限で止めました（--resume で続きから）")
+                stop.set()
+                return
+            fn(weng, wfile, case)
+
+    ths = [threading.Thread(target=work, args=(i, e, f), daemon=True) for i, (e, f) in enumerate(workers)]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join()
+    return time.time() - t_start
+
+
+def latest_records(pattern, key="id", runs_dir=None):
+    """記録（runs の <pattern>*.jsonl）の本ごとの最新。古い順に読み、後のものが勝つ"""
+    d = Path(runs_dir) if runs_dir else RUNS_DIR
+    prev = {}
+    for f in sorted(d.glob(pattern + "*.jsonl")):
+        for ln in f.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(ln)
+                prev[r[key]] = r
+            except Exception:
+                pass
+    return prev
+
+
+def refail_cases(cases, pattern, runs_dir=None):
+    """--refail: 前回の記録が通っていない（M・×・撃てなかった）本、記録の無い本だけ。◎ ○ △ は外す"""
+    prev = latest_records(pattern, runs_dir=runs_dir)
+    return [c for c in cases if prev.get(c["id"], {}).get("mark") not in ("○", "◎", "△", "–")]
+
+
+def run_golden(eng, file_id, cases, workers=None, out=print, run_file=None, limit_seconds=None):
+    """模範の再生。lane ごとに並べて回す。1 本ごとに記録へ書く。返り値は (結果のリスト, 記録ファイル)"""
+    import threading
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    rf = Path(run_file) if run_file else RUNS_DIR / f"golden_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    workers = workers or [(eng, file_id)]
+    results, lock = [], threading.Lock()
+    cases, skipped = split_by_lint(cases)           # 撃つ前に手元の検査（エンジンを撃たない）。外れた本は撃たない
+    for c, probs in skipped:
+        rec = {"id": c["id"], "table": c["table"], "say": c["turns"][0]["say"], "mark": lint_mark(probs), "why": probs, "lint": True}
+        with rf.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        results.append(rec)
+        out(f"{rec['mark']} {c['id']} {c['table']} 検査: " + "；".join(probs)[:160])
+
+    def one(weng, wfile, c):
+        try:
+            resp, _ = run_model(weng, wfile, c)
+            ok, why = judge_model(c, resp)
+        except Exception as e:           # 撃てなかった本は「通らない」に数える（止まらずに残りを回す）
+            ok, why = False, ["撃てませんでした: " + str(e)[:140]]
+        rec = {"id": c["id"], "table": c["table"], "say": c["turns"][0]["say"], "mark": "○" if ok else "M", "why": list(why), "lane": getattr(weng, "lane", "")}
+        with lock:
+            with rf.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            results.append(rec)
+            out(("○ " if ok else "M ") + f"{c['id']} {c['table']}「{rec['say'][:24]}」" + ("" if ok else " " + "；".join(why)[:160]))
+
+    _parallel(cases, workers, one, limit_seconds=limit_seconds, out=out)
+    return results, rf
+
+
+def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_file=None, resume=False, times=1, limit_seconds=None, workers=None):
+    """L2b。台本ごとに 模範（期待の比べ先）→ AI の答え → 撃って判定。1 本ごとに書き出す。workers があれば lane ごとに並べて回す。返り値は (結果のリスト, 記録ファイル)"""
+    import threading
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     rf = Path(run_file) if run_file else RUNS_DIR / f"shot_{model}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
     done = set()
@@ -250,19 +342,21 @@ def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_fil
     finder = gas_ws_find.Finder()
     desc = ws_do_description()
     ask = ask_fn or (lambda p: ask_claude(p, model=model))
-    results, t_start = [], time.time()
-    for case in cases:
+    results, lock = [], threading.Lock()
+    workers = workers or [(eng, file_id)]
+    cases, skipped = split_by_lint(cases, keep_modelless=True)      # 模範の誤り・文書は撃たない（AI を回す前に外す）
+    for c, probs in skipped:
+        out(f"{lint_mark(probs)} {c['id']} {c['table']} 検査で外した（撃たない）: " + "；".join(probs)[:140])
+
+    def one(weng, wfile, case):
         model_resp = model_after = None
         for n in range(1, times + 1):
             if (case["id"], n) in done:
                 continue
-            if limit_seconds and time.time() - t_start > limit_seconds:
-                out("[上限] 全体の時間の上限で止めました（--resume で続きから）")
-                return results, rf
             rec = {"id": case["id"], "n": n, "model": model, "table": case["table"], "say": case["turns"][0]["say"]}
             try:
-                if model_after is None:
-                    model_resp, model_after = run_model(eng, file_id, case)
+                if model_after is None and case.get("model"):
+                    model_resp, model_after = run_model(weng, wfile, case)
                     mok, mwhy = judge_model(case, model_resp)
                     if not mok:
                         rec.update(mark="M", F="M", why="模範が期待を満たさない: " + "；".join(mwhy)[:140], got=[])
@@ -273,7 +367,7 @@ def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_fil
                 text, meta = ask(build_prompt(case["turns"][0]["say"], lk, found, desc))
                 rec["ai"] = meta
                 rec["l0_has_model"] = has
-                res = run_ai_turn(eng, file_id, case, parse_answer(text), model_after, finder, names)
+                res = run_ai_turn(weng, wfile, case, parse_answer(text), model_after, finder, names)
                 if res["mark"] == "×" and res["F"] in ("F2", "F4") and not has:
                     res["F"] = "F1a"
                 rec.update(res)
@@ -281,10 +375,13 @@ def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_fil
                 pass
             except Exception as e:
                 rec.update(mark="×", F="POST", why="撃てなかった: " + str(e)[:160], got=[], post_fail=True)
-            with rf.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            results.append(rec)
-            out(f"{rec['mark']} {rec['id']} {rec['table']}「{rec['say'][:24]}」→ {','.join(rec.get('got') or [])} {rec.get('F', '')} {rec.get('why', '')[:70]} ({(rec.get('ai') or {}).get('sec', 0):.0f}s)")
+            with lock:
+                with rf.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                results.append(rec)
+                out(f"{rec['mark']} {rec['id']} {rec['table']}「{rec['say'][:24]}」→ {','.join(rec.get('got') or [])} {rec.get('F', '')} {rec.get('why', '')[:70]} ({(rec.get('ai') or {}).get('sec', 0):.0f}s)")
+
+    _parallel(cases, workers, one, limit_seconds=limit_seconds, out=out)
     return results, rf
 
 
@@ -303,3 +400,113 @@ def _count(it):
     for x in it:
         d[x] = d.get(x, 0) + 1
     return d
+
+
+# ------------------------------------------------------------------ 撃つ前の検査（エンジンを撃たない・数秒）
+COL_KEYS = ("col", "cols", "column", "columns", "by", "values", "key", "keys", "field", "group_by", "sort_by")
+RANGE_KEYS = ("range", "dest", "to", "target", "at")
+
+
+def overwrite_shelves(shelf_dir=None):
+    """書く先に値があると guardOverwrite_ で止まる棚（ws_shelves の関数に guardOverwrite_ があるもの）"""
+    out = set()
+    for p in sorted(Path(shelf_dir or HERE / "ws_shelves").glob("*.gs")):
+        for blk in re.split(r"(?=SHELF\['[^']+'\]\s*=)", p.read_text(encoding="utf-8")):
+            m = re.match(r"SHELF\['([^']+)'\]", blk)
+            if m and "guardOverwrite_" in blk:
+                out.add(m.group(1))
+    return out
+
+
+def _headings(table):
+    sh = table["sheets"][0]
+    tb = (sh.get("tables") or [{}])[0]
+    grid = T.expand_sheet(sh)
+    hr = (tb.get("header_rows") or [1])[-1] - 1
+    row = grid[hr] if 0 <= hr < len(grid) else []
+    return {str(v) for v in row if v not in (None, "")}, grid
+
+
+def _a1_cells(ref):
+    m = re.fullmatch(r"\$?([A-Za-z]{1,3})\$?(\d+)(?::\$?([A-Za-z]{1,3})\$?(\d+))?", str(ref).strip())
+    if not m:
+        return None
+    def num(s):
+        n = 0
+        for ch in s.upper():
+            n = n * 26 + ord(ch) - 64
+        return n
+    c1, r1 = num(m.group(1)), int(m.group(2))
+    c2, r2 = (num(m.group(3)), int(m.group(4))) if m.group(3) else (c1, r1)
+    return min(r1, r2), max(r1, r2), min(c1, c2), max(c1, c2)
+
+
+def lint_case(case, guard=None):
+    """模範を撃つ前の手元の検査。問題の文字列のリスト。分類の語を頭に付ける: 模範なし・文書・列名・上書き"""
+    probs = []
+    model = case.get("model") or []
+    turn = case["turns"][0]
+    expect = json.dumps(turn.get("expect"), ensure_ascii=False)
+    if not model:
+        if "聞き返した" in expect or "断った" in expect:
+            return ["模範なし: 聞き返す・断る台本（再生する模範が無い）"]
+        return ["模範が空: ops が空です（台本の誤り）"]
+    if any(isinstance(o, dict) and str(o.get("shelf", "")).startswith("doc.") for o in model):
+        return ["文書: 文書の台本は seq（シート用）で撃てない（道具の穴）"]
+    try:
+        table = T.load_table(case["table"])
+    except Exception as e:
+        return [f"表: {case['table']} を読めません: {e}"]
+    if not table.get("sheets"):
+        return ["文書: この表にシートが無い（seq の流し込みはシート用）"]
+    heads, grid = _headings(table)
+    guard = overwrite_shelves() if guard is None else guard
+    for o in model:
+        if not isinstance(o, dict):
+            continue
+        for k in COL_KEYS:
+            if str(o.get("shelf", "")).startswith("split") and k == "by":
+                continue                       # split の by は区切りの種類（space 等）で列名ではない
+            v = o.get(k)
+            for x in (v if isinstance(v, list) else [v]):
+                if isinstance(x, str) and x and not re.fullmatch(r"\$?[A-Za-z]{1,3}", x) and x not in heads:
+                    probs.append(f"列名: {o.get('shelf')} の {k}「{x}」が見出しに無い（見出し: {'、'.join(sorted(heads))[:60]}）")
+        if o.get("shelf") in guard and turn["approve"] != "ある":
+            for k in RANGE_KEYS:
+                box = _a1_cells(o.get(k, "")) if isinstance(o.get(k), str) else None
+                if not box:
+                    continue
+                r1, r2, c1, c2 = box
+                n = sum(1 for r in range(r1 - 1, min(r2, len(grid))) for c in range(c1 - 1, c2) if c < len(grid[r]) and grid[r][c] not in (None, ""))
+                if n:
+                    probs.append(f"上書き: {o.get('shelf')} の {o[k]} に値のあるセルが {n} 個。approve が「ある」でない（ok=True が付かない）")
+    return probs
+
+
+def lint_cases(cases):
+    """{本の id: [問題…]}（問題のある本だけ）"""
+    guard = overwrite_shelves()
+    out = {}
+    for c in cases:
+        p = lint_case(c, guard)
+        if p:
+            out[c["id"]] = p
+    return out
+
+
+def split_by_lint(cases, keep_modelless=False):
+    """(撃つ本, [(本, 問題)…])。文書・模範が空・列名・上書きで外れる本は撃たない。keep_modelless なら「聞き返す・断る」台本（模範なし）は撃つ本に残す（shot は AI の答えを見る）"""
+    bad = lint_cases(cases)
+    run, skipped = [], []
+    for c in cases:
+        p = bad.get(c["id"])
+        if p and not (keep_modelless and p[0].startswith("模範なし")):
+            skipped.append((c, p))
+        else:
+            run.append(c)
+    return run, skipped
+
+
+def lint_mark(problems):
+    """検査で外れた本の印: 対象外（再生する模範が無い・文書の道具の穴）は「–」、台本の誤りは「L」"""
+    return "–" if problems[0].startswith(("模範なし", "文書")) else "L"

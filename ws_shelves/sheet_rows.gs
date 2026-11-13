@@ -247,7 +247,7 @@ SHELF['cols.show'] = function (ctx, op) {
 // 違い: 列のグループ化は group.cols。グループ解除は group.remove
 // 引数: rows*=行[], collapse=真偽
 // 例: 「5行目から10行目をグループ化して折りたたんで」 → {"shelf":"group.rows","rows":[5,6,7,8,9,10],"collapse":true}
-// 触る: グループ
+// 触る: グループ 隠し
 // 控え: 今
 SHELF['group.rows'] = function (ctx, op) {
   need_(op, ['rows']);
@@ -267,7 +267,7 @@ SHELF['group.rows'] = function (ctx, op) {
 // 違い: 行のグループ化は group.rows。グループ解除は group.remove
 // 引数: cols*=列[], collapse=真偽
 // 例: 「D列からF列をグループ化して」 → {"shelf":"group.cols","cols":["D","E","F"]}
-// 触る: グループ
+// 触る: グループ 隠し
 // 控え: 今
 SHELF['group.cols'] = function (ctx, op) {
   need_(op, ['cols']);
