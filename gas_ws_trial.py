@@ -41,7 +41,7 @@ LANE_NUMS = [str(i) for i in range(2, 11)]      # 最大 10 枚（既定の並�
 DEFAULT_JOBS = 5
 LANE_SHEETS = {n: f"WS試験_場{n}" for n in LANE_NUMS}
 LANE_BACKUPS = {n: f"WS試験_控え{n}" for n in LANE_NUMS}
-LANE_BACKUPS["1"] = BACKUP_BOOK          # lane 1（WS試験_場）も lane として撃つ（ふつうの錠は全体の錠を持ち続けるので、並べると他の lane が待たされる）
+LANE_BACKUPS["1"] = "WS試験_控え1"          # lane 1（WS試験_場）の控えは、ふつうの控え（WS試験_控え）と別のブックにする（古いタブの片付けが他の撃ち手のタブを消すため）
 MAX_JOBS = 10         # GAS の同時実行の上限（ユーザーあたり 30 前後）に十分余裕を残す。Sheets API の読み取りは 1 分 60 回前後（超えたら待って撃ち直す）
 WORD_LIMIT = 8        # 札 1 本の語の数の上限（第 8.4 節）
 
@@ -294,7 +294,9 @@ def lanes(client=None, out=print, state_path=STATE_FILE, count=DEFAULT_JOBS):
         return 1
     files = st.setdefault("files", {})
     use = LANE_NUMS[:max(0, min(count, MAX_JOBS) - 1)]
-    for name in [LANE_SHEETS[n] for n in use] + [LANE_BACKUPS[n] for n in use]:
+    use = ["1"] + use if count >= 1 else use
+    use = [n for n in use if n in LANE_BACKUPS]
+    for name in [LANE_SHEETS[n] for n in use if n in LANE_SHEETS] + [LANE_BACKUPS[n] for n in use]:
         fid = files.get(name)
         if fid and drive.get(fid) and not drive.get(fid).get("trashed"):
             continue
@@ -311,7 +313,7 @@ def lane_workers(eng_factory, st=None, jobs=5):
     """(エンジン, 試験場の ID) の並び。lane 1＝WS試験_場、2〜5＝WS試験_場2〜5（lanes で作った分だけ）。jobs 個まで"""
     st = st if st is not None else load_state()
     files = st.get("files", {})
-    ws = [("1", files["WS試験_場"])]
+    ws = [("1", files["WS試験_場"])] if LANE_BACKUPS["1"] in files else [("", files["WS試験_場"])]
     for n in LANE_NUMS:
         if LANE_SHEETS[n] in files and LANE_BACKUPS[n] in files:
             ws.append((n, files[LANE_SHEETS[n]]))
@@ -463,6 +465,7 @@ def props_cmd(args, out=print):
     ap.add_argument("--table", action="append", default=[])
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--changed", action="store_true")          # 前回の記録と比べて、変わった棚・表・ひな形にかかる組だけ回す
+    ap.add_argument("--refail", action="store_true")           # 前回通らなかった組も撃ち直す（直した後の確かめ）
     ap.add_argument("--with-engine", action="store_true")      # 共通部（workspace_engine.gs・Trial.gs）が変わった組も回す（節目）
     ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS)
     ap.add_argument("--resume", default="")
@@ -490,7 +493,7 @@ def props_cmd(args, out=print):
         if len(workers) < a.jobs:
             out(f"[注意] 試験場が {len(workers)} 枚しか無いので {len(workers)} 本で回します（先に `py gas.py ws-trial lanes`）")
     stats, rf = gas_ws_props.run(eng, st["files"]["WS試験_場"], shelves=a.shelf or None, tables=a.table or None, run_file=a.resume or None,
-                                 resume=bool(a.resume), out=out, limit_seconds=a.limit_sec, workers=workers, changed=a.changed, with_engine=a.with_engine)
+                                 resume=bool(a.resume), out=out, limit_seconds=a.limit_sec, workers=workers, changed=a.changed, with_engine=a.with_engine, refail=a.refail)
     rows, fails, p6 = gas_ws_props.summarize(rf) if Path(rf).exists() else ([], [], {})
     out(f"組 {len(rows)} ・通らない {len(fails)} ・POST 失敗 {stats['post_fail']}（Google の上限らしい物 {stats['quota']}・429 を待って撃ち直した回数 {stats['quota_retry']}・錠の待ち直し {stats['busy_retry']}）・{stats['workers']} 本で {stats.get('sec', 0):.0f} 秒・記録 {rf}")
     return 1 if fails else 0

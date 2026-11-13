@@ -290,7 +290,7 @@ def test_common_files_still_free_of_shelf_names_after_stage1():
 MOVE_JS = r"""
 const vm = require('vm'), fs = require('fs');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
-const ctxv = vm.createContext({ console: console, DocumentApp: new Proxy({}, { get: function () { return new Proxy({}, { get: function () { return 1; } }); } }) });
+const ctxv = vm.createContext({ console: console, SpreadsheetApp: { flush: function () { } }, DocumentApp: new Proxy({}, { get: function () { return new Proxy({}, { get: function () { return 1; } }); } }) });
 vm.runInContext(input.files.join('\n'), ctxv);
 vm.runInContext(`
   var __log = [];

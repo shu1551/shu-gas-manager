@@ -34,8 +34,15 @@ SHELF['rows'] = function (ctx, op) {
   } else if (act === 'move') {
     need_(op, ['from', 'to']);
     // to＝動かした後にその列（行）が来る位置。moveColumns/moveRows は「その位置の手前へ」入れるので、右（下）へ動かすときは動かす幅だけ先へ渡す
-    if (isCol) { var f = colNum_(op.from), to = colNum_(op.to); sh.moveColumns(sh.getRange(1, f, 1, 1), to > f ? to + 1 : to); }
-    else { var fr = parseInt(op.from), cn = op.count || 1, tr = parseInt(op.to); sh.moveRows(sh.getRange(fr, 1, cn, 1), tr > fr ? tr + cn : tr); }
+    try {
+      if (isCol) { var f = colNum_(op.from), to = colNum_(op.to); sh.moveColumns(sh.getRange(1, f, 1, 1), to > f ? to + 1 : to); }
+      else { var fr = parseInt(op.from), cn = op.count || 1, tr = parseInt(op.to); sh.moveRows(sh.getRange(fr, 1, cn, 1), tr > fr ? tr + cn : tr); }
+      SpreadsheetApp.flush();   // 結合をまたぐ移動の失敗は、書き込みが反映されるここで出る（棚の外で出ると「内部のエラー」になる）
+    } catch (e) {
+      if (e && e.isArg) throw e;
+      if (/結合|merge/i.test(String(e && e.message || e))) throw new ArgError('結合されたセルをまたぐ位置には動かせません。結合を解除してから（または結合のない列・行で）やり直してください');
+      throw e;
+    }
     chg_(ctx, sh, op.from + ' → ' + op.to, '移動');
   } else throw new ArgError('棚「rows」の action は insert・delete・move です');
 };

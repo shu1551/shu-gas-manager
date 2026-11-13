@@ -67,7 +67,7 @@ SHELF['tidy'] = function (ctx, op) {
 // 例: 「全角の数字を半角に直して」 → {"shelf":"seiri"}
 // 例: 「空行を詰めて重複行も消して」 → {"shelf":"seiri","blank_rows":true,"dedupe":true}
 // 危ない: 消す
-// 触る: 値 書式 固定
+// 触る: 値 書式 幅 固定
 SHELF['seiri'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
   var rg = sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1);
@@ -126,7 +126,7 @@ SHELF['seiri'] = function (ctx, op) {
     }
   }
   if (op.renumber) SHELF['renumber'](ctx, { shelf: 'renumber', col: op.renumber, sheet: op.sheet });
-  if (op.tidy !== false) tidyRange_(ctx, sh, null);
+  if (op.tidy !== false) { tidyRange_(ctx, sh, null); chg_(ctx, sh, '', '書式をそろえた'); }   // 書式をそろえるので「変更なし」とは言わない（指紋が変わるため）
   if (!ctx.changed.length) note_(ctx, '直す所はありませんでした');
 };
 

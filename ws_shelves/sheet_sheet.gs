@@ -91,18 +91,16 @@ SHELF['sheet.copy'] = function (ctx, op) {
   need_(op, ['name']);
   var ss = ctx.ss;
   var s = sheetOf_(ss, op.name, '');
-  var c = s.copyTo(ss);
   var targetName = op.as;
-  if (targetName) {
-    if (ss.getSheetByName(targetName)) throw new ArgError('シート「' + targetName + '」はすでにあります');
-    c.setName(targetName);
-  }
-  if (op.before) {
-    var bs = sheetOf_(ss, op.before, '');
+  if (targetName && ss.getSheetByName(targetName)) throw new ArgError('シート「' + targetName + '」はすでにあります');   // 複製する前に確かめる（複製した後に断ると、複製だけ残る）
+  var bs = op.before ? sheetOf_(ss, op.before, '') : null;
+  var c = s.copyTo(ss);
+  ctx.createdSheets.push(c.getName());
+  if (targetName) { c.setName(targetName); ctx.createdSheets[ctx.createdSheets.length - 1] = targetName; }
+  if (bs) {
     ss.setActiveSheet(c);
     ss.moveActiveSheet(bs.getIndex());
   }
-  ctx.createdSheets.push(c.getName());
   ctx.curSheet = c.getName();
   chg_(ctx, c, '', 'シート「' + op.name + '」を複製' + (targetName ? '（名前: ' + targetName + '）' : ''));
 };

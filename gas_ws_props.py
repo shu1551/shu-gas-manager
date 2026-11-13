@@ -256,7 +256,7 @@ def previous_records(runs_dir=None):
     return prev
 
 
-def changed_combos(combos, fp, prev, with_engine=False):
+def changed_combos(combos, fp, prev, with_engine=False, refail=False):
     """前回の記録と比べて回す組。前回が無い・POST 失敗・指紋が無い・棚/表/ひな形が変わった組（with_engine なら共通部が変わった組も）。返り値は (回す組のリスト, 理由の件数)"""
     out, why = [], {"新規": 0, "前回失敗": 0, "指紋なし": 0, "棚": 0, "表": 0, "ひな形": 0, "共通部": 0}
     for t, s in combos:
@@ -266,6 +266,8 @@ def changed_combos(combos, fp, prev, with_engine=False):
             why["新規"] += 1
         elif r.get("post_fail") or r.get("p", {}).get("P1") == "error":
             why["前回失敗"] += 1
+        elif refail and any(v in ("fail", "error") for v in r.get("p", {}).values()):
+            why["前回通らず"] = why.get("前回通らず", 0) + 1
         elif not r.get("fp"):
             why["指紋なし"] += 1
         else:
@@ -297,7 +299,7 @@ def stamp(rf, fp):
 
 
 # ------------------------------------------------------------------ 回す
-def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, out=print, limit_seconds=None, workers=None, changed=False, with_engine=False, runs_dir=None, fp=None, stagger=1.5):
+def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, out=print, limit_seconds=None, workers=None, changed=False, with_engine=False, runs_dir=None, fp=None, stagger=1.5, refail=False):
     """workers は [(エンジン, 試験場の ID)] の並び（並べて回す。lane ごとに錠・控え・台帳が分かれる）。無ければ eng・file_id の 1 本。
     changed なら、前回の記録と比べて変わった組だけ回す"""
     import queue
@@ -324,7 +326,7 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
     if changed:
         prev = previous_records(runs_dir)
         n0 = len(combos)
-        combos, why = changed_combos(combos, fp, prev, with_engine=with_engine)
+        combos, why = changed_combos(combos, fp, prev, with_engine=with_engine, refail=refail)
         out(f"[変わった所だけ] {n0} 組のうち {len(combos)} 組を回す（理由: " + "・".join(f"{k} {v}" for k, v in why.items()) + "）" if combos else f"[変わった所だけ] 変わった組はありません（{n0} 組を確かめた）")
         if not with_engine and prev and any(r.get("fp") and r["fp"].get("common") != fp["common"] for r in prev.values()):
             out("[注意] 共通部（workspace_engine.gs・Trial.gs）が前回から変わっています。全部回すなら --with-engine（節目）")

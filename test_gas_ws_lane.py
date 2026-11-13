@@ -237,7 +237,7 @@ def test_run_with_changed_runs_nothing_when_nothing_changed_and_stamp_fills_lega
 def test_lane_workers_use_one_sandbox_per_lane_up_to_the_limit():
     st = {"files": {"WS試験_場": "f1", "WS試験_場2": "f2", "WS試験_控え2": "b2", "WS試験_場3": "f3"}}   # 場 3 は控えが無い＝まだ使えない
     ws = TR.lane_workers(lambda: TR.TrialEngine(client=object(), state_path="x.json"), st, jobs=5)
-    assert [(e.lane, f) for e, f in ws] == [("1", "f1"), ("2", "f2")]
+    assert [(e.lane, f) for e, f in ws] == [("", "f1"), ("2", "f2")]
     assert len(TR.lane_workers(lambda: TR.TrialEngine(client=object(), state_path="x.json"), st, jobs=1)) == 1
 
 
@@ -292,3 +292,10 @@ def test_a_busy_lock_is_retried_and_a_429_cools_everyone(tmp_path, monkeypatch):
     monkeypatch.setattr(P.time, "sleep", lambda s: None)
     stats, rf = P.run(Busy("1", 0, log), "f", shelves=["tidy"], tables=["meibo_base"], out=lambda *_: None)
     assert stats["busy_retry"] == 1 and stats["post_fail"] == 0 and stats["quota_retry"] == 0
+
+
+def test_lane_one_gets_its_own_backup_book_and_is_used_only_when_that_book_exists():
+    assert TR.LANE_BACKUPS["1"] == "WS試験_控え1" and TR.LANE_BACKUPS["1"] != TR.BACKUP_BOOK
+    st = {"files": {"WS試験_場": "f1", "WS試験_控え1": "b1", "WS試験_場2": "f2", "WS試験_控え2": "b2"}}
+    ws = TR.lane_workers(lambda: TR.TrialEngine(client=object(), state_path="x.json"), st, jobs=5)
+    assert [(e.lane, f) for e, f in ws] == [("1", "f1"), ("2", "f2")]
