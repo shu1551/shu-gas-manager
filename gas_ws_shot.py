@@ -135,8 +135,29 @@ def run_model(eng, file_id, case):
     """模範を撃つ（流し込む → 撃つ → 戻す）。返り値は seq の返事と、模範の後の状態"""
     table = T.load_table(case["table"])
     turn = case["turns"][0]
-    resp = eng.trial_post("seq", id=file_id, seed=T.seed_payload(table), steps=steps_for(case["model"], turn["approve"] == "ある", retry_wide=True))
+    resp = seq_retry(eng, id=file_id, seed=T.seed_payload(table), steps=steps_for(case["model"], turn["approve"] == "ある", retry_wide=True))
     return resp, resp["snaps"]["B"]
+
+
+SEQ_WAIT = 20
+
+
+def seq_retry(eng, tries=6, wait=None, **kw):
+    """seq を撃つ。回数超え（429）・錠の取り合い・つながらない は待って撃ち直す。それ以外の失敗は日本語の例外にする"""
+    last = ""
+    for i in range(tries):
+        try:
+            resp = eng.trial_post("seq", **kw)
+            if resp.get("ok", True) and "snaps" in resp:
+                return resp
+            last = str(resp.get("error") or resp)[:200]
+        except Exception as e:
+            last = str(e)[:200]
+        low = last.lower()
+        if not any(w.lower() in low for w in ("quota", "429", "too many", "上限", "別の処理が走っています", "サービスに接続できなく", "timeout", "タイムアウト")):
+            break
+        time.sleep((SEQ_WAIT if wait is None else wait) * (i + 1))
+    raise RuntimeError("seq が通りません: " + last)
 
 
 def judge_model(case, resp):
@@ -187,7 +208,7 @@ def run_ai_turn(eng, file_id, case, answer, model_after, finder, say_find_names)
     except gw.WorkspaceError as e:
         return {"mark": "×", "F": "F3", "why": "引数の検査で止まった: " + str(e).splitlines()[0][:100], "got": got}
     ops = [m.catalog.normalize_op(o) for o in ops]
-    resp = eng.trial_post("seq", id=file_id, seed=T.seed_payload(table), steps=steps_for(ops, okflag, retry_wide=False))
+    resp = seq_retry(eng, id=file_id, seed=T.seed_payload(table), steps=steps_for(ops, okflag, retry_wide=False))
     r = _res(resp)
     A, B = resp["snaps"]["A"], resp["snaps"]["B"]
     f12 = turn["approve"] == "まだ" and okflag

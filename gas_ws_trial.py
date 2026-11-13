@@ -523,8 +523,11 @@ def shot_cmd(cmd, args, out=print):
     if cmd == "golden":
         bad = 0
         for c in cases:
-            resp, _ = S.run_model(eng, fid, c)
-            ok, why = S.judge_model(c, resp)
+            try:
+                resp, _ = S.run_model(eng, fid, c)
+                ok, why = S.judge_model(c, resp)
+            except Exception as e:           # 撃てなかった本は「通らない」に数える（止まらずに残りを回す）
+                ok, why = False, ["撃てませんでした: " + str(e)[:140]]
             bad += not ok
             out(("○ " if ok else "M ") + f"{c['id']} {c['table']}「{c['turns'][0]['say'][:24]}」" + ("" if ok else " " + "；".join(why)[:160]))
         out(f"模範の再生 {len(cases)} 本・通らない {bad} 本")

@@ -183,6 +183,7 @@ def test_run_shot_marks_m_without_asking_the_ai_when_the_model_fails(tmp_path, m
 
 def test_post_failure_is_recorded_not_raised(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(S, "SEQ_WAIT", 0)          # 待ち直しの秒は 0（試験を遅くしない）
 
     class Boom(FakeEng):
         def trial_post(self, action, **kw):
