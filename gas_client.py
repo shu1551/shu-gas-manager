@@ -35,6 +35,8 @@ class RecipeItem(dict):
     def __str__(self):
         return self.get("id", "")
 
+OWN_WRITE_TRUST_SEC = 600   # 自分で書いた直後の写しを、クラウドに確かめずに使ってよい長さ（秒）
+
 GAS_SPEEDUP_RECIPES = [
     RecipeItem({
         "id": "R01",
@@ -737,18 +739,35 @@ class GasClient:
                 raise
 
     def _remote_modified_epoch(self, sid):
-        """クラウド上のプロジェクトの最終更新時刻（Drive の modifiedTime、UNIX 秒）。取れなければ None"""
+        """クラウド上のプロジェクトの最終更新時刻（UNIX 秒）。取れなければ None。
+        単独のスクリプトは Drive の modifiedTime。スプレッドシート付属（コンテナバインド）は Drive に
+        ファイルが無く 404 になるので、Apps Script API の projects.get の updateTime で見る
+        （11/11 の版はここで None になり、付属のスクリプトは毎回クラウドから全部読み直して 2 秒遅くなっていた）。"""
+        def _epoch(s):
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() if s else None
+        bound = getattr(self, "_bound_sids", None)
+        if bound is None:
+            bound = self._bound_sids = set()
+        if sid not in bound:      # 付属と分かった物は Drive を飛ばす（404 の往復 0.4 秒を毎回払わない）
+            try:
+                url = f"https://www.googleapis.com/drive/v3/files/{sid}"
+                res = self._request_with_retry("GET", url, headers=self._headers(), params={"fields": "modifiedTime"}, timeout=10)
+                if res.status_code == 200:
+                    ts = _epoch(res.json().get("modifiedTime", ""))
+                    if ts is not None:
+                        return ts
+                elif res.status_code == 404:
+                    bound.add(sid)
+            except Exception:
+                pass
         try:
-            url = f"https://www.googleapis.com/drive/v3/files/{sid}"
-            res = self._request_with_retry("GET", url, headers=self._headers(), params={"fields": "modifiedTime"}, timeout=10)
-            if res.status_code != 200:
-                return None
-            mt = res.json().get("modifiedTime", "")
-            if not mt:
-                return None
-            return datetime.fromisoformat(mt.replace("Z", "+00:00")).timestamp()
+            url = f"https://script.googleapis.com/v1/projects/{sid}"
+            res = self._request_with_retry("GET", url, headers=self._headers(), params={"fields": "updateTime"}, timeout=10)
+            if res.status_code == 200:
+                return _epoch(res.json().get("updateTime", ""))
         except Exception:
-            return None
+            pass
+        return None
 
     def _get_content_for_write(self, sid):
         """書き換え用の読み。手元の写しがあっても、クラウドの更新時刻を 1 回見て、
@@ -759,6 +778,11 @@ class GasClient:
             return self.get_content(sid, use_cache=False)
         data = self.get_content(sid, use_cache=True)
         ts = self._content_cache.get(sid, (0, None))[0]
+        # 続けての直し: この道具が 10 分以内に自分で書いた物で、写しがその書き込み以後なら、クラウドを見に行かない
+        # （1 回 1.4〜2 秒の確かめを、AI が続けて直すたびに払わない。10 分を過ぎたら必ず確かめる）
+        own = getattr(self, "_own_write_at", {}).get(sid)
+        if own and ts >= own and time.time() - own < OWN_WRITE_TRUST_SEC:
+            return data
         remote = self._remote_modified_epoch(sid)
         if remote is not None and remote <= ts + 1.0:
             return data
@@ -2780,6 +2804,9 @@ class GasClient:
             self._content_cache.pop(next(iter(self._content_cache)), None)
         self._content_cache[sid] = (now, copy.deepcopy(c_dict))
         self._synced_sids.add(sid)
+        if not hasattr(self, "_own_write_at"):
+            self._own_write_at = {}
+        self._own_write_at[sid] = now
         disk_cache = self._load_disk_content_cache()
         disk_cache[sid] = {"ts": now, "content": copy.deepcopy(c_dict)}
         self._save_disk_content_cache(disk_cache)
