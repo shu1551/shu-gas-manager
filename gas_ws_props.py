@@ -78,15 +78,16 @@ def table_marks(t):
         "EC": letter(ec), "NC明細": f"{letter(num_col)}{a}:{letter(num_col)}{b}", "TC明細": f"{letter(text_col)}{a}:{letter(text_col)}{b}",
         "FC明細": f"{letter(fc)}{a}:{letter(fc)}{b}", "EC明細": f"{letter(ec)}{a}:{letter(ec)}{b}", "R1": a, "R3": a + 2, "TCの値": str(first or ""),
         "EA": f"{letter(ec)}{a}", "先頭行": f"{letter(fc)}{a}:{letter(lc)}{a}", "空き行": f"A{last + 4}",
+        "明細の行": list(range(a, b + 1)), "広い範囲": f"{letter(fc)}{hr}:{letter(lc + 1)}{last + 1}", "EC明細の下まで": f"{letter(ec)}{a}:{letter(ec)}{b + 1}",
     }
     return m
 
 
 def resolve(node, marks):
     if isinstance(node, str):
-        m = re.fullmatch(r"\{(R1|R3)\}", node)
-        if m:
-            return marks[m.group(1)]
+        m = re.fullmatch(r"\{([^{}]+)\}", node)
+        if m and m.group(1) in marks and not isinstance(marks[m.group(1)], str):
+            return marks[m.group(1)]               # 数・行の並びは型のまま入れる（文字の印は下で文字として埋める）
         return re.sub(r"\{([^{}]+)\}", lambda x: str(marks[x.group(1)]) if x.group(1) in marks else x.group(0), node)
     if isinstance(node, list):
         return [resolve(x, marks) for x in node]
@@ -99,6 +100,37 @@ def build_ops(shelf, table, templates=None):
     tpl = (templates or load_templates())[shelf]
     marks = table_marks(table)
     return [resolve(tpl["templates"][0], marks)][0], tpl.get("may_change", [])
+
+
+def build_ops_wide(shelf, table, templates=None):
+    """広い削除のひな形（templates.json の "wide"）。無ければ None"""
+    tpl = (templates or load_templates())[shelf]
+    if not tpl.get("wide"):
+        return None
+    return resolve(tpl["wide"][0], table_marks(table))
+
+
+def build_steps_wide(ops):
+    """P7 を確かめる 1 本: いきなり ok=True で撃つ → 止まる（retry_wide が同じ ops をもう一度撃つ）→ 戻す"""
+    return [{"snap": "A"}, {"do": ops, "ok": True, "name": "w1", "retry_wide": True}, {"snap": "B"}, {"undo_all": True, "name": "undow"}, {"snap": "C"}]
+
+
+def evaluate_wide(resp):
+    """広いひな形の seq の返事 → (pass/fail/na, 理由)。止まらずに通ったら fail、引数違いで断られた（この表に当てはまらない）なら na"""
+    sn, st = resp["snaps"], resp["steps"]
+    s = _step(st, "w1")
+    k = kind_of(s["res"])
+    if not s["wide"]:
+        if k in ("arg", "noop"):
+            return "na", f"この表では広い削除に当たらなかった（{k}）"
+        if k == "ok":
+            return "fail", "広い削除のひな形が、止まらずに ok=True で通った"
+        return "fail", f"止まらずに {k}: " + str(s["res"].get("error_brief"))[:100]
+    v, why = p7_verdict(st, sn, sn["A"])
+    undos = [u for x in st if "undo" in x for u in x["undo"]]
+    if v == "pass" and (not _same(sn["A"], sn["C"]) or any(not u["ok"] for u in undos)):
+        return "fail", "広い削除を通した後、戻しても指紋が最初と違う"
+    return v, why
 
 
 def build_steps(ops, danger):
@@ -124,6 +156,36 @@ def _same(x, y):
     return J.promise_fingerprints(x) == J.promise_fingerprints(y)
 
 
+WIDE_COUNT = re.compile(r"\d+\s*(件|行|列|枚|セル|個)")
+
+
+def p7_verdict(st, sn, A):
+    """(pass/fail/na, 理由)。止まらなかった組（広い削除に当たらない）は na。止まった組は 3 つを確かめる:
+    止めの返事に何が何件消えるかがある・止まった後の指紋が最初と同じ・止まった後の同じ ops の撃ち直しが通る（また止まらない）"""
+    why = []
+    hit = False
+    for name in ("do1", "do2", "w1"):
+        s = _step(st, name)
+        if not s or not s.get("wide"):
+            continue
+        hit = True
+        first = s.get("first") or {}
+        msg = first.get("error_brief") or first.get("error") or ""
+        if not first.get("blocked"):
+            why.append(f"{name}: 最初の撃ちが止まっていない")
+        if not WIDE_COUNT.search(msg):
+            why.append(f"{name}: 返事に何が何件消えるかが無い（{msg[:60]}）")
+        if name != "do2":
+            snap = sn.get(name + "_first")
+            if snap is None or not _same(A, snap):
+                why.append(f"{name}: 止まったのに指紋が変わった")
+        if kind_of(s["res"]) == "blocked":
+            why.append(f"{name}: 同じ ops をもう一度撃っても通らない")
+    if not hit:
+        return "na", ""
+    return ("fail", "；".join(why)[:300]) if why else ("pass", "")
+
+
 def kind_of(res):
     if res["ok"]:
         return "ok" if res["changed"] else "noop"
@@ -146,6 +208,10 @@ def evaluate(resp, shelf, danger, may_change, tinfo):
     d1, d2 = _step(st, "do1"), _step(st, "do2")
     k1, k2 = kind_of(d1["res"]), kind_of(d2["res"])
     out.update(kind1=k1, kind2=k2, wide=bool(d1["wide"] or d2["wide"]))
+    # P7 広い削除は 1 回止まる: 最初に止まった撃ち（do1・do2 の first）が「止め・指紋が同じ・何が何件か」で、止まった後の撃ち直しが通る
+    out["p"]["P7"], r7 = p7_verdict(st, sn, A)
+    if r7:
+        out["reasons"]["P7"] = r7
     undos = [u for s in st if "undo" in s for u in s["undo"]]
     bad = [u for u in undos if not u["ok"]]
     # P1
@@ -373,6 +439,18 @@ def run(eng, file_id, shelves=None, tables=None, run_file=None, resume=False, ou
                     if not resp.get("ok", True) or "snaps" not in resp:
                         raise RuntimeError(str(resp.get("error") or resp)[:200])
                     ev = evaluate(resp, shelf, danger, may, tinfo)
+                    wops = build_ops_wide(shelf, table, templates)
+                    if wops:
+                        rec["wide_ops"] = wops
+                        w = weng.trial_post("seq", id=wfile, steps=build_steps_wide(wops))
+                        if not w.get("ok", True) or "snaps" not in w:
+                            raise RuntimeError(str(w.get("error") or w)[:200])
+                        wv, wwhy = evaluate_wide(w)
+                        rec["wide_msg"] = ((_step(w["steps"], "w1") or {}).get("first") or {}).get("error_brief", "")
+                        ev["p"]["P7"] = "fail" if "fail" in (wv, ev["p"]["P7"]) else ("pass" if "pass" in (wv, ev["p"]["P7"]) else "na")
+                        if wwhy:
+                            ev["reasons"]["P7"] = (ev["reasons"].get("P7", "") + "；" if ev["reasons"].get("P7") else "") + "広い範囲: " + wwhy
+                        seeded = None if wv == "fail" else seeded
                     rec.update(ev)
                     rec.pop("post_fail", None)
                     if ev["p"]["P1"] == "fail":

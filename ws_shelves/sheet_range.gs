@@ -91,7 +91,7 @@ SHELF['clear.values'] = function (ctx, op) {
   need_(op, ['range']);
   var sh = sheetCtx_(ctx, op);
   var rg = sh.getRange(op.range);
-  guardDelete_(ctx, '範囲「' + op.range + '」の値を消します', wideRange_(sh, rg));
+  guardDelete_(ctx, '範囲「' + op.range + '」の値を消します', wideRange_(sh, rg), rg.getNumRows() * rg.getNumColumns() + ' セル');
   var only = op.only || 'all';
   if (only === 'constants') {
     var formulas = rg.getFormulas();
@@ -143,7 +143,7 @@ SHELF['clear.all'] = function (ctx, op) {
   need_(op, ['range']);
   var sh = sheetCtx_(ctx, op);
   var rg = sh.getRange(op.range);
-  guardDelete_(ctx, '範囲「' + op.range + '」の値と書式を消します', wideRange_(sh, rg));
+  guardDelete_(ctx, '範囲「' + op.range + '」の値と書式を消します', wideRange_(sh, rg), rg.getNumRows() * rg.getNumColumns() + ' セル');
   rg.clear();
   chg_(ctx, sh, rg.getA1Notation(), '値と書式をクリア');
 };

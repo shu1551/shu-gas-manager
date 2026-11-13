@@ -107,7 +107,7 @@ SHELF['seiri'] = function (ctx, op) {
     }
     // 表の途中の空行だけ（findTable_ が最後の非空行までを表とするので、すべて途中）
     if (blanks.length) {
-      guardDelete_(ctx, '空行 ' + blanks.join('・') + ' 行目を詰めます', wideRowCount_(t2, blanks.length));
+      guardDelete_(ctx, '空行 ' + blanks.join('・') + ' 行目を詰めます', wideRowCount_(t2, blanks.length), blanks.length + ' 行');
       for (var k = blanks.length - 1; k >= 0; k--) sh.deleteRow(blanks[k]);
       chg_(ctx, sh, blanks.join('・') + ' 行目', '空行を削除（' + blanks.length + ' 行）');
     }
@@ -120,7 +120,7 @@ SHELF['seiri'] = function (ctx, op) {
       if (seen[key]) dups.push(d); else seen[key] = 1;
     }
     if (dups.length) {
-      guardDelete_(ctx, '全列が同じ重複行 ' + dups.join('・') + ' 行目を消します', wideRowCount_(t2, dups.length));
+      guardDelete_(ctx, '全列が同じ重複行 ' + dups.join('・') + ' 行目を消します', wideRowCount_(t2, dups.length), dups.length + ' 行');
       for (var k2 = dups.length - 1; k2 >= 0; k2--) sh.deleteRow(dups[k2]);
       chg_(ctx, sh, dups.join('・') + ' 行目', '重複行を削除（' + dups.length + ' 行）');
     }
@@ -245,7 +245,7 @@ SHELF['dedupe'] = function (ctx, op) {
     note_(ctx, '重複行はありませんでした（変更なし）');
     return;
   }
-  guardDelete_(ctx, (colIndices.length ? '指定列が同じ' : '全列が同じ') + '重複行 ' + dups.join('・') + ' 行目を消します', wideRowCount_(t, dups.length));
+  guardDelete_(ctx, (colIndices.length ? '指定列が同じ' : '全列が同じ') + '重複行 ' + dups.join('・') + ' 行目を消します', wideRowCount_(t, dups.length), dups.length + ' 行');
   for (var k = dups.length - 1; k >= 0; k--) sh.deleteRow(dups[k]);
   chg_(ctx, sh, dups.join('・') + ' 行目', '重複行を削除（' + dups.length + ' 行）');
 };

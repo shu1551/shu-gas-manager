@@ -93,7 +93,7 @@ def ev(r, danger=False, may=()):
 
 def test_p1_to_p5_pass_for_a_well_behaved_shelf():
     out = ev(resp(A0, B1=B_CHANGED, B2=B_CHANGED))
-    assert out["kind1"] == "ok" and out["p"] == {"P1": "pass", "P2": "na", "P3": "pass", "P4": "pass", "P5": "pass"}
+    assert out["kind1"] == "ok" and out["p"] == {"P1": "pass", "P2": "na", "P3": "pass", "P4": "pass", "P5": "pass", "P7": "na"}
     assert out["p5class"] == "変更なしと言う" and out["p6"] == []
 
 
@@ -158,6 +158,50 @@ def test_p6_lists_side_items_that_did_not_come_back_only_when_the_shelf_changed_
 def test_p7_wide_flag_is_recorded_when_the_first_shot_was_stopped_and_retried():
     assert ev(resp(A0, B1=B_CHANGED, wide=True))["wide"] is True
     assert ev(resp(A0, B1=B_CHANGED))["wide"] is False
+
+
+def wide_resp(msg="シート「x」を削除します（消える数: 1 枚）（広い削除です。何が消えるかを見て、同じ ops をもう一度 ok=True で撃つと通ります）", blocked=True, first_snap=None, retried_kind="ok"):
+    r = resp(A0, B1=B_CHANGED, wide=True)
+    r["steps"][0]["first"] = {"ok": False, "blocked": blocked, "error_brief": msg}
+    r["steps"][0]["res"] = res() if retried_kind == "ok" else res(False, blocked=True, brief="x")
+    r["snaps"]["do1_first"] = first_snap or A0
+    return r
+
+
+def test_p7_passes_when_stopped_once_with_what_and_how_many_and_passes_on_the_second_shot():
+    out = ev(wide_resp())
+    assert out["p"]["P7"] == "pass" and "P7" not in out["reasons"]
+
+
+def test_p7_fails_without_count_with_changed_fingerprint_or_when_second_shot_is_also_stopped():
+    assert ev(wide_resp(msg="広い削除です"))["p"]["P7"] == "fail"                                   # 何が何件かが無い
+    assert ev(wide_resp(first_snap=B_CHANGED))["p"]["P7"] == "fail"                               # 止まったのに指紋が変わった
+    assert ev(wide_resp(retried_kind="blocked"))["p"]["P7"] == "fail"                             # 撃ち直しても通らない
+    assert ev(wide_resp(blocked=False))["p"]["P7"] == "fail"                                      # 最初の撃ちが止まっていない
+
+
+def test_wide_templates_resolve_for_every_table_and_pass_validation():
+    tpl = P.load_templates()
+    m = gw.WorkspaceManager(client=object(), state_path=gw.HERE / "x_unused_props.json")
+    wide = [s for s in tpl if tpl[s].get("wide")]
+    assert {"rows.delete", "rows", "clear.values", "clear.all", "api"} <= set(wide)
+    for tn in P.TABLES:
+        t = T.load_table(tn)
+        for shelf in wide:
+            ops = P.build_ops_wide(shelf, t, tpl)
+            assert m.validate_ops(ops) == "sheet", (tn, shelf)
+            assert not any("{" in s and "}" in s for s in _strings(ops)), (tn, shelf, ops)
+
+
+def test_evaluate_wide_distinguishes_na_pass_and_fail():
+    def w(wide, kind_res, first=None, snap=None, c=None):
+        st = [{"name": "w1", "res": kind_res, "wide": wide, **({"first": first} if first else {})}, {"name": "undow", "undo": [{"ok": True, "error": None, "notes": []}]}]
+        return {"snaps": {"A": A0, "B": B_CHANGED, "C": c or A0, **({"w1_first": snap or A0} if wide else {})}, "steps": st}
+    good_first = {"blocked": True, "error_brief": "消えます（消える数: 5 行）（広い削除です）"}
+    assert P.evaluate_wide(w(True, res(), good_first))[0] == "pass"
+    assert P.evaluate_wide(w(False, res(False, arg=True, brief="x")))[0] == "na"                    # この表に当てはまらない
+    assert P.evaluate_wide(w(False, res()))[0] == "fail"                                          # 止まらずに通った
+    assert P.evaluate_wide(w(True, res(), good_first, c=B_CHANGED))[0] == "fail"                  # 戻しても違う
 
 
 def test_skips_file_format(tmp_path):

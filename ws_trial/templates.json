@@ -373,6 +373,14 @@
   ],
   "may_change": [
    "式"
+  ],
+  "wide": [
+   [
+    {
+     "shelf": "clear.values",
+     "range": "{広い範囲}"
+    }
+   ]
   ]
  },
  "clear.format": {
@@ -397,6 +405,14 @@
   ],
   "may_change": [
    "式"
+  ],
+  "wide": [
+   [
+    {
+     "shelf": "clear.all",
+     "range": "{広い範囲}"
+    }
+   ]
   ]
  },
  "copy": {
@@ -485,6 +501,14 @@
   ],
   "may_change": [
    "式"
+  ],
+  "wide": [
+   [
+    {
+     "shelf": "rows",
+     "rows": "{明細の行}"
+    }
+   ]
   ]
  },
  "rows.insert": {
@@ -511,6 +535,14 @@
   ],
   "may_change": [
    "式"
+  ],
+  "wide": [
+   [
+    {
+     "shelf": "rows.delete",
+     "rows": "{明細の行}"
+    }
+   ]
   ]
  },
  "rows.move": {
@@ -682,7 +714,23 @@
     }
    ]
   ],
-  "may_change": []
+  "may_change": [],
+  "wide": [
+   [
+    {
+     "shelf": "api",
+     "why": "試験",
+     "requests": [
+      {
+       "deleteRange": {
+        "range": "{EC明細の下まで}",
+        "shiftDimension": "COLUMNS"
+       }
+      }
+     ]
+    }
+   ]
+  ]
  },
  "filter.off": {
   "templates": [

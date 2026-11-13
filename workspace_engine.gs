@@ -1036,19 +1036,19 @@ function note_(ctx, s) { ctx.notes.push(s); }
 function chg_(ctx, sh, a1, what) { ctx.changed.push((sh ? sh.getName() + '!' : '') + a1 + (what ? ' ' + what : '')); }
 function need_(op, keys) { keys.forEach(function (k) { if (op[k] === undefined || op[k] === null || op[k] === '') throw new ArgError('棚「' + op.shelf + '」に「' + k + '」が要ります'); }); }
 // 消す手の守り。wide（広い削除）のときは、ok=True でも道具の側で 1 回止める（試験設計書 第 3.5 節 (1)・第 13 章）
-function guardDelete_(ctx, msg, wide) {
-  if (wide) return guardWide_(ctx, msg);
+function guardDelete_(ctx, msg, wide, count) {
+  if (wide) return guardWide_(ctx, msg, count);
   if (!ctx.ok) throw new Blocked(msg + '（人の値を消すので、「消してよい」の承認＝ok=True が要ります）');
 }
 // 広い削除（シートごと・シート全体・表の外まで・明細の半分より多く）: 同じ相手・同じ ops が直前（10 分以内）に 1 回止まっていなければ、ok=True でも止める。
 // ok なしの下見も 1 回目に数える（ふつうの「下見 → 承認 → ok=True」は今までと同じ 2 往復）。止めた ops の指紋だけを覚え、同じ ops が ok=True で来たら通す
 var WIDE_MS = 10 * 60 * 1000;
-function guardWide_(ctx, msg) {
+function guardWide_(ctx, msg, count) {
   var now = Date.now(), map = getJson_('WIDE', {}), key = ctx.wideKey || 'x', live = {};
   Object.keys(map).forEach(function (k) { if (now - map[k] < WIDE_MS) live[k] = map[k]; });
   if (ctx.ok && live[key]) { delete live[key]; setJson_('WIDE', live); return; }
   live[key] = now; setJson_('WIDE', live);
-  throw new Blocked(msg + '（広い削除です。何が消えるかを見て' + (ctx.ok ? '' : '、「消してよい」の承認を得てから') + '、同じ ops をもう一度 ok=True で撃つと通ります）');
+  throw new Blocked(msg + (count ? '（消える数: ' + count + '）' : '') + '（広い削除です。何が消えるかを見て' + (ctx.ok ? '' : '、「消してよい」の承認を得てから') + '、同じ ops をもう一度 ok=True で撃つと通ります）');
 }
 // 広さの目安: 範囲がシートの値のある範囲を全部覆う／表の外まで及ぶ
 function wideRange_(sh, rg) {

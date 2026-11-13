@@ -72,7 +72,7 @@ SHELF['sheet.delete'] = function (ctx, op) {
   var ss = ctx.ss;
   var s = sheetOf_(ss, op.name, '');
   if (ss.getSheets().length <= 1) throw new ArgError('シートが1枚しかないため削除できません');
-  guardDelete_(ctx, 'シート「' + op.name + '」を削除します', true);   // シートごと消す手は広い削除
+  guardDelete_(ctx, 'シート「' + op.name + '」を削除します', true, '1 枚');   // シートごと消す手は広い削除
   ss.deleteSheet(s);
   chg_(ctx, null, '', 'シート「' + op.name + '」を削除');
 };

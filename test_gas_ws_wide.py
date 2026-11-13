@@ -123,9 +123,9 @@ def test_every_wide_shelf_passes_wide_to_guard_delete_and_cards_still_match_the_
     import re
     from pathlib import Path
     src = {p.name: p.read_text(encoding="utf-8") for p in (Path(gw.HERE) / "ws_shelves").glob("*.gs")}
-    assert "guardDelete_(ctx, 'シート「' + op.name + '」を削除します', true)" in src["sheet_sheet.gs"]
-    assert src["sheet_range.gs"].count("wideRange_(sh, rg))") == 2                       # clear.values・clear.all
+    assert "guardDelete_(ctx, 'シート「' + op.name + '」を削除します', true, '1 枚')" in src["sheet_sheet.gs"]
+    assert src["sheet_range.gs"].count("wideRange_(sh, rg),") == 2                       # clear.values・clear.all
     assert "wideRowCount_(" in src["sheet_filter.gs"] and "wideRowCount_(tw, nums.length)" in src["sheet_rows.gs"]
-    assert "を撃ちます（' + info.danger.length + ' 件）', true)" in src["api.gs"]           # api の消す型
+    assert "を撃ちます（' + info.danger.length + ' 件）', true, info.danger.length + ' 件')" in src["api.gs"]           # api の消す型
     import gas_ws_catalog as C
     assert C.check(gw.CATALOG) == []                                                    # 札の「危ない: 消す」と本文の守りの一致は崩れていない

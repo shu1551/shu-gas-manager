@@ -417,10 +417,11 @@ EXTRA_ACTIONS['seq'] = function (req) {
     if (st.snap) { out.snaps[st.snap] = trialSnap_(ss); return; }
     if (st.do) {
       var go = function () { return actDo_({ target: { id: req.id, kind: 'sheet' }, ops: st.do, ok: !!st.ok }); };
-      var r = go(), wide = false;
-      if (st.retry_wide && !r.ok && r.blocked && String(r.error || '').indexOf('広い削除') >= 0) { wide = true; r = go(); }
+      var r = go(), wide = false, first = null;
+      if (st.retry_wide && !r.ok && r.blocked && String(r.error || '').indexOf('広い削除') >= 0) { wide = true; first = trialSlim_(r); first.error_brief = String(r.error || '').slice(0, 300); out.snaps[st.name + '_first'] = trialSnap_(ss); r = go(); }
       if (r.ok && r.backup) made++;
       var o = { name: st.name, res: trialSlim_(r), wide: wide };
+      if (first) o.first = first;
       o.res.error_brief = String(r.error || '').slice(0, 200);
       out.steps.push(o);
       return;
