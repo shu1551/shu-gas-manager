@@ -138,7 +138,9 @@ SHELF['freeze'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
   var r = op.rows !== undefined ? parseInt(op.rows) : 1;
   var c = op.cols !== undefined ? parseInt(op.cols) : 0;
-  try { sh.setFrozenRows(r); sh.setFrozenColumns(c); }
+  var sid = sh.getSheetId(), bk = (ctx.bk || []).filter(function (x) { return x.id === sid; })[0];
+  var curR = bk ? bk.frozenR : sh.getFrozenRows(), curC = bk ? bk.frozenC : sh.getFrozenColumns();
+  try { if (curR !== r) sh.setFrozenRows(r); if (curC !== c) sh.setFrozenColumns(c); }
   catch (e) { throw new ArgError('結合セルの途中では固定できません（行 ' + r + '・列 ' + c + '）。結合を解除するか、結合をすべて含む行・列までを指定してください'); }
   chg_(ctx, sh, '', '行固定: ' + r + '、列固定: ' + c);
 };
@@ -154,8 +156,10 @@ SHELF['freeze'] = function (ctx, op) {
 // 控え: 今
 SHELF['unfreeze'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
-  sh.setFrozenRows(0);
-  sh.setFrozenColumns(0);
+  var sid = sh.getSheetId(), bk = (ctx.bk || []).filter(function (x) { return x.id === sid; })[0];
+  var curR = bk ? bk.frozenR : sh.getFrozenRows(), curC = bk ? bk.frozenC : sh.getFrozenColumns();
+  if (curR !== 0) sh.setFrozenRows(0);
+  if (curC !== 0) sh.setFrozenColumns(0);
   chg_(ctx, sh, '', '固定を解除');
 };
 

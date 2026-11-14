@@ -80,7 +80,16 @@ function props_() {
   var p = PropertiesService.getScriptProperties();
   if (!LANE) return p;
   var k2 = function (k) { return k === 'TRIAL_CFG' ? k : k + '@' + LANE; };
-  return { getProperty: function (k) { return p.getProperty(k2(k)); }, setProperty: function (k, v) { return p.setProperty(k2(k), v); }, deleteProperty: function (k) { return p.deleteProperty(k2(k)); } };
+  return {
+    getProperty: function (k) { return p.getProperty(k2(k)); },
+    setProperty: function (k, v) { return p.setProperty(k2(k), v); },
+    setProperties: function (obj) {
+      var o = {};
+      Object.keys(obj).forEach(function (k) { o[k2(k)] = obj[k]; });
+      return typeof p.setProperties === 'function' ? p.setProperties(o) : Object.keys(o).forEach(function (k) { p.setProperty(k, o[k]); });
+    },
+    deleteProperty: function (k) { return p.deleteProperty(k2(k)); }
+  };
 }
 function getJson_(k, d) { var v = props_().getProperty(k); if (!v) return d; try { return JSON.parse(v); } catch (e) { return d; } }
 function setJson_(k, v) { props_().setProperty(k, JSON.stringify(v)); }
@@ -124,14 +133,20 @@ function sheetOf_(ss, name, ctxDefault) {
 
 // ---------------------------------------------------------------- 表の形
 
+var _TBL_CACHE = null;   // 値を変えない 1 回の runDo_ 中だけ findTable_ の結果を共有する（finally で必ず null に戻す）
 function findTable_(sh) {
+  var sid = _TBL_CACHE ? sh.getSheetId() : null;
+  if (_TBL_CACHE && _TBL_CACHE[sid] !== undefined) {
+    var c0 = _TBL_CACHE[sid];
+    return c0 ? { sheet: sh, headerRow: c0.headerRow, firstCol: c0.firstCol, lastCol: c0.lastCol, firstData: c0.firstData, lastData: c0.lastData, totalRow: c0.totalRow, vals: c0.vals } : null;
+  }
   var lr = sh.getLastRow(), lc = sh.getLastColumn();
-  if (lr < 1 || lc < 1) return null;
+  if (lr < 1 || lc < 1) { if (_TBL_CACHE) _TBL_CACHE[sid] = null; return null; }
   var vals = sh.getRange(1, 1, lr, lc).getValues();
   var nonEmpty = function (row) { return row.filter(function (v) { return !isBlank_(v); }).length; };
   var h = -1;
   for (var r = 0; r < vals.length; r++) { if (nonEmpty(vals[r]) >= 2) { h = r; break; } }
-  if (h < 0) return null;
+  if (h < 0) { if (_TBL_CACHE) _TBL_CACHE[sid] = null; return null; }
   var hdr = vals[h], fc = -1, lcol = -1;
   for (var c = 0; c < hdr.length; c++) if (!isBlank_(hdr[c])) { if (fc < 0) fc = c; lcol = c; }
   var last = h;
@@ -146,6 +161,7 @@ function findTable_(sh) {
     for (var fcx = fc; fcx <= lcol; fcx++) { var fv = vals[last][fcx]; if (!isBlank_(fv)) { first = String(fv); break; } }
     if (/^(合計|総計|小計|計|total|sum)/i.test(first.trim())) { t.totalRow = last + 1; t.lastData = last; }
   }
+  if (_TBL_CACHE) _TBL_CACHE[sid] = { headerRow: t.headerRow, firstCol: t.firstCol, lastCol: t.lastCol, firstData: t.firstData, lastData: t.lastData, totalRow: t.totalRow, vals: t.vals };
   return t;
 }
 function needTable_(sh) {
@@ -214,9 +230,22 @@ function sameFinger_(a, b) { return a && b && a.rows === b.rows && a.cols === b.
 // ---------------------------------------------------------------- 台帳
 
 function ledger_() { return getJson_('LEDGER', { seq: 0, items: [] }); }
-function ledgerSave_(l) {
-  while (l.items.length > LEDGER_MAX) { var x = l.items.shift(); if (x && x.hasSide) { try { props_().deleteProperty('SIDE_' + x.n); } catch (e) { } } }
-  setJson_('LEDGER', l);
+function ledgerSave_(l, extraProps) {
+  while (l.items.length > LEDGER_MAX) {
+    var x = l.items.shift();
+    if (x && x.hasSide) { try { props_().deleteProperty('SIDE_' + x.n); } catch (e) { } }
+    if (x && x.hasLight) { try { props_().deleteProperty('LIGHT_' + x.n); } catch (e) { } }
+  }
+  var p = props_();
+  if (extraProps && Object.keys(extraProps).length && typeof p.setProperties === 'function') {
+    var map = {};
+    Object.keys(extraProps).forEach(function (k) { map[k] = JSON.stringify(extraProps[k]); });
+    map['LEDGER'] = JSON.stringify(l);
+    p.setProperties(map);
+  } else {
+    if (extraProps) Object.keys(extraProps).forEach(function (k) { setJson_(k, extraProps[k]); });
+    setJson_('LEDGER', l);
+  }
 }
 function ledgerBrief_() {
   return ledger_().items.slice().reverse().map(function (it) {
@@ -286,11 +315,13 @@ function backupSheets_(ss, sheets, n, sideItems) {
   return out;
 }
 // 列幅は表のある列だけ記録する（1 回の API 呼びが約 0.1 秒なので、全列・全行は読まない。行の高さは戻しの対象外）
+// 変更の無い控えを破棄する（ライト控えは控えブックにタブを持たないので何もしない）
 function discardBackup_(bk) {
   if (!bk || !bk.length) return;
+  if (!bk.some(function (b) { return !b.lite && b.tab; })) return;
   try {
     var book = bkBook_();
-    bk.forEach(function (b) { var t = book.getSheetByName(b.tab); if (t && book.getSheets().length > 1) book.deleteSheet(t); });
+    bk.forEach(function (b) { if (!b.lite && b.tab) { var t = book.getSheetByName(b.tab); if (t && book.getSheets().length > 1) book.deleteSheet(t); } });
   } catch (e) { }
 }
 function colWidths_(sh) { var o = [], lc = Math.min(Math.max(sh.getLastColumn(), 1), 30); for (var c = 1; c <= lc; c++) o.push(sh.getColumnWidth(c)); return o; }
@@ -325,6 +356,162 @@ function restoreSheet_(ss, b) {
     orig.setFrozenRows(b.frozenR); orig.setFrozenColumns(b.frozenC);
     if (orig.getIndex() !== b.index) { ss.setActiveSheet(orig); ss.moveActiveSheet(b.index); }
   } finally { if (tmp) { try { ss.deleteSheet(tmp); } catch (e) { } } }
+}
+
+// 値やシート構成を変えない棚は、控えブックへ copyTo せず Sheets API で必要な項目だけを控える（9KB を超える巨大シートは従来控えへ戻す）
+var LITE_EXCLUDE_ = { '値': 1, 'シート構成': 1 };
+function liteTouch_(ops) {
+  if (!ops || !ops.length) return null;
+  var set = {};
+  for (var i = 0; i < ops.length; i++) {
+    var op = ops[i], c = CATALOG[op.shelf];
+    if (!c || DYNAMIC[op.shelf]) return null;
+    if (op.to && String(op.to).indexOf('!') >= 0) return null;
+    if ('merge' in op && op.merge !== undefined) return null;   // セル結合は右下の値を消すので通常控えへ
+    var touch = c.touch || [];
+    for (var j = 0; j < touch.length; j++) {
+      if (LITE_EXCLUDE_[touch[j]]) return null;
+      set[touch[j]] = 1;
+    }
+  }
+  return Object.keys(set);
+}
+function packRects_(rows, rOff, cOff, pickFn) {
+  var pal = [], pMap = {}, truns = [], rects = [], prev = {};
+  for (var r = 0; r < rows.length; r++) {
+    var vals = (rows[r] && rows[r].values) || [];
+    var cur = {}, c = 0;
+    while (c < vals.length) {
+      var v = vals[c] || {};
+      if (v.textFormatRuns) truns.push([rOff + r, cOff + c, v.textFormatRuns]);
+      var obj = pickFn(v);
+      if (!obj || !Object.keys(obj).length) { c++; continue; }
+      var key = JSON.stringify(obj), idx = pMap[key];
+      if (!idx) { pal.push(obj); idx = pal.length; pMap[key] = idx; }
+      var c0 = c;
+      while (c + 1 < vals.length) {
+        var nv = vals[c + 1] || {};
+        var nobj = pickFn(nv);
+        if (!nobj || !Object.keys(nobj).length || JSON.stringify(nobj) !== key) break;
+        if (nv.textFormatRuns) truns.push([rOff + r, cOff + c + 1, nv.textFormatRuns]);
+        c++;
+      }
+      var c1 = c + 1, rk = (cOff + c0) + ':' + (cOff + c1) + ':' + idx;
+      if (prev[rk] && prev[rk][1] === rOff + r) {
+        prev[rk][1] = rOff + r + 1;
+        cur[rk] = prev[rk];
+      } else {
+        var rect = [rOff + r, rOff + r + 1, cOff + c0, cOff + c1, idx];
+        rects.push(rect);
+        cur[rk] = rect;
+      }
+      c++;
+    }
+    prev = cur;
+  }
+  return { pal: pal, rects: rects, truns: truns };
+}
+function packDim_(meta, defPx) {
+  var out = [];
+  (meta || []).forEach(function (m) {
+    var px = (m && m.pixelSize !== undefined) ? m.pixelSize : defPx;
+    if (out.length && out[out.length - 1][1] === px) out[out.length - 1][0]++;
+    else out.push([1, px]);
+  });
+  return out;
+}
+function saveSide_(n, rec) {
+  var s = JSON.stringify(rec);
+  if (s.length <= 6000) { props_().setProperty('SIDE_' + n, s); return; }
+  var gz = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(s, 'application/json')).getBytes());
+  props_().setProperty('SIDE_' + n, JSON.stringify({ __gz: gz }));
+}
+function backupSheetsLite_(ss, sheets, n, items) {
+  if (!sheets.length) return [];
+  var tb = Date.now();
+  var want = {}; items.forEach(function (i) { want[i] = 1; });
+  var out = sheets.map(function (sh) {
+    return { id: sh.getSheetId(), name: sh.getName(), index: sh.getIndex(), frozenR: sh.getFrozenRows(), frozenC: sh.getFrozenColumns(), lite: true };
+  });
+  var needMeta = !!(want['隠し'] || want['グループ'] || want['保護'] || want['名前'] || want['タブ色'] || want['グラフ'] || want['フィルタ'] || want['条件付き'] || want['交互の色']);
+  if (needMeta) {
+    var shF = ['properties(sheetId' + (want['隠し'] ? ',hidden' : '') + (want['タブ色'] ? ',tabColorStyle' : '') + ')'];
+    if (want['フィルタ']) shF.push('basicFilter');
+    if (want['グループ']) shF.push('rowGroups', 'columnGroups');
+    if (want['保護']) shF.push('protectedRanges(protectedRangeId,range,description,warningOnly,editors,unprotectedRanges)');
+    if (want['グラフ']) shF.push('charts(chartId,spec,position)');
+    if (want['条件付き']) shF.push('conditionalFormats');
+    if (want['交互の色']) shF.push('bandedRanges');
+    var resp = Sheets.Spreadsheets.get(ss.getId(), { fields: 'sheets(' + shF.join(',') + ')' + (want['名前'] ? ',namedRanges' : '') });
+    var byId = {}; (resp.sheets || []).forEach(function (x) { byId[x.properties.sheetId] = x; });
+    out.forEach(function (b) {
+      var x = byId[b.id]; if (!x) return;
+      b.side = b.side || {};
+      if (want['フィルタ']) b.side.filter = x.basicFilter || null;
+      if (want['隠し']) b.side.hidden = !!x.properties.hidden;
+      if (want['タブ色']) b.side.tab = x.properties.tabColorStyle || null;
+      if (want['グループ']) { b.side.rg = x.rowGroups || []; b.side.cg = x.columnGroups || []; }
+      if (want['保護']) b.side.prot = (x.protectedRanges || []).map(stripId_);
+      if (want['グラフ']) b.side.charts = (x.charts || []).map(function (c) { return { spec: c.spec, position: c.position }; });
+      if (want['条件付き']) b.side.cf = x.conditionalFormats || [];
+      if (want['交互の色']) b.side.band = (x.bandedRanges || []).map(function (br) { var c = {}; Object.keys(br).forEach(function (k) { if (k !== 'bandedRangeId') c[k] = br[k]; }); return c; });
+    });
+    if (want['名前']) out.book = { named: (resp.namedRanges || []).map(function (r) { return { name: r.name, range: r.range }; }) };
+  }
+  var needGrid = !!(want['書式'] || want['入力規則'] || want['幅'] || want['隠し']);
+  if (needGrid) {
+    var ranges = [], gFields = ['properties(sheetId)'];
+    var needCells = !!(want['書式'] || want['入力規則']);
+    if (want['書式']) gFields.push('merges');
+    var dataF = [];
+    if (want['隠し'] || want['幅']) {
+      dataF.push('rowMetadata(' + (want['隠し'] ? 'hiddenByUser' : '') + (want['隠し'] && want['幅'] ? ',' : '') + (want['幅'] ? 'pixelSize' : '') + ')');
+      dataF.push('columnMetadata(' + (want['隠し'] ? 'hiddenByUser' : '') + (want['隠し'] && want['幅'] ? ',' : '') + (want['幅'] ? 'pixelSize' : '') + ')');
+    }
+    if (needCells) {
+      var vF = [];
+      if (want['書式']) vF.push('userEnteredFormat', 'textFormatRuns');
+      if (want['入力規則']) vF.push('dataValidation');
+      dataF.push('startRow', 'startColumn', 'rowData(values(' + vF.join(',') + '))');
+      sheets.forEach(function (s, si) { ranges.push(q_(out[si].name)); });
+    } else {
+      sheets.forEach(function (s, si) { var qn = q_(out[si].name); ranges.push(qn + '!A:A'); ranges.push(qn + '!1:1'); });
+    }
+    gFields.push('data(' + dataF.join(',') + ')');
+    var dr = Sheets.Spreadsheets.get(ss.getId(), { includeGridData: true, ranges: ranges, fields: 'sheets(' + gFields.join(',') + ')' });
+    var dById = {}; (dr.sheets || []).forEach(function (x) { dById[x.properties.sheetId] = x; });
+    out.forEach(function (b) {
+      var x = dById[b.id]; if (!x) return;
+      b.side = b.side || {};
+      var d = x.data || [], g0 = d[0] || {}, g1 = needCells ? g0 : (d[1] || {});
+      if (want['隠し']) { b.side.hr = hiddenRuns_(g0.rowMetadata); b.side.hc = hiddenRuns_(g1.columnMetadata); }
+      if (want['幅']) { b.side.rh = packDim_(g0.rowMetadata, 21); b.side.cw = packDim_(g1.columnMetadata, 100); }
+      if (want['書式']) {
+        var pf = packRects_(g0.rowData || [], g0.startRow || 0, g0.startColumn || 0, function (v) { return v.userEnteredFormat || null; });
+        var fmt = { merges: x.merges || [], pal: pf.pal, rects: pf.rects };
+        if (pf.truns.length) fmt.truns = pf.truns;
+        b.side.fmt = fmt;
+      }
+      if (want['入力規則']) {
+        var pd = packRects_(g0.rowData || [], g0.startRow || 0, g0.startColumn || 0, function (v) { return v.dataValidation || null; });
+        b.side.dv = { pal: pd.pal, rects: pd.rects };
+      }
+    });
+  }
+  if (want['固定']) {
+    out.forEach(function (b) { b.side = b.side || {}; b.side.fr = [b.frozenR, b.frozenC]; });
+  }
+  // 9KB 上限を超える場合は従来控えへ安全にフォールバックする
+  var probe = packSide_(out, items);
+  if (probe) {
+    var ps = JSON.stringify(probe);
+    if (ps.length > 6000) {
+      var gz = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(ps, 'application/json')).getBytes());
+      if (JSON.stringify({ __gz: gz }).length > 7800) return null;
+    }
+  }
+  bkLap_('lite', tb);
+  return out;
 }
 
 // ---------------------------------------------------------------- 脇の状態（控えと戻し）
@@ -397,6 +584,10 @@ function stripSide_(bk) {
 }
 function loadSide_(it) {
   var rec = it.hasSide ? getJson_('SIDE_' + it.n, null) : null;
+  if (rec && rec.__gz) {
+    try { rec = JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(rec.__gz), 'application/x-gzip')).getDataAsString('utf-8')); }
+    catch (e) { rec = null; }
+  }
   var bks = (it.sheets || []).map(function (b) { var c = {}; Object.keys(b).forEach(function (k) { c[k] = b[k]; }); if (rec && rec.sheets && rec.sheets[b.id]) c.side = rec.sheets[b.id]; return c; });
   if (rec && rec.book) bks.book = rec.book;
   return bks;
@@ -416,20 +607,67 @@ function restoreSide_(ss, bk, notes) {
   var book = bk && bk.book;
   if (!recs.length && !book) return;
   var needCur = !!book, need = {};
-  recs.forEach(function (b) { ['rg', 'cg', 'prot', 'charts'].forEach(function (k) { if (b.side[k] !== undefined) { needCur = true; need[k] = 1; } }); });
+  recs.forEach(function (b) {
+    ['rg', 'cg', 'prot', 'charts'].forEach(function (k) { if (b.side[k] !== undefined) { needCur = true; need[k] = 1; } });
+    if (b.side.fmt !== undefined) { needCur = true; need.merges = 1; }
+    if (b.side.cf !== undefined) { needCur = true; need.cf = 1; }
+    if (b.side.band !== undefined) { needCur = true; need.band = 1; }
+  });
   var cur = {};
   if (needCur) {
     var f = ['properties(sheetId)'];
     if (need.rg) f.push('rowGroups'); if (need.cg) f.push('columnGroups');
     if (need.prot) f.push('protectedRanges(protectedRangeId)'); if (need.charts) f.push('charts(chartId)');
+    if (need.merges) f.push('merges');
+    if (need.cf) f.push('conditionalFormats');
+    if (need.band) f.push('bandedRanges(bandedRangeId)');
     var r = Sheets.Spreadsheets.get(ss.getId(), { fields: 'sheets(' + f.join(',') + ')' + (book ? ',namedRanges(namedRangeId)' : '') });
     (r.sheets || []).forEach(function (x) { cur[x.properties.sheetId] = x; });
     cur.__named = r.namedRanges || [];
   }
+  var repeatReq_ = function (range, cell, fields) { var req = {}; req['repeat' + 'Cell'] = { range: range, cell: cell, fields: fields }; return req; };
   var build = function (withEditors) {
     var dels = [], adds = [], props = [];
     recs.forEach(function (b) {
       var s = b.side, id = b.id, c = cur[id] || {};
+      if (s.fmt !== undefined) {
+        (c.merges || []).forEach(function (m) { dels.push({ unmergeCells: { range: m } }); });
+        dels.push(repeatReq_({ sheetId: id }, {}, 'userEnteredFormat,textFormatRuns'));
+        (s.fmt.rects || []).forEach(function (q) {
+          adds.push(repeatReq_({ sheetId: id, startRowIndex: q[0], endRowIndex: q[1], startColumnIndex: q[2], endColumnIndex: q[3] },
+            { userEnteredFormat: s.fmt.pal[q[4] - 1] }, 'userEnteredFormat'));
+        });
+        (s.fmt.truns || []).forEach(function (tr) {
+          adds.push({ updateCells: { start: { sheetId: id, rowIndex: tr[0], columnIndex: tr[1] }, rows: [{ values: [{ textFormatRuns: tr[2] }] }], fields: 'textFormatRuns' } });
+        });
+        (s.fmt.merges || []).forEach(function (m) { adds.push({ mergeCells: { range: m, mergeType: 'MERGE_ALL' } }); });
+      }
+      if (s.dv !== undefined) {
+        dels.push(repeatReq_({ sheetId: id }, {}, 'dataValidation'));
+        (s.dv.rects || []).forEach(function (q) {
+          adds.push(repeatReq_({ sheetId: id, startRowIndex: q[0], endRowIndex: q[1], startColumnIndex: q[2], endColumnIndex: q[3] },
+            { dataValidation: s.dv.pal[q[4] - 1] }, 'dataValidation'));
+        });
+      }
+      if (s.cw !== undefined) {
+        var ci = 0;
+        s.cw.forEach(function (run) { props.push({ updateDimensionProperties: { range: { sheetId: id, dimension: 'COLUMNS', startIndex: ci, endIndex: ci + run[0] }, properties: { pixelSize: run[1] }, fields: 'pixelSize' } }); ci += run[0]; });
+      }
+      if (s.rh !== undefined) {
+        var ri = 0;
+        s.rh.forEach(function (run) { props.push({ updateDimensionProperties: { range: { sheetId: id, dimension: 'ROWS', startIndex: ri, endIndex: ri + run[0] }, properties: { pixelSize: run[1] }, fields: 'pixelSize' } }); ri += run[0]; });
+      }
+      if (s.cf !== undefined) {
+        for (var cfi = 0; cfi < (c.conditionalFormats || []).length; cfi++) dels.push({ deleteConditionalFormatRule: { sheetId: id, index: 0 } });
+        s.cf.forEach(function (rule, idx) { adds.push({ addConditionalFormatRule: { rule: rule, index: idx } }); });
+      }
+      if (s.band !== undefined) {
+        (c.bandedRanges || []).forEach(function (br) { dels.push({ deleteBanding: { bandedRangeId: br.bandedRangeId } }); });
+        s.band.forEach(function (br) { adds.push({ addBanding: { bandedRange: br } }); });
+      }
+      if (s.fr !== undefined) {
+        props.push({ updateSheetProperties: { properties: { sheetId: id, gridProperties: { frozenRowCount: s.fr[0], frozenColumnCount: s.fr[1] } }, fields: 'gridProperties.frozenRowCount,gridProperties.frozenColumnCount' } });
+      }
       if (s.hr !== undefined || s.hc !== undefined) {
         var sh = byId_(ss, id), mr = sh ? sh.getMaxRows() : 0, mc = sh ? sh.getMaxColumns() : 0;
         if (s.hr !== undefined && mr) { props.push({ updateDimensionProperties: { range: { sheetId: id, dimension: 'ROWS', startIndex: 0, endIndex: mr }, properties: { hiddenByUser: false }, fields: 'hiddenByUser' } });
@@ -460,8 +698,9 @@ function restoreSide_(ss, bk, notes) {
     }
     // 先にシートの隠しを「出す」側へ寄せないと、最後の見えているシートを隠すとき失敗する。付け直しの後に隠しを合わせる
     var showFirst = props.filter(function (q) { return q.updateSheetProperties && q.updateSheetProperties.properties.hidden === false; });
-    var rest = props.filter(function (q) { return showFirst.indexOf(q) < 0; });
-    return dels.concat(showFirst, adds, rest);
+    var hideLast = props.filter(function (q) { return q.updateSheetProperties && q.updateSheetProperties.properties.hidden === true; });
+    var rest = props.filter(function (q) { return showFirst.indexOf(q) < 0 && hideLast.indexOf(q) < 0; });
+    return dels.concat(showFirst, adds, rest, hideLast);
   };
   var reqs = build(true);
   if (reqs.length) SpreadsheetApp.flush();   // 中身を戻した分を反映してから、脇の状態を付け直す（グラフは中身の範囲を指すため）
@@ -484,7 +723,10 @@ function restoreSide_(ss, bk, notes) {
     if (notes) notes.push('保護の「編集できる人」の一覧は戻せませんでした（保護そのものは付け直しました）');
     }
   }
-  recs.forEach(function (b) { if (b.side.filter) restoreFilter_(ss, b.id, b.side.filter, notes); });   // フィルタは SpreadsheetApp で付け直す（API の setBasicFilter では隠す行が反映されない）
+  recs.forEach(function (b) {
+    if (b.side.filter) restoreFilter_(ss, b.id, b.side.filter, notes);   // フィルタは SpreadsheetApp で付け直す（API の setBasicFilter では隠す行が反映されない）
+    else if (b.side.filter === null) { var shf = byId_(ss, b.id); var f0 = shf && shf.getFilter(); if (f0) f0.remove(); }
+  });
 }
 
 // 記録した spec から、種類・範囲・位置・題だけを SpreadsheetApp で作り直す（API の addChart が通らない形のとき）
@@ -629,15 +871,29 @@ function runDo_(req, T0) {
     _file: { id: fid, name: fname, url: created ? created.url : null } };
   var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: fid,
     name: fname, kind: kind, what: summarizeOps_(ops), isNew: !!created, fp: FP_VER };
-  var bk = null, sideItems = [];
+  var bk = null, sideItems = [], liteItems = null, isLite = false;
   try {
     if (!created) {
       if (kind === 'sheet') {
         var names = touchedSheets_(ctx, ops);
-        sideItems = sideItems_(ops);
-        bk = backupSheets_(ctx.ss, names, n, sideItems); lap_(tm, 'backup');
+        liteItems = liteTouch_(ops);
+        if (liteItems !== null) {
+          bk = backupSheetsLite_(ctx.ss, names, n, liteItems);
+          if (bk !== null) isLite = true;
+        }
+        if (!isLite) {
+          sideItems = sideItems_(ops);
+          bk = backupSheets_(ctx.ss, names, n, sideItems);
+        }
+        lap_(tm, 'backup');
         entry.sheets = bk;
-        entry.before = {}; names.forEach(function (sh0, idx) { var b0 = bk[idx]; entry.before[b0.id] = fingerSheet_(sh0, FP_VER, b0); });
+        if (isLite) {
+          entry.lite = true;
+          entry.liteItems = liteItems;
+          tm.finger0 = 0;
+        } else {
+          entry.before = {}; names.forEach(function (sh0, idx) { var b0 = bk[idx]; entry.before[b0.id] = fingerSheet_(sh0, FP_VER, b0); });
+        }
       } else { entry.doc = backupDoc_(ctx.doc, n); lap_(tm, 'backup'); entry.beforeDoc = fingerDoc_(ctx.doc); }
     }
     ctx.bk = bk; lap_(tm, 'finger0');
@@ -654,7 +910,11 @@ function runDo_(req, T0) {
     // 書き終わりの指紋
     if (kind === 'sheet') {
       entry.after = {};
-      (entry.sheets || []).forEach(function (b) { var s = byId_(ctx.ss, b.id); if (s) entry.after[b.id] = fingerSheet_(s); });
+      var hasFix = isLite && liteItems.indexOf('固定') >= 0;
+      (entry.sheets || []).forEach(function (b) {
+        var s = byId_(ctx.ss, b.id);
+        if (s) entry.after[b.id] = fingerSheet_(s, FP_VER, isLite ? (hasFix ? { name: b.name } : b) : null);
+      });
       entry.created = {};
       ctx.createdSheets.forEach(function (nm) { var s = ctx.ss.getSheetByName(nm); if (s) entry.created[nm] = fingerSheet_(s); });
     } else entry.afterDoc = fingerDoc_(ctx.doc);
@@ -666,8 +926,8 @@ function runDo_(req, T0) {
       discardBackup_(bk); lap_(tm, 'discard');
       return { ok: true, target: tgt_(ctx, file), changed: [], notes: ['変更はありませんでした（すでにその状態です）'].concat(ctx.notes.filter(function (x) { return x.indexOf('変更なし') < 0; })), remaining: ctx.remaining, backup: 0, ms: msOut_(tm) };
     }
-    var sideRec = (bk && bk.length) ? packSide_(bk, sideItems) : null;
-    if (sideRec) { setJson_('SIDE_' + n, sideRec); entry.hasSide = true; entry.sideItems = sideRec.items; entry.sheets = stripSide_(bk); }
+    var sideRec = (bk && bk.length) ? packSide_(bk, isLite ? liteItems : sideItems) : null;
+    if (sideRec) { saveSide_(n, sideRec); entry.hasSide = true; entry.sideItems = sideRec.items; entry.sheets = stripSide_(bk); }
     l.items.push(entry); ledgerSave_(l);
     lap_(tm, 'ledger');
     var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: created ? 0 : n, ms: msOut_(tm) };
@@ -705,6 +965,12 @@ function fingerOnly_(ops, kind) {
 }
 function isNoop_(ops, entry, ctx) {
   if (ctx.createdSheets.length) return false;
+  if (entry.lite) {
+    if (entry.liteItems && entry.liteItems.length === 1 && entry.liteItems[0] === '固定') {
+      return (entry.sheets || []).every(function (b) { var s = byId_(ctx.ss, b.id); return s && s.getFrozenRows() === b.frozenR && s.getFrozenColumns() === b.frozenC; });
+    }
+    return ctx.changed.length === 0;
+  }
   if (!fingerOnly_(ops, ctx.kind)) return ctx.changed.length === 0;
   if (ctx.kind === 'sheet') {
     if (!entry.sheets || !entry.sheets.length) return false;
@@ -745,7 +1011,7 @@ function touchedSheets_(ctx, ops) {
 
 function restoreAll_(ss, bk, createdNames) {
   (createdNames || []).forEach(function (nm) { var s = ss.getSheetByName(nm); if (s && ss.getSheets().length > 1) ss.deleteSheet(s); });
-  (bk || []).forEach(function (b) { restoreSheet_(ss, b); });
+  (bk || []).forEach(function (b) { if (!b.lite) restoreSheet_(ss, b); });
   restoreSide_(ss, bk, null);
 }
 function resetNew_(ctx, kind) {
@@ -794,12 +1060,18 @@ function actUndo_(req) {
     if (it.kind === 'sheet') {
       var ss2 = file, names = [];
       (it.sheets || []).forEach(function (b) { var s = byId_(ss2, b.id); if (s) names.push(s); });
-      entry.sheets = backupSheets_(ss2, names, n, it.sideItems || []);
+      var undoLite = false;
+      if (it.lite && it.liteItems) {
+        entry.sheets = backupSheetsLite_(ss2, names, n, it.liteItems);
+        if (entry.sheets !== null) { undoLite = true; entry.lite = true; entry.liteItems = it.liteItems; }
+      }
+      if (!undoLite) entry.sheets = backupSheets_(ss2, names, n, it.sideItems || []);
       var made = Object.keys(it.created || {});
       made.forEach(function (nm) { var s = ss2.getSheetByName(nm); if (s && ss2.getSheets().length > 1) ss2.deleteSheet(s); });
       var bks = loadSide_(it);
-      bks.forEach(function (b) { restoreSheet_(ss2, b); });
+      bks.forEach(function (b) { if (!b.lite) restoreSheet_(ss2, b); });
       restoreSide_(ss2, bks, undoNotes);
+      SpreadsheetApp.flush();
       entry.after = {}; (entry.sheets || []).forEach(function (b) { var s = byId_(ss2, b.id); if (s) entry.after[b.id] = fingerSheet_(s); });
     } else {
       entry.doc = backupDoc_(file, n);
@@ -810,8 +1082,8 @@ function actUndo_(req) {
   } catch (err) {
     return { ok: false, error: '戻せませんでした: ' + String(err.message || err), target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
   }
-  var sideRec2 = (entry.sheets && entry.sheets.length) ? packSide_(entry.sheets, it.sideItems || []) : null;
-  if (sideRec2) { setJson_('SIDE_' + n, sideRec2); entry.hasSide = true; entry.sideItems = sideRec2.items; entry.sheets = stripSide_(entry.sheets); }
+  var sideRec2 = (entry.sheets && entry.sheets.length) ? packSide_(entry.sheets, entry.lite ? entry.liteItems : (it.sideItems || [])) : null;
+  if (sideRec2) { saveSide_(n, sideRec2); entry.hasSide = true; entry.sideItems = sideRec2.items; entry.sheets = stripSide_(entry.sheets); }
   it.undone = true; l.items.push(entry); ledgerSave_(l);
   return { ok: true, undone: it.n, backup: n, what: it.what, notes: undoNotes, target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
 }
