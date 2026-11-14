@@ -355,3 +355,41 @@ def test_resume_refail_and_limit_sec(tmp_path):
     assert res_lim == []
 
 
+def test_read_only_answer_vs_question_f8(tmp_path):
+    tp = _trial_state(tmp_path)
+    s0 = _make_snap([["日付", "得意先", "金額"], ["2026-10-01", "B社", 100], ["2026-10-02", "A社", 200]])
+
+    read_case = {
+        "id": "l3-read",
+        "table": "uriage_base",
+        "kind": "読む",
+        "turns": [{
+            "say": "100円以上の行は何件ありますか？",
+            "approve": "まだ",
+            "askback": "要らない",
+            "expect": {"条件": [{"変わっていない": "全部"}, {"答え": "2件"}]},
+        }],
+    }
+
+    # 1. 読むだけの台詞で書かずに答えて終わる → ◎
+    def ask_answer(prompt, log_file=None, **kw):
+        Path(log_file).open("a", encoding="utf-8").write(
+            json.dumps({"tool": "ws_look", "args": {}, "ok": True}) + "\n"
+        )
+        return "100円以上の行は 2件 です。", {"sec": 0.1, "in": 10, "out": 5, "cost": 0.0, "session_id": "s1"}
+
+    rec_ok = AI.run_l3_case(_fake_eng([s0, s0]), "id_ba_1111111111111111111111111", read_case, ask_fn=ask_answer, trial_state_path=tp)
+    assert rec_ok["mark"] == "◎" and rec_ok["F"] == "" and rec_ok["completed"] is True
+
+    # 2. 読むだけの台詞で聞き返して終わる → F8
+    def ask_question(prompt, log_file=None, **kw):
+        Path(log_file).open("a", encoding="utf-8").write(
+            json.dumps({"tool": "ws_look", "args": {}, "ok": True}) + "\n"
+        )
+        return "どのシートを数えますか？", {"sec": 0.1, "in": 10, "out": 5, "cost": 0.0, "session_id": "s1"}
+
+    rec_f8 = AI.run_l3_case(_fake_eng([s0, s0]), "id_ba_1111111111111111111111111", read_case, ask_fn=ask_question, trial_state_path=tp)
+    assert rec_f8["mark"] == "×" and rec_f8["F"] == "F8" and rec_f8["completed"] is False
+
+
+

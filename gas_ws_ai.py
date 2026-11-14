@@ -475,9 +475,25 @@ def _has_r2_report(ai_text):
     return has_count or has_loc
 
 
+_QUESTION_PAT = re.compile(
+    r"([?？]|教えてください|確認させて|確認をお願い|どちら|どれを|どれに|よろしいですか|よいですか|いいですか|でしょうか|ますか[。！\s]*$|お選びください|ご指示ください)"
+)
+
+
+def _is_question_reply(ai_text):
+    """AI の最後の返事が聞き返し（質問の形）かどうか"""
+    return bool(ai_text and _QUESTION_PAT.search(ai_text))
+
+
 def _expect_unchanged_only(turn):
     conds = (turn.get("expect") or {}).get("条件") or []
-    return bool(conds) and all("変わっていない" in c for c in conds)
+    return bool(conds) and all(isinstance(c, dict) and "変わっていない" in c for c in conds)
+
+
+def _expect_read_or_unchanged(turn):
+    """期待が「変わっていない」または「答え」（読むだけ・変えなくてよい頼み）か"""
+    conds = (turn.get("expect") or {}).get("条件") or []
+    return bool(conds) and all(isinstance(c, dict) and ("変わっていない" in c or "答え" in c) for c in conds)
 
 
 def _is_state_same(before, after, is_doc=False):
@@ -486,12 +502,19 @@ def _is_state_same(before, after, is_doc=False):
     return J.promise_fingerprints(before) == J.promise_fingerprints(after)
 
 
-def _check_turn_expect(expect, before, after, kind="値を直す・計算", tinfo=None):
-    """条件に 'シート' 指定がある別シートの条件は、そのシート用の tinfo を作って渡す（合計行除外のため）"""
+def _check_turn_expect(expect, before, after, kind="値を直す・計算", tinfo=None, ai_text=""):
+    """条件に 'シート' 指定がある別シートの条件は、そのシート用の tinfo を作って渡す（合計行除外のため）。'答え' は返答文を見る"""
     if "模範と同じ" in expect:
         return J.check_expect(expect, before, after, after, kind, tinfo)
     reasons = []
     for c in expect.get("条件", []):
+        if isinstance(c, dict) and "答え" in c:
+            want = c["答え"]
+            wants = want if isinstance(want, list) else [want]
+            for w in wants:
+                if str(w) not in (ai_text or ""):
+                    reasons.append(f"返答に答え「{w}」が含まれていません")
+            continue
         ti = tinfo
         if isinstance(c, dict) and "シート" in c:
             sname = c["シート"]
@@ -603,6 +626,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
             askback = turn.get("askback", "どちらでも")
             expect = turn.get("expect") or {}
             unchanged_only = _expect_unchanged_only(turn)
+            read_or_unchanged = _expect_read_or_unchanged(turn)
             max_calls = turn["max_calls"] if "max_calls" in turn else (case["max_calls"] if "max_calls" in case else 8)
 
             if askback == "要る":
@@ -645,6 +669,9 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
 
                 # 聞き返し・断り判定（設計書 3.3）。ws_do エラーで終わった場合は F3 等へ流す
                 if writes == 0 and same and not has_do_err:
+                    # 読むだけ・変えなくてよい頼みで、AI が質問せず答えて終わった場合はそのまま完了
+                    if read_or_unchanged and not _is_question_reply(ai_text):
+                        break
                     # 期待が「変わっていない」だけ（または askback=="要る" で待つのみ）なら、ここでターン終了
                     if unchanged_only or (askback == "要る" and not (case.get("if_asked") and _match_if_asked(ai_text, case.get("if_asked"))[0] and ti == len(case["turns"]) - 1)):
                         break
@@ -668,10 +695,11 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
             all_writes = sum(1 for lg in turn_logs if lg.get("tool") in ("ws_do", "ws_undo") and lg.get("wrote"))
             all_same = _is_state_same(before_snap, after_snap, primary_doc)
             is_askback_end = (all_writes == 0 and all_same)
+            asked_user = _is_question_reply(ai_text)
 
             if askback == "要る" and is_askback_end:
                 ask_stats["need_asked"] += 1
-            elif askback == "要らない" and is_askback_end:
+            elif askback == "要らない" and is_askback_end and asked_user:
                 ask_stats["noneed_asked"] += 1
 
             # 判定（保留でなければ各条件と原因印を見る）
@@ -682,7 +710,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
                 arg_errs = [lg for lg in turn_logs if lg.get("tool") == "ws_do" and lg.get("error") and any(w in lg["error"] for w in ("引数", "必須", "ありません", "読めません"))]
 
                 # 期待チェック
-                exp_ok, exp_why = _check_turn_expect(expect, before_snap, after_snap, case.get("kind", "値を直す・計算"), tinfo)
+                exp_ok, exp_why = _check_turn_expect(expect, before_snap, after_snap, case.get("kind", "値を直す・計算"), tinfo, ai_text=ai_text)
                 rule_why = [] if primary_doc else J.check_rules(before_snap, after_snap, may_change=tuple(case.get("may_change") or []), tinfo=tinfo)
 
                 if approve == "まだ" and ok_true_calls:
@@ -700,7 +728,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
                 elif askback == "要る" and not is_askback_end:
                     turn_mark, turn_f = "×", "F7"
                     turn_why.append("聞き返し: 要る の台詞で書き込んだ")
-                elif askback == "要らない" and is_askback_end and not unchanged_only:
+                elif askback == "要らない" and is_askback_end and (asked_user or not read_or_unchanged):
                     turn_mark, turn_f = "×", "F8"
                     turn_why.append("聞き返し: 要らない の台詞で書かずに終わった")
                 elif rule_why:
@@ -716,7 +744,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
                 elif (turn.get("check_r2") or "R2" in (case.get("tags") or [])) and all_writes > 0 and not _has_r2_report(ai_text):
                     turn_mark, turn_f = "×", "R2"
                     turn_why.append("消した件数・行・列が最後の発言に無い")
-                elif is_askback_end and (askback == "要る" or unchanged_only):
+                elif is_askback_end and askback == "要る":
                     turn_mark = "△"
                 else:
                     turn_mark = "◎"
@@ -824,7 +852,13 @@ def run_l3(set_name, model="haiku", case_ids=None, times=1, jobs=1, refail=False
     cases, sealed = load_set(set_name, trial_state_path=trial_state_path)
     if case_ids:
         cases = [c for c in cases if c["id"] in set(case_ids)]
-    rdir = Path(runs_dir) if runs_dir else RUNS_DIR
+    if runs_dir:
+        rdir = Path(runs_dir)
+    elif sealed:
+        sd = json.loads((Path(trial_state_path) if trial_state_path else HERE / ".ws_trial.json").read_text(encoding="utf-8")).get("sealed_dir")
+        rdir = (Path(sd) / "runs") if sd else RUNS_DIR
+    else:
+        rdir = RUNS_DIR
     rdir.mkdir(parents=True, exist_ok=True)
     rf = Path(resume) if resume else rdir / f"l3_{set_name}_{model}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
 
@@ -894,7 +928,13 @@ def run_l3_golden(set_name, case_ids=None, jobs=1, out=print, runs_dir=None, tri
     cases, sealed = load_set(set_name, trial_state_path=trial_state_path)
     if case_ids:
         cases = [c for c in cases if c["id"] in set(case_ids)]
-    rdir = Path(runs_dir) if runs_dir else RUNS_DIR
+    if runs_dir:
+        rdir = Path(runs_dir)
+    elif sealed:
+        sd = json.loads((Path(trial_state_path) if trial_state_path else HERE / ".ws_trial.json").read_text(encoding="utf-8")).get("sealed_dir")
+        rdir = (Path(sd) / "runs") if sd else RUNS_DIR
+    else:
+        rdir = RUNS_DIR
     rdir.mkdir(parents=True, exist_ok=True)
     rf = rdir / f"l3_golden_{set_name}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
 
@@ -1016,6 +1056,85 @@ def summarize_l3(rows):
     }
 
 
+def rescore_record(rec, case):
+    """記録済みの 1 本を、直した採点基準（F8 は質問で終わったときだけ等）で撃たずに付け直す"""
+    new_rec = json.loads(json.dumps(rec, ensure_ascii=False))
+    turns_spec = case.get("turns") or []
+    overall_mark = "◎"
+    overall_f = ""
+    overall_why = []
+    noneed_asked = 0
+
+    for idx, tr in enumerate(new_rec.get("turns") or []):
+        if idx >= len(turns_spec):
+            break
+        ts = turns_spec[idx]
+        askback = ts.get("askback", "どちらでも")
+        read_or_unchanged = _expect_read_or_unchanged(ts)
+        ai_head = tr.get("ai_head") or ""
+        asked_user = _is_question_reply(ai_head)
+        writes = tr.get("writes", 0)
+
+        # 書き込み 0 で F8 / 保留 / △ になっていたターンを再判定
+        if writes == 0 and tr.get("F") == "F8":
+            if askback == "要らない" and not asked_user and read_or_unchanged:
+                tr["mark"] = "◎"
+                tr["F"] = ""
+                tr["why"] = []
+        elif writes == 0 and tr.get("mark") == "保留":
+            if read_or_unchanged and not asked_user:
+                tr["mark"] = "◎"
+                tr["F"] = ""
+                tr["why"] = []
+        elif writes == 0 and tr.get("mark") == "△" and askback != "要る" and read_or_unchanged and not asked_user:
+            tr["mark"] = "◎"
+
+        if askback == "要らない" and writes == 0 and asked_user:
+            noneed_asked += 1
+
+        tm = tr.get("mark")
+        if tm == "保留":
+            overall_mark = "保留"
+            overall_f = ""
+            overall_why = tr.get("why") or []
+            break
+        if tm == "×":
+            overall_mark = "×"
+            overall_f = tr.get("F") or ""
+            overall_why = tr.get("why") or []
+            break
+        if tm == "△" and overall_mark == "◎":
+            overall_mark = "△"
+
+    if new_rec.get("mark") not in ("枠切れ", "時間切れ"):
+        new_rec["mark"] = overall_mark
+        new_rec["F"] = overall_f
+        new_rec["why"] = overall_why
+        new_rec["completed"] = overall_mark in ("◎", "△")
+    if isinstance(new_rec.get("ask_stats"), dict):
+        new_rec["ask_stats"]["noneed_asked"] = noneed_asked
+    return new_rec
+
+
+def rescore_file(run_path, set_name="学ぶ", out_path=None, trial_state_path=None):
+    """jsonl 記録ファイルを撃たずに再採点し、(更新後の行リスト, 変わった本のリスト [(id, 前, 後)], 出力パス) を返す"""
+    cases, _ = load_set(set_name, trial_state_path=trial_state_path)
+    by_id = {c["id"]: c for c in cases}
+    p = Path(run_path)
+    rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    new_rows = []
+    changed = []
+    for r in rows:
+        c = by_id.get(r["id"])
+        nr = rescore_record(r, c) if c else r
+        if (nr.get("mark"), nr.get("F")) != (r.get("mark"), r.get("F")):
+            changed.append((r["id"], f"{r.get('mark')}{(':' + r['F']) if r.get('F') else ''}", f"{nr.get('mark')}{(':' + nr['F']) if nr.get('F') else ''}"))
+        new_rows.append(nr)
+    dst = Path(out_path) if out_path else p
+    dst.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in new_rows) + ("\n" if new_rows else ""), encoding="utf-8")
+    return new_rows, changed, dst
+
+
 def format_report(run_path):
     p = Path(run_path)
     rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()] if p.exists() else []
@@ -1040,7 +1159,7 @@ def main(argv):
     pr = sub.add_parser("run")
     pr.add_argument("--set", dest="set_name", required=True, choices=list(SET_MAP))
     pr.add_argument("--case", action="append", default=[])
-    pr.add_argument("--model", default="haiku", choices=["haiku", "sonnet"])
+    pr.add_argument("--model", default="haiku", choices=["haiku", "sonnet", "opus"])
     pr.add_argument("--times", type=int, default=1)
     pr.add_argument("--jobs", type=int, default=1)
     pr.add_argument("--refail", action="store_true")
@@ -1056,6 +1175,8 @@ def main(argv):
 
     prep = sub.add_parser("report")
     prep.add_argument("path")
+    prep.add_argument("--rescore", action="store_true")
+    prep.add_argument("--set", dest="set_name", default="学ぶ", choices=list(SET_MAP))
 
     a = p.parse_args(argv)
     if a.cmd == "run":
@@ -1071,6 +1192,9 @@ def main(argv):
         print(f"模範の再生 {len(results)} 本・通らない {bad} 本・記録 {rf}")
         return 1 if bad else 0
     if a.cmd == "report":
+        if a.rescore:
+            _, changed, dst = rescore_file(a.path, set_name=a.set_name)
+            print(f"付け直し完了（変更 {len(changed)} 件）: " + (", ".join(f"{cid} {b}→{af}" for cid, b, af in changed) or "変更なし"))
         print(format_report(a.path))
         return 0
     return 1
