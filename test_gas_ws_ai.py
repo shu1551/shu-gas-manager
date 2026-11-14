@@ -570,6 +570,49 @@ def test_hyde_receiver_timeout_and_sandbox_guard(tmp_path):
     assert not (hdir_p / "resume.txt").exists()
 
 
+def test_hyde_log_offset_counts_lines_not_bytes(tmp_path):
+    """前の本の記録が 3 行ある ws_log.jsonl に続けて書いても、今の本の呼び出しだけが数えられる"""
+    import threading
+    import time
+
+    tp = _trial_state(tmp_path)
+    s0 = _make_snap([["日付", "得意先", "金額"], ["2026-10-01", "B社", 100]])
+    hdir = tmp_path / "hyde_off"
+    hdir.mkdir(parents=True, exist_ok=True)
+    log_p = hdir / "ws_log.jsonl"
+    prev_lines = [
+        json.dumps({"tool": "ws_look", "args": {}}, ensure_ascii=False),
+        json.dumps({"tool": "ws_find", "args": {}}, ensure_ascii=False),
+        json.dumps({"tool": "ws_do", "args": {"op": "delete_row", "approved": True}}, ensure_ascii=False),
+    ]
+    log_p.write_text("\n".join(prev_lines) + "\n", encoding="utf-8")
+
+    def fake_recv():
+        next_p = hdir / "next.json"
+        done_p = hdir / "done.json"
+        for _ in range(100):
+            if next_p.exists():
+                d = json.loads(next_p.read_text(encoding="utf-8"))
+                with log_p.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"tool": "ws_look", "args": {}}, ensure_ascii=False) + "\n")
+                done_p.write_text(json.dumps({"case": d["case"], "turn": d["turn"], "reply": "見ました"}, ensure_ascii=False), encoding="utf-8")
+                return
+            time.sleep(0.02)
+
+    case = {
+        "id": "l3-hyde-off",
+        "table": "uriage_base",
+        "turns": [{"say": "見て", "approve": "まだ", "askback": "要らない", "expect": {"条件": []}}],
+    }
+    th = threading.Thread(target=fake_recv, daemon=True)
+    th.start()
+    rec = AI.run_l3_case(_fake_eng([s0, s0]), "id_ba_1111111111111111111111111", case, model="hyde", trial_state_path=tp, hyde_dir=hdir, hyde_poll=0.02)
+    th.join(timeout=2)
+    assert rec["turns"][0]["tool_calls"] == 1
+    assert not rec.get("no_tool")
+
+
+
 
 
 

@@ -718,7 +718,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
     tinfo = T.table_info(T.load_table(tname)) if tname else None
 
     session_id = None
-    log_offset = log_file.stat().st_size if (use_hyde and log_file.exists()) else 0
+    log_offset = len(log_file.read_text(encoding="utf-8").splitlines()) if (use_hyde and log_file.exists()) else 0
     turn_results = []
     ai_total = {"calls": 0, "sec": 0.0, "in": 0, "out": 0, "cost": 0.0}
     snap_sec = 0.0
