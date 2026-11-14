@@ -17,6 +17,8 @@ def _run_node(js_body: str):
         + (ROOT / "ws_shelves" / "sheet_make.gs").read_text(encoding="utf-8")
         + "\n"
         + (ROOT / "ws_shelves" / "sheet_filter.gs").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "ws_shelves" / "sheet_range.gs").read_text(encoding="utf-8")
     )
     script = (
         "var PropertiesService={getScriptProperties:function(){return {getProperty:function(){return null;},setProperty:function(){}};}};\n"
@@ -223,8 +225,80 @@ def test_ws_look_and_shelves_prevent_f10_and_f4():
     assert "ok 不要" in cards["seiri"]["diff"]
     assert "あいうえお順" in cards["sort"]["diff"]
     assert "既定は「集計」" in cards["summary"]["diff"]
-    assert "元表の 2 列" in cards["chart.new"]["diff"]
-    assert "range に" in cards["chart.new"]["diff"]
+    assert "元表 2 列" in cards["chart.new"]["diff"]
+    assert "edit" in cards["chart.new"]["diff"]
+    assert "消さずに chart.new" in cards["chart.delete"]["diff"]
     assert "他列の値が違っても" in cards["dedupe"]["diff"]
+    assert "シート全体" in cards["clear.values"]["diff"]
+
+
+def test_chart_new_edit_in_place_without_delete():
+    out = _run_node("""
+      var updated = 0, inserted = 0, opts = { title: '分類ごとの現在庫' };
+      var ch = {
+        getOptions: function(){ return { get: function(k){ return opts[k]; } }; },
+        modify: function(){
+          var nextOpts = { title: opts.title };
+          return {
+            setChartType: function(){ return this; },
+            setOption: function(k, v){ nextOpts[k] = v; return this; },
+            setPosition: function(){ return this; },
+            clearRanges: function(){ return this; },
+            addRange: function(){ return this; },
+            build: function(){ return { _opts: nextOpts }; }
+          };
+        }
+      };
+      var sh = {
+        getName: function(){ return '在庫一覧'; },
+        getCharts: function(){ return [ch]; },
+        updateChart: function(built){ updated++; opts = built._opts; },
+        insertChart: function(){ inserted++; }
+      };
+      var ctx = { curSheet: '在庫一覧', logs: [], ss: {} };
+      function sheetCtx_(){ return sh; }
+      function chg_(c, s, a1, msg){ c.logs.push({sh: s.getName(), a1: a1, msg: msg}); }
+      SHELF['chart.new'](ctx, { edit: true, title: '分類別在庫' });
+      __out = { updated: updated, inserted: inserted, title: opts.title, log: ctx.logs[0] };
+    """)
+    assert out["updated"] == 1
+    assert out["inserted"] == 0
+    assert out["title"] == "分類別在庫"
+    assert "分類別在庫" in out["log"]["msg"]
+
+
+def test_clear_values_handles_whole_sheet_and_wide_a1():
+    out = _run_node("""
+      var calls = [], cleared = [];
+      var mkRg = function(a1, rows, cols) {
+        return {
+          getA1Notation: function(){ return a1; },
+          getNumRows: function(){ return rows; },
+          getNumColumns: function(){ return cols; },
+          clearContent: function(){ cleared.push(a1); }
+        };
+      };
+      var sh = {
+        getName: function(){ return '名簿'; },
+        getMaxRows: function(){ return 25; },
+        getMaxColumns: function(){ return 6; },
+        getDataRange: function(){ calls.push('dataRange'); return mkRg('A1:F21', 21, 6); },
+        getRange: function(spec){
+          calls.push(spec);
+          if (typeof spec === 'string') throw new Error('範囲は見つかりませんでした');
+          return mkRg('R' + arguments[0] + 'C' + arguments[1] + ':' + arguments[2] + 'x' + arguments[3], arguments[2], arguments[3]);
+        }
+      };
+      var ctx = { logs: [] };
+      function sheetCtx_(){ return sh; }
+      function wideRange_(){ return true; }
+      function guardDelete_(){ }
+      function chg_(c, s, a1, msg){ c.logs.push({a1: a1, msg: msg}); }
+      SHELF['clear.values'](ctx, {});
+      SHELF['clear.values'](ctx, { range: 'シート全体' });
+      SHELF['clear.values'](ctx, { range: 'A:Z' });
+      __out = { calls: calls, cleared: cleared };
+    """)
+    assert out["cleared"] == ["A1:F21", "A1:F21", "R1C1:25x6"]
 
 

@@ -195,35 +195,34 @@ SHELF['pivot.new'] = function (ctx, op) {
 };
 
 // 棚: chart.new
-// 題: グラフを作る
+// 題: グラフを作る・直す
 // 分類: 集計
-// 語: グラフを作|グラフにして|グラフを入れ|棒グラフ|折れ線|円グラフ|推移
-// 違い: 新シートを作らず元表の列だけで描く（「〇〇ごとの△△をグラフにして」でも、集計表を作ってと頼まれていなければ summary でシートを足さず元表の 2 列 range="C1:C21,G1:G21" 等でそのまま描く）。集計表も頼まれたときは summary + chart.new（range に「集計」や「シート!範囲」指定可）。ピボットは pivot.new
-// 引数: range=範囲, type=選択(column/bar/line/pie/area/scatter)=column, title=文字, at=範囲
-// 例: 「売上の棒グラフを作って」 → {"shelf":"chart.new","type":"column"}
+// 語: グラフを作|グラフにして|グラフを入れ|棒グラフ|折れ線|円グラフ|推移|グラフのタイトル
+// 違い: タイトルや種類を変えるときは chart.delete で消して作り直さず、{"shelf":"chart.new","edit":true,"title":"..."} で既存グラフを変更する（target 指定可）。「〇〇ごとの△△をグラフにして」でも集計表作成の頼みが無ければ summary で新シートを足さず元表 2 列（例 "C1:C21,G1:G21"）でそのまま描く。ピボットは pivot.new
+// 引数: range=範囲, type=選択(column/bar/line/pie/area/scatter)=column, title=文字, at=範囲, target=文字, edit=真偽
 // 例: 「売上の推移を折れ線グラフにして」 → {"shelf":"chart.new","type":"line","title":"売上推移"}
+// 例: 「今あるグラフのタイトルを分類別在庫に変えて」 → {"shelf":"chart.new","edit":true,"title":"分類別在庫"}
 // 触る: グラフ
 // 控え: 今
 SHELF['chart.new'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
+  var charts = sh.getCharts ? sh.getCharts() : [];
+  var isEdit = Boolean(op.edit || op.target || (!op.range && !op.at && !op.type && op.title && charts.length === 1));
   var rangeList = op.range ? String(op.range).split(/\s*,\s*/).filter(function (s) { return s; }) : [];
-  var ranges = rangeList.length ? rangeList.map(function (r) {
-    if (r.indexOf('!') >= 0) return ctx.ss.getRange(r);
-    var refSh = r.indexOf(':') < 0 ? ctx.ss.getSheetByName(r) : null;
-    if (refSh) {
-      var rt = findTable_(refSh);
-      return rt ? refSh.getRange(rt.headerRow, rt.firstCol, rt.lastData - rt.headerRow + 1, rt.lastCol - rt.firstCol + 1) : refSh.getDataRange();
-    }
-    return sh.getRange(r);
-  }) : [(function () {
-    var t = findTable_(sh);
-    return t ? sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
-  })()];
-  var full = ranges[0];
-  if (!full || full.getLastRow() === 0 || full.getLastColumn() === 0) {
-    throw new ArgError('グラフにするデータがありません');
-  }
-  var typeStr = (op.type || 'column').toLowerCase();
+  var resolveRanges_ = function () {
+    return rangeList.length ? rangeList.map(function (r) {
+      if (r.indexOf('!') >= 0) return ctx.ss.getRange(r);
+      var refSh = r.indexOf(':') < 0 ? ctx.ss.getSheetByName(r) : null;
+      if (refSh) {
+        var rt = findTable_(refSh);
+        return rt ? refSh.getRange(rt.headerRow, rt.firstCol, rt.lastData - rt.headerRow + 1, rt.lastCol - rt.firstCol + 1) : refSh.getDataRange();
+      }
+      return sh.getRange(r);
+    }) : [(function () {
+      var t = findTable_(sh);
+      return t ? sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
+    })()];
+  };
   var typeMap = {
     column: Charts.ChartType.COLUMN,
     bar: Charts.ChartType.BAR,
@@ -232,9 +231,50 @@ SHELF['chart.new'] = function (ctx, op) {
     area: Charts.ChartType.AREA,
     scatter: Charts.ChartType.SCATTER
   };
-  var chartType = typeMap[typeStr];
-  if (!chartType) throw new ArgError('種類「' + typeStr + '」は使えません（column/bar/line/pie/area/scatter）');
-  var b = sh.newChart().setChartType(chartType);
+  var typeStr = op.type ? String(op.type).toLowerCase() : '';
+  if (typeStr && !typeMap[typeStr]) throw new ArgError('種類「' + typeStr + '」は使えません（column/bar/line/pie/area/scatter）');
+
+  if (isEdit) {
+    if (!charts.length) throw new ArgError('シート「' + sh.getName() + '」に変更するグラフがありません');
+    var targetChart = null;
+    if (op.target && op.target !== '*' && op.target !== 'last') {
+      for (var i = 0; i < charts.length; i++) {
+        var ct = charts[i].getOptions() && charts[i].getOptions().get('title');
+        if (ct === op.target) { targetChart = charts[i]; break; }
+      }
+      if (!targetChart) throw new ArgError('グラフ「' + op.target + '」が見つかりませんでした');
+    } else {
+      targetChart = charts[charts.length - 1];
+    }
+    var mb = targetChart.modify();
+    if (typeStr) mb.setChartType(typeMap[typeStr]);
+    if (op.title !== undefined && op.title !== null) mb.setOption('title', op.title);
+    if (op.at) {
+      var editAt = sh.getRange(op.at);
+      mb.setPosition(editAt.getRow(), editAt.getColumn(), 0, 0);
+    }
+    if (rangeList.length) {
+      var editRanges = resolveRanges_();
+      if (mb.clearRanges) mb.clearRanges();
+      editRanges.forEach(function (rg) { mb.addRange(rg); });
+    }
+    sh.updateChart(mb.build());
+    ctx.curSheet = sh.getName();
+    var parts = [];
+    if (op.title !== undefined && op.title !== null) parts.push('タイトル「' + op.title + '」');
+    if (typeStr) parts.push('種類 ' + typeStr);
+    if (op.at) parts.push('位置 ' + op.at);
+    chg_(ctx, sh, op.target || '', 'グラフを変更' + (parts.length ? '（' + parts.join('・') + '）' : ''));
+    return;
+  }
+
+  var ranges = resolveRanges_();
+  var full = ranges[0];
+  if (!full || full.getLastRow() === 0 || full.getLastColumn() === 0) {
+    throw new ArgError('グラフにするデータがありません');
+  }
+  typeStr = typeStr || 'column';
+  var b = sh.newChart().setChartType(typeMap[typeStr]);
   ranges.forEach(function (rg) { b.addRange(rg); });
   if (op.title) b.setOption('title', op.title);
   if (op.at) {
@@ -260,7 +300,7 @@ SHELF['chart.new'] = function (ctx, op) {
 // 題: グラフを消す
 // 分類: 集計
 // 語: グラフを消|グラフを削除|グラフをなく|グラフはいらない|グラフ削除
-// 違い: ピボットテーブルを消すなら sheet.delete。表の消去なら range.clear
+// 違い: タイトルや種類を変えるときは消さずに chart.new（edit:true）を使う。ピボットテーブルを消すなら sheet.delete。表の消去なら range.clear
 // 引数: title=文字
 // 例: 「グラフを消して」 → {"shelf":"chart.delete"}
 // 例: 「売上推移グラフを削除して」 → {"shelf":"chart.delete","title":"売上推移"}

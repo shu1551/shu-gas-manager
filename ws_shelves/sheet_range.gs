@@ -80,18 +80,43 @@ SHELF['find'] = function (ctx, op) {
 // 題: 範囲の値を消す（書式は残す）
 // 分類: 範囲
 // 語: 値を消|値をクリア|中身を消|中身を空|入力を消|数字を消|データを消
-// 違い: 書式ごと消すなら clear.all。書式だけなら clear.format。行ごと消すなら rows.delete
-// 引数: range*=範囲, only=選択(all/constants)=all
+// 違い: 範囲を省略するとシート全体の値を消す。書式ごと消すなら clear.all。書式だけなら clear.format。行ごと消すなら rows.delete
+// 引数: range=範囲, only=選択(all/constants)=all
 // 例: 「B2からD10の中身を消して」 → {"shelf":"clear.values","range":"B2:D10"}
 // 例: 「数字だけ消して式は残して」 → {"shelf":"clear.values","range":"A2:F50","only":"constants"}
 // 危ない: 消す
 // 触る: 値
 // 控え: 今
 SHELF['clear.values'] = function (ctx, op) {
-  need_(op, ['range']);
   var sh = sheetCtx_(ctx, op);
-  var rg = sh.getRange(op.range);
-  guardDelete_(ctx, '範囲「' + op.range + '」の値を消します', wideRange_(sh, rg), rg.getNumRows() * rg.getNumColumns() + ' セル');
+  var raw = op.range ? String(op.range).trim() : '';
+  var rg, label;
+  if (!raw || /^(all|\*|全体|全セル|シート全体|sheet)$/i.test(raw)) {
+    rg = sh.getDataRange();
+    label = 'シート全体（' + rg.getA1Notation() + '）';
+  } else {
+    var fixed = raw.replace(/^([A-Za-z]+)1:([A-Za-z]+)$/, '$1:$2');
+    try {
+      rg = sh.getRange(fixed);
+    } catch (e) {
+      var m = fixed.match(/^([A-Za-z]+)(\d*):([A-Za-z]+)(\d*)$/);
+      if (!m) throw e;
+      var colToNum_ = function (col) {
+        var n = 0; col = col.toUpperCase();
+        for (var i = 0; i < col.length; i++) n = n * 26 + (col.charCodeAt(i) - 64);
+        return n;
+      };
+      var maxR = sh.getMaxRows(), maxC = sh.getMaxColumns();
+      var c1 = colToNum_(m[1]), c2 = colToNum_(m[3]);
+      var r1 = m[2] ? parseInt(m[2], 10) : 1, r2 = m[4] ? parseInt(m[4], 10) : maxR;
+      if (c1 < 1 || c1 > maxC || r1 < 1 || r1 > maxR) throw e;
+      c2 = Math.min(c2, maxC); r2 = Math.min(r2, maxR);
+      if (c2 < c1 || r2 < r1) throw e;
+      rg = sh.getRange(r1, c1, r2 - r1 + 1, c2 - c1 + 1);
+    }
+    label = '範囲「' + op.range + '」';
+  }
+  guardDelete_(ctx, label + 'の値を消します', wideRange_(sh, rg), rg.getNumRows() * rg.getNumColumns() + ' セル');
   var only = op.only || 'all';
   if (only === 'constants') {
     var formulas = rg.getFormulas();
