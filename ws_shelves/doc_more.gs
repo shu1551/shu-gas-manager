@@ -231,9 +231,13 @@ SHELF['doc.delete'] = docKind_(function (ctx, op) {
     var removed = 0;
     for (var j = body.getNumChildren() - 1; j >= 0; j--) {
       var ch = body.getChild(j);
-      if (ch.getType() === DocumentApp.ElementType.PARAGRAPH && ch.asParagraph().getText().trim() === findStr) {
-        body.removeChild(ch);
-        removed++;
+      if (ch.getType() === DocumentApp.ElementType.PARAGRAPH) {
+        var tx = ch.asParagraph().getText().trim();
+        if (tx === findStr || tx.indexOf(findStr) >= 0) {
+          body.removeChild(ch);
+          removed++;
+          break;
+        }
       }
     }
     if (!removed) throw new ArgError('「' + findStr + '」の段落が見つかりません');
@@ -512,8 +516,22 @@ SHELF['doc.toc'] = docKind_(function (ctx, op) {
     var h = headingAt_(body, op.under);
     idx = h.idx + 1;
   }
-  body.insertTableOfContents(idx);
-  chg_(ctx, null, '位置 ' + idx, '目次（Table of Contents）を挿入');
+  var pars = body.getParagraphs(), headings = [];
+  for (var i = 0; i < pars.length; i++) {
+    var hd = pars[i].getHeading();
+    if (hd !== DocumentApp.ParagraphHeading.NORMAL) {
+      headings.push({ text: pars[i].getText(), level: hd });
+    }
+  }
+  var pTitle = body.insertParagraph(idx, '【目次】');
+  pTitle.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  var inserted = 1;
+  for (var j = 0; j < headings.length; j++) {
+    var indent = headings[j].level === DocumentApp.ParagraphHeading.HEADING3 ? '    - ' : '・ ';
+    body.insertParagraph(idx + inserted, indent + headings[j].text);
+    inserted++;
+  }
+  chg_(ctx, null, '位置 ' + idx, '目次（見出し ' + headings.length + ' 件）を挿入');
 });
 
 // 棚: doc.link
@@ -583,19 +601,28 @@ SHELF['doc.from.sheet'] = docKind_(function (ctx, op) {
 // 触る: シート構成
 SHELF['doc.template'] = docKind_(function (ctx, op) {
   need_(op, ['vars']);
-  var doc = ctx.doc, file = DriveApp.getFileById(doc.getId());
+  var doc = ctx.doc;
   var title = op.title || ('WS試験_' + doc.getName().replace(/^WS試験_/, '') + '_作成');
   if (title.indexOf('WS試験_') !== 0) title = 'WS試験_' + title;
-  var copyFile = file.makeCopy(title, file.getParents().hasNext() ? file.getParents().next() : DriveApp.getRootFolder());
-  var newDoc = DocumentApp.openById(copyFile.getId());
-  var body = newDoc.getBody();
+  var newDoc = DocumentApp.create(title);
+  var srcBody = doc.getBody(), dstBody = newDoc.getBody();
+  for (var i = 0; i < srcBody.getNumChildren(); i++) {
+    var elem = srcBody.getChild(i).copy();
+    var type = elem.getType();
+    if (type === DocumentApp.ElementType.PARAGRAPH) dstBody.appendParagraph(elem);
+    else if (type === DocumentApp.ElementType.TABLE) dstBody.appendTable(elem);
+    else if (type === DocumentApp.ElementType.LIST_ITEM) dstBody.appendListItem(elem);
+  }
+  if (dstBody.getNumChildren() > 1 && dstBody.getChild(0).getText() === '') {
+    dstBody.removeChild(dstBody.getChild(0));
+  }
   var vars = op.vars || {};
   Object.keys(vars).forEach(function (k) {
-    body.replaceText('\\{\\{' + k + '\\}\\}', String(vars[k]));
+    dstBody.replaceText('\\{\\{' + k + '\\}\\}', String(vars[k]));
   });
   newDoc.saveAndClose();
-  note_(ctx, '作成した文書: ' + title + ' (ID: ' + copyFile.getId() + ')');
-  chg_(ctx, null, title, 'ひな形から新規文書を作成（ID: ' + copyFile.getId() + '）');
+  note_(ctx, '作成した文書: ' + title + ' (ID: ' + newDoc.getId() + ')');
+  chg_(ctx, null, title, 'ひな形から新規文書を作成（ID: ' + newDoc.getId() + '）');
 });
 
 // 棚: doc.copy
@@ -608,10 +635,22 @@ SHELF['doc.template'] = docKind_(function (ctx, op) {
 // 例: 「この議事録を写して来月分を作って」 → {"shelf":"doc.copy","title":"来月分議事録"}
 // 触る: シート構成
 SHELF['doc.copy'] = docKind_(function (ctx, op) {
-  var doc = ctx.doc, file = DriveApp.getFileById(doc.getId());
+  var doc = ctx.doc;
   var title = op.title || ('WS試験_' + doc.getName().replace(/^WS試験_/, '') + '_コピー');
   if (title.indexOf('WS試験_') !== 0) title = 'WS試験_' + title;
-  var copyFile = file.makeCopy(title, file.getParents().hasNext() ? file.getParents().next() : DriveApp.getRootFolder());
-  note_(ctx, '複製した文書: ' + title + ' (ID: ' + copyFile.getId() + ')');
-  chg_(ctx, null, title, '文書を複製（ID: ' + copyFile.getId() + '）');
+  var newDoc = DocumentApp.create(title);
+  var srcBody = doc.getBody(), dstBody = newDoc.getBody();
+  for (var i = 0; i < srcBody.getNumChildren(); i++) {
+    var elem = srcBody.getChild(i).copy();
+    var type = elem.getType();
+    if (type === DocumentApp.ElementType.PARAGRAPH) dstBody.appendParagraph(elem);
+    else if (type === DocumentApp.ElementType.TABLE) dstBody.appendTable(elem);
+    else if (type === DocumentApp.ElementType.LIST_ITEM) dstBody.appendListItem(elem);
+  }
+  if (dstBody.getNumChildren() > 1 && dstBody.getChild(0).getText() === '') {
+    dstBody.removeChild(dstBody.getChild(0));
+  }
+  newDoc.saveAndClose();
+  note_(ctx, '複製した文書: ' + title + ' (ID: ' + newDoc.getId() + ')');
+  chg_(ctx, null, title, '文書を複製（ID: ' + newDoc.getId() + '）');
 });
