@@ -20,9 +20,11 @@ import gas_ws_trial as GT
 HERE = Path(__file__).resolve().parent
 CASES_DIR = HERE / "ws_trial" / "cases"
 RUNS_DIR = HERE / "ws_trial" / "runs"
+HYDE_DIR = Path(r"C:\Users\shu\Desktop\WS受け手")
 
 SANDBOX_FILES_FIXED = GT.SANDBOX_SHEETS + GT.SANDBOX_DOCS  # 試験場 5 つ
 AI_TIMEOUT = 180
+HYDE_TIMEOUT = 300
 MAX_ASKBACK_REPLIES = 2
 
 SYSTEM_PROMPT = (
@@ -55,9 +57,12 @@ class SandboxWorkspace(GT.TrialEngine):
         files = st.get("files") or {}
         out = {}
         for name in SANDBOX_FILES_FIXED:
-            if name in files:
+            # lane 2 以降は「WS試験_場」をその lane の試験場に割り当てる
+            key = f"WS試験_場{self.lane}" if (name == "WS試験_場" and self.lane and self.lane != "1") else name
+            fid = files.get(key) or files.get(name)
+            if fid:
                 kind = "doc" if name in GT.SANDBOX_DOCS else "sheet"
-                out[name] = {"id": files[name], "kind": kind}
+                out[name] = {"id": fid, "kind": kind}
         return out
 
     def _allowed_ids(self):
@@ -344,6 +349,95 @@ def ask_claude_ws(prompt, mcp_config_path, model="haiku", session_id=None, timeo
     return d.get("result", raw), meta
 
 
+class NoReceiverError(TimeoutError):
+    pass
+
+
+def hyde_dir_for(lane="1", hyde_dir=None):
+    """受け手やりとり用の置き場パスを返す（既定: C:\\Users\\shu\\Desktop\\WS受け手\\lane<N>）"""
+    if hyde_dir:
+        return Path(hyde_dir)
+    ln = str(lane or "1").strip() or "1"
+    return HYDE_DIR / f"lane{ln}"
+
+
+def ask_hyde_ws(case_id, turn_num, say, target_name, lane="1", hyde_dir=None, timeout=HYDE_TIMEOUT, poll_sec=1.0):
+    """ハイド君（Antigravity の別会話）とファイル（next.json / done.json）で 1 往復する"""
+    hdir = hyde_dir_for(lane=lane, hyde_dir=hyde_dir)
+    hdir.mkdir(parents=True, exist_ok=True)
+    next_path = hdir / "next.json"
+    done_path = hdir / "done.json"
+    # 前の回の done.json が残っていれば先に消してから新しい依頼を書く
+    done_path.unlink(missing_ok=True)
+    try:
+        lane_val = int(lane) if str(lane).strip() else 1
+    except Exception:
+        lane_val = str(lane)
+    # 期待・askback・max_calls は絶対に書かない
+    payload = {
+        "case": case_id,
+        "turn": turn_num,
+        "say": say,
+        "target": target_name,
+        "lane": lane_val,
+    }
+    tmp_next = hdir / "next.json.tmp"
+    tmp_next.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_next.replace(next_path)
+
+    t0 = time.time()
+    deadline = t0 + timeout
+    while time.time() <= deadline:
+        if done_path.exists():
+            try:
+                d = json.loads(done_path.read_text(encoding="utf-8"))
+                if isinstance(d, dict) and d.get("case") == case_id and int(d.get("turn", -1)) == int(turn_num) and "reply" in d:
+                    reply = str(d.get("reply") or "")
+                    done_path.unlink(missing_ok=True)
+                    return reply, {"sec": time.time() - t0, "in": 0, "out": 0, "cost": 0.0, "session_id": None}
+            except Exception:
+                pass
+        time.sleep(poll_sec)
+    raise NoReceiverError(f"受け手（done.json）が {timeout} 秒以内に返りませんでした")
+
+
+def pause_hyde_chunk(hyde_dir, poll_sec=1.0):
+    """20 本ごとの区切りで next.json に pause を書き、resume.txt が置かれるまで待つ"""
+    hdir = Path(hyde_dir)
+    hdir.mkdir(parents=True, exist_ok=True)
+    next_path = hdir / "next.json"
+    resume_path = hdir / "resume.txt"
+    tmp_next = hdir / "next.json.tmp"
+    tmp_next.write_text(json.dumps({"pause": "新しい会話に替えてください"}, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_next.replace(next_path)
+    while not resume_path.exists():
+        time.sleep(poll_sec)
+    resume_path.unlink(missing_ok=True)
+
+
+def _prod_guard_snapshot(client):
+    """本番の台帳件数と控えブック更新時刻を記録する（未設定やオフライン時はエラー情報を返す）"""
+    if not GT.PROD_STATE_FILE.exists():
+        return {"skipped": "本番 .ws_state.json なし"}
+    try:
+        import gas_workspace
+        prod_ws = gas_workspace.WorkspaceManager(client=client, state_path=GT.PROD_STATE_FILE)
+        res = prod_ws._post({"action": "list"})
+        ledger_items = res.get("ledger") or []
+        files = prod_ws._drive_list(
+            "name='GASマネージャー_控え' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+            "files(id,name,modifiedTime)",
+        )
+        bk_mod = files[0].get("modifiedTime") if files else None
+        return {
+            "ledger_count": len(ledger_items),
+            "ledger_top_n": ledger_items[0].get("n") if ledger_items else None,
+            "bk_modified": bk_mod,
+        }
+    except Exception as e:
+        return {"error": str(e)[:120]}
+
+
 class QuotaError(RuntimeError):
     pass
 
@@ -550,7 +644,8 @@ def _read_new_logs(log_path, offset):
 
 
 # ------------------------------------------------------------------ 1 本の通し実行
-def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None, sealed=False, trial_state_path=None):
+def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None, sealed=False, trial_state_path=None,
+                hyde_dir=None, hyde_timeout=HYDE_TIMEOUT, hyde_poll=1.0):
     """1 本の台本（複数ターン）を通しで実行し、記録辞書を返す"""
     t_all = time.time()
     state_files = state_files or GT.load_state(trial_state_path or GT.STATE_FILE).get("files", {})
@@ -576,9 +671,17 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
     elif not expected_ids:
         expected_ids.add(primary_id)
 
+    use_hyde = (model == "hyde" and ask_fn is None)
     tmp_dir = Path(tempfile.mkdtemp(prefix="ws_l3_"))
-    state_file = tmp_dir / "ws_state.json"
-    log_file = tmp_dir / "ws_log.jsonl"
+    if use_hyde:
+        hdir = hyde_dir_for(lane=getattr(eng, "lane", "1") or "1", hyde_dir=hyde_dir)
+        hdir.mkdir(parents=True, exist_ok=True)
+        state_file = hdir / "ws_state.json"
+        log_file = hdir / "ws_log.jsonl"
+    else:
+        hdir = None
+        state_file = tmp_dir / "ws_state.json"
+        log_file = tmp_dir / "ws_log.jsonl"
     mcp_cfg = tmp_dir / "mcp.json"
     empty_cwd = tmp_dir / "empty"
     empty_cwd.mkdir(parents=True, exist_ok=True)
@@ -589,6 +692,9 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
         state_file.write_text(json.dumps({
             "target": {"id": primary_id, "name": init_name, "kind": "doc" if primary_doc else "sheet"}
         }, ensure_ascii=False), encoding="utf-8")
+    elif use_hyde:
+        # 前のケースの target が残らないよう空にする
+        state_file.write_text("{}", encoding="utf-8")
 
     mcp_cfg.write_text(json.dumps({
         "mcpServers": {
@@ -612,7 +718,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
     tinfo = T.table_info(T.load_table(tname)) if tname else None
 
     session_id = None
-    log_offset = 0
+    log_offset = log_file.stat().st_size if (use_hyde and log_file.exists()) else 0
     turn_results = []
     ai_total = {"calls": 0, "sec": 0.0, "in": 0, "out": 0, "cost": 0.0}
     snap_sec = 0.0
@@ -660,6 +766,13 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
             for attempt in range(MAX_ASKBACK_REPLIES + 1):
                 if ask_fn:
                     ai_text, meta = ask_fn(prompt, session_id=session_id, state_file=state_file, log_file=log_file, turn_idx=ti, attempt=attempt)
+                elif use_hyde:
+                    tname_arg = tf or (watch[0][0] if watch else "")
+                    ai_text, meta = ask_hyde_ws(
+                        case["id"], ti + 1, prompt, tname_arg,
+                        lane=getattr(eng, "lane", "1") or "1",
+                        hyde_dir=hdir, timeout=hyde_timeout, poll_sec=hyde_poll,
+                    )
                 else:
                     ai_text, meta = ask_claude_ws(prompt, mcp_cfg, model=model, session_id=session_id, workdir=str(empty_cwd))
                 session_id = meta.get("session_id") or session_id
@@ -798,6 +911,10 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
         overall_mark = "枠切れ"
         overall_f = "QUOTA"
         overall_why = [str(e)[:160]]
+    except NoReceiverError as e:
+        overall_mark = "受け手なし"
+        overall_f = "NO_RECEIVER"
+        overall_why = [str(e)[:160]]
     except TimeoutError as e:
         overall_mark = "時間切れ"
         overall_f = "TIMEOUT"
@@ -808,6 +925,13 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
         overall_why = ["実行エラー: " + str(e)[:160]]
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # hyde 受け手で done.json は返ったのに WS_SANDBOX_LOG に呼び出しが 1 つも無い場合は外撃ち疑いで止める
+    if use_hyde and overall_mark not in ("枠切れ", "時間切れ", "受け手なし"):
+        if sum(tr.get("tool_calls", 0) for tr in turn_results) == 0:
+            overall_mark = "外撃ち疑い"
+            overall_f = "SANDBOX"
+            overall_why = ["試験用の外を撃った疑い（WS_SANDBOX_LOG に呼び出し記録なし）"]
 
     # created_ids を .ws_trial.json の recorded に追記
     if created_ids:
@@ -865,7 +989,11 @@ def _build_workers(client, st, jobs, lanes=None, trial_state_path=None):
 
 
 def run_l3(set_name, model="haiku", case_ids=None, times=1, jobs=1, refail=False,
-           resume=None, limit_sec=None, ask_fn=None, out=print, runs_dir=None, trial_state_path=None, lanes=None):
+           resume=None, limit_sec=None, ask_fn=None, out=print, runs_dir=None, trial_state_path=None, lanes=None,
+           hyde_dir=None, chunk=20, hyde_poll=1.0):
+    if model == "hyde":
+        jobs = 1
+        lanes = lanes or "1"
     cases, sealed = load_set(set_name, trial_state_path=trial_state_path)
     if case_ids:
         cases = [c for c in cases if c["id"] in set(case_ids)]
@@ -890,7 +1018,7 @@ def run_l3(set_name, model="haiku", case_ids=None, times=1, jobs=1, refail=False
         for ln in rf.read_text(encoding="utf-8").splitlines():
             try:
                 d = json.loads(ln)
-                if d.get("mark") not in ("枠切れ", "時間切れ"):
+                if d.get("mark") not in ("枠切れ", "時間切れ", "受け手なし", "外撃ち疑い"):
                     done.add((d["id"], d.get("n", 1)))
             except Exception:
                 pass
@@ -918,7 +1046,7 @@ def run_l3(set_name, model="haiku", case_ids=None, times=1, jobs=1, refail=False
         for n in range(1, times + 1):
             if (c["id"], n) in done:
                 continue
-            rec = run_l3_case(weng, wfile, c, model=model, ask_fn=ask_fn, state_files=state_files, sealed=sealed, trial_state_path=trial_state_path)
+            rec = run_l3_case(weng, wfile, c, model=model, ask_fn=ask_fn, state_files=state_files, sealed=sealed, trial_state_path=trial_state_path, hyde_dir=hyde_dir)
             rec["n"] = n
             with lock:
                 with rf.open("a", encoding="utf-8") as f:
@@ -927,15 +1055,53 @@ def run_l3(set_name, model="haiku", case_ids=None, times=1, jobs=1, refail=False
                 say_part = "" if sealed else f"「{rec.get('say', '')[:20]}」"
                 out(f"{rec['mark']} {rec['id']} {rec['table']} {say_part} {rec['F']} {'；'.join(rec['why'])[:80]} ({rec['timing']['total_sec']:.1f}s)")
 
+    prod_before = None
+    if model == "hyde" and ask_fn is None:
+        prod_before = _prod_guard_snapshot(client)
+        out(f"[本番監視・開始] 台帳件数={prod_before.get('ledger_count')} / 控え更新={prod_before.get('bk_modified')} ({prod_before.get('skipped') or prod_before.get('error') or 'ok'})")
+
     try:
-        if lane_cases:
-            S._parallel(lane_cases, workers, one, limit_seconds=limit_sec, out=out)
-        if shared_cases:
+        if model == "hyde":
             w0 = workers[0]
-            for c in shared_cases:
-                one(w0[0], w0[1], c)
+            hdir = hyde_dir_for(lane=lanes, hyde_dir=hyde_dir)
+            todo = [(c, n) for c in cases for n in range(1, times + 1) if (c["id"], n) not in done]
+            in_chunk = 0
+            for idx, (c, n) in enumerate(todo):
+                rec = run_l3_case(
+                    w0[0], w0[1], c, model=model, ask_fn=ask_fn,
+                    state_files=state_files, sealed=sealed, trial_state_path=trial_state_path,
+                    hyde_dir=hdir, hyde_poll=hyde_poll,
+                )
+                rec["n"] = n
+                with lock:
+                    with rf.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    results.append(rec)
+                    say_part = "" if sealed else f"「{rec.get('say', '')[:20]}」"
+                    out(f"{rec['mark']} {rec['id']} {rec['table']} {say_part} {rec['F']} {'；'.join(rec['why'])[:80]} ({rec['timing']['total_sec']:.1f}s)")
+                if rec.get("mark") == "外撃ち疑い":
+                    out("[停止] 試験用の外を撃った疑いがあるためここで止めます")
+                    break
+                in_chunk += 1
+                if chunk and chunk > 0 and in_chunk >= chunk and idx < len(todo) - 1:
+                    out(f"[区切り] {chunk} 本完了。新しい会話に替えて resume.txt が置かれるまで待ちます ({hdir})")
+                    pause_hyde_chunk(hdir, poll_sec=hyde_poll)
+                    in_chunk = 0
+        else:
+            if lane_cases:
+                S._parallel(lane_cases, workers, one, limit_seconds=limit_sec, out=out)
+            if shared_cases:
+                w0 = workers[0]
+                for c in shared_cases:
+                    one(w0[0], w0[1], c)
     finally:
         cleanup_procs()
+        if model == "hyde" and ask_fn is None:
+            prod_after = _prod_guard_snapshot(client)
+            out(f"[本番監視・終了] 台帳件数={prod_after.get('ledger_count')} / 控え更新={prod_after.get('bk_modified')} ({prod_after.get('skipped') or prod_after.get('error') or 'ok'})")
+            if prod_before and not prod_before.get("skipped") and not prod_before.get("error") and not prod_after.get("error"):
+                if prod_before.get("ledger_count") != prod_after.get("ledger_count") or prod_before.get("bk_modified") != prod_after.get("bk_modified"):
+                    out("⚠️ 警告: 本番の台帳または控えブックが変化しています！")
 
     return results, rf
 
@@ -1150,7 +1316,7 @@ def rescore_record(rec, case, f8_reasons=None):
         if tm == "△" and overall_mark == "◎":
             overall_mark = "△"
 
-    if new_rec.get("mark") not in ("枠切れ", "時間切れ"):
+    if new_rec.get("mark") not in ("枠切れ", "時間切れ", "受け手なし", "外撃ち疑い"):
         new_rec["mark"] = overall_mark
         new_rec["F"] = overall_f
         new_rec["why"] = overall_why
@@ -1211,13 +1377,15 @@ def main(argv):
     pr = sub.add_parser("run")
     pr.add_argument("--set", dest="set_name", required=True, choices=list(SET_MAP))
     pr.add_argument("--case", action="append", default=[])
-    pr.add_argument("--model", default="haiku", choices=["haiku", "sonnet", "opus"])
+    pr.add_argument("--model", default="haiku", choices=["haiku", "sonnet", "opus", "hyde"])
     pr.add_argument("--times", type=int, default=1)
     pr.add_argument("--jobs", type=int, default=1)
     pr.add_argument("--refail", action="store_true")
     pr.add_argument("--resume", default="")
     pr.add_argument("--limit-sec", type=int, default=None)
     pr.add_argument("--lane", default=None)
+    pr.add_argument("--hyde-dir", default=None)
+    pr.add_argument("--chunk", type=int, default=20)
 
     pg = sub.add_parser("golden")
     pg.add_argument("--set", dest="set_name", default="学ぶ", choices=list(SET_MAP))
@@ -1235,6 +1403,7 @@ def main(argv):
         results, rf = run_l3(
             a.set_name, model=a.model, case_ids=a.case or None, times=a.times,
             jobs=a.jobs, refail=a.refail, resume=a.resume or None, limit_sec=a.limit_sec, lanes=a.lane,
+            hyde_dir=a.hyde_dir, chunk=a.chunk,
         )
         print(format_report(rf))
         return 0

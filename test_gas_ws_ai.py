@@ -458,5 +458,118 @@ def test_rescore_f10_max_calls_lowered_adds_f10_and_counts_f8_reasons():
     assert reasons.get("writes>0") == 1
 
 
+def test_hyde_receiver_success_and_no_secret_in_next_json(tmp_path):
+    """model='hyde' で next.json に機密を書かず、偽の受け手が書いた done.json と ws_log.jsonl で ◎ になる"""
+    import threading
+    import time
+
+    tp = _trial_state(tmp_path)
+    hdir = tmp_path / "hyde"
+    s0 = _make_snap([["日付", "得意先", "金額"], ["2026-10-01", "B社", 100], ["2026-10-02", "A社", 200]])
+    s1 = _make_snap([["日付", "得意先", "金額"], ["2026-10-02", "A社", 200], ["2026-10-01", "B社", 100]])
+
+    case = {
+        "id": "l3-hyde-ok",
+        "table": "uriage_base",
+        "max_calls": 5,
+        "turns": [{
+            "say": "金額の大きい順に並べて",
+            "approve": "まだ",
+            "askback": "要らない",
+            "expect": {"条件": [{"並び": {"列": "金額", "向き": "降順"}}]},
+        }],
+    }
+
+    seen_next = {}
+
+    def fake_hyde():
+        next_p = hdir / "next.json"
+        done_p = hdir / "done.json"
+        log_p = hdir / "ws_log.jsonl"
+        for _ in range(100):
+            if next_p.exists():
+                d = json.loads(next_p.read_text(encoding="utf-8"))
+                seen_next.update(d)
+                # WS_SANDBOX_LOG に道具呼び出しの記録を書く
+                with log_p.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"tool": "ws_do", "args": {"ops": [{"shelf": "sort"}]}, "wrote": True, "ok": True}, ensure_ascii=False) + "\n")
+                done_p.write_text(json.dumps({"case": d["case"], "turn": d["turn"], "reply": "500に変更しました。"}, ensure_ascii=False), encoding="utf-8")
+                return
+            time.sleep(0.02)
+
+    th = threading.Thread(target=fake_hyde, daemon=True)
+    th.start()
+    eng = _fake_eng([s0, s1])
+    eng.lane = "1"
+    rec = AI.run_l3_case(eng, "id_ba_1111111111111111111111111", case, model="hyde", trial_state_path=tp, hyde_dir=hdir, hyde_poll=0.02)
+    th.join(timeout=2)
+
+    assert seen_next.get("case") == "l3-hyde-ok"
+    assert seen_next.get("turn") == 1
+    assert seen_next.get("say") == "金額の大きい順に並べて"
+    assert seen_next.get("lane") == 1
+    assert "expect" not in seen_next and "askback" not in seen_next and "max_calls" not in seen_next
+    assert rec["mark"] == "◎" and rec["completed"] is True
+    assert rec["turns"][0]["writes"] == 1 and rec["turns"][0]["tool_calls"] == 1
+
+
+def test_hyde_receiver_timeout_and_sandbox_guard(tmp_path):
+    """受け手なし(NO_RECEIVER)・外撃ち疑い(SANDBOX)・20本区切り(pause/resume.txt)を検証"""
+    import threading
+    import time
+
+    tp = _trial_state(tmp_path)
+    s0 = _make_snap([["日付", "得意先", "金額"], ["2026-10-01", "B社", 100]])
+
+    # 1. done.json が返らない → 受け手なし
+    hdir_to = tmp_path / "hyde_to"
+    case_to = {
+        "id": "l3-hyde-to",
+        "table": "uriage_base",
+        "turns": [{"say": "見て", "approve": "まだ", "askback": "要らない", "expect": {"条件": []}}],
+    }
+    eng = _fake_eng([s0])
+    eng.lane = "1"
+    rec = AI.run_l3_case(eng, "id_ba_1111111111111111111111111", case_to, model="hyde", trial_state_path=tp, hyde_dir=hdir_to, hyde_timeout=0.08, hyde_poll=0.02)
+    assert rec["mark"] == "受け手なし" and rec["F"] == "NO_RECEIVER" and rec["completed"] is False
+
+    # 2. WS_SANDBOX_LOG に呼び出しが 0 件なのに done.json が返った → 外撃ち疑い
+    hdir_sb = tmp_path / "hyde_sb"
+
+    def fake_no_log():
+        next_p = hdir_sb / "next.json"
+        done_p = hdir_sb / "done.json"
+        for _ in range(100):
+            if next_p.exists():
+                d = json.loads(next_p.read_text(encoding="utf-8"))
+                done_p.write_text(json.dumps({"case": d["case"], "turn": d["turn"], "reply": "見ました"}, ensure_ascii=False), encoding="utf-8")
+                return
+            time.sleep(0.02)
+
+    th = threading.Thread(target=fake_no_log, daemon=True)
+    th.start()
+    rec_sb = AI.run_l3_case(_fake_eng([s0, s0]), "id_ba_1111111111111111111111111", case_to, model="hyde", trial_state_path=tp, hyde_dir=hdir_sb, hyde_poll=0.02)
+    th.join(timeout=2)
+    assert rec_sb["mark"] == "外撃ち疑い" and rec_sb["F"] == "SANDBOX" and rec_sb["completed"] is False
+
+    # 3. pause_hyde_chunk: next.json に pause を書き、resume.txt で抜けて消す
+    hdir_p = tmp_path / "hyde_pause"
+
+    def put_resume():
+        for _ in range(100):
+            np = hdir_p / "next.json"
+            if np.exists() and json.loads(np.read_text(encoding="utf-8")).get("pause"):
+                (hdir_p / "resume.txt").write_text("ok", encoding="utf-8")
+                return
+            time.sleep(0.02)
+
+    th2 = threading.Thread(target=put_resume, daemon=True)
+    th2.start()
+    AI.pause_hyde_chunk(hdir_p, poll_sec=0.02)
+    th2.join(timeout=2)
+    assert not (hdir_p / "resume.txt").exists()
+
+
+
 
 
