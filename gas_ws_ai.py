@@ -361,7 +361,10 @@ def hyde_dir_for(lane="1", hyde_dir=None):
     return HYDE_DIR / f"lane{ln}"
 
 
-def ask_hyde_ws(case_id, turn_num, say, target_name, lane="1", hyde_dir=None, timeout=HYDE_TIMEOUT, poll_sec=1.0):
+_HYDE_SEQ = {}
+
+
+def ask_hyde_ws(case_id, turn_num, say, target_name, lane="1", hyde_dir=None, timeout=HYDE_TIMEOUT, poll_sec=1.0, rep=1):
     """ハイド君（Antigravity の別会話）とファイル（next.json / done.json）で 1 往復する"""
     hdir = hyde_dir_for(lane=lane, hyde_dir=hyde_dir)
     hdir.mkdir(parents=True, exist_ok=True)
@@ -373,6 +376,14 @@ def ask_hyde_ws(case_id, turn_num, say, target_name, lane="1", hyde_dir=None, ti
         lane_val = int(lane) if str(lane).strip() else 1
     except Exception:
         lane_val = str(lane)
+    prev_seq = _HYDE_SEQ.get(str(hdir), 0)
+    if prev_seq == 0 and next_path.exists():
+        try:
+            prev_seq = int(json.loads(next_path.read_text(encoding="utf-8")).get("seq") or 0)
+        except Exception:
+            prev_seq = 0
+    seq = prev_seq + 1
+    _HYDE_SEQ[str(hdir)] = seq
     # 期待・askback・max_calls は絶対に書かない
     payload = {
         "case": case_id,
@@ -380,6 +391,8 @@ def ask_hyde_ws(case_id, turn_num, say, target_name, lane="1", hyde_dir=None, ti
         "say": say,
         "target": target_name,
         "lane": lane_val,
+        "seq": seq,
+        "rep": int(rep),
     }
     tmp_next = hdir / "next.json.tmp"
     tmp_next.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -391,7 +404,13 @@ def ask_hyde_ws(case_id, turn_num, say, target_name, lane="1", hyde_dir=None, ti
         if done_path.exists():
             try:
                 d = json.loads(done_path.read_text(encoding="utf-8"))
-                if isinstance(d, dict) and d.get("case") == case_id and int(d.get("turn", -1)) == int(turn_num) and "reply" in d:
+                if (
+                    isinstance(d, dict)
+                    and d.get("case") == case_id
+                    and int(d.get("turn", -1)) == int(turn_num)
+                    and (d.get("seq") is None or int(d.get("seq")) == seq)
+                    and "reply" in d
+                ):
                     reply = str(d.get("reply") or "")
                     done_path.unlink(missing_ok=True)
                     return reply, {"sec": time.time() - t0, "in": 0, "out": 0, "cost": 0.0, "session_id": None}
@@ -645,7 +664,7 @@ def _read_new_logs(log_path, offset):
 
 # ------------------------------------------------------------------ 1 本の通し実行
 def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None, sealed=False, trial_state_path=None,
-                hyde_dir=None, hyde_timeout=HYDE_TIMEOUT, hyde_poll=1.0):
+                hyde_dir=None, hyde_timeout=HYDE_TIMEOUT, hyde_poll=1.0, rep=1):
     """1 本の台本（複数ターン）を通しで実行し、記録辞書を返す"""
     t_all = time.time()
     state_files = state_files or GT.load_state(trial_state_path or GT.STATE_FILE).get("files", {})
@@ -771,7 +790,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
                     ai_text, meta = ask_hyde_ws(
                         case["id"], ti + 1, prompt, tname_arg,
                         lane=getattr(eng, "lane", "1") or "1",
-                        hyde_dir=hdir, timeout=hyde_timeout, poll_sec=hyde_poll,
+                        hyde_dir=hdir, timeout=hyde_timeout, poll_sec=hyde_poll, rep=rep,
                     )
                 else:
                     ai_text, meta = ask_claude_ws(prompt, mcp_cfg, model=model, session_id=session_id, workdir=str(empty_cwd))
@@ -1071,7 +1090,7 @@ def run_l3(set_name, model="haiku", case_ids=None, times=1, jobs=1, refail=False
                 rec = run_l3_case(
                     w0[0], w0[1], c, model=model, ask_fn=ask_fn,
                     state_files=state_files, sealed=sealed, trial_state_path=trial_state_path,
-                    hyde_dir=hdir, hyde_poll=hyde_poll,
+                    hyde_dir=hdir, hyde_poll=hyde_poll, rep=n,
                 )
                 rec["n"] = n
                 with lock:

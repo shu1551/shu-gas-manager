@@ -612,6 +612,57 @@ def test_hyde_log_offset_counts_lines_not_bytes(tmp_path):
     assert not rec.get("no_tool")
 
 
+def test_hyde_repeat_same_say_uses_seq_and_rep(tmp_path):
+    """同じ台詞を 2 回続けても next.json の seq/rep が変わり、2 回とも受けられる"""
+    import threading
+    import time
+
+    tp = _trial_state(tmp_path)
+    s0 = _make_snap([["日付", "得意先", "金額"], ["2026-10-01", "B社", 100]])
+    hdir = tmp_path / "hyde_rep"
+    hdir.mkdir(parents=True, exist_ok=True)
+    log_p = hdir / "ws_log.jsonl"
+    seen = []
+    stop_flag = False
+
+    def fake_recv():
+        next_p = hdir / "next.json"
+        done_p = hdir / "done.json"
+        last_raw = None
+        while not stop_flag:
+            if next_p.exists():
+                raw = next_p.read_text(encoding="utf-8")
+                if raw != last_raw:
+                    last_raw = raw
+                    d = json.loads(raw)
+                    seen.append((d.get("seq"), d.get("rep")))
+                    with log_p.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps({"tool": "ws_look", "args": {}}, ensure_ascii=False) + "\n")
+                    done_p.write_text(json.dumps({
+                        "case": d["case"], "turn": d["turn"], "seq": d["seq"], "reply": f"見ました{d['rep']}"
+                    }, ensure_ascii=False), encoding="utf-8")
+            time.sleep(0.02)
+
+    case = {
+        "id": "l3-hyde-rep",
+        "table": "uriage_base",
+        "turns": [{"say": "見て", "approve": "まだ", "askback": "要らない", "expect": {"条件": []}}],
+    }
+    th = threading.Thread(target=fake_recv, daemon=True)
+    th.start()
+    try:
+        r1 = AI.run_l3_case(_fake_eng([s0, s0]), "id_ba_1111111111111111111111111", case, model="hyde", trial_state_path=tp, hyde_dir=hdir, hyde_poll=0.02, rep=1)
+        r2 = AI.run_l3_case(_fake_eng([s0, s0]), "id_ba_1111111111111111111111111", case, model="hyde", trial_state_path=tp, hyde_dir=hdir, hyde_poll=0.02, rep=2)
+    finally:
+        stop_flag = True
+        th.join(timeout=2)
+    assert len(seen) == 2
+    assert seen[0][1] == 1 and seen[1][1] == 2
+    assert seen[1][0] > seen[0][0]
+    assert r1["mark"] != "受け手なし" and r2["mark"] != "受け手なし"
+
+
+
 
 
 
