@@ -392,4 +392,71 @@ def test_read_only_answer_vs_question_f8(tmp_path):
     assert rec_f8["mark"] == "×" and rec_f8["F"] == "F8" and rec_f8["completed"] is False
 
 
+def test_rescore_f10_max_calls_raised_removes_f10():
+    """max_calls を引き上げた台本で rescore_record すると F10 が外れて ◎ になる"""
+    rec = {
+        "id": "l3-f10-up",
+        "mark": "×",
+        "F": "F10",
+        "completed": False,
+        "tool_calls": 10,
+        "turns": [{
+            "turn": 1,
+            "writes": 1,
+            "tool_calls": 10,
+            "approve": "まだ",
+            "askback": "要らない",
+            "ai_head": "更新しました。",
+        }],
+    }
+    case = {
+        "id": "l3-f10-up",
+        "max_calls": 12,
+        "turns": [{"say": "更新して", "approve": "まだ", "askback": "要らない", "expect": {"条件": []}}],
+    }
+    new_rec = AI.rescore_record(rec, case)
+    assert new_rec["F"] == "" and new_rec["mark"] == "◎" and new_rec["completed"] is True
+
+
+def test_rescore_f10_max_calls_lowered_adds_f10_and_counts_f8_reasons():
+    """max_calls を引き下げた台本で rescore_record すると F10 が付き、F8 残存理由も集計される"""
+    rec = {
+        "id": "l3-f10-down",
+        "mark": "◎",
+        "F": "",
+        "completed": True,
+        "tool_calls": 6,
+        "turns": [{
+            "turn": 1,
+            "writes": 1,
+            "tool_calls": 6,
+            "approve": "まだ",
+            "askback": "要らない",
+            "ai_head": "更新しました。",
+        }],
+    }
+    case = {
+        "id": "l3-f10-down",
+        "max_calls": 4,
+        "turns": [{"say": "更新して", "approve": "まだ", "askback": "要らない", "expect": {"条件": []}}],
+    }
+    new_rec = AI.rescore_record(rec, case)
+    assert new_rec["F"] == "F10" and new_rec["mark"] == "×" and new_rec["completed"] is False
+
+    # F8 残存理由の集計（writes>0 と 質問で終わった）
+    reasons = {}
+    rec_f8_w = {
+        "id": "l3-f8-w",
+        "mark": "×",
+        "F": "F8",
+        "completed": False,
+        "tool_calls": 1,
+        "turns": [{"turn": 1, "mark": "×", "F": "F8", "writes": 1, "tool_calls": 1, "approve": "まだ", "askback": "要らない", "ai_head": "書きました"}],
+    }
+    case_f8_w = {"id": "l3-f8-w", "turns": [{"say": "書いて", "approve": "まだ", "askback": "要らない", "expect": {"条件": []}}]}
+    AI.rescore_record(rec_f8_w, case_f8_w, f8_reasons=reasons)
+    assert reasons.get("writes>0") == 1
+
+
+
 
