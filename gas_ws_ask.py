@@ -279,13 +279,14 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         elif any(w in text for w in r["words"]):
             v = r["value"]
             op[r["arg"]] = v if a["type"] in ("対応", "配列", "表") else _cast(a, v)
-    names = _col_names(text, table)
-    letters = _col_letters(text)
-    explicit_range = _range_of(text, table)
-    rows = _rows_of(text)
-    colors = _colors(text)
-    nums = _numbers(text)
-    sheet_hits = [s for s in (sheets or []) if s and nfkc(s) in text]
+    scan = QUOTE_RE.sub(" ", text)          # 「」の中（タイトル・入れる文字など）は、列・範囲・行・色として読まない
+    names = _col_names(scan, table)
+    letters = _col_letters(scan)
+    explicit_range = _range_of(scan, table)
+    rows = _rows_of(scan)
+    colors = _colors(scan)
+    nums = _numbers(scan)
+    sheet_hits = [s for s in (sheets or []) if s and nfkc(s) in scan]
     named = bool(explicit_range or rows or letters or names or sheet_hits)
     need = [a["name"] for a in shelf["args"] if a["req"]] + [k for k in shelf["any"]]
     col_pool = list(names) + [x for x in letters if x not in [_letter_of(table, n) for n in names]]

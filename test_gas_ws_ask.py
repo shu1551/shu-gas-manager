@@ -32,6 +32,11 @@ def test_clear_asks_fire_with_built_args():
     assert p.fire and (p.ops[0]["from"], p.ops[0]["to"]) == ("A", "B")
 
 
+def test_words_inside_quotes_are_not_read_as_columns():
+    p = plan("グラフのタイトルを『得意先別売上』に")
+    assert all("range" not in o and "col" not in o for o in p.ops), p.ops
+
+
 def test_two_clauses_make_two_ops():
     p = plan("1行おきに色を付けて、売上の棒グラフも作って")
     assert p.fire and [o["shelf"] for o in p.ops] == ["banding.add", "chart.new"]
