@@ -926,12 +926,11 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    # hyde 受け手で done.json は返ったのに WS_SANDBOX_LOG に呼び出しが 1 つも無い場合は外撃ち疑いで止める
+    # hyde 受け手で done.json は返ったのに WS_SANDBOX_LOG に呼び出しが 1 つも無い場合は止めずに印だけ付ける
+    no_tool = False
     if use_hyde and overall_mark not in ("枠切れ", "時間切れ", "受け手なし"):
         if sum(tr.get("tool_calls", 0) for tr in turn_results) == 0:
-            overall_mark = "外撃ち疑い"
-            overall_f = "SANDBOX"
-            overall_why = ["試験用の外を撃った疑い（WS_SANDBOX_LOG に呼び出し記録なし）"]
+            no_tool = True
 
     # created_ids を .ws_trial.json の recorded に追記
     if created_ids:
@@ -959,6 +958,8 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
         "ask_stats": ask_stats,
         "completed": overall_mark in ("◎", "△"),
     }
+    if no_tool:
+        rec["no_tool"] = True
     if not sealed and case.get("turns"):
         rec["say"] = case["turns"][0]["say"]
     return rec
@@ -1079,9 +1080,11 @@ def run_l3(set_name, model="haiku", case_ids=None, times=1, jobs=1, refail=False
                     results.append(rec)
                     say_part = "" if sealed else f"「{rec.get('say', '')[:20]}」"
                     out(f"{rec['mark']} {rec['id']} {rec['table']} {say_part} {rec['F']} {'；'.join(rec['why'])[:80]} ({rec['timing']['total_sec']:.1f}s)")
-                if rec.get("mark") == "外撃ち疑い":
-                    out("[停止] 試験用の外を撃った疑いがあるためここで止めます")
-                    break
+                if ask_fn is None and (idx + 1) % 10 == 0 and prod_before and not prod_before.get("skipped") and not prod_before.get("error"):
+                    prod_mid = _prod_guard_snapshot(client)
+                    if not prod_mid.get("error") and prod_before.get("ledger_count") != prod_mid.get("ledger_count"):
+                        out(f"⚠️ 警告: 本番の台帳件数が変化しています（{prod_before.get('ledger_count')} -> {prod_mid.get('ledger_count')}）！停止します")
+                        break
                 in_chunk += 1
                 if chunk and chunk > 0 and in_chunk >= chunk and idx < len(todo) - 1:
                     out(f"[区切り] {chunk} 本完了。新しい会話に替えて resume.txt が置かれるまで待ちます ({hdir})")
@@ -1357,11 +1360,13 @@ def format_report(run_path):
     p = Path(run_path)
     rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()] if p.exists() else []
     sm = summarize_l3(rows)
+    no_tool_n = sum(1 for r in rows if r.get("no_tool"))
     lines = [
         f"記録: {run_path}",
         f"完遂: {sm['completed']}/{sm['n']}（{sm['rate']:.1f}%）",
         f"印の内訳: {sm['marks']}",
         f"原因の印: {sm['F']}",
+        f"道具を呼ばなかった本: {no_tool_n} 本",
         f"聞き返し: 要る台詞で聞いた {sm['need_rate']:.1f}% ／ 要らない台詞で聞いた {sm['noneed_rate']:.1f}% ／ 同じ質問くり返し {sm['repeat_asked']} 回",
         f"1 本あたり: 全体 {sm['sec_per_case']:.1f} 秒（AI {sm['ai_sec_per_case']:.1f} 秒）・入力 {sm['in_per_case']:.0f} 出力 {sm['out_per_case']:.0f} トークン（計 ${sm['cost_usd']:.3f}）",
     ]

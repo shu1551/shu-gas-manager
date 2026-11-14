@@ -533,7 +533,7 @@ def test_hyde_receiver_timeout_and_sandbox_guard(tmp_path):
     rec = AI.run_l3_case(eng, "id_ba_1111111111111111111111111", case_to, model="hyde", trial_state_path=tp, hyde_dir=hdir_to, hyde_timeout=0.08, hyde_poll=0.02)
     assert rec["mark"] == "受け手なし" and rec["F"] == "NO_RECEIVER" and rec["completed"] is False
 
-    # 2. WS_SANDBOX_LOG に呼び出しが 0 件なのに done.json が返った → 外撃ち疑い
+    # 2. WS_SANDBOX_LOG に呼び出しが 0 件で done.json が返った → 止めずに採点し no_tool=True
     hdir_sb = tmp_path / "hyde_sb"
 
     def fake_no_log():
@@ -550,7 +550,7 @@ def test_hyde_receiver_timeout_and_sandbox_guard(tmp_path):
     th.start()
     rec_sb = AI.run_l3_case(_fake_eng([s0, s0]), "id_ba_1111111111111111111111111", case_to, model="hyde", trial_state_path=tp, hyde_dir=hdir_sb, hyde_poll=0.02)
     th.join(timeout=2)
-    assert rec_sb["mark"] == "外撃ち疑い" and rec_sb["F"] == "SANDBOX" and rec_sb["completed"] is False
+    assert rec_sb.get("no_tool") is True and rec_sb["mark"] != "外撃ち疑い"
 
     # 3. pause_hyde_chunk: next.json に pause を書き、resume.txt で抜けて消す
     hdir_p = tmp_path / "hyde_pause"
