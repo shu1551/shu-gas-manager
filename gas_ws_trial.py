@@ -521,6 +521,7 @@ def shot_cmd(cmd, args, out=print):
     ap.add_argument("--limit-sec", type=int, default=6 * 3600)
     ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS)      # 試験場を N 枚（lane）並べて同時に撃つ（props と同じ）
     ap.add_argument("--refail", action="store_true")               # 前回 M・×・撃てなかった本だけ（golden・shot）
+    ap.add_argument("--set", dest="set_name", choices=["境目", "節目", "便", "卒業"], default="")
     a = ap.parse_args(args)
     from gas_client import GasClient
     st = load_state()
@@ -528,12 +529,25 @@ def shot_cmd(cmd, args, out=print):
     eng = TrialEngine(client=client)
     eng.assert_not_prod()
     fid = st["files"]["WS試験_場"]
-    cases = [c for c in S.load_cases() if not a.case or c["id"] in a.case]
+    sealed = bool(a.set_name)
+    runs_dir = None
+    if sealed:
+        sealed_dir = Path(st["sealed_dir"])
+        runs_dir = sealed_dir / "runs"
+        all_cases = S.load_cases(sealed_dir / a.set_name, layer=None)
+        cases = [c for c in all_cases if c.get("layer") == "L2b"]
+        skipped_layer = len(all_cases) - len(cases)
+        if skipped_layer:
+            out(f"[--set {a.set_name}] L2b 以外を {skipped_layer} 本飛ばして {len(cases)} 本")
+        if a.case:
+            cases = [c for c in cases if c["id"] in a.case]
+    else:
+        cases = [c for c in S.load_cases() if not a.case or c["id"] in a.case]
     workers = None
     if cmd in ("golden", "shot"):
         if a.refail:
             n0 = len(cases)
-            cases = S.refail_cases(cases, "golden_" if cmd == "golden" else f"shot_{a.model}_")
+            cases = S.refail_cases(cases, "golden_" if cmd == "golden" else f"shot_{a.model}_", runs_dir=runs_dir)
             out(f"[前回通らなかった本だけ] {n0} 本のうち {len(cases)} 本を回す")
         if a.jobs > 1 and len(cases) > 1:
             eng._ensure_engine()                 # 版の差し替えは先に 1 回だけ
@@ -550,7 +564,7 @@ def shot_cmd(cmd, args, out=print):
         bad = sum(r["mark"] in ("M", "L") for r in results)         # 「–」（対象外）は通らないに数えない
         out(f"模範の再生 {len(cases)} 本・通らない {bad} 本・記録 {rf}")
         return 1 if bad else 0
-    results, rf = S.run_shot(eng, fid, cases, model=a.model, out=out, run_file=a.resume or None, resume=bool(a.resume), times=a.times, limit_seconds=a.limit_sec, workers=workers)
+    results, rf = S.run_shot(eng, fid, cases, model=a.model, out=out, run_file=a.resume or None, resume=bool(a.resume), times=a.times, limit_seconds=a.limit_sec, workers=workers, runs_dir=runs_dir, sealed=sealed)
     sm = S.summarize(results)
     out(f"L2b {a.model}: {sm['ok']}/{sm['n']}（{sm['rate']:.0f}%）・外れの内訳 {sm['F']}・AI {sm['ai_calls']} 回 {sm['ai_sec']:.0f} 秒（1 回 {sm['sec_each']:.1f} 秒）・入力 {sm['in_tokens']} 出力 {sm['out_tokens']} トークン・API 換算 ${sm['cost_usd']:.3f}・記録 {rf}")
     return 0

@@ -33,10 +33,12 @@ AI_TIMEOUT = 240
 
 
 # ------------------------------------------------------------------ 台本
-def load_cases(cases_dir=CASES_DIR):
+def load_cases(cases_dir=CASES_DIR, layer="L2b"):
     out = []
     for p in sorted(Path(cases_dir).glob("*.json")):
         out += json.loads(p.read_text(encoding="utf-8"))
+    if layer:
+        out = [c for c in out if c.get("layer") == layer]
     return out
 
 
@@ -397,11 +399,12 @@ def run_golden(eng, file_id, cases, workers=None, out=print, run_file=None, limi
     return results, rf
 
 
-def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_file=None, resume=False, times=1, limit_seconds=None, workers=None):
+def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_file=None, resume=False, times=1, limit_seconds=None, workers=None, runs_dir=None, sealed=False):
     """L2b。台本ごとに 模範（期待の比べ先）→ AI の答え → 撃って判定。1 本ごとに書き出す。workers があれば lane ごとに並べて回す。返り値は (結果のリスト, 記録ファイル)"""
     import threading
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    rf = Path(run_file) if run_file else RUNS_DIR / f"shot_{model}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    rdir = Path(runs_dir) if runs_dir else RUNS_DIR
+    rdir.mkdir(parents=True, exist_ok=True)
+    rf = Path(run_file) if run_file else rdir / f"shot_{model}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
     done = set()
     if resume and rf.exists():
         for ln in rf.read_text(encoding="utf-8").splitlines():
@@ -416,12 +419,27 @@ def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_fil
     results, lock = [], threading.Lock()
     workers = workers or [(eng, file_id)]
     cases, skipped = split_by_lint(cases, keep_modelless=True)      # 模範の誤り・文書は撃たない（AI を回す前に外す）
+    if sealed:
+        still_skipped = []
+        for c, probs in skipped:
+            rem = [p for p in probs if not p.startswith("模範が空:")]
+            if rem:
+                still_skipped.append((c, rem))
+            else:
+                cases.append(c)
+        skipped = still_skipped
     for c, probs in skipped:
-        out(f"{lint_mark(probs)} {c['id']} {c['table']} 検査で外した（撃たない）: " + "；".join(probs)[:140])
+        if sealed:
+            out(f"{lint_mark(probs)} {c['id']} 検査で外した（撃たない）")
+        else:
+            out(f"{lint_mark(probs)} {c['id']} {c['table']} 検査で外した（撃たない）: " + "；".join(probs)[:140])
     docs = [c for c in cases if is_doc_table(T.load_table(c["table"]))]
     cases = [c for c in cases if c not in docs]
     for c in docs:
-        out(f"– {c['id']} {c['table']} 検査で外した（撃たない）: 文書: L2b の shot は文書に未対応（模範の再生 golden は撃てる）")
+        if sealed:
+            out(f"– {c['id']} 検査で外した（撃たない）")
+        else:
+            out(f"– {c['id']} {c['table']} 検査で外した（撃たない）: 文書: L2b の shot は文書に未対応（模範の再生 golden は撃てる）")
 
     def one(weng, wfile, case):
         model_resp = model_after = None
@@ -454,7 +472,10 @@ def run_shot(eng, file_id, cases, model="haiku", ask_fn=None, out=print, run_fil
                 with rf.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 results.append(rec)
-                out(f"{rec['mark']} {rec['id']} {rec['table']}「{rec['say'][:24]}」→ {','.join(rec.get('got') or [])} {rec.get('F', '')} {rec.get('why', '')[:70]} ({(rec.get('ai') or {}).get('sec', 0):.0f}s)")
+                if sealed:
+                    out(f"{rec['mark']} {rec['id']} {rec.get('F', '')} ({(rec.get('ai') or {}).get('sec', 0):.0f}s)")
+                else:
+                    out(f"{rec['mark']} {rec['id']} {rec['table']}「{rec['say'][:24]}」→ {','.join(rec.get('got') or [])} {rec.get('F', '')} {rec.get('why', '')[:70]} ({(rec.get('ai') or {}).get('sec', 0):.0f}s)")
 
     _parallel(cases, workers, one, limit_seconds=limit_seconds, out=out)
     return results, rf
