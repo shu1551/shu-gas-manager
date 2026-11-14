@@ -184,7 +184,7 @@ def _mgr(tmp_path, ms, timing):
     c = _Client(ms)
     m = gw.WorkspaceManager(client=c, state_path=tmp_path / "s.json")
     c.ver = m.engine_version()
-    m._save({"engine_sid": "E" * 40, "engine_url": "https://script.google.com/macros/s/x/dev", "engine_ver": m.engine_version(), "target": {"id": "A" * 44, "kind": "sheet", "name": "n"}})
+    m._save({"engine_sid": "E" * 40, "engine_deploy_id": "DEP_1", "engine_url": "https://script.google.com/macros/s/x/exec", "engine_ver": m.engine_version(), "target": {"id": "A" * 44, "kind": "sheet", "name": "n"}})
     m.timing = timing
     return m, c
 

@@ -5829,7 +5829,7 @@ class FakeWsClient:
         return _Resp(404, {})
 
     def call_webapp(self, url, params=None, body=None, method="GET", key=None, timeout=15, use_auth=False, dev=False, no_rerun=False):
-        assert method == "POST" and use_auth and url.endswith("/dev"), url
+        assert method == "POST" and use_auth and url.endswith("/exec"), url
         self.posts.append(body)
         item = self.script.pop(0) if self.script else {"ok": True, "target": {}, "changed": []}
         if isinstance(item, Exception):
@@ -5847,9 +5847,9 @@ class FakeWsClient:
     def _put_content(self, sid, files):
         self.put.append((sid, files))
 
-    def deploy(self, sid, description=""):
+    def deploy(self, sid, description="", deployment_id=None, refresh=False, fast=False):
         self.deployed.append(sid)
-        return {"webAppUrl": "x"}
+        return {"deploymentId": deployment_id or "DEP_1", "webAppUrl": "https://script.google.com/macros/s/AKfycbFAKE/exec"}
 
     def resolve_webapp_url(self, sid, refresh=False, dev=False):
         return "https://script.google.com/macros/s/AKfycbFAKE/exec"
@@ -5864,7 +5864,7 @@ def ws_env(tmp_path, monkeypatch):
     fc = FakeWsClient()
     mgr = gw.WorkspaceManager(client=fc, state_path=tmp_path / ".ws_state.json")
     fc.engine_version = mgr.engine_version()
-    st = {"engine_sid": "E" * 40, "engine_url": "https://script.google.com/macros/s/AKfycbFAKE/dev", "engine_ver": mgr.engine_version()}
+    st = {"engine_sid": "E" * 40, "engine_deploy_id": "DEP_1", "engine_url": "https://script.google.com/macros/s/AKfycbFAKE/exec", "engine_ver": mgr.engine_version()}
     mgr._save(st)
     return mgr, fc, tmp_path
 
@@ -6046,7 +6046,7 @@ def test_ws_auth_needed_gives_three_step_message(ws_env):
     with pytest.raises(gw.WorkspaceAuthNeeded) as ei:
         mgr.do(TIDY)
     msg = str(ei.value)
-    assert "/dev" in msg and "1." in msg and "2." in msg and "3." in msg and "もう一度頼んで" in msg
+    assert "/exec" in msg and "1." in msg and "2." in msg and "3." in msg and "もう一度頼んで" in msg
     fc.script = [("text", "<html>Server Error</html>")]
     with pytest.raises(gw.WorkspaceError, match="読めません"):
         mgr.do(TIDY)
@@ -6069,7 +6069,7 @@ def test_ws_install_engine_creates_project_when_missing(ws_env):
     fc.drive["__script__"] = []
     st = mgr.install_engine()
     assert fc.created == ["shu-workspace-engine"] and fc.deployed == ["S" * 40]
-    assert st["engine_url"].endswith("/dev") and st["engine_sid"] == "S" * 40
+    assert st["engine_url"].endswith("/exec") and st["engine_sid"] == "S" * 40 and st["engine_deploy_id"] == "DEP_1"
     files = fc.put[0][1]
     assert [f["name"] for f in files] == ["appsscript", "Engine"]
     assert mgr.engine_version() in files[1]["source"]

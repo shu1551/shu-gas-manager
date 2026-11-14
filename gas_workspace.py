@@ -2,7 +2,7 @@
 """
 gas_workspace.py - Workspace マネージャー（スプレッドシートとドキュメントを会話で作る・直す）
 
-通り道は 1 本：専用の GAS エンジン（shu-workspace-engine, workspace_engine.gs）の /dev に
+通り道は 1 本：専用の GAS エンジン（shu-workspace-engine, workspace_engine.gs）の /exec に
 本人のトークンで POST する。型（棚）はエンジンが持ち、ここは
   ・今の相手（.ws_state.json）を覚える　・ファイルを名前で探す（Drive 一覧）
   ・ops（棚の名前と引数の JSON）を撃つ前に検査する　・呼び直しで二重にならない番号　・報告を 3〜5 行に組む
@@ -182,16 +182,25 @@ class WorkspaceManager:
         """エンジンの置き場所を決め、リポジトリの版を差し替える（無ければ作る）"""
         st = st if st is not None else self._load()
         sid = st.get("engine_sid") or self._find_engine_sid()
-        created = False
         if not sid:
             sid = self.client.create_project(self.engine_title)["scriptId"]
-            created = True
         self.client._put_content(sid, self._engine_files())
-        if created or not st.get("engine_url"):
-            if created:
-                self.client.deploy(sid, description="shu-workspace-engine setup")
-            url = self.client.resolve_webapp_url(sid, refresh=True, dev=True)
-            st["engine_url"] = re.sub(r"/(exec|dev)$", "/dev", url)
+        dep_id = st.get("engine_deploy_id") or None
+        dep = self.client.deploy(
+            sid,
+            description=f"{self.engine_title} {self.engine_version()}",
+            deployment_id=dep_id,
+            refresh=not dep_id,
+            fast=True,
+        )
+        dep_id = (dep or {}).get("deploymentId") or dep_id or ""
+        url = (dep or {}).get("webAppUrl") or ""
+        if not url.startswith("http"):
+            prev_url = st.get("engine_url") or ""
+            url = prev_url if (dep_id and prev_url.startswith("http") and prev_url.endswith("/exec")) else self.client.resolve_webapp_url(sid, refresh=True, dev=False)
+        st["engine_url"] = re.sub(r"/(exec|dev)$", "/exec", url)
+        if dep_id:
+            st["engine_deploy_id"] = dep_id
         st["engine_sid"] = sid
         st["engine_ver"] = self.engine_version()
         self._save(st)
@@ -199,7 +208,13 @@ class WorkspaceManager:
 
     def _ensure_engine(self):
         st = self._load()
-        if not st.get("engine_sid") or not st.get("engine_url") or st.get("engine_ver") != self.engine_version():
+        url = st.get("engine_url") or ""
+        if (
+            not st.get("engine_sid")
+            or not url.endswith("/exec")
+            or not st.get("engine_deploy_id")
+            or st.get("engine_ver") != self.engine_version()
+        ):
             st = self.install_engine(st)
         return st
 
@@ -436,11 +451,24 @@ class WorkspaceManager:
             self._remember_table(st3, res.get("target") or {}, res.get("table"), res.get("sheets"))
             self._save(st3)
         shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p.ops)
-        extra_lines = ["撃った棚: " + shown]
-        tl = gas_ws_ask.table_line(res.get("table") or {})
-        if res.get("ok") and tl:
-            extra_lines.append("撃った後の" + tl)
-        return text + "\n" + "\n".join(extra_lines)
+        if not res.get("ok"):
+            return text + "\n撃った棚: " + shown
+        tgt_out = res.get("target") or res.get("created") or {}
+        ch = res.get("changed") or []
+        ch_text = (" ／ ".join(ch[:2]) + (f"（ほか {len(ch) - 2} 件）" if len(ch) > 2 else "")) if ch else "なし"
+        tail = []
+        if res.get("created"):
+            tail.append("新しく作りました")
+        if res.get("backup"):
+            tail.append(f"控え #{res['backup']}（ws_undo で戻せます）")
+        if res.get("replayed"):
+            tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
+        tail.append("このまま使う人に報告して終える")
+        return "\n".join([
+            self._title(tgt_out),
+            f"直した所: {ch_text}（撃った棚: {shown}）",
+            " ／ ".join(tail),
+        ])
 
     def _do(self, ops, target, ok, tim):
         st, res, key = self._do_res(ops, target, ok, tim)

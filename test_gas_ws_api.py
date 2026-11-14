@@ -90,7 +90,7 @@ def test_validate_ops_runs_the_api_check_and_log_happens_only_on_success(tmp_pat
 
         def call_webapp(self, url, **kw):
             return {"status_code": 200, "data": dict(self.res, version=m.engine_version())}
-    st = {"engine_sid": "E" * 40, "engine_url": "https://script.google.com/macros/s/x/dev", "engine_ver": m.engine_version(), "target": {"id": "A" * 44, "kind": "sheet", "name": "n"}}
+    st = {"engine_sid": "E" * 40, "engine_deploy_id": "DEP_1", "engine_url": "https://script.google.com/macros/s/x/exec", "engine_ver": m.engine_version(), "target": {"id": "A" * 44, "kind": "sheet", "name": "n"}}
     m._save(st)
     ops = [{"shelf": "api", "requests": [{"repeatCell": {"range": "A1", "fields": "userEnteredFormat"}}], "why": "青く"}]
     m._client = C_({"ok": False, "error": "x", "blocked": True, "target": {"id": "A" * 44, "name": "n", "kind": "sheet"}})

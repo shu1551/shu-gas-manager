@@ -457,8 +457,8 @@ class FakeGoogle:
     def _put_content(self, sid, files):
         self.put.append((sid, files))
 
-    def deploy(self, sid, description=""):
-        return {"webAppUrl": "x"}
+    def deploy(self, sid, description="", deployment_id=None, refresh=False, fast=False):
+        return {"deploymentId": deployment_id or "DEP_TEST", "webAppUrl": "https://script.google.com/macros/s/AKfycbTEST/exec"}
 
     def resolve_webapp_url(self, sid, refresh=False, dev=False):
         return "https://script.google.com/macros/s/AKfycbTEST/exec"
@@ -489,7 +489,7 @@ def test_init_creates_folder_and_files_then_stops_for_authorization(tmp_path):
     rc = TR.init(client=g, out=out.append, state_path=st)
     assert rc == 2                                                      # 許可が要る所で止まる
     text = "\n".join(out)
-    assert "https://script.google.com/macros/s/AKfycbTEST/dev" in text and "権限を確認" in text and "init" in text
+    assert "https://script.google.com/macros/s/AKfycbTEST/exec" in text and "権限を確認" in text and "init" in text
     s = TR.load_state(st)
     assert s["folder_id"] and set(s["files"]) == set(TR.SANDBOX_SHEETS + TR.SANDBOX_DOCS + [TR.BACKUP_BOOK])
     assert all(f["parents"] == [s["folder_id"]] for f in g.files.values() if f["mimeType"] != TR.MIME_FOLDER)      # 全部フォルダ WS試験 の中
