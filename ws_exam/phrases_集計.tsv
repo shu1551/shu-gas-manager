@@ -21,3 +21,63 @@ chart.delete	売上推移グラフを削除して
 chart.delete	グラフをなくして
 chart.delete	グラフはいらないから消して
 ?chart.delete	グラフ 削除 消去
+calc.col	数量×単価で金額の列を足して
+calc.col	D列に利益（売上-費用）の列を足して
+?calc.col	計算列 追加 計算式
+?calc.col	計算 式 列 追加
+calc.percent	売上の構成比を出して
+calc.percent	売上の構成比の列を足して
+?calc.percent	割合 列 構成比
+?calc.percent	構成比 パーセント 列
+stat.row	表の下に平均の行を足して
+stat.row	表の下に最大値と最小値の行を追加して
+?stat.row	平均行 追加 下
+?stat.row	平均 最大 最小 行
+lookup.add	商品マスタから単価を引いてきて
+lookup.add	マスタ表から商品名をVLOOKUPで引いて足して
+?lookup.add	別の表 列 参照 追加
+?lookup.add	マスタ 参照 列 追加 引く
+calc.diff	前月との差額の列を足して
+calc.diff	売上の前年比の列を追加して
+?calc.diff	前年比 差分 増減 列
+?calc.diff	前月比 伸び率 差の列
+calc.running	売上の累計列を足して
+calc.running	金額の累積合計の列を追加して
+?calc.running	累計 累積 列 追加
+?calc.running	ランニングトータル 累計
+calc.rank	売上順位の列を足して
+calc.rank	点数の高い順に順位の列をつけて
+?calc.rank	順位 ランク 列 追加
+?calc.rank	ランキング 列 計算
+count.if	合格の件数を数えて
+count.if	東京の件数をカウントして
+?count.if	件数 カウント 個数 条件
+?count.if	COUNTIF 条件 件数
+subtotal	部署ごとの小計行を挟んで
+subtotal	月ごとの小計を入れて
+?subtotal	小計 行 挿入
+?subtotal	小計 集計 行 挟む
+formula.guard	数式をIFERRORでエラーが出ないように囲んで
+formula.guard	計算式のエラー表示を空白にして
+?formula.guard	数式 IFERROR エラー保護
+?formula.guard	計算式 エラー 回避 囲む
+formula.tovalue	この列の計算式を確定した値に変えて
+formula.tovalue	計算結果を値貼り付けして
+?formula.tovalue	数式 値 変換
+?formula.tovalue	計算式 値 固定化
+round	金額を千円単位で四捨五入して
+round	計算結果を切り捨てて
+?round	四捨五入 切り捨て 切り上げ
+?round	ROUND ラウンド 端数処理
+date.parts	日付から年と月の列を分けて
+date.parts	日付の列から曜日を取り出して
+?date.parts	日付 年 月 曜日 分解
+?date.parts	日付から年 日付から月 曜日の列
+text.join	姓と名の列を結合して
+text.join	住所の各列を1つにつなげて
+?text.join	文字列 結合 列 つなげる
+?text.join	列をつないで 列を連結 結合
+text.case	品番を大文字にそろえて
+text.case	英字を小文字に変換して
+?text.case	大文字 小文字 変換
+?text.case	半角 全角 統一

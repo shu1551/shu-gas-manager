@@ -27,13 +27,13 @@ SPLIT = re.compile(r"[。、，,\n]|(?<=[ぁ-ん]て)から|それから|つい�
 
 _A1 = r"[A-Z]{1,3}[0-9]{1,6}"
 _SEP = r"\s*(?:[:：]|から|〜|~|－|-|ー)\s*"
-RANGE_RE = re.compile(r"(?<![A-Za-z])(" + _A1 + r")" + _SEP + r"(" + _A1 + r")(?![0-9])")
+RANGE_RE = re.compile(r"(?<![A-Za-z])(" + _A1 + r")" + _SEP + r"(" + _A1 + r")(?:まで)?(?![0-9])")
 CELL_RE = re.compile(r"(?<![A-Za-z0-9])(" + _A1 + r")(?![0-9])")
-COLROWS_RE = re.compile(r"(?<![A-Za-z])([A-Z]{1,3})列の?\s*([0-9]+)行目?" + _SEP + r"([0-9]+)行目?")
-COLSPAN_RE = re.compile(r"(?<![A-Za-z])([A-Z]{1,3})列?" + r"\s*(?:から|〜|~|－|-)\s*" + r"([A-Z]{1,3})列")
+COLROWS_RE = re.compile(r"(?<![A-Za-z])([A-Z]{1,3})列の?\s*([0-9]+)行目?" + _SEP + r"([0-9]+)行目?(?:まで)?")
+COLSPAN_RE = re.compile(r"(?<![A-Za-z])([A-Z]{1,3})列?" + r"\s*(?:から|〜|~|－|-)\s*" + r"([A-Z]{1,3})列(?:まで)?")
 COL_RE = re.compile(r"(?<![A-Za-z])([A-Z]{1,3})列")
-ROWSPAN_RE = re.compile(r"([0-9]+)行目?" + _SEP + r"([0-9]+)行目")
-ROW_RE = re.compile(r"(?<![0-9])([0-9]+)行目")
+ROWSPAN_RE = re.compile(r"([0-9]+)行目?" + _SEP + r"([0-9]+)行目?(?:まで)?")
+ROW_RE = re.compile(r"(?<![0-9])([0-9]+)\s*行目")
 QUOTE_RE = re.compile(r"[「『\"“]([^」』\"”]+)[」』\"”]")
 NUM_RE = re.compile(r"(?<![A-Za-z0-9.])([0-9]+(?:\.[0-9]+)?)(?![0-9])")
 
@@ -239,6 +239,10 @@ def _cast(a, v):
         if isinstance(v, bool):
             return v
         return str(v).lower() in ("true", "1", "yes")
+    if t == "範囲" and isinstance(v, str):
+        m = RANGE_RE.search(v)
+        if m:
+            return f"{m.group(1)}:{m.group(2)}"
     if t == "選択":
         s = str(v).lower()
         return s if s in a["choices"] else None
@@ -280,6 +284,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             v = r["value"]
             op[r["arg"]] = v if a["type"] in ("対応", "配列", "表") else _cast(a, v)
     scan = QUOTE_RE.sub(" ", text)          # 「」の中（タイトル・入れる文字など）は、列・範囲・行・色として読まない
+    scan = re.sub(r"[（(][^）)]*[）)]", " ", scan)  # （）の中（計算式や補足説明など）も列・範囲として読まない
     names = _col_names(scan, table)
     letters = _col_letters(scan)
     explicit_range = _range_of(scan, table)
@@ -287,7 +292,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     colors = _colors(scan)
     nums = _numbers(scan)
     sheet_hits = [s for s in (sheets or []) if s and nfkc(s) in scan]
-    named = bool(explicit_range or rows or letters or names or sheet_hits)
+    named = bool(explicit_range or rows or letters or names or sheet_hits or shelf["name"] in ("dedupe", "seiri"))
     need = [a["name"] for a in shelf["args"] if a["req"]] + [k for k in shelf["any"]]
     col_pool = list(names) + [x for x in letters if x not in [_letter_of(table, n) for n in names]]
     range_given = False
@@ -318,6 +323,10 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 pass
             elif explicit_range:
                 v = explicit_range
+            elif wanted and shelf["name"] in ("clear.all", "cf.dup") and table:
+                first_r = table["data"].split("-")[0] if table.get("data") else str(table.get("header_row", 1) + 1)
+                last_r = table["data"].split("-")[-1] if table.get("data") else str(table.get("header_row", 1) + 1)
+                v = f"{table['first_col']}{first_r}:{table['last_col']}{last_r}"
             elif col_pool and (wanted or not has_col_arg):
                 ls = [x for x in ((_letter_of(table, c) or (c if re.fullmatch(r"[A-Z]{1,3}", c) else None)) for c in col_pool) if x]
                 v = _col_range(table, ls)
@@ -332,6 +341,10 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         elif t == "行[]":
             if rows:
                 v = rows
+        elif t == "配列":
+            if quotes and (wanted or not op.get(k)):
+                v = list(quotes)
+                quotes.clear()
         elif t == "シート":
             if sheet_hits:
                 v = sheet_hits.pop(0)
@@ -348,6 +361,23 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 v = nums[0]
         if v not in (None, "", []):
             op[k] = v
+    if shelf["name"] == "filter.where":
+        m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip())
+        if m_name:
+            op["equals"] = m_name.group(1).strip()
+        elif "equals" in op and isinstance(op["equals"], str):
+            op["equals"] = re.sub(r"(?:さん|様)$", "", op["equals"]).strip()
+        if "col" not in op and table:
+            cols = [c["name"] for c in table.get("columns", [])]
+            eq = op.get("equals", "")
+            if any(k in cols for k in ("勘定科目", "科目")) and (any(x in eq for x in ("費", "料", "税", "手当")) or "旅費" in eq):
+                op["col"] = "勘定科目" if "勘定科目" in cols else "科目"
+            elif any(k in cols for k in ("氏名", "名前", "社員名", "担当")) and (" " in eq or "　" in eq or any(x in text for x in ("さん", "様", "氏"))):
+                op["col"] = next(k for k in ("氏名", "名前", "社員名", "担当") if k in cols)
+            elif cols:
+                text_cols = [c["name"] for c in table.get("columns", []) if not c.get("number")]
+                if text_cols:
+                    op["col"] = text_cols[0]
     missing = [k for k in (a["name"] for a in shelf["args"] if a["req"]) if op.get(k) in (None, "", [])]
     if shelf["any"] and not any(op.get(k) not in (None, "", []) for k in shelf["any"]):
         missing.append("・".join(shelf["any"]) + " のどれか")
@@ -355,11 +385,14 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     bare_ok = any(not any(k in ex for k in what) for _, ex in shelf["examples"])   # 札の例に「何をするか」なしで撃つ例があれば、なしでも撃てる棚
     if not missing and not bare_ok and len(what) >= WHAT_MIN and not any(k in op for k in what) and not any(a["req"] and a["type"] not in _LOCATOR_TYPES for a in shelf["args"]):
         missing.append("何をするか（" + "・".join(what[:6]) + " …）")
+    if shelf["danger"] and named and not VAGUE.search(nfkc(text)) and not missing:
+        op["ok"] = True
     return op, missing, named
 
 
 # ------------------------------------------------------------------ 頼み → ops
 def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
+    cur_sheet = cur_sheet or (sheets[0] if sheets else "")
     p = Plan()
     ask = (ask or "").strip()
     if not ask:
@@ -384,6 +417,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
         rx_hit = lambda x: any("re" in r and _rx(r["re"]).search(c) for r in x[2].get("ask_rules") or [])
         hit = [x for x in near if rx_hit(x)]
         far = [x for x in scored if x not in near and rx_hit(x)]
+        if far and any(x[2]["name"] == "write" for x in far) and scored[0][2]["name"] == "replace" and CELL_RE.search(c):
+            w_item = next(x for x in far if x[2]["name"] == "write")
+            hit = [w_item]
+            far = [x for x in far if x[2]["name"] != "write"]
         if far and not hit:
             p.reasons.append(f"「{c}」の当てが割れた（{scored[0][2]['name']} と {far[0][2]['name']}）")
             p.cards += [scored[0][2], far[0][2]]
@@ -391,9 +428,9 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
             continue
         if len(hit) == 1 and hit[0] is not scored[0]:
             scored = [hit[0]] + [x for x in scored if x is not hit[0]]
-            scored[0] = (max(lead, hit[0][0]) + MARGIN,) + tuple(scored[0][1:])
+            scored[0] = (max(lead, hit[0][0], gas_ws_find.WEAK_SCORE) + MARGIN,) + tuple(scored[0][1:])
         elif len(hit) == 1:
-            scored[0] = (scored[0][0] + MARGIN,) + tuple(scored[0][1:])
+            scored[0] = (max(scored[0][0], gas_ws_find.WEAK_SCORE) + MARGIN,) + tuple(scored[0][1:])
         top_t, _, top, _ = scored[0]
         second = scored[1] if len(scored) > 1 else None
         if top_t < gas_ws_find.WEAK_SCORE:
@@ -411,6 +448,16 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
             ok_all = False
             continue
         op, missing, named = build_op(top, c, table, sheets, cur_sheet)
+        if p.ops and p.ops[-1].get("shelf") == top["name"]:
+            prev = p.ops[-1]
+            for scope_k in ("header", "range", "col"):
+                if scope_k in prev and scope_k not in op:
+                    op[scope_k] = prev[scope_k]
+                    named = True
+                    missing = [m for m in missing if not any(x in m for x in ("range", "col", "header"))]
+            if top["name"] == "format":
+                if re.search(r"色[もを]付[け言]|色[もを]つ[け言]|色[もを]塗", c) and not op.get("bg") and not op.get("color"):
+                    op["bg"] = "青"
         p.ops.append(op)
         if missing:
             p.missing += [f"{top['name']}: " + m for m in missing]
@@ -420,7 +467,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
             p.reasons.append(f"「{c}」は{top['danger']}棚で、場所の名指しがありません")
             p.cards.append(top)
             ok_all = False
-    if any(("外です" in g or "ws_undo" in g) for g in p.guide) or (p.guide and not p.ops):
+    if any(("外です" in g or "ws_undo" in g or (("棚はありません" in g or "棚ではありません" in g) and not any(o["shelf"] in ("doc.outline", "filter.where", "filter.on") for o in p.ops))) for g in p.guide) or (p.guide and not p.ops):
         p.reasons.append("案内が出ています（棚でない頼み）")
         ok_all = False
     kinds = {finder.cat.by_name[o["shelf"]]["kind"] for o in p.ops}
@@ -439,7 +486,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
 
 def render_unfired(p, finder):
     lines = ["撃っていません: " + ("／".join(p.reasons) or "引数が決まりません")]
-    if p.missing:
+    if len(p.missing) == 1 and p.ops:
+        miss_name = p.missing[0].split(": ", 1)[-1] if ": " in p.missing[0] else p.missing[0]
+        lines.append(f"この ops に {miss_name} を入れて ws_do(ops=…) で撃つ")
+    elif p.missing:
         lines.append("足りない引数: " + "、".join(p.missing))
     if p.ops:
         lines.append("組みかけ: ops=" + json.dumps(p.ops, ensure_ascii=False, separators=(",", ":")))

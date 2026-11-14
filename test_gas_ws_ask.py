@@ -52,8 +52,8 @@ def test_vague_or_dangerous_without_a_named_place_do_not_fire():
 def test_out_of_scope_and_split_asks_do_not_fire():
     assert not plan("このシートをPDFにしてメールで送って").fire
     assert not plan("会社の角印の画像をシートの右下に貼り付けて").fire
-    p = plan("B2の値を『確定』に書き換えて")       # 置換の棚より、書く棚の決めが当たっている＝割れたとして撃たない
-    assert not p.fire
+    p = plan("B2の値を『確定』に書き換えて")       # A1セル番地＋書き換えは write が勝って撃つ
+    assert p.fire and p.ops[0]["shelf"] == "write" and p.ops[0]["cells"] == {"B2": "確定"}
 
 
 def test_unfired_text_shows_missing_and_cards():

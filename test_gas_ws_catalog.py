@@ -23,6 +23,10 @@ HERE = Path(__file__).resolve().parent
 LEGACY_NAMES = [
     "table.new", "sheet.add", "tidy", "seiri", "renumber", "width", "total", "summary", "sort", "write", "format", "rows", "replace",
     "doc.new", "doc.append", "doc.replace", "doc.section", "doc.table", "doc.style",
+    "doc.outline", "doc.insert", "doc.table.cell",
+    "doc.find", "doc.heading", "doc.list", "doc.delete", "doc.move", "doc.table.row",
+    "doc.font", "doc.align", "doc.table.style", "doc.pagebreak", "doc.header", "doc.toc",
+    "doc.link", "doc.from.sheet", "doc.template", "doc.copy",
 ]
 
 # 段 1 で足した束ねた棚の別名 9 本

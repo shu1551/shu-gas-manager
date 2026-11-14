@@ -23,3 +23,79 @@ doc.table	文書の1つ目の表の2行1列を「新」に直して
 doc.style	行間を広げて見やすく
 doc.style	文書の見た目を整えて
 ?doc.style	文書 書式 フォント
+doc.outline	この文書の章立てを見せて
+doc.outline	文書の見出し一覧を出して
+?doc.outline	文書 目次 章立て 見出し
+?doc.outline	文書 構成 目次 アウトライン
+doc.insert	決定事項の下に『次回は来週』と1行足して
+doc.insert	参加者の後に『オブザーバー佐藤』を差し込んで
+?doc.insert	見出し 下 段落 差し込み
+?doc.insert	文書 段落 差し込み 挿入
+doc.table.cell	文書の表の担当の欄を佐藤にして
+doc.table.cell	表の金額のセルを50000に直して
+?doc.table.cell	文書 表 値 書き換え
+?doc.table.cell	文書 表 セル 書き換え
+doc.find	文書の中から参加者という言葉を探して
+doc.find	文書内で決定事項を検索して
+?doc.find	文書 言葉 探す 検索
+?doc.find	文書内を検索 キーワード検索 探す
+doc.heading	この行を見出し1にして
+doc.heading	議事録のタイトルを見出しに変更して
+?doc.heading	見出し レベル 変更 段落
+?doc.heading	見出しに変更 大見出し 中見出し レベル
+doc.list	決定事項を箇条書きにして
+doc.list	手順を番号つきリストにして
+?doc.list	箇条書き 番号 リスト
+?doc.list	リスト 箇条書き 変換
+doc.delete	2番目の段落を消して
+doc.delete	この節をまるごと削除して
+?doc.delete	段落 節 削除 消去
+?doc.delete	文書 削除 節 段落
+doc.move	決定事項の節を参加者の前に移して
+doc.move	この節を先頭に持ってきて
+?doc.move	段落 節 移動 移す
+?doc.move	順番 入れ替え 節
+doc.table.row	表に新しい行を追加して
+doc.table.row	表の2行目を削除して
+?doc.table.row	表 行 追加 削除
+?doc.table.row	文書 表に行を追加 表の行を削除
+doc.font	文字サイズを14ポイントにして太字にして
+doc.font	文字の色を赤色に変えて
+?doc.font	フォント 文字 色 サイズ 太字
+?doc.font	文字色 大きさ 書式
+doc.align	タイトルを中央寄せにして
+doc.align	段落の行間を広げて
+?doc.align	中央寄せ 右寄せ 行間 字下げ
+?doc.align	揃え 配置 行間 インデント
+doc.table.style	表の見出し行の背景色をグレーにして
+doc.table.style	表の罫線を細い実線にして
+?doc.table.style	表 見た目 罫線 背景色
+?doc.table.style	文書 表の見た目 表の罫線 背景色
+doc.pagebreak	ここで改ページを入れて
+doc.pagebreak	見出しの前に改ページを挿入して
+?doc.pagebreak	改ページ 挿入 ページ区切り
+?doc.pagebreak	改ページ 区切り
+doc.header	文書のヘッダーにタイトルを設定して
+doc.header	ページ番号をフッターに付けて
+?doc.header	ヘッダー フッター ページ番号
+?doc.header	柱 ページ 番号 ヘッダ
+doc.toc	文書の先頭に目次を入れて
+doc.toc	目次を挿入して
+?doc.toc	目次 挿入 作成 更新
+?doc.toc	アウトライン 目次 追加
+doc.link	参考資料の文字にURLのリンクを付けて
+doc.link	この文字のハイパーリンクを外して
+?doc.link	リンク 挿入 解除 URL
+?doc.link	ハイパーリンク 付与 削除
+doc.from.sheet	スプレッドシートの売上表を文書に貼り付けて
+doc.from.sheet	シートの集計表を文書に差し込んで
+?doc.from.sheet	スプレッドシート 表 差し込み 文書
+?doc.from.sheet	シート 表 挿入 ドキュメント
+doc.template	ひな形文書の社名を埋めて新しい文書を作って
+doc.template	テンプレートの変数を差し替えて文書を作成して
+?doc.template	ひな形 テンプレート 差し込み 文書生成
+?doc.template	テンプレート 変数 埋め込み
+doc.copy	この文書のコピーを作って
+doc.copy	文書を複製して別の名前で保存して
+?doc.copy	文書 複製 コピー 作成
+?doc.copy	ドキュメント 複製 別名

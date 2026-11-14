@@ -54,6 +54,36 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 | **別名登録 (エイリアス)** | `set_alias(name, script_id)` / `list_aliases()` | スプレッドシート付属スクリプトの登録・確認 |
 | **バージョン復元** | `diff_version` / `restore_version(project, version_number)` | 差分確認・スナップショット復元 |
 | **環境診断** | `setup_check(open_browser=False)` | 認証・API接続状態の確認 |
-| **スプレッドシート・文書を作る/直す** | `ws_look(ask=頼みの文)` で見る＋棚の札 → `ws_do(ops, target, ok)` で撃つ → `ws_undo` で戻す（札だけなら `ws_find`） | 棚（型）の名前と引数は札のとおりに。書く前に控え・失敗なら自動で戻す。手順は `WORKSPACE.md` |
+| **統合コマンド窓口** | `gas(command)` | CLI互換コマンド（files, outline, diagnose, func等）の一括実行 |
 
-> Workspace（`ws_*`）: 初回だけブラウザでエンジンの許可が要ります。人の値を消す手は「消してよい」の承認があるときだけ `ok=True`。
+### Workspace 操作 4 道具（2号機）
+
+スプレッドシートやドキュメントを会話形式で安全に作成・編集・整形するツール群です。実行前に自動で控え（バックアップ）を取り、失敗時は自動でロールバックします。
+
+| 道具 | 役割 | 主な引数・使い方 |
+| :--- | :--- | :--- |
+| `ws_look` | **状態確認＋棚引き** | `target`（URL・ID・名前）、`range`（セル範囲）、`image=True`（PNG画像確認）、`ask="頼み"` で棚札も同時提示 |
+| `ws_find` | **棚札の検索 (通信なし)** | `ask="頼みの文"` または `ask="分類:行と列"`、`ask="棚:sort"`、空で分類一覧。`kind="sheet" \| "doc"` |
+| `ws_do` | **作成・修正の実行** | `ask="頼みの文"`（初手直撃）または `ops=[{"shelf":"棚名", ...}]`。削除・上書きは名指し時のみ `ok=True` |
+| `ws_undo` | **直前・過去へ巻き戻し** | 空で直前を取り消し、`to="番号"` で特定時点まで一括復元、`list=True` で履歴台帳（戻し済み管理）を表示 |
+
+### GAS 棚ルーター群（高速化・診断・骨格）
+
+GAS プロジェクト全体の品質向上、高速化、リファクタリング、UIデザインを一括・安全に行う専用ルーター群です。
+
+| 道具 | 役割 | 特徴・使い分け |
+| :--- | :--- | :--- |
+| `gas_shelf` | **先撃ち総合棚ルーター** | 自然言語 `query` から全25棚（レシピ・骨格・診断）を自動判定・自動ディスパッチ。迷ったらまずこれ |
+| `gas_dock` | **統合人間ドック診断** | diagnose + xray + RPC契約検査を統合し、100点満点スコアと処方箋（改善手順）を提示 |
+| `gas_recipe` | **高速化レシピ棚** | 全12レシピ（R01: appendRow一括化、R02: 2次元配列化、UrlFetch並列化等）の検出・プレビュー・自動適用 |
+| `design_skin` | **デザイン着せ替え** | WebアプリHTMLに高品質CSS/UIプリセット（linear, glass, notion, emerald）を即座に反映 |
+| `gas_scaffold` | **上級アーキテクチャ骨格** | S01〜S05（Promise化RPC、SWR即時描画、楽観UI等）の堅牢な設計パターンを安全注入 |
+
+## 5. 道具の使い分け指針
+
+- **スプレッドシート・文書の中身や書式を直接操作したい場合**:
+  → **Workspace 操作 4 道具 (`ws_look` / `ws_find` / `ws_do` / `ws_undo`)** を使用。
+- **GAS コード全体の高速化・健康診断・デザイン刷新・骨格導入を行いたい場合**:
+  → **GAS 棚ルーター群 (`gas_shelf` / `gas_dock` / `gas_recipe` / `design_skin` / `gas_scaffold`)** を使用。
+- **特定ファイルのコード確認・ピンポイント修正・バージョン管理・デプロイを行いたい場合**:
+  → **GAS 1号機ツール (`get_function`, `patch_function`, `deploy`, `gas`)** を使用。

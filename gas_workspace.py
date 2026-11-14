@@ -594,7 +594,15 @@ class WorkspaceManager:
 
     def find(self, ask="", kind=""):
         """棚の札を引く（通信なし）。kind 省略時は今の相手の種類で絞る"""
-        return self.finder.ask(ask, kind or self._cur_kind(), log_to=self.misses_path)
+        k = kind
+        if not k:
+            ask_s = (ask or "").strip()
+            # ask が文書系を指している場合は doc、そうでなければ今の相手の種類
+            if re.match(r"^分類\s*[:：]\s*文書$", ask_s) or re.match(r"^(?:棚\s*[:：]\s*)?doc\.", ask_s):
+                k = "doc"
+            else:
+                k = self._cur_kind()
+        return self.finder.ask(ask, k, log_to=self.misses_path)
 
     def look(self, target="", sheet="", range="", image=False, ask=""):
         if not ask:

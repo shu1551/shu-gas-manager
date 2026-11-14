@@ -143,9 +143,9 @@ SHELF['doc.new'] = docKind_(function (ctx, op) {
 // 棚: doc.append
 // 題: 文書に追記する
 // 分類: 文書
-// 語: 追記|末尾に足|文末に足|最後に追加|段落を足|項目を足|節の下に
+// 語: 追記|末尾に足|文末に足|最後に追加|段落を足|項目を足|節の下に|最後に|末尾に
 // 引数: markdown*=文字, under=文字
-// 頼み: markdown~[『「]([^』」]+)[』」]を?(?:書き足|足|追記|加え)
+// 頼み: markdown~[『「]([^』」]+)[』」]を?(?:書き足|足|追記|加え) ; markdown~最後に[『「]([^』」]+)[』」]を?(?:足|追加|追記)
 // 例: 「最後に1行足して」 → {"shelf":"doc.append","markdown":"以上です。"}
 // 触る: 値 書式
 SHELF['doc.append'] = docKind_(function (ctx, op) {
@@ -179,8 +179,9 @@ SHELF['doc.append'] = docKind_(function (ctx, op) {
 // 棚: doc.replace
 // 題: 文書の文字を置き換える
 // 分類: 文書
-// 語: 文書を置換|文書の置き換え|文中の語を|表記を統一|言葉を直し|文字を直し|語を変えて
+// 語: 文書を置換|文書の置き換え|文中の語を|表記を統一|言葉を直し|文字を直し|語を変えて|置き換えて|置換して
 // 引数: find*=文字, with=文字, match_case=真偽
+// 頼み: find~[『「]([^』」]+)[』」]を[『「](?:[^』」]+)[』」]に ; with~[『「](?:[^』」]+)[』」]を[『「]([^』」]+)[』」]に
 // 例: 「山田を山田（総務）に直して」 → {"shelf":"doc.replace","find":"山田","with":"山田（総務）"}
 // 触る: 値 書式
 SHELF['doc.replace'] = docKind_(function (ctx, op) {
@@ -272,9 +273,9 @@ SHELF['doc.table'] = docKind_(function (ctx, op) {
 // 棚: doc.style
 // 題: 文書の書式をそろえる
 // 分類: 文書
-// 語: 書式をそろえ|フォントを|行間を|文字サイズ|見出しをそろえ|体裁を整え|文書を整
+// 語: 書式をそろえ|フォントを|行間を|文字サイズ|見出しをそろえ|体裁を整え|文書を整|文字の大きさ
 // 引数: font=文字, size=数, line_spacing=数
-// 頼み: font~フォントを(.+?)に ; size~([0-9.]+)\s*pt ; line_spacing~行間を([0-9.]+)
+// 頼み: font~フォントを(.+?)に ; size~([0-9.]+)\s*pt ; size~文字の大きさを([0-9.]+) ; line_spacing~行間を([0-9.]+)
 // 例: 「文書のフォントをMeiryoに」 → {"shelf":"doc.style","font":"Meiryo"}
 // 触る: 書式
 SHELF['doc.style'] = docKind_(function (ctx, op) {

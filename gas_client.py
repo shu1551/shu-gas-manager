@@ -23,6 +23,22 @@ import difflib
 import collections
 import webbrowser
 import hashlib
+import importlib
+
+# ホットリロード時の Workspace 道具・キャッシュのフラッシュ
+for _m in ["gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_workspace", "gas_ws_ai"]:
+    if _m in sys.modules:
+        try:
+            importlib.reload(sys.modules[_m])
+        except Exception:
+            pass
+if "gas_ws_find" in sys.modules:
+    sys.modules["gas_ws_find"]._default = None
+_main_mod = sys.modules.get("__main__")
+if _main_mod and hasattr(_main_mod, "_ws"):
+    _main_mod._ws = None
+if "gas_mcp_server" in sys.modules:
+    sys.modules["gas_mcp_server"]._ws = None
 
 class RecipeItem(dict):
     """高速化レシピ棚アイテム"""

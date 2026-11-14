@@ -175,7 +175,8 @@ class Finder:
         m = re.match(r"^分類\s*[:：]\s*(.+)$", ask)
         if m:
             cat = m.group(1).strip()
-            shelves = [s for s in self.cat.shelves if s["category"] == cat and s["searchable"] and (not kind or s["kind"] == kind)]
+            target_kind = "doc" if cat == "文書" else kind
+            shelves = [s for s in self.cat.shelves if s["category"] == cat and s["searchable"] and (not target_kind or s["kind"] == target_kind)]
             if not shelves:
                 return f"分類「{cat}」の棚はありません。分類: " + "・".join(gas_ws_catalog.CATEGORIES)
             return self.render(shelves, [])
@@ -186,7 +187,10 @@ class Finder:
                 return f"棚「{m.group(1)}」はありません。" + self.near(m.group(1))
             return "\n".join(["1. " + self.card(s)[0]] + self.card(s)[1:] + ["   引数: " + s["args_raw"]])
         if not ask:
-            return self.overview()
+            return self.overview(kind=kind)
+        # 文書系の棚・分類を指している場合は kind 未指定でも doc 棚に向ける
+        if not kind and (ask.startswith("doc.") or "棚:doc." in ask or "棚：doc." in ask):
+            kind = "doc"
         picks, scores, guide = self.find(ask, kind)
         top = max([scores.get(s["name"], 0) for s in picks], default=0)
         weak = top < WEAK_SCORE
@@ -199,10 +203,10 @@ class Finder:
         picks = picks[:n]
         return ("近い棚:\n" + self.render(picks, [])) if picks else ""
 
-    def overview(self):
+    def overview(self, kind=""):
         counts = {}
         for s in self.cat.shelves:
-            if s["searchable"]:
+            if s["searchable"] and (not kind or s["kind"] == kind):
                 counts[s["category"]] = counts.get(s["category"], 0) + 1
         lines = ["棚の分類と本数（ws_find(ask=\"分類:名前\") でその分類の札、ask=\"頼みの文\" で候補）:"]
         lines += [f"  {c}: {counts[c]} 本" for c in gas_ws_catalog.CATEGORIES if c in counts]

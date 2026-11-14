@@ -15,18 +15,21 @@
 SHELF['rows'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), act = op.action || (op.cols ? 'delete' : 'delete');
   var isCol = !!op.cols, list = (isCol ? op.cols : op.rows) || [];
+  var tw = findTable_(sh);
+  var colRef = function (x) { return typeof x === 'number' ? x : (tw ? colIndexOf_(tw, x) : colNum_(x)); };
   if (act === 'insert') {
     var at = op.at || list[0]; need_({ shelf: 'rows', at: at }, ['at']);
     var cnt = op.count || 1;
-    if (isCol) sh.insertColumnsBefore(typeof at === 'number' ? at : colNum_(at), cnt); else sh.insertRowsBefore(parseInt(at), cnt);
-    chg_(ctx, sh, (isCol ? at + '列の前' : at + '行目の前'), cnt + ' ' + (isCol ? '列' : '行') + '挿入');
+    var atNum = isCol ? colRef(at) : parseInt(at);
+    if (isCol) sh.insertColumnsBefore(atNum, cnt); else sh.insertRowsBefore(atNum, cnt);
+    chg_(ctx, sh, (isCol ? (typeof at === 'number' ? colLetter_(at) : at) + '列の前' : at + '行目の前'), cnt + ' ' + (isCol ? '列' : '行') + '挿入');
   } else if (act === 'delete') {
     if (!list.length) throw new ArgError('棚「rows」に rows（行番号の配列）か cols が要ります');
-    var nums = list.map(function (x) { return isCol ? (typeof x === 'number' ? x : colNum_(x)) : parseInt(x); }).sort(function (a, b) { return b - a; });
+    var nums = list.map(function (x) { return isCol ? colRef(x) : parseInt(x); }).sort(function (a, b) { return b - a; });
     var max = isCol ? sh.getMaxColumns() : sh.getMaxRows();
     nums.forEach(function (n) { if (n < 1 || n > max) throw new ArgError((isCol ? '列' : '行') + '番号 ' + n + ' は範囲外です（1〜' + max + '）'); });
     var peek = nums.map(function (n) { var v = isCol ? sh.getRange(1, n, Math.min(sh.getLastRow() || 1, 50), 1).getDisplayValues() : sh.getRange(n, 1, 1, Math.max(1, sh.getLastColumn())).getDisplayValues()[0]; return (isCol ? colLetter_(n) + '列' : n + '行目') + '「' + String(isCol ? v.map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('/') : v.filter(Boolean).slice(0, 3).join('/')).slice(0, 24) + '」'; });
-    var tw = findTable_(sh), wide = false;   // 表の外まで／明細の半分より多くを消す削除は、ok=True でも 1 回止める
+    var wide = false;   // 表の外まで／明細の半分より多くを消す削除は、ok=True でも 1 回止める
     if (tw) wide = isCol ? nums.some(function (n) { return n < tw.firstCol || n > tw.lastCol; }) : (nums.some(function (n) { return n < tw.headerRow || n > (tw.totalRow || tw.lastData); }) || wideRowCount_(tw, nums.length));
     guardDelete_(ctx, peek.reverse().join('、') + ' を削除します', wide, nums.length + (isCol ? ' 列' : ' 行'));
     nums.forEach(function (n) { if (isCol) sh.deleteColumn(n); else sh.deleteRow(n); });
@@ -35,7 +38,7 @@ SHELF['rows'] = function (ctx, op) {
     need_(op, ['from', 'to']);
     // to＝動かした後にその列（行）が来る位置。moveColumns/moveRows は「その位置の手前へ」入れるので、右（下）へ動かすときは動かす幅だけ先へ渡す
     try {
-      if (isCol) { var f = colNum_(op.from), to = colNum_(op.to); sh.moveColumns(sh.getRange(1, f, 1, 1), to > f ? to + 1 : to); }
+      if (isCol) { var f = colRef(op.from), to = colRef(op.to); sh.moveColumns(sh.getRange(1, f, 1, 1), to > f ? to + 1 : to); }
       else { var fr = parseInt(op.from), cn = op.count || 1, tr = parseInt(op.to); sh.moveRows(sh.getRange(fr, 1, cn, 1), tr > fr ? tr + cn : tr); }
       SpreadsheetApp.flush();   // 結合をまたぐ移動の失敗は、書き込みが反映されるここで出る（棚の外で出ると「内部のエラー」になる）
     } catch (e) {
@@ -63,7 +66,7 @@ SHELF['rows.insert'] = function (ctx, op) {
 // 棚: rows.delete
 // 題: 行を削除する
 // 分類: 行と列
-// 語: 行を削除|行を消|行目を消|行を取り除|行を捨て|いらない|不要な行
+// 語: 行を削除|行を消|行目を消|行を取り除|行を捨て|いらない|不要な行|まとめて削除|一気に消|まとめて消|一気に削除
 // 違い: 列なら cols.delete。重複した行・空行だけなら seiri
 // 引数: rows*=行[]
 // 例: 「3行目から5行目を消して」 → {"shelf":"rows.delete","rows":[3,4,5]}
@@ -88,7 +91,7 @@ SHELF['rows.move'] = function (ctx, op) {
 // 棚: cols.insert
 // 題: 列を挿入する
 // 分類: 行と列
-// 語: 列を挿入|列を追加|列を足|列を差し込|空の列|間に列|列を増や
+// 語: 列を挿入|列を追加|空の列を足|間に列を足|列を1列足|列を差し込|空の列|間に列|列を増や
 // 違い: 行なら rows.insert
 // 引数: at*=列, count=数
 // 頼み: at~[A-Z]{1,3}列と([A-Z]{1,3})列の間 ; at~([A-Z]{1,3})列の(?:前|左)
@@ -129,7 +132,7 @@ SHELF['cols.move'] = function (ctx, op) {
 // 語: 見出しを固定|行を固定|列を固定|枠を固定|動かない|スクロールしても|ウィンドウ枠の固定
 // 違い: 固定を外すなら unfreeze
 // 引数: rows=数=1, cols=数=0
-// 頼み: rows~([0-9]+)行目?(?:まで|を|が|と|の|も) ; cols=1<A列 ; cols~([0-9]+)列目
+// 頼み: rows~([0-9]+)行目?(?:まで)?(?:固定|フリーズ|動かない) ; cols=1<A列 ; cols~([0-9]+)列目
 // 例: 「1行目の見出しを固定して」 → {"shelf":"freeze","rows":1}
 // 例: 「見出し行とA列を固定して」 → {"shelf":"freeze","rows":1,"cols":1}
 // 触る: 固定
@@ -205,7 +208,7 @@ SHELF['rows.show'] = function (ctx, op) {
 // 棚: cols.hide
 // 題: 列を隠す
 // 分類: 行と列
-// 語: 列を隠|列を非表示|列を見えなく|列を隠して
+// 語: 列を隠|列を非表示|非表示にして|非表示に|列を見えなく|列を隠して
 // 違い: 列を再表示するなら cols.show。列を消すなら cols.delete
 // 引数: cols*=列[]
 // 例: 「C列とD列を隠して」 → {"shelf":"cols.hide","cols":["C","D"]}

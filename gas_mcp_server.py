@@ -45,7 +45,8 @@ def reload_tools() -> str:
     """常駐MCPサーバーのツール定義および GasClient ロジックをメモリ上でホットリロードします。
     サーバープロセスを再起動することなく、最新の Python コードを即座に反映します。
     """
-    global _client
+    global _client, _ws
+    _ws = None
     import importlib
     import gas_client
 
@@ -53,6 +54,12 @@ def reload_tools() -> str:
     if "gas_local_extras" in sys.modules:
         import gas_local_extras
         importlib.reload(gas_local_extras)
+    for mod_name in ["gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_workspace", "gas_ws_ai"]:
+        if mod_name in sys.modules:
+            try:
+                importlib.reload(sys.modules[mod_name])
+            except Exception:
+                pass
 
     if _client is not None:
         old_client = _client

@@ -101,9 +101,10 @@ SHELF['total'] = function (ctx, op) {
 // 棚: summary
 // 題: 項目ごとの集計表を作る
 // 分類: 集計
-// 語: 項目ごとの集計|まとめて|集計表を|部署ごとに合計|ごとの合計|ごとに集計|ごとの件数
+// 語: 項目ごとの集計|まとめて集計|集計表を|部署ごとに合計|ごとの合計|ごとに集計|ごとの件数|集計表を作|集計表を新|ごとの集計表|ごとの金額|ごとの数量|をまとめて|売上をまとめて
 // 違い: ピボットテーブルを作るなら pivot.new。表自体の合計行なら total。出力先シートの既定は「集計」（別シート名の指定が無ければ into は省略）
 // 引数: by*=列, values*=列[], func=選択(sum/count/avg)=sum, into=文字
+// 頼み: into=集計<新しいシートに ; by~([^\s]+)ごとの ; func=avg<平均 ; func=count<件数|人数
 // 例: 「部署ごとの金額の合計表を作って」 → {"shelf":"summary","by":"部署","values":["金額"]}
 // 例: 「得意先ごとの金額の合計を出して」 → {"shelf":"summary","by":"得意先","values":["金額"]}
 // 危ない: 消す
@@ -200,7 +201,7 @@ SHELF['pivot.new'] = function (ctx, op) {
 // 語: グラフを作|グラフにして|グラフを入れ|棒グラフ|折れ線|円グラフ|推移|グラフのタイトル
 // 違い: タイトルや種類を変えるときは chart.delete で消して作り直さず、{"shelf":"chart.new","edit":true,"title":"..."} で既存グラフを変更する（target 指定可）。「〇〇ごとの△△をグラフにして」でも集計表作成の頼みが無ければ summary で新シートを足さず元表 2 列（例 "C1:C21,G1:G21"）でそのまま描く。ピボットは pivot.new
 // 引数: range=範囲, type=選択(column/bar/line/pie/area/scatter)=column, title=文字, at=範囲, target=文字, edit=真偽
-// 頼み: type=bar<横棒 ; type=line<折れ線 ; type=pie<円グラフ ; type=area<面グラフ ; type=scatter<散布図 ; type=column<棒グラフ|縦棒 ; title~タイトルを[『「]([^』」]+)[』」] ; title~タイトルを([^』」\s、。]+?)(?:に|へ) ; edit=true<タイトルを|に変え|に変更|に直し|を変えて|を変更|を直し|今あるグラフ|既存のグラフ
+// 頼み: type=bar<横棒 ; type=line<折れ線 ; type=pie<円グラフ ; type=area<面グラフ ; type=scatter<散布図 ; type=column<棒グラフ|縦棒|グラフ ; title~タイトルを[『「]([^』」]+)[』」] ; title~タイトルを([^』」\s、。]+?)(?:に|へ) ; edit=true<タイトルを|に変え|に変更|に直し|を変えて|を変更|を直し|今あるグラフ|既存のグラフ
 // 例: 「売上の推移を折れ線グラフにして」 → {"shelf":"chart.new","type":"line","title":"売上推移"}
 // 例: 「今あるグラフのタイトルを分類別在庫に変えて」 → {"shelf":"chart.new","edit":true,"title":"分類別在庫"}
 // 触る: グラフ

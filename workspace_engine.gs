@@ -1120,7 +1120,15 @@ function actUndo_(req) {
   }
   var sideRec2 = (entry.sheets && entry.sheets.length) ? packSide_(entry.sheets, entry.lite ? entry.liteItems : (it.sideItems || [])) : null;
   if (sideRec2) { saveSide_(n, sideRec2); entry.hasSide = true; entry.sideItems = sideRec2.items; entry.sheets = stripSide_(entry.sheets); }
-  it.undone = true; l.items.push(entry); ledgerSave_(l);
+  it.undone = true;
+  if (req.to) {
+    l.items.forEach(function (x) {
+      if (x.id === it.id && x.n > it.n && !x.undone && !x.isUndo) {
+        x.undone = true;
+      }
+    });
+  }
+  l.items.push(entry); ledgerSave_(l);
   return { ok: true, undone: it.n, backup: n, what: it.what, notes: undoNotes, target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
 }
 
