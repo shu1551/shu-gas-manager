@@ -385,7 +385,15 @@ class WorkspaceManager:
         tc, fresh = None, False
 
         def look_fresh():
-            self._look(target=target)               # 表の形を見て覚える（1 往復）
+            try:
+                self._look(target=target)           # 表の形を見て覚える（1 往復）
+            except WorkspaceError as e:
+                if "がありません。あるのは" not in str(e):
+                    raise
+                s0 = self._load()                    # 覚えていたシートが消えた → 先頭のシートで見直す
+                (s0.get("target") or {}).pop("sheet", None)
+                self._save(s0)
+                self._look(target=target)
             s = self._load()
             t = dict(s.get("target") or tgt)
             return t, self._cached_table(s, t)
@@ -399,7 +407,7 @@ class WorkspaceManager:
             table = (tc or {}).get("table")
             p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=tgt.get("sheet", ""))
             tim.lap("当て")
-            if not p.fire and p.missing and not fresh and kind == "sheet" and not is_new:
+            if not p.fire and p.missing and not p.reasons and not fresh and kind == "sheet" and not is_new:
                 # 覚えていた形で引数が決まらなかった → 形が変わったのかもしれない。1 回だけ見直して組み直す
                 tgt, tc = look_fresh()
                 fresh = True
@@ -414,6 +422,8 @@ class WorkspaceManager:
             st2, res, key = self._do_res(p.ops, target, ok, tim, extra)
             if res.get("stale") and attempt == 0:
                 t = res.get("target") or tgt
+                if t.get("sheet") and (st2.get("target") or {}).get("id") == t.get("id"):
+                    st2["target"]["sheet"] = t["sheet"]     # 覚えていたシートが消えていたら、エンジンが見た先頭のシートに替える
                 self._remember_table(st2, t, res.get("table"), res.get("sheets"))
                 self._save(st2)
                 tc = self._cached_table(st2, t)

@@ -614,7 +614,7 @@ function runDo_(req, T0) {
   }
   lap_(tm, 'open');
   if (req.expect && kind === 'sheet' && !created) {
-    var shE = t.sheet || file.getSheets()[0].getName(), nowT = tableOfSheet_(file, shE);
+    var shE = (t.sheet && file.getSheetByName(t.sheet)) ? t.sheet : file.getSheets()[0].getName(), nowT = tableOfSheet_(file, shE);
     if (!sameTable_(nowT, req.expect)) {
       return { ok: false, stale: true, error: '表の形が変わっていました（書いていません）', target: { id: file.getId(), name: file.getName(), kind: 'sheet', url: file.getUrl(), sheet: shE },
         table: nowT && !nowT.none ? nowT : null, sheets: file.getSheets().map(function (s) { return s.getName(); }), ms: msOut_(tm) };
