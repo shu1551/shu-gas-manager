@@ -65,9 +65,11 @@ def test_preview_without_ok_counts_as_the_first_stop_so_the_normal_flow_stays_tw
 def test_ok_true_from_the_start_is_stopped_once_then_passes_when_the_same_ops_comes_again():
     out = _run(TRY + """
       var a = attempt(mk(true), true), b = attempt(mk(true), true);
-      __out = { a: a, b: b };
+      var r0 = null; try { guardDelete_(mk(true), 'シート「x」を削除します', true, '2'); } catch (e) { r0 = e; }
+      __out = { a: a, b: b, a_needs_ok: !!(r0 && r0.isBlocked) };
     """)
-    assert out["a"].startswith("blocked") and "「消してよい」の承認" not in out["a"]          # ok は付いているので、見て確かめてもう一度、とだけ言う
+    assert out["a"].startswith("blocked") and "「消してよい」の承認" in out["a"] and "使う人に見せて" in out["a"]  # ok=True で来ても使う人への確認を求める
+    assert out["a_needs_ok"] is True
     assert out["b"] == "pass"
 
 

@@ -454,7 +454,7 @@ class WorkspaceManager:
         err = res.get("error") or "不明なエラー"
         if res.get("blocked"):
             lines.append("止めました: " + err)
-            lines.append("何も変えていません。承認の言葉があるときだけ ok=True で撃ち直してください。")
+            lines.append("何も変えていません。消える物をユーザーに見せて確認し、ユーザーの承認の言葉があるときだけ ok=True で撃ち直してください。")
         elif res.get("busy"):
             lines.append("失敗: " + err)
         else:

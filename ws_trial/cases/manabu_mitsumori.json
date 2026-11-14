@@ -215,7 +215,7 @@
     ],
     "turns": [
       {
-        "say": "C2:C20の数量列には数字しか入らないようにして",
+        "say": "D2:D20の数量列には数字しか入らないようにして",
         "approve": "まだ",
         "askback": "要らない",
         "expect": {
@@ -231,7 +231,7 @@
     "model": [
       {
         "shelf": "validation.number",
-        "range": "C2:C20"
+        "range": "D2:D20"
       }
     ],
     "may_change": [],

@@ -654,7 +654,7 @@ function runDo_(req, T0) {
       discardBackup_(bk);
     } catch (e2) { why = String(e2.message || e2); }
     var out2 = { ok: false, error: String(err.message || err), where: '棚 #' + (ctx.opNo || 0) + ' ' + (ctx.opName || ''),
-      restored: restored, restore_error: why, blocked: !!err.isBlocked, arg: !!err.isArg, target: tgt_(ctx, file), stack: String(err.stack || '').slice(0, 400) };
+      restored: restored, restore_error: why, blocked: !!err.isBlocked, needs_ok: !!err.isBlocked, arg: !!err.isArg, target: tgt_(ctx, file), stack: String(err.stack || '').slice(0, 400) };
     if (created) out2.created = created;
     return out2;
   }
@@ -1049,7 +1049,7 @@ function guardWide_(ctx, msg, count) {
   Object.keys(map).forEach(function (k) { if (now - map[k] < WIDE_MS) live[k] = map[k]; });
   if (ctx.ok && live[key]) { delete live[key]; setJson_('WIDE', live); return; }
   live[key] = now; setJson_('WIDE', live);
-  throw new Blocked('広い削除です。' + (count ? '消える数: ' + count + '。' : '') + (msg.length > 150 ? msg.slice(0, 150) + '…' : msg) + '（何が消えるかを見て' + (ctx.ok ? '' : '、「消してよい」の承認を得てから') + '、同じ ops をもう一度 ok=True で撃つと通ります）');
+  throw new Blocked('広い削除です。' + (count ? '消える数: ' + count + '。' : '') + (msg.length > 150 ? msg.slice(0, 150) + '…' : msg) + '（何が消えるかを使う人に見せて、「消してよい」の承認を得てから、同じ ops をもう一度 ok=True で撃つと通ります）');
 }
 // 広さの目安: 範囲がシートの値のある範囲を全部覆う／表の外まで及ぶ
 function wideRange_(sh, rg) {
@@ -1107,12 +1107,17 @@ function rgb_(s) {
     '水色': '#00FFFF', 'シアン': '#00FFFF', 'cyan': '#00FFFF', 'lightblue': '#ADD8E6',
     '紺': '#000080', 'ネイビー': '#000080', 'navy': '#000080',
     '茶': '#8B4513', '茶色': '#8B4513', 'brown': '#8B4513',
-    '薄赤': '#FCE4D6', '薄青': '#D9E1F2', '薄緑': '#E2EFDA', '薄黄': '#FFF2CC', '薄灰': '#F2F2F2', '薄灰色': '#F2F2F2',
+    '薄赤': '#FCE4D6', '薄青': '#D9E1F2', '薄緑': '#E2EFDA', '薄黄': '#FFF2CC', '薄灰': '#F2F2F2', '薄灰色': '#F2F2F2', '薄グレー': '#F2F2F2', '薄橙': '#FCE5CD', '薄紫': '#EAD1DC',
     'lightred': '#FCE4D6', 'lightgreen': '#E2EFDA', 'lightyellow': '#FFF2CC', 'lightgray': '#F2F2F2'
   };
   var k = str.toLowerCase();
   if (map[k] !== undefined) return map[k];
   if (map[str] !== undefined) return map[str];
+  // 「黄色」「薄い灰色」などの表記ゆれを吸収する
+  var norm = str.replace(/^薄い/, '薄').replace(/色$/, '');
+  if (map[norm] !== undefined) return map[norm];
+  var norm2 = str.replace(/^薄い/, '薄');
+  if (map[norm2] !== undefined) return map[norm2];
   throw new ArgError('知らない色の名前です: 「' + str + '」');
 }
 function shiftFormula_(f, off) {

@@ -3,8 +3,8 @@
 // 棚: format
 // 題: 範囲の書式を変える
 // 分類: 見た目
-// 語: 書式を|太字に|色を付け|背景色|文字色|中央揃え|罫線|赤く
-// 違い: 条件付きで色を変えるなら cf.add。1行おきに色なら banding.add
+// 語: 書式を|太字に|色を付け|背景色|表示に|中央揃え|罫線|赤く
+// 違い: 「〜の列」は範囲を切らず col:"列名" で渡す。条件付きは cf.add、1行おきは banding.add
 // 引数: range=範囲, col=列, header=真偽, bold=真偽, italic=真偽, color=色, bg=色, size=数, font=文字, number_format=文字, align=文字, valign=文字, wrap=真偽, borders=文字, merge=真偽
 // どれか: range col header
 // 例: 「見出しを太字で青い背景に」 → {"shelf":"format","header":true,"bold":true,"bg":"#1F4E79","color":"#FFFFFF"}
@@ -61,7 +61,7 @@ SHELF['width'] = function (ctx, op) {
 // 棚: cf.add
 // 題: 条件付き書式を付ける
 // 分類: 見た目
-// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|だったら色|を目立たせ|自動で色
+// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色
 // 違い: いつも同じ色なら format
 // 引数: range*=範囲, when*=選択(gt/ge/lt/le/eq/ne/contains/blank/notblank/formula), value=文字, bg=色, color=色, bold=真偽
 // 例: 「売上が100万以上のセルを赤く」 → {"shelf":"cf.add","range":"F2:F100","when":"ge","value":"1000000","bg":"赤"}

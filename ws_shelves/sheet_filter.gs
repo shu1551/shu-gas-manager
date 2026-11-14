@@ -57,7 +57,7 @@ function tidyRange_(ctx, sh, rangeA1) {
 // 棚: tidy
 // 題: 表の見た目を整える
 // 分類: 整える
-// 語: 表を整|見た目を整|体裁を整|見やすく|罫線を引|列幅を揃|表を綺麗
+// 語: 表を整|見た目を整|体裁を整|見やすく|罫線を引|列幅を揃|表を綺麗|きれいに
 // 引数: range=範囲
 // 例: 「この表を見やすく整えて」 → {"shelf":"tidy"}
 // 例: 「B列からD列だけ体裁を整えて」 → {"shelf":"tidy","range":"B:D"}
@@ -263,8 +263,8 @@ SHELF['dedupe'] = function (ctx, op) {
 // 題: 文字を列に分ける
 // 分類: 整える
 // 語: 列に分け|列を分割|区切って分|カンマで分|スペースで分|姓と名に分|文字を分割
-// 違い: 列を挿入するだけなら cols.insert
-// 引数: col*=列, by=選択(comma/space/tab/slash/hyphen/custom)=comma, sep=文字
+// 違い: 隣の列を消さず左に空列を入れて分けるなら insert:true。列を挿入するだけなら cols.insert
+// 引数: col*=列, by=選択(comma/space/tab/slash/hyphen/custom)=comma, sep=文字, insert=真偽
 // 例: 「氏名列を姓と名にスペースで分けて」 → {"shelf":"split.col","col":"氏名","by":"space"}
 // 例: 「住所列をカンマで列に分割して」 → {"shelf":"split.col","col":"住所","by":"comma"}
 // 危ない: 上書き
@@ -299,8 +299,13 @@ SHELF['split.col'] = function (ctx, op) {
     return;
   }
   var extraCols = maxParts - 1;
-  var checkRg = sh.getRange(t.firstData, ci + 1, numRows, extraCols);
-  guardOverwrite_(ctx, checkRg, '分割先「' + checkRg.getA1Notation() + '」');
+  // insert=true のときは右に空列を挿入して上書きを避ける
+  if (op.insert) {
+    sh.insertColumnsAfter(ci, extraCols);
+  } else {
+    var checkRg = sh.getRange(t.firstData, ci + 1, numRows, extraCols);
+    guardOverwrite_(ctx, checkRg, '分割先「' + checkRg.getA1Notation() + '」');
+  }
 
   var outVals = [];
   for (var i = 0; i < numRows; i++) {

@@ -2581,8 +2581,12 @@ _ws = None
 def get_ws():
     global _ws
     if _ws is None:
-        import gas_workspace
-        _ws = gas_workspace.WorkspaceManager(client=get_client())
+        if os.environ.get("WS_SANDBOX") == "1":
+            import gas_ws_ai
+            _ws = gas_ws_ai.make_sandbox_ws(client=get_client())
+        else:
+            import gas_workspace
+            _ws = gas_workspace.WorkspaceManager(client=get_client())
     return _ws
 
 def _ws_run(fn, **kw):
@@ -2615,7 +2619,7 @@ def ws_find(ask: str = "", kind: str = "") -> str:
 def ws_do(ops: str, target: str = "", ok: bool = False) -> str:
     """棚の JSON 配列を 1 回で撃って、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
     ops=[{"shelf":"棚の名前", …引数}]。棚の名前と引数は ws_look(ask=…)／ws_find の札のとおりに。
-    棚に無い設定は shelf="api"（requests は batchUpdate の形）。target="new:名前"で新規。消す手の ok=True は、消す物を名指しで頼まれ 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。
+    棚に無い設定は shelf="api"（requests は batchUpdate の形）。target="new:名前"で新規。ok=True はユーザーの言葉に明確な承認があるときだけ（広い削除は 1 回止まるので見せて確認）。
     返事は 対象／直した所／残り／URL。"""
     return _ws_run(get_ws().do, ops=ops, target=target, ok=ok)
 

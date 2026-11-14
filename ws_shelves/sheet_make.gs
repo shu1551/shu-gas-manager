@@ -204,11 +204,13 @@ SHELF['pivot.new'] = function (ctx, op) {
 // 控え: 今
 SHELF['chart.new'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
-  var full = op.range ? sh.getRange(op.range) : (function () {
+  var rangeList = op.range ? String(op.range).split(/\s*,\s*/).filter(function (s) { return s; }) : [];
+  var ranges = rangeList.length ? rangeList.map(function (r) { return sh.getRange(r); }) : [(function () {
     var t = findTable_(sh);
     return t ? sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
-  })();
-  if (full.getLastRow() === 0 || full.getLastColumn() === 0) {
+  })()];
+  var full = ranges[0];
+  if (!full || full.getLastRow() === 0 || full.getLastColumn() === 0) {
     throw new ArgError('グラフにするデータがありません');
   }
   var typeStr = (op.type || 'column').toLowerCase();
@@ -223,19 +225,19 @@ SHELF['chart.new'] = function (ctx, op) {
   var chartType = typeMap[typeStr];
   if (!chartType) throw new ArgError('種類「' + typeStr + '」は使えません（column/bar/line/pie/area/scatter）');
   var b = sh.newChart().setChartType(chartType);
-  b.addRange(full);
+  ranges.forEach(function (rg) { b.addRange(rg); });
   if (op.title) b.setOption('title', op.title);
   if (op.at) {
     var atRg = sh.getRange(op.at);
     b.setPosition(atRg.getRow(), atRg.getColumn(), 0, 0);
   } else {
     var atRow = full.getRow();
-    var atCol = full.getLastColumn() + 2;
+    var atCol = Math.max.apply(null, ranges.map(function (rg) { return rg.getLastColumn(); })) + 2;
     b.setPosition(atRow, atCol, 0, 0);
   }
   sh.insertChart(b.build());
   ctx.curSheet = sh.getName();
-  chg_(ctx, sh, full.getA1Notation(), 'グラフを作成（' + typeStr + (op.title ? '・' + op.title : '') + '）');
+  chg_(ctx, sh, ranges.map(function (rg) { return rg.getA1Notation(); }).join(','), 'グラフを作成（' + typeStr + (op.title ? '・' + op.title : '') + '）');
 };
 
 // 棚: chart.delete
