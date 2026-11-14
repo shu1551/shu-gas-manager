@@ -2600,36 +2600,37 @@ def _ws_run(fn, **kw):
 @mcp.tool()
 @safe_tool
 def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False, ask: str = "") -> str:
-    """スプレッドシート・文書を見て、今の相手として覚える（表の形・文書の見出し）。target=URL・ID・名前（空なら今の相手）。
-    ask="頼みの文" を一緒に渡すと使える棚の札も同時に返り 1 回で済む。中身も必要なときは range="A1:Z30" を最初から同時に渡す。
-    image=True は視覚確認を頼まれたときだけ（通常の操作後・ws_do 成功後に確認の ws_look は撃たない）。
-    作る・直す前はこれ。"""
+    """スプレッドシート・文書を見て今の相手として覚える（表の形・見出し）。target=URL・ID・名前（空なら今の相手）。相手が決まっていれば ws_do(ask) は look なしで撃てる。
+    中身を読むときは range="A1:Z30" を最初から渡し 1 回で済む。image=True は見た目の確認を頼まれたときだけ（ws_do 成功後に確認の ws_look は撃たない）。"""
     return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image, ask=ask)
 
 @mcp.tool()
 @safe_tool
 def ws_find(ask: str = "", kind: str = "") -> str:
-    """頼みの文か語から、棚の札（名前・引数・例）を引く。通信なし。ask="分類:入力" でその分類の全部、ask="棚:名前" でその 1 本、空で分類の一覧。
-    候補が合わなければ語を言い換えて引き直す。棚に無ければ api（Sheets API の batchUpdate）を ws_do で撃つ。
-    kind=sheet|doc（空なら今の相手の種類）。"""
+    """棚の札（名前・引数・例）を引く（通信なし）。ws_do(ask) が「撃っていません」で候補が合わないときの引き直し用。棚に無ければ api（Sheets API の batchUpdate）。
+    ask="頼みか語"・"分類:入力"（分類の全部）・"棚:名前"（1 本）・空（一覧）。kind=sheet|doc。"""
     return _ws_run(get_ws().find, ask=ask, kind=kind)
 
 @mcp.tool()
 @safe_tool
-def ws_do(ops: str, target: str = "", ok: bool = False) -> str:
-    """複数の棚を JSON 配列で 1 回にまとめて撃ち、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
-    ops=[{"shelf":"棚の名前", …引数}]。棚の名前と引数は ws_look(ask=…)／ws_find の札のとおりに。
-    棚に無い設定は shelf="api"（requests は batchUpdate の形）。target="new:名前"で新規。値を消さない手（作成・書式・集計・整える等）は聞き返さず ok なしで即撃つ。消す・上書きの ok=True は、対象が名指しで 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。
-    成功後は確認のための ws_look を撃たず、そのまま 対象／直した所／残り／URL を返す。"""
-    return _ws_run(get_ws().do, ops=ops, target=target, ok=ok)
+def ws_do(ask: str = "", ops: str = "", target: str = "", ok: bool = False) -> str:
+    """スプレッドシート・文書を作る・直す。まず ask="使う人の頼みの文そのまま" で 1 回撃つ（道具が棚を当て・引数を組み・控えを取って撃ち、直した所・撃った棚・撃った後の表の形を返す。成功後は確かめの ws_look を撃たずに答える）。
+    「撃っていません」なら足りない引数・組みかけ・候補の札を見て ops=[{"shelf":"棚",…引数}] で撃つ（人にしか分からない物だけ聞く）。棚に無い設定は shelf="api"（batchUpdate の requests）。target=URL・ID・名前・"new:名前"（空なら今の相手）。
+    値を消さない手（作成・書式・集計・整える等）は聞き返さず ok なしで即撃つ。消す・上書きの ok=True は、場所が名指しで 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。止まったら消える物を見せて聞く。"""
+    return _ws_run(get_ws().do, ops=ops, target=target, ok=ok, ask=ask)
 
 @mcp.tool()
 @safe_tool
 def ws_undo(to: str = "", list: bool = False, ok: bool = False) -> str:
-    """直前の ws_do を控えから戻す（空=直前、to=番号、list=True で台帳）。
-    道具が書いた後に人が手で直した所があれば止まる（ok=True で戻す）。
-    新しく作ったファイルは消さない。"""
+    """直前の ws_do を控えから戻す（空=直前、to=番号、list=True で台帳）。人が後から手で直した所があれば止まる（ok=True で戻す）。新しく作ったファイルは消さない。"""
     return _ws_run(get_ws().undo, to=to, list=list, ok=ok)
+
+# 表を直すだけの人向けの起こし方: 環境変数 GAS_MCP_ONLY=ws で ws の 4 本だけを出す（AI が読む道具の説明が 59 本→4 本に減り、速く安くなる）
+WS_TOOLS = ("ws_do", "ws_look", "ws_find", "ws_undo")
+if os.environ.get("GAS_MCP_ONLY", "").strip().lower() == "ws":
+    for _t in list(mcp._tool_manager.list_tools()):
+        if _t.name not in WS_TOOLS:
+            mcp.remove_tool(_t.name)
 
 if __name__ == "__main__":
     mcp.run()

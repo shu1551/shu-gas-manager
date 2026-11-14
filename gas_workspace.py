@@ -346,18 +346,97 @@ class WorkspaceManager:
         return self._search_name(target, kind), False
 
     # ------------------------------------------------------------ ws_do
-    def do(self, ops, target="", ok=False):
+    def do(self, ops="", target="", ok=False, ask=""):
         tim = _Timer()
         self._tim = tim
         try:
-            out = self._do(ops, target, ok, tim)
+            if ask and not (ops if isinstance(ops, (list, dict)) else str(ops or "").strip()):
+                out = self._do_ask(ask, target, ok, tim)
+            else:
+                out = self._do(ops, target, ok, tim)
         finally:
             self._tim = None
         tim.lap("返事")
         self.last_timing = tim
         return out + ("\n" + format_timing(tim) if self.timing else "")
 
+    # ------------------------------------------------------------ ws_do(ask=…)：当てて・組んで・撃つを 1 回で
+    def _remember_table(self, st, tgt, table, sheets):
+        """表の形を覚える（次の頼みの引数を組むのに使う）。sheets は名前のリスト"""
+        if not tgt.get("id"):
+            return
+        st["table_cache"] = {"id": tgt["id"], "sheet": tgt.get("sheet", ""), "table": table or None,
+                             "sheets": [s["name"] if isinstance(s, dict) else s for s in (sheets or [])]}
+
+    def _cached_table(self, st, tgt):
+        tc = st.get("table_cache") or {}
+        if tgt.get("id") and tc.get("id") == tgt["id"] and (not tgt.get("sheet") or tc.get("sheet") == tgt.get("sheet")):
+            return tc
+        return None
+
+    def _do_ask(self, ask, target, ok, tim):
+        import gas_ws_ask
+        st = self._load()
+        tgt, is_new = self.resolve_target(target, None, st)
+        kind = tgt.get("kind") or ""
+        if not kind and tgt.get("id"):
+            kind = self._kind_of_mime(self._drive_meta(tgt["id"])["mimeType"]) or ""
+        tim.lap("相手")
+        tc, fresh = None, False
+
+        def look_fresh():
+            self._look(target=target)               # 表の形を見て覚える（1 往復）
+            s = self._load()
+            t = dict(s.get("target") or tgt)
+            return t, self._cached_table(s, t)
+        if kind == "sheet" and not is_new:
+            tc = self._cached_table(st, tgt)
+            if tc is None:                          # 表の形を覚えていない相手は、先に 1 回だけ見る
+                tgt, tc = look_fresh()
+                fresh = True
+        tim.lap("表の形")
+        for attempt in range(2):
+            table = (tc or {}).get("table")
+            p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=tgt.get("sheet", ""))
+            tim.lap("当て")
+            if not p.fire and p.missing and not fresh and kind == "sheet" and not is_new:
+                # 覚えていた形で引数が決まらなかった → 形が変わったのかもしれない。1 回だけ見直して組み直す
+                tgt, tc = look_fresh()
+                fresh = True
+                table = (tc or {}).get("table")
+                p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=tgt.get("sheet", ""))
+                tim.lap("当て")
+            if not p.fire:
+                return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
+            extra = {"want_table": True}
+            if table and kind == "sheet" and not is_new:
+                extra["expect"] = table
+            st2, res, key = self._do_res(p.ops, target, ok, tim, extra)
+            if res.get("stale") and attempt == 0:
+                t = res.get("target") or tgt
+                self._remember_table(st2, t, res.get("table"), res.get("sheets"))
+                self._save(st2)
+                tc = self._cached_table(st2, t)
+                tgt, fresh = dict(t), True
+                continue
+            break
+        text = self._finish_do(st2, res, key)
+        if res.get("ok") and res.get("table") is not None:
+            st3 = self._load()
+            self._remember_table(st3, res.get("target") or {}, res.get("table"), res.get("sheets"))
+            self._save(st3)
+        shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p.ops)
+        extra_lines = ["撃った棚: " + shown]
+        tl = gas_ws_ask.table_line(res.get("table") or {})
+        if res.get("ok") and tl:
+            extra_lines.append("撃った後の" + tl)
+        return text + "\n" + "\n".join(extra_lines)
+
     def _do(self, ops, target, ok, tim):
+        st, res, key = self._do_res(ops, target, ok, tim)
+        return self._finish_do(st, res, key)
+
+    def _do_res(self, ops, target, ok, tim, extra=None):
         ops = self.parse_ops(ops)
         kind = self.validate_ops(ops)
         ops = [self.catalog.normalize_op(o) for o in ops]   # 列[]・行[] に 1 つだけ渡された値を配列にそろえる
@@ -379,20 +458,22 @@ class WorkspaceManager:
         if sheet:
             body_target["sheet"] = sheet
         # 呼び直しで二重にならない番号：時間切れで終わった同じ頼みは同じ番号で撃つ
-        h = _digest(body_target, ops, bool(ok))
+        h = _digest(body_target, ops, bool(ok)) if not extra else _digest(body_target, ops, bool(ok), extra)
         pend = st.get("pending") or {}
         call_id = pend["call_id"] if pend.get("hash") == h else uuid.uuid4().hex
         st["pending"] = {"hash": h, "call_id": call_id}
         self._save(st)
         tim.lap("状態")
-        res = self._post({"action": "do", "call_id": call_id, "target": body_target, "ops": ops, "ok": bool(ok)})
+        body = {"action": "do", "call_id": call_id, "target": body_target, "ops": ops, "ok": bool(ok)}
+        body.update(extra or {})
+        res = self._post(body)
         if res.get("ok"):
             gas_ws_api.log_uses(ops, self.api_uses_path)       # 撃った api の型と頼みの 1 行（棚に上げる候補の材料）
         tim.engine = res.get("ms") or {}
         tim.last = time.perf_counter()
         st = self._load()
         st.pop("pending", None)
-        return self._finish_do(st, res, key)
+        return st, res, key
 
     def _finish_do(self, st, res, key):
         tgt = res.get("target") or {}
@@ -518,6 +599,8 @@ class WorkspaceManager:
         t = res["target"]
         st = self._load()
         st["target"] = {k: t[k] for k in ("id", "name", "kind", "url", "sheet") if t.get(k)}
+        if t.get("kind") == "sheet":
+            self._remember_table(st, st["target"], res.get("table"), res.get("sheets"))
         self._save(st)
         return self.format_look(res)
 

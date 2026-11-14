@@ -53,6 +53,7 @@ SHELF['rows'] = function (ctx, op) {
 // 語: 行を挿入|行を追加|行を足|行を差し込|空行を入れ|間に行|行を増や
 // 違い: 列なら cols.insert。表の下に足すだけなら write
 // 引数: at*=文字, count=数
+// 頼み: at~([0-9]+)行目の(?:前|上) ; count~([0-9]+)行(?:を|足|追加|挿入)
 // 例: 「3行目の前に2行足して」 → {"shelf":"rows.insert","at":3,"count":2}
 // 触る: 値 書式
 SHELF['rows.insert'] = function (ctx, op) {
@@ -90,6 +91,7 @@ SHELF['rows.move'] = function (ctx, op) {
 // 語: 列を挿入|列を追加|列を足|列を差し込|空の列|間に列|列を増や
 // 違い: 行なら rows.insert
 // 引数: at*=列, count=数
+// 頼み: at~[A-Z]{1,3}列と([A-Z]{1,3})列の間 ; at~([A-Z]{1,3})列の(?:前|左)
 // 例: 「C列の前に列を1つ足して」 → {"shelf":"cols.insert","at":"C"}
 // 触る: 値 書式
 SHELF['cols.insert'] = function (ctx, op) {
@@ -127,6 +129,7 @@ SHELF['cols.move'] = function (ctx, op) {
 // 語: 見出しを固定|行を固定|列を固定|枠を固定|動かない|スクロールしても|ウィンドウ枠の固定
 // 違い: 固定を外すなら unfreeze
 // 引数: rows=数=1, cols=数=0
+// 頼み: rows~([0-9]+)行目?(?:まで|を|が|と|の|も) ; cols=1<A列 ; cols~([0-9]+)列目
 // 例: 「1行目の見出しを固定して」 → {"shelf":"freeze","rows":1}
 // 例: 「見出し行とA列を固定して」 → {"shelf":"freeze","rows":1,"cols":1}
 // 触る: 固定

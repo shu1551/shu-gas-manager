@@ -20,7 +20,7 @@ CATEGORIES = ["作る", "シート", "範囲", "行と列", "見た目", "絞る
 TOUCH_ITEMS = ["値", "書式", "シート構成", "幅", "固定", "フィルタ", "入力規則", "条件付き", "交互の色", "隠し", "グループ", "保護", "名前", "グラフ", "タブ色"]
 BACKUP_ITEMS = ["今", "名前", "先", "全部", "なし"]
 DANGERS = ["消す", "上書き"]
-HEADINGS = ["棚", "題", "分類", "語", "違い", "引数", "どれか", "例", "危ない", "触る", "控え", "検索"]
+HEADINGS = ["棚", "題", "分類", "語", "違い", "引数", "どれか", "例", "危ない", "触る", "控え", "検索", "頼み"]
 REQUIRED = ["棚", "題", "分類", "語", "引数", "例", "触る"]
 TYPES = ["シート", "範囲", "列", "列[]", "行[]", "色", "文字", "数", "真偽", "配列", "表", "対応"]
 GUARD = {"消す": "guardDelete_(", "上書き": "guardOverwrite_("}
@@ -174,7 +174,45 @@ def _build(f, name_in_code, fname, body):
         sh["examples"].append((m.group(1), op))
     if not 1 <= len(sh["examples"]) <= 2:
         raise CatalogError(f"{tag}の例は 1〜2 個です")
+    try:
+        sh["ask_rules"] = parse_ask_rules(f.get("頼み", ""), {a["name"]: a for a in args})
+    except CatalogError as e:
+        raise CatalogError(f"{tag}: {e}")
     return sh
+
+
+def parse_ask_rules(text, args):
+    """札の「頼み:」＝頼みの文から引数を組む決め（ws_do の ask が読む）。「 ; 」区切りで 2 つの形:
+      引数=値<語|語   … 語のどれかが頼みにあれば、その値（JSON として読めれば JSON、読めなければ文字）
+      引数~正規表現   … 頼みに当たれば、1 つ目の括弧の中身（型が 数 なら数に）
+    """
+    rules = []
+    for part in [p.strip() for p in (text or "").split(" ; ") if p.strip()]:
+        m = re.match(r"^([a-z_]+)~(.+)$", part)
+        if m:
+            name, pat = m.group(1), m.group(2)
+            if name not in args:
+                raise CatalogError(f"「頼み:」に引数にない名前「{name}」があります")
+            try:
+                rx = re.compile(pat)
+            except re.error as e:
+                raise CatalogError(f"「頼み:」の正規表現が読めません（{name}）: {e}")
+            if rx.groups < 1:
+                raise CatalogError(f"「頼み:」の正規表現に括弧がありません（{name}）")
+            rules.append({"arg": name, "re": pat})       # 文字のまま持つ（札は JSON にされることがある）。当てる側で compile
+            continue
+        m = re.match(r"^([a-z_]+)=(.+?)<(.+)$", part)
+        if not m:
+            raise CatalogError(f"「頼み:」の形が違います（引数=値<語|語 か 引数~正規表現）: {part}")
+        name, raw, words = m.group(1), m.group(2).strip(), [w.strip() for w in m.group(3).split("|") if w.strip()]
+        if name not in args:
+            raise CatalogError(f"「頼み:」に引数にない名前「{name}」があります")
+        try:
+            val = json.loads(raw)
+        except Exception:
+            val = raw
+        rules.append({"arg": name, "value": val, "words": words})
+    return rules
 
 
 class Catalog:

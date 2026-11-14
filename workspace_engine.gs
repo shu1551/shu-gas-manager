@@ -595,7 +595,7 @@ function actDo_(req) {
   var cacheGetMs = Date.now() - tc;
   var res = runDo_(req, Date.now());
   if (res && res.ms) res.ms.cacheGet = cacheGetMs;
-  if (req.call_id) { try { var s = JSON.stringify(res); if (s.length < 90000) cache.put('call_' + req.call_id, s, 21600); } catch (e) { } }
+  if (req.call_id && !(res && res.stale)) { try { var s = JSON.stringify(res); if (s.length < 90000) cache.put('call_' + req.call_id, s, 21600); } catch (e) { } }
   return res;
 }
 
@@ -613,6 +613,14 @@ function runDo_(req, T0) {
     var o = openTarget_(t); file = o.file; kind = o.kind;
   }
   lap_(tm, 'open');
+  if (req.expect && kind === 'sheet' && !created) {
+    var shE = t.sheet || file.getSheets()[0].getName(), nowT = tableOfSheet_(file, shE);
+    if (!sameTable_(nowT, req.expect)) {
+      return { ok: false, stale: true, error: '表の形が変わっていました（書いていません）', target: { id: file.getId(), name: file.getName(), kind: 'sheet', url: file.getUrl(), sheet: shE },
+        table: nowT && !nowT.none ? nowT : null, sheets: file.getSheets().map(function (s) { return s.getName(); }), ms: msOut_(tm) };
+    }
+    lap_(tm, 'expect');
+  }
   var l = ledger_(); l.seq++; var n = l.seq;   // 番号は最後の書き込みでまとめて残す（鍵の中なので重ならない。失敗・変更なしでは番号を使い回す）
   lap_(tm, 'seq');
   var fid = created ? created.id : (t.id || file.getId()), fname = created ? created.name : file.getName();
@@ -664,6 +672,9 @@ function runDo_(req, T0) {
     lap_(tm, 'ledger');
     var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: created ? 0 : n, ms: msOut_(tm) };
     if (created) { out.created = created; }
+    if (req.want_table && kind === 'sheet') {   // 撃った後の表の形（道具が覚えて、次の頼みの引数に使う・AI が確かめの look を撃たなくて済む）
+      try { out.table = tableOfSheet_(ctx.ss, out.target.sheet); out.sheets = ctx.ss.getSheets().map(function (s) { return s.getName(); }); lap_(tm, 'table'); out.ms = msOut_(tm); } catch (eT) { }
+    }
     return out;
   } catch (err) {
     var restored = false, why = '';
@@ -897,6 +908,25 @@ function lookSide_(ss, sh) {
   return lines;
 }
 
+function tableOut_(tb) {
+  return { header_row: tb.headerRow, first_col: colLetter_(tb.firstCol), last_col: colLetter_(tb.lastCol), data: tb.firstData + '-' + tb.lastData,
+    total_row: tb.totalRow || null, columns: headerNames_(tb).map(function (h, i) { var ci = tb.firstCol + i; return { col: colLetter_(ci), name: h, number: isNumberCol_(tb, ci) }; }) };
+}
+// 頼みの文から引数を組んだ ws_do（ask）用：道具が覚えている表の形と、今の表の形が同じか。違えば書く前に止めて今の形を返す
+function tableOfSheet_(ss, name) {
+  var sh = name ? ss.getSheetByName(name) : null;
+  if (!sh) return null;
+  var tb = findTable_(sh);
+  return tb ? tableOut_(tb) : { none: true };
+}
+function sameTable_(a, e) {
+  if (!a || a.none || !e) return false;
+  if (a.header_row !== e.header_row || a.data !== e.data || (a.total_row || null) !== (e.total_row || null)) return false;
+  var an = a.columns.map(function (c) { return c.col + '=' + c.name; }).join('|');
+  var en = (e.columns || []).map(function (c) { return c.col + '=' + c.name; }).join('|');
+  return an === en;
+}
+
 function actLook_(req) {
   var t = req.target || {}, o = openTarget_(t), out = { ok: true };
   if (o.kind === 'sheet') {
@@ -907,10 +937,7 @@ function actLook_(req) {
     out.target.sheet = sh.getName();
     try { var side = lookSide_(ss, sh); if (side.length) out.side = side; } catch (eS) { }   // 脇の状態は添え物。読めなくても look は返す
     var tb = findTable_(sh);
-    if (tb) {
-      out.table = { header_row: tb.headerRow, first_col: colLetter_(tb.firstCol), last_col: colLetter_(tb.lastCol), data: tb.firstData + '-' + tb.lastData,
-        total_row: tb.totalRow || null, columns: headerNames_(tb).map(function (h, i) { var ci = tb.firstCol + i; return { col: colLetter_(ci), name: h, number: isNumberCol_(tb, ci) }; }) };
-    }
+    if (tb) out.table = tableOut_(tb);
     if (req.range) {
       var rg = sh.getRange(req.range);
       out.range = req.range; out.values = rg.getDisplayValues(); out.formulas = rg.getFormulas();

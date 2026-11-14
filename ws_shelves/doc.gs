@@ -145,6 +145,7 @@ SHELF['doc.new'] = docKind_(function (ctx, op) {
 // 分類: 文書
 // 語: 追記|末尾に足|文末に足|最後に追加|段落を足|項目を足|節の下に
 // 引数: markdown*=文字, under=文字
+// 頼み: markdown~[『「]([^』」]+)[』」]を?(?:書き足|足|追記|加え)
 // 例: 「最後に1行足して」 → {"shelf":"doc.append","markdown":"以上です。"}
 // 触る: 値 書式
 SHELF['doc.append'] = docKind_(function (ctx, op) {
@@ -217,6 +218,7 @@ SHELF['doc.replace'] = docKind_(function (ctx, op) {
 // 分類: 文書
 // 語: 節を差し替|節を削除|見出しの下を|章を書き直|節を書き直|節ごと消|見出しごと
 // 引数: heading*=文字, action=選択(replace/delete)=replace, markdown=文字
+// 頼み: heading~[『「]([^』」]+)[』」]の節 ; action=delete<節を消|節を削除 ; markdown~の節を[『「]([^』」]+)[』」]に
 // 例: 「「概要」の節を書き直して」 → {"shelf":"doc.section","heading":"概要","markdown":"新しい概要です。"}
 // 危ない: 消す
 // 触る: 値 書式
@@ -272,6 +274,7 @@ SHELF['doc.table'] = docKind_(function (ctx, op) {
 // 分類: 文書
 // 語: 書式をそろえ|フォントを|行間を|文字サイズ|見出しをそろえ|体裁を整え|文書を整
 // 引数: font=文字, size=数, line_spacing=数
+// 頼み: font~フォントを(.+?)に ; size~([0-9.]+)\s*pt ; line_spacing~行間を([0-9.]+)
 // 例: 「文書のフォントをMeiryoに」 → {"shelf":"doc.style","font":"Meiryo"}
 // 触る: 書式
 SHELF['doc.style'] = docKind_(function (ctx, op) {

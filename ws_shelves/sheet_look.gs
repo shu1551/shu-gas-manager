@@ -6,6 +6,7 @@
 // 語: 書式を|太字に|色を付け|背景色|表示に|中央揃え|罫線|赤く
 // 違い: 「〜の列」は範囲を切らず col:"列名" で渡す。条件付きは cf.add、1行おきは banding.add
 // 引数: range=範囲, col=列, header=真偽, bold=真偽, italic=真偽, color=色, bg=色, size=数, font=文字, number_format=文字, align=文字, valign=文字, wrap=真偽, borders=文字, merge=真偽
+// 頼み: bold=true<太字|太く ; italic=true<斜体|イタリック ; header=true<見出し ; number_format=¥#,##0<円マーク|¥|円表示 ; number_format=#,##0<カンマ|桁区切り ; wrap=true<折り返 ; align=center<中央寄せ|中央揃え ; size~([0-9]+)\s*(?:pt|ポイント)
 // どれか: range col header
 // 例: 「見出しを太字で青い背景に」 → {"shelf":"format","header":true,"bold":true,"bg":"#1F4E79","color":"#FFFFFF"}
 // 例: 「金額の列を桁区切りに」 → {"shelf":"format","col":"金額","number_format":"#,##0"}
@@ -64,6 +65,7 @@ SHELF['width'] = function (ctx, op) {
 // 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色
 // 違い: いつも同じ色なら format
 // 引数: range*=範囲, when*=選択(gt/ge/lt/le/eq/ne/contains/blank/notblank/formula), value=文字, bg=色, color=色, bold=真偽
+// 頼み: when=ge<以上 ; when=le<以下 ; when=lt<未満|より小さい|より少ない ; when=gt<より大きい|を超え|超える|より多い ; when=contains<が入っている|を含む|が含まれ ; when=blank<空欄のセル|空白のセル ; value~([0-9][0-9,]*)(?:円|個|件|人)?(?:以上|以下|未満|より|を超|超) ; value~[『「]([^』」]+)[』」]
 // 例: 「売上が100万以上のセルを赤く」 → {"shelf":"cf.add","range":"F2:F100","when":"ge","value":"1000000","bg":"赤"}
 // 例: 「売上が100万以上の行を目立たせて」 → {"shelf":"cf.add","range":"A2:F100","when":"formula","value":"=$F2>=1000000","bg":"薄赤"}
 // 触る: 条件付き

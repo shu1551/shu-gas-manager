@@ -181,12 +181,12 @@ class SandboxWorkspace(GT.TrialEngine):
                 "result_head": res_text[:120] if res_text else "",
             })
 
-    def do(self, ops, target="", ok=False):
+    def do(self, ops="", target="", ok=False, ask=""):
         err = None
         res_text = ""
         before_ids = set(self._allowed_ids())
         try:
-            res_text = super().do(ops=ops, target=target, ok=ok)
+            res_text = super().do(ops=ops, target=target, ok=ok, ask=ask)
             return res_text
         except Exception as e:
             err = str(e)
@@ -199,7 +199,7 @@ class SandboxWorkspace(GT.TrialEngine):
             wrote = bool(err is None and res_text and ("直した所:" in res_text or "作りました:" in res_text or "新規:" in res_text or new_ids))
             self._log({
                 "tool": "ws_do",
-                "args": {"ops": ops, "target": target, "ok": bool(ok)},
+                "args": {"ops": ops, "target": target, "ok": bool(ok), "ask": ask},
                 "ok": err is None,
                 "wrote": wrote,
                 "blocked": blocked,
@@ -722,6 +722,7 @@ def run_l3_case(eng, file_id, case, model="haiku", ask_fn=None, state_files=None
                 "args": [str(HERE / "gas_mcp_server.py")],
                 "env": {
                     "WS_SANDBOX": "1",
+                    "GAS_MCP_ONLY": "ws",          # 道具の説明は ws の 4 本だけ（170: AI が読む量を減らす）
                     "WS_SANDBOX_STATE": str(state_file),
                     "WS_SANDBOX_LOG": str(log_file),
                     "WS_SANDBOX_LANE": str(getattr(eng, "lane", "")),

@@ -48,6 +48,20 @@ py gas.py setup --open
 }
 ```
 ※ Windows 環境で `py` ランチャーをお使いの場合は `"command": "py"` でも動作します。
+
+**表（スプレッドシート・文書）を直すだけなら、この起こし方が速くて安い**: `env` に `GAS_MCP_ONLY=ws` を足すと、道具は Workspace の 4 本（`ws_do`・`ws_look`・`ws_find`・`ws_undo`）だけになります。AI が読む道具の説明が 59 本分から 4 本分に減り、頼み 1 つの返事が早くなります。AI は `ws_do(ask="使う人の頼みの文")` を 1 回撃つだけで、道具が棚を当てて引数を組み、控えを取ってから書きます。
+
+```json
+{
+  "mcpServers": {
+    "gas-ws": {
+      "command": "python",
+      "args": ["C:/path/to/gas-manager/gas_mcp_server.py"],
+      "env": { "GAS_MCP_ONLY": "ws" }
+    }
+  }
+}
+```
 ※ リポジトリ内の [`SKILL.md`](./SKILL.md) を AI エージェントのスキルフォルダに配置すると、AI が最短手数（`outline` → `get_function` → `patch_function` / `batch_patch` → `diagnose`）で動くようになります。
 
 ---

@@ -5,6 +5,7 @@
 // 分類: 入力
 // 語: プルダウン|選択肢から選|リストから選|選べるように|入力規則
 // 引数: range*=範囲, items=配列, from=範囲, strict=真偽=true
+// 頼み: items~((?:[^\s、。・:に]+・)+[^\s、。・:]+?)(?:から|の)
 // どれか: items from
 // 例: 「C列に未着手、進行中、完了のプルダウンを付けて」 → {"shelf":"validation.list","range":"C2:C100","items":["未着手","進行中","完了"]}
 // 触る: 入力規則
@@ -136,6 +137,7 @@ SHELF['protect.sheet'] = function (ctx, op) {
 // 語: 範囲を保護|セルを保護|列を保護|行を保護|ここだけ保護
 // 違い: シート全体なら protect.sheet。保護を外すなら protect.remove
 // 引数: range*=範囲, warn=真偽
+// 頼み: range~([A-Z]{1,3}[0-9]+:[A-Z]{1,3}[0-9]+)の範囲
 // 例: 「A1からC10の範囲を保護して」 → {"shelf":"protect.range","range":"A1:C10"}
 // 触る: 保護
 // 控え: 今

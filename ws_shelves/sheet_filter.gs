@@ -147,6 +147,7 @@ SHELF['seiri'] = function (ctx, op) {
 // 語: 番号を振り直|連番に直|番号を振り|通し番号|No を振|番号を付け直
 // 違い: すでに表にある番号の列を、見出しの名前（番号・No）で指して 1,2,3… に直す（空の行は飛ばす）。番地の範囲を指して連番を書くなら fill.series
 // 引数: col*=列, start=数
+// 頼み: start~([0-9]+)から
 // 例: 「番号の列を1から振り直して」 → {"shelf":"renumber","col":"番号"}
 // 例: 「行を消したのでNoを2から付け直して」 → {"shelf":"renumber","col":"No","start":2}
 // 触る: 値
@@ -170,6 +171,7 @@ SHELF['renumber'] = function (ctx, op) {
 // 語: 並べ替え|昇順に|降順に|順番に並べ|大きい順|小さい順|ソート|あいうえお順
 // 違い: 文字・漢字の列の並べ替え（あいうえお順等）もこの棚 1 回で済む（行を手動で動かさない）。条件に合う行だけ見せるなら filter.where（古い filter・where の引数も今までどおり撃てる）
 // 引数: col=列, desc=真偽, filter=真偽, where=対応
+// 頼み: desc=true<大きい順|多い順|高い順|降順|新しい順|逆順|遅い順
 // どれか: col filter where
 // 例: 「金額の大きい順に並べて」 → {"shelf":"sort","col":"金額","desc":true}
 // 触る: 値 フィルタ
@@ -199,6 +201,7 @@ SHELF['sort'] = function (ctx, op) {
 // 語: だけ表示|だけ見せ|だけに絞|行だけ残|絞り込んで|のみ表示|フィルタをかけ
 // 違い: 並べ替えは sort
 // 引数: col*=列, equals=文字
+// 頼み: equals~(?:が|は)[『「]?([^』」]+?)[』」]?の(?:行|人|もの|データ)だけ
 // 例: 「部署が営業の行だけ見せて」 → {"shelf":"filter.where","col":"部署","equals":"営業"}
 // 触る: 値 フィルタ
 SHELF['filter.where'] = function (ctx, op) {
@@ -267,6 +270,7 @@ SHELF['dedupe'] = function (ctx, op) {
 // 語: 列に分け|列を分割|区切って分|カンマで分|スペースで分|姓と名に分|文字を分割
 // 違い: 隣の列を消さず左に空列を入れて分けるなら insert:true。列を挿入するだけなら cols.insert
 // 引数: col*=列, by=選択(comma/space/tab/slash/hyphen/custom)=comma, sep=文字, insert=真偽
+// 頼み: by=space<スペース|空白 ; by=comma<カンマ|コンマ ; by=slash<スラッシュ ; by=hyphen<ハイフン
 // 例: 「氏名列を姓と名にスペースで分けて」 → {"shelf":"split.col","col":"氏名","by":"space"}
 // 例: 「住所列をカンマで列に分割して」 → {"shelf":"split.col","col":"住所","by":"comma"}
 // 危ない: 上書き
