@@ -38,6 +38,7 @@ PUBLIC_FILES = [
     "gas_ws_catalog.py",
     "ws_shelves/doc.gs",
     "ws_shelves/sheet_filter.gs",
+    "ws_shelves/sheet_guard.gs",
     "ws_shelves/sheet_look.gs",
     "ws_shelves/sheet_make.gs",
     "ws_shelves/sheet_range.gs",
@@ -47,12 +48,12 @@ PUBLIC_FILES = [
     "gas_ws_find.py",
     "gas_ws_check.py",
     "gas_ws_api.py",
+    "gas_ws_ask.py",
     "ws_shelves/api.gs",
     "ws_exam/phrases_api.tsv",
     "test_gas_ws_api.py",
+    "test_gas_ws_ask.py",
     "test_gas_ws_wide.py",
-    "gas_ws_exam.py",
-    "test_gas_ws_exam.py",
     "ws_shelves/guide.txt",
     "ws_shelves/synonyms.txt",
     "ws_exam/answers.tsv",
@@ -137,7 +138,8 @@ def main():
 
     allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
                                                   # 公開しない物（試験の道具・試験場の記録・手元の記録）。公開物に入らないことは、ホワイトリストと上の禁止パターンで見る
-                                                  "ws_exam", "ws_shelves", "ws_trial", "gas_ws_judge.py", "gas_ws_tables.py", "gas_ws_trial.py", "test_gas_ws_trial.py", "gas_ws_props.py", "gas_ws_shot.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_undo_side.py", "test_gas_ws_speed.py", "test_gas_ws_lane.py",
+                                                  "ws_exam", "ws_shelves", "ws_trial", "gas_ws_ai.py", "gas_ws_coverage.py", "gas_ws_exam.py", "gas_ws_judge.py", "gas_ws_props.py", "gas_ws_sealreport.py", "gas_ws_shot.py", "gas_ws_tables.py", "gas_ws_trial.py",
+                                                  "test_gas_ws_167.py", "test_gas_ws_ai.py", "test_gas_ws_coverage.py", "test_gas_ws_exam.py", "test_gas_ws_judge_extra.py", "test_gas_ws_lane.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_shot_sealed.py", "test_gas_ws_speed.py", "test_gas_ws_trial.py", "test_gas_ws_undo_side.py",
                                                   ".ws_engine_all.gs", ".ws_trial.json", ".ws_api_uses.tsv", ".ws_misses.tsv", ".ws_ledger.json"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:

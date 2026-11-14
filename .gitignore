@@ -27,5 +27,27 @@ queue/
 .ws_engine_all.gs
 .ws_misses.tsv
 .ws_trial.json
+ws_trial/
 ws_trial/runs/
 .ws_api_uses.tsv
+
+# 試験用ハーネス・採点・対象テスト（公開しない）
+gas_ws_trial.py
+gas_ws_judge.py
+gas_ws_exam.py
+gas_ws_props.py
+gas_ws_shot.py
+gas_ws_sealreport.py
+gas_ws_coverage.py
+gas_ws_ai.py
+gas_ws_tables.py
+test_gas_ws_167.py
+test_gas_ws_ai.py
+test_gas_ws_coverage.py
+test_gas_ws_exam.py
+test_gas_ws_judge_extra.py
+test_gas_ws_lane.py
+test_gas_ws_props.py
+test_gas_ws_shot.py
+test_gas_ws_shot_sealed.py
+test_gas_ws_trial.py
