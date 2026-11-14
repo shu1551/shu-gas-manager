@@ -954,7 +954,7 @@ function runDo_(req, T0) {
 
 // 変更なしの判定。棚の「触る:」（CATALOG）に、指紋に出る物が 1 つでもある棚は指紋で比べる。
 // 指紋に出る物＝値・シート構成・固定、シートでは書式も（文書の指紋は文字と見出し構造だけなので、文書の書式は出ない）。
-// フィルタ・幅 は指紋に出ない（棚が「付随して触る」だけなら、判定は前のまま指紋）。
+// 幅 は指紋に出ない（棚が「付随して触る」だけなら、判定は前のまま指紋）。フィルタを触る棚は、実際にフィルタが変わったかも比べる。
 // 指紋に出る物が 1 つも無い棚（幅だけ・文書の書式だけ 等）を含むときは、棚が報告した変更（ctx.changed）が空のときだけ「変更なし」
 var FINGER_ITEMS_ = ['値', 'シート構成', '固定'];
 function fingerOnly_(ops, kind) {
@@ -962,6 +962,40 @@ function fingerOnly_(ops, kind) {
     var c = CATALOG[o.shelf];
     return !!c && c.touch.some(function (t) { return FINGER_ITEMS_.indexOf(t) >= 0; });
   });
+}
+function touchesItem_(ops, item) {
+  return ops.some(function (o) {
+    var c = CATALOG[o.shelf];
+    if (c && c.touch && c.touch.indexOf(item) >= 0) return true;
+    return !!(DYNAMIC[o.shelf] && DYNAMIC[o.shelf].touch && DYNAMIC[o.shelf].touch(o).indexOf(item) >= 0);
+  });
+}
+function normJson_(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(function (x) { return x === undefined ? 'null' : normJson_(x); }).join(',') + ']';
+  return '{' + Object.keys(v).sort().filter(function (k) { return v[k] !== undefined; }).map(function (k) { return JSON.stringify(k) + ':' + normJson_(v[k]); }).join(',') + '}';
+}
+// フィルタの有無や設定内容が実行前後で実際に変わったか調べる
+function filterChanged_(ctx, entry) {
+  var both = [];
+  for (var i = 0; i < (entry.sheets || []).length; i++) {
+    var b = entry.sheets[i], s = ctx.ss && byId_(ctx.ss, b.id);
+    if (!s || typeof s.getFilter !== 'function') continue;
+    var had = !!(b.side && b.side.filter), has = !!s.getFilter();
+    if (had !== has) return true;
+    if (had && has) both.push(b);
+  }
+  if (!both.length) return false;
+  if (typeof SpreadsheetApp !== 'undefined' && typeof SpreadsheetApp.flush === 'function') SpreadsheetApp.flush();
+  if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets || typeof Sheets.Spreadsheets.get !== 'function') return ctx.changed.length > 0;
+  try {
+    var resp = Sheets.Spreadsheets.get(ctx.ss.getId(), { fields: 'sheets(properties(sheetId),basicFilter)' });
+    var byId = {};
+    (resp.sheets || []).forEach(function (x) { byId[x.properties.sheetId] = x.basicFilter || null; });
+    return both.some(function (b) { return normJson_(b.side.filter) !== normJson_(byId[b.id] || null); });
+  } catch (e) {
+    return ctx.changed.length > 0;
+  }
 }
 function isNoop_(ops, entry, ctx) {
   if (ctx.createdSheets.length) return false;
@@ -974,7 +1008,9 @@ function isNoop_(ops, entry, ctx) {
   if (!fingerOnly_(ops, ctx.kind)) return ctx.changed.length === 0;
   if (ctx.kind === 'sheet') {
     if (!entry.sheets || !entry.sheets.length) return false;
-    return entry.sheets.every(function (b) { return sameFinger_(entry.before[b.id], entry.after[b.id]); });
+    if (!entry.sheets.every(function (b) { return sameFinger_(entry.before[b.id], entry.after[b.id]); })) return false;
+    if (touchesItem_(ops, 'フィルタ') && filterChanged_(ctx, entry)) return false;
+    return true;
   }
   return sameFinger_(entry.beforeDoc, entry.afterDoc);
 }
