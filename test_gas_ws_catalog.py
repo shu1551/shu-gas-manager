@@ -270,10 +270,9 @@ def _run_node():
 def test_noop_decision_and_backup_sheets_same_as_before_for_all_19():
     res = _run_node()
     assert res
-    # 変更なしの判定は全部同じ。ただし width／doc.style を含む組が「changed 空」で来る場合は除く
-    # （この 2 本は必ず変更を報告する。旧は常に false・新は changed で決める＝現実には同じ答えになる）
-    unreal = {c["id"] for c in _cases() if not c["changed"] and any(o["shelf"] in ("width", "doc.style") for o in c["ops"])}
-    diff_noop = [r["id"] for r in res if r["nuNoop"] != r["oldNoop"] and r["id"] not in unreal]
+    # 変更なしの判定は同じ。ただし width／doc.style／format（書式は FP_VER=4 の軽量指紋に出ない）は changed で決める
+    no_fp = ("width", "doc.style", "format")
+    diff_noop = [r["id"] for r in res if r["nuNoop"] != r["oldNoop"] and not any(s in r["id"] for s in no_fp)]
     assert diff_noop == [], diff_noop[:5]
     # 控えるシートは、束ねた棚の sheet.add（全部を控える）と table.new（sheet 指定なしでも今のシートを控える）を除いて同じ
     allowed = ("sheet.add", "table.new")
@@ -291,5 +290,7 @@ def test_noop_for_width_and_doc_style_is_never_true_when_changed():
     for r in res:
         if ("width|" in r["id"] or "doc.style|" in r["id"]) and "changed=True" in r["id"]:
             assert r["nuNoop"] is False and r["oldNoop"] is False, r["id"]
+        if "format|" in r["id"] and "changed=True" in r["id"]:
+            assert r["nuNoop"] is False, r["id"]
     created = [r for r in res if r["id"] == "作成あり"][0]
     assert created["nuNoop"] is False and created["oldNoop"] is False

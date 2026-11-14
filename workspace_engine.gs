@@ -9,6 +9,7 @@ var BK_BOOK_NAME = 'GASマネージャー_控え';
 var BK_DOC_PREFIX = 'GASマネージャー_文書控え_';
 var BK_DOC_SLOTS = 5;
 var BK_TABS_MAX = 20;
+var BK_TABS_KEEP = 15;
 var LEDGER_MAX = 40;
 
 // 見た目の決まり（どの棚も同じ決まりを使う）
@@ -98,7 +99,7 @@ function a1_(r, c, nr, nc) {
 }
 function wlen_(s) { s = String(s); var n = 0; for (var i = 0; i < s.length; i++) n += s.charCodeAt(i) > 255 ? 2 : 1; return n; }
 function isBlank_(v) { return v === '' || v === null || v === undefined; }
-var FP_VER = 3;   // 指紋の版。1＝文字列を既定の文字コードで数えた（日本語が区別できない）、2＝UTF-8、3＝固定の列も入れる（列だけ固定した変更が「変更なし」になり控えが取れなかった）
+var FP_VER = 4;   // 指紋の版。1＝文字を既定、2＝UTF-8、3＝固定の列も入れる、4＝値・式＋構成・固定の軽量版（書式 5 配列を外す）
 function digest_(s, v) {
   var bytes = (v === 1) ? s : Utilities.newBlob(s).getBytes();   // 版 1 は昔の控えの指紋を比べるためだけに残す
   return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, bytes)).slice(0, 12);
@@ -175,16 +176,23 @@ function isNoCol_(t, ci) {
 
 // ---------------------------------------------------------------- 指紋
 
-function fingerSheet_(sh, v) {
+function fingerSheet_(sh, v, meta) {
   v = v || FP_VER;
   var lr = sh.getLastRow(), lc = sh.getLastColumn();
   var d = '';
   if (lr > 0 && lc > 0) {
     var rg = sh.getRange(1, 1, lr, lc);
-    d = digest_(JSON.stringify(rg.getFormulas()) + JSON.stringify(rg.getDisplayValues()) + JSON.stringify(rg.getBackgrounds()) + JSON.stringify(rg.getFontWeights()) +
-      JSON.stringify(rg.getFontColors()) + JSON.stringify(rg.getNumberFormats()) + JSON.stringify(rg.getHorizontalAlignments()), v);
+    if (v >= 4) {
+      d = digest_(JSON.stringify(rg.getFormulas()) + JSON.stringify(rg.getDisplayValues()), v);
+    } else {
+      d = digest_(JSON.stringify(rg.getFormulas()) + JSON.stringify(rg.getDisplayValues()) + JSON.stringify(rg.getBackgrounds()) + JSON.stringify(rg.getFontWeights()) +
+        JSON.stringify(rg.getFontColors()) + JSON.stringify(rg.getNumberFormats()) + JSON.stringify(rg.getHorizontalAlignments()), v);
+    }
   }
-  return { rows: lr, cols: lc, d: digest_(d + '|' + sh.getName() + '|' + sh.getFrozenRows() + (v >= 3 ? '|' + sh.getFrozenColumns() : ''), v) };
+  var nm = (meta && meta.name !== undefined) ? meta.name : sh.getName();
+  var fr = (meta && meta.frozenR !== undefined) ? meta.frozenR : sh.getFrozenRows();
+  var fc = (meta && meta.frozenC !== undefined) ? meta.frozenC : sh.getFrozenColumns();
+  return { rows: lr, cols: lc, d: digest_(d + '|' + nm + '|' + fr + (v >= 3 ? '|' + fc : ''), v) };
 }
 function fingerDoc_(doc, v) {
   v = v || FP_VER;
@@ -239,28 +247,39 @@ function backupSheets_(ss, sheets, n, sideItems) {
   if (!sheets.length) return [];
   var tb = Date.now();
   var book = bkBook_(), out = []; bkLap_('open', tb); tb = Date.now();
-  var cur = book.getSheets(); bkLap_('list', tb);   // 控えブックの全タブを 1 回で読み、以降はこの一覧から決める（API 呼びを減らす）
+  var cur = book.getSheets(); bkLap_('list', tb);   // 控えブックの全タブを 1 回で読み、数で掃除の要否を決める
+  var curCount = cur.length, added = [], needRefresh = false;
   sheets.forEach(function (sh) {
-    var nm = bkTabName_(n, sh.getSheetId());
-    for (var i = 0; i < cur.length; i++) {
-      if (cur[i].getName() === nm) { if (cur.length > 1) { book.deleteSheet(cur[i]); cur.splice(i, 1); } break; }
+    var sid = sh.getSheetId(), shName = sh.getName();
+    var nm = bkTabName_(n, sid);
+    if (curCount > 1) {
+      var dup = book.getSheetByName(nm);
+      if (dup) { book.deleteSheet(dup); curCount--; needRefresh = true; }
     }
     var tc = Date.now();
     var c = sh.copyTo(book); bkLap_('copy', tc); tc = Date.now();
-    c.setName(nm); cur.push(c); bkLap_('name', tc);
+    c.setName(nm); curCount++; added.push({ s: c, name: nm }); bkLap_('name', tc);
     // 列幅は控えのタブ（copyTo が写す）にあるので、戻すときにそこから読む（書く前に列ごとに読まない）
-    out.push({ id: sh.getSheetId(), name: sh.getName(), index: sh.getIndex(), tab: nm, frozenR: sh.getFrozenRows(), frozenC: sh.getFrozenColumns() });
+    out.push({ id: sid, name: shName, index: sh.getIndex(), tab: nm, frozenR: sh.getFrozenRows(), frozenC: sh.getFrozenColumns() });
   });
-  // 控えブックに最初からある白紙シートを外す
-  for (var j = 0; j < cur.length; j++) {
-    var nj = cur[j].getName();
-    if ((nj === 'シート1' || nj === 'Sheet1') && cur.length > 1) { try { book.deleteSheet(cur[j]); cur.splice(j, 1); } catch (e) { } break; }
+  var tp = Date.now();
+  // 白紙の初期シート削除は枚数が少ない初期状態のみ確認（通常時は getName() を呼ばない）
+  if (cur.length <= 3) {
+    for (var j = 0; j < cur.length; j++) {
+      var nj = cur[j].getName();
+      if ((nj === 'シート1' || nj === 'Sheet1') && curCount > 1) { try { book.deleteSheet(cur[j]); curCount--; needRefresh = true; } catch (e) { } break; }
+    }
   }
-  // 古い控えのタブを回す（BK_TABS_MAX 枚まで）
-  var tabs = cur.filter(function (s) { return /^ws\d+_/.test(s.getName()); });
-  tabs.sort(function (x, y) { return parseInt(x.getName().slice(2)) - parseInt(y.getName().slice(2)); });
-  var extra = tabs.length - BK_TABS_MAX, left = cur.length, tp = Date.now();
-  for (var k = 0; k < extra && left > 1; k++) { book.deleteSheet(tabs[k]); left--; }
+  // 古い控えのタブを回す（BK_TABS_MAX 枚を超えたときだけ BK_TABS_KEEP 枚までまとめて削り、普段は掃除を走らせない）
+  if (curCount > BK_TABS_MAX) {
+    var list = needRefresh
+      ? book.getSheets().map(function (s) { return { s: s, name: s.getName() }; })
+      : cur.map(function (s) { return { s: s, name: s.getName() }; }).concat(added);
+    var tabs = list.filter(function (x) { return /^ws\d+_/.test(x.name); });
+    tabs.sort(function (x, y) { return parseInt(x.name.slice(2)) - parseInt(y.name.slice(2)); });
+    var extra = tabs.length - BK_TABS_KEEP, left = list.length;
+    for (var k = 0; k < extra && left > 1; k++) { book.deleteSheet(tabs[k].s); left--; }
+  }
   bkLap_('prune', tp);
   var ts = Date.now();
   captureSide_(ss, sheets, out, sideItems || []); bkLap_('side', ts);
@@ -349,7 +368,7 @@ function captureSide_(ss, sheets, bk, items) {
   var dataById = {};
   if (want['隠し']) {
     var ranges = [];
-    sheets.forEach(function (s) { ranges.push(q_(s.getName()) + '!A:A'); ranges.push(q_(s.getName()) + '!1:1'); });
+    sheets.forEach(function (s, si) { var qn = q_((bk[si] && bk[si].name) || s.getName()); ranges.push(qn + '!A:A'); ranges.push(qn + '!1:1'); });
     var dr = Sheets.Spreadsheets.get(ss.getId(), { includeGridData: true, ranges: ranges, fields: 'sheets(properties(sheetId),data(rowMetadata(hiddenByUser),columnMetadata(hiddenByUser)))' });
     (dr.sheets || []).forEach(function (x) { dataById[x.properties.sheetId] = x.data || []; });
   }
@@ -596,10 +615,12 @@ function runDo_(req, T0) {
   lap_(tm, 'open');
   var l = ledger_(); l.seq++; var n = l.seq;   // 番号は最後の書き込みでまとめて残す（鍵の中なので重ならない。失敗・変更なしでは番号を使い回す）
   lap_(tm, 'seq');
-  var ctx = { wideKey: digest_(file.getId() + '|' + JSON.stringify(ops), FP_VER), kind: kind, file: file, ss: kind === 'sheet' ? file : null, doc: kind === 'doc' ? file : null,
-    sheetName: t.sheet || '', ok: !!req.ok, changed: [], notes: [], remaining: [], createdSheets: [], n: n, isNew: !!created };
-  var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: file.getId(),
-    name: file.getName(), kind: kind, what: summarizeOps_(ops), isNew: !!created, fp: FP_VER };
+  var fid = created ? created.id : (t.id || file.getId()), fname = created ? created.name : file.getName();
+  var ctx = { wideKey: digest_(fid + '|' + JSON.stringify(ops), FP_VER), kind: kind, file: file, ss: kind === 'sheet' ? file : null, doc: kind === 'doc' ? file : null,
+    sheetName: t.sheet || '', ok: !!req.ok, changed: [], notes: [], remaining: [], createdSheets: [], n: n, isNew: !!created,
+    _file: { id: fid, name: fname, url: created ? created.url : null } };
+  var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: fid,
+    name: fname, kind: kind, what: summarizeOps_(ops), isNew: !!created, fp: FP_VER };
   var bk = null, sideItems = [];
   try {
     if (!created) {
@@ -608,7 +629,7 @@ function runDo_(req, T0) {
         sideItems = sideItems_(ops);
         bk = backupSheets_(ctx.ss, names, n, sideItems); lap_(tm, 'backup');
         entry.sheets = bk;
-        entry.before = {}; names.forEach(function (sh0) { entry.before[sh0.getSheetId()] = fingerSheet_(sh0); });
+        entry.before = {}; names.forEach(function (sh0, idx) { var b0 = bk[idx]; entry.before[b0.id] = fingerSheet_(sh0, FP_VER, b0); });
       } else { entry.doc = backupDoc_(ctx.doc, n); lap_(tm, 'backup'); entry.beforeDoc = fingerDoc_(ctx.doc); }
     }
     ctx.bk = bk; lap_(tm, 'finger0');
@@ -619,7 +640,7 @@ function runDo_(req, T0) {
       ctx.opNo = i + 1; ctx.opName = op.shelf;
       fn(ctx, op);
     }
-    SpreadsheetApp.flush();
+    if (kind === 'sheet' && (created || !(entry.sheets && entry.sheets.length))) SpreadsheetApp.flush();
     lap_(tm, 'ops');
     if (kind === 'doc') { ctx.doc.saveAndClose(); ctx.doc = DocumentApp.openById(entry.id); file = ctx.doc; lap_(tm, 'save'); }
     // 書き終わりの指紋
@@ -666,10 +687,9 @@ function runDo_(req, T0) {
 // 指紋に出る物が 1 つも無い棚（幅だけ・文書の書式だけ 等）を含むときは、棚が報告した変更（ctx.changed）が空のときだけ「変更なし」
 var FINGER_ITEMS_ = ['値', 'シート構成', '固定'];
 function fingerOnly_(ops, kind) {
-  var vis = kind === 'sheet' ? FINGER_ITEMS_.concat(['書式']) : FINGER_ITEMS_;
   return ops.every(function (o) {
     var c = CATALOG[o.shelf];
-    return !!c && c.touch.some(function (t) { return vis.indexOf(t) >= 0; });
+    return !!c && c.touch.some(function (t) { return FINGER_ITEMS_.indexOf(t) >= 0; });
   });
 }
 function isNoop_(ops, entry, ctx) {
@@ -683,8 +703,9 @@ function isNoop_(ops, entry, ctx) {
 }
 
 function tgt_(ctx, file) {
-  var o = { id: file.getId(), name: file.getName(), kind: ctx.kind, url: file.getUrl() };
-  if (ctx.kind === 'sheet') o.sheet = ctx.curSheet || ctx.sheetName || ctx.ss.getSheets()[0].getName();
+  var f = ctx._file || {};
+  var o = { id: f.id || file.getId(), name: f.name || file.getName(), kind: ctx.kind, url: f.url || file.getUrl() };
+  if (ctx.kind === 'sheet') o.sheet = ctx.curSheet || ctx.sheetName || ctx._sheet0 || ctx.ss.getSheets()[0].getName();
   return o;
 }
 function byId_(ss, id) { return ss.getSheets().filter(function (s) { return s.getSheetId() === id; })[0]; }
@@ -697,7 +718,7 @@ function touchedSheets_(ctx, ops) {
     var s = name ? ss.getSheetByName(name) : null;
     if (s && !seen[s.getSheetId()]) { seen[s.getSheetId()] = 1; out.push(s); }
   };
-  var def = ctx.sheetName || ss.getSheets()[0].getName();
+  var def = ctx.sheetName || (ctx._sheet0 = ss.getSheets()[0].getName());
   ops.forEach(function (op) {
     if (DYNAMIC[op.shelf]) { DYNAMIC[op.shelf].sheets(ctx, op).forEach(add); return; }   // 控えるシートを引数から決める棚
     var c = CATALOG[op.shelf], bk = c && c.backup ? c.backup : ['今'];
