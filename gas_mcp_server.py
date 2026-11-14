@@ -2601,9 +2601,9 @@ def _ws_run(fn, **kw):
 @safe_tool
 def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False, ask: str = "") -> str:
     """スプレッドシート・文書を見て、今の相手として覚える（表の形・文書の見出し）。target=URL・ID・名前（空なら今の相手）。
-    range=A1表記で中身も。image=True で見た目を画像に撮る（ws_do の後の目視。画像を開いて確かめる）。
-    ask="頼みの文" で、使える棚の札（名前・引数・例）も一緒に返す。作る・直す前はこれ。
-    手順は WORKSPACE.md。"""
+    ask="頼みの文" を一緒に渡すと使える棚の札も同時に返り 1 回で済む。中身も必要なときは range="A1:Z30" を最初から同時に渡す。
+    image=True は視覚確認を頼まれたときだけ（通常の操作後・ws_do 成功後に確認の ws_look は撃たない）。
+    作る・直す前はこれ。"""
     return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image, ask=ask)
 
 @mcp.tool()
@@ -2617,10 +2617,10 @@ def ws_find(ask: str = "", kind: str = "") -> str:
 @mcp.tool()
 @safe_tool
 def ws_do(ops: str, target: str = "", ok: bool = False) -> str:
-    """棚の JSON 配列を 1 回で撃って、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
+    """複数の棚を JSON 配列で 1 回にまとめて撃ち、スプレッドシート・文書を作る・直す。書く前に控えを取り、失敗なら戻す。
     ops=[{"shelf":"棚の名前", …引数}]。棚の名前と引数は ws_look(ask=…)／ws_find の札のとおりに。
-    棚に無い設定は shelf="api"（requests は batchUpdate の形）。target="new:名前"で新規。ok=True はユーザーの言葉に明確な承認があるときだけ（広い削除は 1 回止まるので見せて確認）。
-    返事は 対象／直した所／残り／URL。"""
+    棚に無い設定は shelf="api"（requests は batchUpdate の形）。target="new:名前"で新規。値を消さない手（作成・書式・集計・整える等）は聞き返さず ok なしで即撃つ。消す・上書きの ok=True は、対象が名指しで 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。
+    成功後は確認のための ws_look を撃たず、そのまま 対象／直した所／残り／URL を返す。"""
     return _ws_run(get_ws().do, ops=ops, target=target, ok=ok)
 
 @mcp.tool()

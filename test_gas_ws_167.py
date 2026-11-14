@@ -135,3 +135,96 @@ def test_split_col_insert_avoids_guard_overwrite():
     assert out["insertedAfter"] == [2, 1]
     assert out["writtenA1"] == [2, 2, 2, 2]
     assert out["writtenVals"] == [["山田", "太郎"], ["佐藤", "花子"]]
+
+
+def test_ws_do_docstring_and_sheet_delete_avoid_excess_askback():
+    import gas_ws_shot as shot
+    desc = shot.ws_do_description()
+    assert "聞き返さず ok なしで即撃つ" in desc
+    assert "消す・上書きの ok=True は" in desc
+    assert "名指しで 1 つに決まるか" in desc
+    assert len([ln for ln in desc.splitlines() if ln.strip()]) <= 4
+    delete_card = next(
+        s for s in gas_workspace.CATALOG.shelves if s.get("name") == "sheet.delete"
+    )
+    assert "質問する" not in str(delete_card.get("diff", ""))
+    ws_md = (ROOT / "WORKSPACE.md").read_text(encoding="utf-8")
+    assert "聞き返さず `ok` なしで即実行" in ws_md
+
+
+def test_chart_new_accepts_summary_sheet_name():
+    out = _run_node("""
+      var added = [], pos = null, inserted = 0;
+      var mkRg = function(sname, a1, lc) {
+        return {
+          getSheet: function(){ return { getName: function(){ return sname; } }; },
+          getA1Notation: function(){ return a1; },
+          getRow: function(){ return 1; },
+          getLastRow: function(){ return 3; },
+          getLastColumn: function(){ return lc; }
+        };
+      };
+      var sumRg = mkRg('集計', 'A1:B3', 2);
+      var sumSh = {
+        getName: function(){ return '集計'; },
+        getLastRow: function(){ return 4; },
+        getLastColumn: function(){ return 2; },
+        getRange: function(r, c, nr, nc){
+          if (nr === 3) return mkRg('集計', 'A1:B3', 2);
+          return { getValues: function(){ return [['分類', '現在庫'], ['A', 10], ['B', 20], ['合計', 30]]; } };
+        }
+      };
+      var mainSh = {
+        getName: function(){ return '在庫一覧'; },
+        getLastColumn: function(){ return 9; },
+        newChart: function(){
+          return {
+            setChartType: function(){ return this; },
+            addRange: function(rg){ added.push(rg.getSheet().getName() + '!' + rg.getA1Notation()); return this; },
+            setOption: function(){ return this; },
+            setPosition: function(r, c){ pos = [r, c]; return this; },
+            build: function(){ return {}; }
+          };
+        },
+        insertChart: function(){ inserted++; }
+      };
+      var ctx = {
+        curSheet: '在庫一覧',
+        logs: [],
+        ss: {
+          getSheetByName: function(n){ return n === '集計' ? sumSh : (n === '在庫一覧' ? mainSh : null); },
+          getSheets: function(){ return [mainSh, sumSh]; }
+        }
+      };
+      function sheetCtx_(c){ return mainSh; }
+      function chg_(c, s, a1, msg){ c.logs.push({sh: s.getName(), a1: a1, msg: msg}); }
+      SHELF['chart.new'](ctx, { type: 'column', range: '集計' });
+      __out = { added: added, pos: pos, inserted: inserted, log: ctx.logs[0] };
+    """)
+    assert out["added"] == ["集計!A1:B3"]
+    assert out["pos"] == [1, 11]
+    assert out["inserted"] == 1
+    assert out["log"]["sh"] == "在庫一覧"
+    assert out["log"]["a1"] == "集計!A1:B3"
+
+
+def test_ws_look_and_shelves_prevent_f10_and_f4():
+    import ast
+    src = (ROOT / "gas_mcp_server.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    look_doc = next(
+        ast.get_docstring(n) for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "ws_look"
+    )
+    assert "1 回で済む" in look_doc
+    assert "確認の ws_look は撃たない" in look_doc
+    cards = {s["name"]: s for s in gas_workspace.CATALOG.shelves}
+    assert "seiri" in cards["tidy"]["diff"]
+    assert "ok 不要" in cards["seiri"]["diff"]
+    assert "あいうえお順" in cards["sort"]["diff"]
+    assert "既定は「集計」" in cards["summary"]["diff"]
+    assert "元表の 2 列" in cards["chart.new"]["diff"]
+    assert "range に" in cards["chart.new"]["diff"]
+    assert "他列の値が違っても" in cards["dedupe"]["diff"]
+
+

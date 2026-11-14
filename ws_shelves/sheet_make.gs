@@ -102,9 +102,10 @@ SHELF['total'] = function (ctx, op) {
 // 題: 項目ごとの集計表を作る
 // 分類: 集計
 // 語: 項目ごとの集計|まとめて|集計表を|部署ごとに合計|ごとの合計|ごとに集計|ごとの件数
-// 違い: ピボットテーブルを作るなら pivot.new。表自体の合計行なら total
+// 違い: ピボットテーブルを作るなら pivot.new。表自体の合計行なら total。出力先シートの既定は「集計」（別シート名の指定が無ければ into は省略）
 // 引数: by*=列, values*=列[], func=選択(sum/count/avg)=sum, into=文字
 // 例: 「部署ごとの金額の合計表を作って」 → {"shelf":"summary","by":"部署","values":["金額"]}
+// 例: 「得意先ごとの金額の合計を出して」 → {"shelf":"summary","by":"得意先","values":["金額"]}
 // 危ない: 消す
 // 触る: 値 書式 シート構成
 // 控え: 今,先
@@ -142,7 +143,8 @@ SHELF['summary'] = function (ctx, op) {
   } else { dst = ctx.ss.insertSheet(into); ctx.createdSheets.push(into); }
   dst.getRange(1, 1, grid.length, grid[0].length).setValues(grid);
   ctx.curSheet = src.getName();
-  chg_(ctx, dst, a1_(1, 1, grid.length, grid[0].length), '「' + src.getName() + '」の ' + hdr[0] + ' ごとの集計（元の表を直すと追従）');
+  chg_(ctx, dst, a1_(1, 1, grid.length, grid[0].length), 'シート「' + into + '」へ「' + src.getName() + '」の ' + hdr[0] + ' ごとの集計（元の表を直すと追従）');
+  note_(ctx, '別の棚からこの表を参照するときは range:"' + into + '"（または "' + into + '!' + a1_(1, 1, grid.length, grid[0].length) + '"）');
   tidyRange_(ctx, dst, null);
 };
 
@@ -196,7 +198,7 @@ SHELF['pivot.new'] = function (ctx, op) {
 // 題: グラフを作る
 // 分類: 集計
 // 語: グラフを作|グラフにして|グラフを入れ|棒グラフ|折れ線|円グラフ|推移
-// 違い: 式の集計表なら summary。ピボットテーブルなら pivot.new
+// 違い: 新シートを作らず元表の列だけで描く（「〇〇ごとの△△をグラフにして」でも、集計表を作ってと頼まれていなければ summary でシートを足さず元表の 2 列 range="C1:C21,G1:G21" 等でそのまま描く）。集計表も頼まれたときは summary + chart.new（range に「集計」や「シート!範囲」指定可）。ピボットは pivot.new
 // 引数: range=範囲, type=選択(column/bar/line/pie/area/scatter)=column, title=文字, at=範囲
 // 例: 「売上の棒グラフを作って」 → {"shelf":"chart.new","type":"column"}
 // 例: 「売上の推移を折れ線グラフにして」 → {"shelf":"chart.new","type":"line","title":"売上推移"}
@@ -205,7 +207,15 @@ SHELF['pivot.new'] = function (ctx, op) {
 SHELF['chart.new'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
   var rangeList = op.range ? String(op.range).split(/\s*,\s*/).filter(function (s) { return s; }) : [];
-  var ranges = rangeList.length ? rangeList.map(function (r) { return sh.getRange(r); }) : [(function () {
+  var ranges = rangeList.length ? rangeList.map(function (r) {
+    if (r.indexOf('!') >= 0) return ctx.ss.getRange(r);
+    var refSh = r.indexOf(':') < 0 ? ctx.ss.getSheetByName(r) : null;
+    if (refSh) {
+      var rt = findTable_(refSh);
+      return rt ? refSh.getRange(rt.headerRow, rt.firstCol, rt.lastData - rt.headerRow + 1, rt.lastCol - rt.firstCol + 1) : refSh.getDataRange();
+    }
+    return sh.getRange(r);
+  }) : [(function () {
     var t = findTable_(sh);
     return t ? sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
   })()];
@@ -231,13 +241,19 @@ SHELF['chart.new'] = function (ctx, op) {
     var atRg = sh.getRange(op.at);
     b.setPosition(atRg.getRow(), atRg.getColumn(), 0, 0);
   } else {
-    var atRow = full.getRow();
-    var atCol = Math.max.apply(null, ranges.map(function (rg) { return rg.getLastColumn(); })) + 2;
+    var sameSheet = ranges.every(function (rg) { return !rg.getSheet || rg.getSheet().getName() === sh.getName(); });
+    var atRow = sameSheet ? full.getRow() : 1;
+    var atCol = sameSheet
+      ? Math.max.apply(null, ranges.map(function (rg) { return rg.getLastColumn(); })) + 2
+      : Math.max(1, sh.getLastColumn()) + 2;
     b.setPosition(atRow, atCol, 0, 0);
   }
   sh.insertChart(b.build());
   ctx.curSheet = sh.getName();
-  chg_(ctx, sh, ranges.map(function (rg) { return rg.getA1Notation(); }).join(','), 'グラフを作成（' + typeStr + (op.title ? '・' + op.title : '') + '）');
+  chg_(ctx, sh, ranges.map(function (rg) {
+    var sname = rg.getSheet ? rg.getSheet().getName() : sh.getName();
+    return (sname !== sh.getName() ? sname + '!' : '') + rg.getA1Notation();
+  }).join(','), 'グラフを作成（' + typeStr + (op.title ? '・' + op.title : '') + '）');
 };
 
 // 棚: chart.delete
