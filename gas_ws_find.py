@@ -86,6 +86,7 @@ class Finder:
         self.cat = catalog or gas_ws_catalog.load()
         self.syn = load_synonyms() if synonyms is None else synonyms
         self.guide = load_guide() if guide is None else guide
+        self._guide_norm = [([nw for nw in (norm(w, self.syn) for w in words) if nw], text) for words, text in self.guide]
         self._index = []
         for order, s in enumerate(self.cat.shelves):
             words = [norm(w, self.syn) for w in s["words"]]
@@ -138,7 +139,7 @@ class Finder:
                         seen.append(s)
             picks = seen[:MAX_N]
         q = norm(ask, self.syn)
-        guide = [text for words, text in self.guide if any(norm(w, self.syn) and norm(w, self.syn) in q for w in words)]
+        guide = [text for nwords, text in self._guide_norm if any(nw in q for nw in nwords)]
         return picks, scores, guide
 
     def why(self, ask, kind=""):

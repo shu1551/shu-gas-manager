@@ -7,7 +7,6 @@ clasp の認証トークンを利用し、Google Apps Script API & Drive API を
 
 import os
 import ast
-import ast
 import sys
 import json
 import time
@@ -25,20 +24,22 @@ import webbrowser
 import hashlib
 import importlib
 
-# ホットリロード時の Workspace 道具・キャッシュのフラッシュ
-for _m in ["gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_workspace", "gas_ws_ai"]:
-    if _m in sys.modules:
-        try:
-            importlib.reload(sys.modules[_m])
-        except Exception:
-            pass
-if "gas_ws_find" in sys.modules:
-    sys.modules["gas_ws_find"]._default = None
-_main_mod = sys.modules.get("__main__")
-if _main_mod and hasattr(_main_mod, "_ws"):
-    _main_mod._ws = None
-if "gas_mcp_server" in sys.modules:
-    sys.modules["gas_mcp_server"]._ws = None
+# ホットリロード時のみ Workspace 道具・キャッシュをフラッシュ（初回 import 時の二重ロードを防ぐ）
+if globals().get("_GAS_CLIENT_LOADED"):
+    for _m in ["gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_workspace", "gas_ws_ai"]:
+        if _m in sys.modules:
+            try:
+                importlib.reload(sys.modules[_m])
+            except Exception:
+                pass
+    if "gas_ws_find" in sys.modules:
+        sys.modules["gas_ws_find"]._default = None
+    _main_mod = sys.modules.get("__main__")
+    if _main_mod and hasattr(_main_mod, "_ws"):
+        _main_mod._ws = None
+    if "gas_mcp_server" in sys.modules:
+        sys.modules["gas_mcp_server"]._ws = None
+_GAS_CLIENT_LOADED = True
 
 class RecipeItem(dict):
     """高速化レシピ棚アイテム"""
@@ -2391,7 +2392,7 @@ class GasClient:
         matched_file["source"] = new_source
 
         self._put_content(sid, files)
-        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False, fast=fast)
         ret = {
             "status": "success",
             "file": matched_file["name"],
@@ -2466,7 +2467,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
-            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True)
+            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "file": matched_file["name"],
@@ -2479,7 +2480,7 @@ class GasClient:
         backup_path = self._save_backup(sid, content)
         matched_file["source"] = new_source
         self._put_content(sid, files)
-        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False, fast=fast)
 
         ret = {
             "status": "success",
@@ -2529,7 +2530,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
-            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True)
+            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "file": matched_file["name"],
@@ -2541,7 +2542,7 @@ class GasClient:
         backup_path = self._save_backup(sid, content)
         matched_file["source"] = new_source
         self._put_content(sid, files)
-        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False, fast=fast)
 
         ret = {
             "status": "success",
@@ -2588,7 +2589,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
-            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True)
+            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "file": matched_file["name"],
@@ -2600,7 +2601,7 @@ class GasClient:
         backup_path = self._save_backup(sid, content)
         matched_file["source"] = new_source
         self._put_content(sid, files)
-        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=False, fast=fast)
 
         ret = {
             "status": "success",
@@ -2785,7 +2786,7 @@ class GasClient:
         combined_diff = "\n".join(diff_chunks)
 
         if dry_run:
-            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True)
+            self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "modified_files": modified_names,
@@ -2920,6 +2921,7 @@ class GasClient:
                 continue
             fname = f.get("name", "")
             source = f.get("source", "")
+            lines = source.splitlines()
             raw_funcs = self._extract_functions_from_js(source, 0)
             for f1 in raw_funcs:
                 is_nested = False
@@ -2935,7 +2937,6 @@ class GasClient:
                             break
                 if not is_nested:
                     fn_name = f1["name"]
-                    lines = source.splitlines()
                     s_idx = f1["start_line"] - 1
                     e_idx = min(f1["end_line"], len(lines))
                     fn_src = "\n".join(lines[s_idx:e_idx])
@@ -2943,7 +2944,7 @@ class GasClient:
 
                     # return 文の解析
                     b_start = fn_src.find('{')
-                    if b_start != -1:
+                    if b_start != -1 and "return" in fn_src:
                         fn_body = fn_src[b_start + 1:]
                         tokens, _ = self._tokenize_js(fn_body)
                         returns = []
@@ -3307,6 +3308,8 @@ class GasClient:
                 continue
             fname = f.get("name", "")
             source = f.get("source", "")
+            if "HtmlService" not in source:
+                continue
             tokens, _ = self._tokenize_js(source)
             for tm in tpl_pat.finditer(source):
                 match_start = tm.start()
@@ -3318,8 +3321,11 @@ class GasClient:
                 if tpl_name not in existing_html_names and tpl_base not in existing_html_names:
                     broken_templates.add((fname, tpl_name))
 
-        contract_res = self._analyze_rpc_contracts_from_files(files)
-        rpc_property_mismatches = {(m["file"], m["rpc"], m["missing_prop"]) for m in contract_res.get("rpc_property_mismatches", [])}
+        if any(f.get("type") == "HTML" and "google" in f.get("source", "") for f in files):
+            contract_res = self._analyze_rpc_contracts_from_files(files)
+            rpc_property_mismatches = {(m["file"], m["rpc"], m["missing_prop"]) for m in contract_res.get("rpc_property_mismatches", [])}
+        else:
+            rpc_property_mismatches = set()
 
         return {
             "duplicate_functions": duplicate_functions,
@@ -3570,8 +3576,6 @@ class GasClient:
             self._dock_cache.pop(k, None)
         for k in [k for k in self._xray_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
             self._xray_cache.pop(k, None)
-        self._tokenize_cache.clear()
-        self._extract_funcs_cache.clear()
 
         # projects_list キャッシュ内の該当プロジェクトの modifiedTime を現在日時に即時更新
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -4398,7 +4402,7 @@ class GasClient:
         )
         if has_runner:
             self.clean_runner(sid)
-            head_content = self.get_content(sid, use_cache=False)
+            head_content = self.get_content(sid, use_cache=True)
             has_runner_after = any(
                 ("__gm_exec_" in f.get("source", "") or "__gm_run" in f.get("source", ""))
                 for f in head_content.get("files", [])
@@ -5118,7 +5122,7 @@ class GasClient:
             if not already_installed and not keep_runner:
                 try:
                     self.clean_runner(sid)
-                    head_content = self.get_content(sid, use_cache=False)
+                    head_content = self.get_content(sid, use_cache=True)
                     runner_left = any(
                         "__gm_exec_" in f.get("source", "") or "__gm_run" in f.get("source", "")
                         for f in head_content.get("files", [])
@@ -6342,6 +6346,14 @@ class GasClient:
                             continue
                         raw_hit = api_m.group(1) or api_m.group(2) or ""
                         api_name = raw_hit.rstrip("(").strip()
+
+                        # .getValue で XmlService の getAttribute(...).getValue() や固定セル参照 getRange("H1").getValue() は除外
+                        if api_name == ".getValue":
+                            preceding_code = sub_src[max(0, api_pos_in_sub - 60):api_pos_in_sub]
+                            if re.search(r"\.getAttribute\s*\([^)]*\)\s*$", preceding_code):
+                                continue
+                            if re.search(r"\.getRange\s*\(\s*['\"][A-Za-z]+\d+['\"]\s*\)\s*$", preceding_code):
+                                continue
 
                         # .getPlainBody の直前に ? '' : がある場合はフォールバックなので除外
                         if "getPlainBody" in api_name:

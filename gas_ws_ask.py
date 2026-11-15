@@ -399,7 +399,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
         p.reasons.append("頼みの文が空です")
         return p
     q_all = gas_ws_find.norm(ask, finder.syn)
-    p.guide = [text for words, text in finder.guide if any(gas_ws_find.norm(w, finder.syn) and gas_ws_find.norm(w, finder.syn) in q_all for w in words)]
+    p.guide = [text for nwords, text in finder._guide_norm if any(nw in q_all for nw in nwords)]
     cl = clauses(ask) or [nfkc(ask)]
     ok_all = True
     if VAGUE.search(nfkc(ask)):

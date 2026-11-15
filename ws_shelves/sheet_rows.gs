@@ -15,8 +15,13 @@
 SHELF['rows'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), act = op.action || (op.cols ? 'delete' : 'delete');
   var isCol = !!op.cols, list = (isCol ? op.cols : op.rows) || [];
-  var tw = findTable_(sh);
-  var colRef = function (x) { return typeof x === 'number' ? x : (tw ? colIndexOf_(tw, x) : colNum_(x)); };
+  var tw;
+  var getTw = function () { if (tw === undefined) tw = findTable_(sh); return tw; };
+  var colRef = function (x) {
+    if (typeof x === 'number') return x;
+    if (/^[A-Za-z]{1,3}$/.test(String(x).trim())) return colNum_(x);
+    return getTw() ? colIndexOf_(getTw(), x) : colNum_(x);
+  };
   if (act === 'insert') {
     var at = op.at || list[0]; need_({ shelf: 'rows', at: at }, ['at']);
     var cnt = op.count || 1;
@@ -30,7 +35,7 @@ SHELF['rows'] = function (ctx, op) {
     nums.forEach(function (n) { if (n < 1 || n > max) throw new ArgError((isCol ? '列' : '行') + '番号 ' + n + ' は範囲外です（1〜' + max + '）'); });
     var peek = nums.map(function (n) { var v = isCol ? sh.getRange(1, n, Math.min(sh.getLastRow() || 1, 50), 1).getDisplayValues() : sh.getRange(n, 1, 1, Math.max(1, sh.getLastColumn())).getDisplayValues()[0]; return (isCol ? colLetter_(n) + '列' : n + '行目') + '「' + String(isCol ? v.map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('/') : v.filter(Boolean).slice(0, 3).join('/')).slice(0, 24) + '」'; });
     var wide = false;   // 表の外まで／明細の半分より多くを消す削除は、ok=True でも 1 回止める
-    if (tw) wide = isCol ? nums.some(function (n) { return n < tw.firstCol || n > tw.lastCol; }) : (nums.some(function (n) { return n < tw.headerRow || n > (tw.totalRow || tw.lastData); }) || wideRowCount_(tw, nums.length));
+    if (getTw()) wide = isCol ? nums.some(function (n) { return n < tw.firstCol || n > tw.lastCol; }) : (nums.some(function (n) { return n < tw.headerRow || n > (tw.totalRow || tw.lastData); }) || wideRowCount_(tw, nums.length));
     guardDelete_(ctx, peek.reverse().join('、') + ' を削除します', wide, nums.length + (isCol ? ' 列' : ' 行'));
     nums.forEach(function (n) { if (isCol) sh.deleteColumn(n); else sh.deleteRow(n); });
     chg_(ctx, sh, nums.slice().reverse().join('・') + (isCol ? ' 列' : ' 行目'), '削除');

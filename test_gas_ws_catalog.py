@@ -239,7 +239,7 @@ def _cases():
         "doc.section": {"heading": "h", "markdown": "x"}, "doc.table": {"rows": [["a"]]}, "doc.style": {},
     }
     cases = []
-    for n in LEGACY_NAMES:
+    for n in sample:
         kind = "doc" if n.startswith("doc.") else "sheet"
         for variant, extra in (("既定", {}), ("sheet 指定", {"sheet": "S2"} if kind == "sheet" else {})):
             for same in (True, False):

@@ -133,13 +133,16 @@ function sheetOf_(ss, name, ctxDefault) {
 
 // ---------------------------------------------------------------- 表の形
 
-var _TBL_CACHE = null;   // 値を変えない 1 回の runDo_ 中だけ findTable_ の結果を共有する（finally で必ず null に戻す）
+var _TBL_CACHE = null;   // 1 回の runDo_ 中に findTable_ の結果を共有する（値を変える棚では最初の 1 回で消費、finally で必ず null に戻す）
 function findTable_(sh) {
-  var sid = _TBL_CACHE ? sh.getSheetId() : null;
+  if (!sh || typeof sh.getLastRow !== 'function') return null;
+  var sid = (_TBL_CACHE && typeof sh.getSheetId === 'function') ? sh.getSheetId() : null;
   if (_TBL_CACHE && _TBL_CACHE[sid] !== undefined) {
     var c0 = _TBL_CACHE[sid];
+    if (_TBL_CACHE._once) _TBL_CACHE = null;
     return c0 ? { sheet: sh, headerRow: c0.headerRow, firstCol: c0.firstCol, lastCol: c0.lastCol, firstData: c0.firstData, lastData: c0.lastData, totalRow: c0.totalRow, vals: c0.vals } : null;
   }
+  if (_TBL_CACHE && _TBL_CACHE._once) _TBL_CACHE = null;
   var lr = sh.getLastRow(), lc = sh.getLastColumn();
   if (lr < 1 || lc < 1) { if (_TBL_CACHE) _TBL_CACHE[sid] = null; return null; }
   var vals = sh.getRange(1, 1, lr, lc).getValues();
@@ -420,7 +423,8 @@ function packDim_(meta, defPx) {
   });
   return out;
 }
-function saveSide_(n, rec) {
+function saveSide_(n, rec, preStr) {
+  if (preStr) { props_().setProperty('SIDE_' + n, preStr); return; }
   var s = JSON.stringify(rec);
   if (s.length <= 6000) { props_().setProperty('SIDE_' + n, s); return; }
   var gz = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(s, 'application/json')).getBytes());
@@ -431,7 +435,7 @@ function backupSheetsLite_(ss, sheets, n, items) {
   var tb = Date.now();
   var want = {}; items.forEach(function (i) { want[i] = 1; });
   var out = sheets.map(function (sh) {
-    return { id: sh.getSheetId(), name: sh.getName(), index: sh.getIndex(), frozenR: sh.getFrozenRows(), frozenC: sh.getFrozenColumns(), lite: true };
+    return { id: sh.getSheetId(), name: sh.getName(), frozenR: sh.getFrozenRows(), frozenC: sh.getFrozenColumns(), lite: true };
   });
   var needMeta = !!(want['隠し'] || want['グループ'] || want['保護'] || want['名前'] || want['タブ色'] || want['グラフ'] || want['フィルタ'] || want['条件付き'] || want['交互の色']);
   if (needMeta) {
@@ -501,14 +505,17 @@ function backupSheetsLite_(ss, sheets, n, items) {
   if (want['固定']) {
     out.forEach(function (b) { b.side = b.side || {}; b.side.fr = [b.frozenR, b.frozenC]; });
   }
-  // 9KB 上限を超える場合は従来控えへ安全にフォールバックする
+  // 9KB 上限を超える場合は従来控えへ安全にフォールバックする（通過時は文字列化・圧縮済みの結果を保持して二重計算を防ぐ）
   var probe = packSide_(out, items);
   if (probe) {
     var ps = JSON.stringify(probe);
     if (ps.length > 6000) {
       var gz = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(ps, 'application/json')).getBytes());
-      if (JSON.stringify({ __gz: gz }).length > 7800) return null;
+      ps = JSON.stringify({ __gz: gz });
+      if (ps.length > 7800) return null;
     }
+    out._packedStr = ps;
+    out._packedItems = probe.items;
   }
   bkLap_('lite', tb);
   return out;
@@ -855,9 +862,11 @@ function runDo_(req, T0) {
     var o = openTarget_(t); file = o.file; kind = o.kind;
   }
   lap_(tm, 'open');
+  _TBL_CACHE = {};
   if (req.expect && kind === 'sheet' && !created) {
     var shE = (t.sheet && file.getSheetByName(t.sheet)) ? t.sheet : file.getSheets()[0].getName(), nowT = tableOfSheet_(file, shE);
     if (!sameTable_(nowT, req.expect)) {
+      _TBL_CACHE = null;
       return { ok: false, stale: true, error: '表の形が変わっていました（書いていません）', target: { id: file.getId(), name: file.getName(), kind: 'sheet', url: file.getUrl(), sheet: shE },
         table: nowT && !nowT.none ? nowT : null, sheets: file.getSheets().map(function (s) { return s.getName(); }), ms: msOut_(tm) };
     }
@@ -897,12 +906,14 @@ function runDo_(req, T0) {
       } else { entry.doc = backupDoc_(ctx.doc, n); lap_(tm, 'backup'); entry.beforeDoc = fingerDoc_(ctx.doc); }
     }
     ctx.bk = bk; lap_(tm, 'finger0');
+    if (!isLite && _TBL_CACHE) _TBL_CACHE._once = true;
     for (var i = 0; i < ops.length; i++) {
       var op = ops[i], fn = SHELF[op.shelf];
       if (!fn) throw new ArgError('棚「' + op.shelf + '」はありません');
       if (fn.kind && fn.kind !== kind) throw new ArgError('棚「' + op.shelf + '」は' + (fn.kind === 'doc' ? '文書' : 'シート') + '用です（今の相手は' + (kind === 'doc' ? '文書' : 'スプレッドシート') + '）');
       ctx.opNo = i + 1; ctx.opName = op.shelf;
       fn(ctx, op);
+      if (!isLite) _TBL_CACHE = null;
     }
     if (kind === 'sheet' && (created || !(entry.sheets && entry.sheets.length))) SpreadsheetApp.flush();
     lap_(tm, 'ops');
@@ -910,10 +921,10 @@ function runDo_(req, T0) {
     // 書き終わりの指紋
     if (kind === 'sheet') {
       entry.after = {};
-      var hasFix = isLite && liteItems.indexOf('固定') >= 0;
+      var keepName = !touchesItem_(ops, 'シート構成'), keepFix = !touchesItem_(ops, '固定');
       (entry.sheets || []).forEach(function (b) {
         var s = byId_(ctx.ss, b.id);
-        if (s) entry.after[b.id] = fingerSheet_(s, FP_VER, isLite ? (hasFix ? { name: b.name } : b) : null);
+        if (s) entry.after[b.id] = fingerSheet_(s, FP_VER, { name: keepName ? b.name : undefined, frozenR: keepFix ? b.frozenR : undefined, frozenC: keepFix ? b.frozenC : undefined });
       });
       entry.created = {};
       ctx.createdSheets.forEach(function (nm) { var s = ctx.ss.getSheetByName(nm); if (s) entry.created[nm] = fingerSheet_(s); });
@@ -926,8 +937,9 @@ function runDo_(req, T0) {
       discardBackup_(bk); lap_(tm, 'discard');
       return { ok: true, target: tgt_(ctx, file), changed: [], notes: ['変更はありませんでした（すでにその状態です）'].concat(ctx.notes.filter(function (x) { return x.indexOf('変更なし') < 0; })), remaining: ctx.remaining, backup: 0, ms: msOut_(tm) };
     }
-    var sideRec = (bk && bk.length) ? packSide_(bk, isLite ? liteItems : sideItems) : null;
-    if (sideRec) { saveSide_(n, sideRec); entry.hasSide = true; entry.sideItems = sideRec.items; entry.sheets = stripSide_(bk); }
+    var preStr = bk && bk._packedStr;
+    var sideRec = preStr ? { items: bk._packedItems } : ((bk && bk.length) ? packSide_(bk, isLite ? liteItems : sideItems) : null);
+    if (sideRec) { saveSide_(n, sideRec, preStr); entry.hasSide = true; entry.sideItems = sideRec.items; entry.sheets = stripSide_(bk); }
     l.items.push(entry); ledgerSave_(l);
     lap_(tm, 'ledger');
     var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: created ? 0 : n, ms: msOut_(tm) };
@@ -949,6 +961,8 @@ function runDo_(req, T0) {
       restored: restored, restore_error: why, blocked: !!err.isBlocked, needs_ok: !!err.isBlocked, arg: !!err.isArg, target: tgt_(ctx, file), stack: String(err.stack || '').slice(0, 400) };
     if (created) out2.created = created;
     return out2;
+  } finally {
+    _TBL_CACHE = null;
   }
 }
 
@@ -1089,7 +1103,7 @@ function actUndo_(req) {
   if (hand.length && !req.ok)
     return { ok: false, needs_ok: true, error: '道具が書いた後に手で直した所があります（戻すと消えます）: ' + hand.join('、') + '。それでも戻すなら ok=True', target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
   // 戻す前の状態も控えに取る（undo の undo）
-  l.seq++; var n = l.seq; setJson_('LEDGER', l);
+  l.seq++; var n = l.seq;
   var undoNotes = [];
   var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: it.id, name: it.name, kind: it.kind, what: 'undo #' + it.n, isUndo: true, fp: FP_VER };
   try {
@@ -1118,8 +1132,9 @@ function actUndo_(req) {
   } catch (err) {
     return { ok: false, error: '戻せませんでした: ' + String(err.message || err), target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
   }
-  var sideRec2 = (entry.sheets && entry.sheets.length) ? packSide_(entry.sheets, entry.lite ? entry.liteItems : (it.sideItems || [])) : null;
-  if (sideRec2) { saveSide_(n, sideRec2); entry.hasSide = true; entry.sideItems = sideRec2.items; entry.sheets = stripSide_(entry.sheets); }
+  var preStr2 = entry.sheets && entry.sheets._packedStr;
+  var sideRec2 = preStr2 ? { items: entry.sheets._packedItems } : ((entry.sheets && entry.sheets.length) ? packSide_(entry.sheets, entry.lite ? entry.liteItems : (it.sideItems || [])) : null);
+  if (sideRec2) { saveSide_(n, sideRec2, preStr2); entry.hasSide = true; entry.sideItems = sideRec2.items; entry.sheets = stripSide_(entry.sheets); }
   it.undone = true;
   if (req.to) {
     l.items.forEach(function (x) {

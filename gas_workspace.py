@@ -49,13 +49,41 @@ class WorkspaceTimeout(WorkspaceError):
     pass
 
 
+_ENGINE_CACHE = {}
+
+
+def _engine_bundle(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
+    """共通部・Catalog・棚の (texts, hash, version) をファイルの更新時刻つきでキャッシュして返す"""
+    cp, sd = Path(common_path).resolve(), Path(shelf_dir).resolve()
+    sfiles = gas_ws_catalog.shelf_files(sd)
+    try:
+        cst = cp.stat()
+        ast_m = Path(gas_ws_api.__file__).stat().st_mtime_ns
+        sig = (cst.st_mtime_ns, cst.st_size, ast_m, tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in sfiles))
+    except OSError:
+        sig = None
+    cached = _ENGINE_CACHE.get((cp, sd))
+    if sig is not None and cached is not None and cached[0] == sig:
+        return cached[1], cached[2], cached[3]
+    cat = CATALOG if (sd == SHELF_DIR.resolve() and cached is None) else gas_ws_catalog.load(sd)
+    common_text = cp.read_text(encoding="utf-8")
+    out = [("Engine", common_text), ("Catalog", gas_ws_catalog.build_catalog_gs(cat)), ("ApiTypes", gas_ws_api.build_types_gs())]
+    for p in sfiles:
+        out.append((p.stem, p.read_text(encoding="utf-8")))
+    h = hashlib.sha1()
+    for _, text in out:
+        h.update(text.encode("utf-8"))
+    fhash = h.hexdigest()[:8]
+    m = re.search(r"var ENGINE_VERSION = '([^']*)'", common_text)
+    ver = f"{m.group(1) if m else 'ws'}+{fhash}"
+    if sig is not None:
+        _ENGINE_CACHE[(cp, sd)] = (sig, out, fhash, ver)
+    return out, fhash, ver
+
+
 def _engine_texts(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
     """GAS に入れる順の (名前, 本文): 共通部 → Catalog（札から作る）→ 棚のファイル（名前の順）"""
-    cat = gas_ws_catalog.load(shelf_dir)
-    out = [("Engine", Path(common_path).read_text(encoding="utf-8")), ("Catalog", gas_ws_catalog.build_catalog_gs(cat)), ("ApiTypes", gas_ws_api.build_types_gs())]
-    for p in gas_ws_catalog.shelf_files(shelf_dir):
-        out.append((p.stem, p.read_text(encoding="utf-8")))
-    return out
+    return list(_engine_bundle(common_path, shelf_dir)[0])
 
 
 class _Timer:
@@ -97,10 +125,7 @@ def format_timing(tim):
 
 def _file_hash(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
     """版の指紋: 入れる全ファイルの連結から取る"""
-    h = hashlib.sha1()
-    for _, text in _engine_texts(common_path, shelf_dir):
-        h.update(text.encode("utf-8"))
-    return h.hexdigest()[:8]
+    return _engine_bundle(common_path, shelf_dir)[1]
 
 
 def _digest(*parts):
@@ -151,9 +176,7 @@ class WorkspaceManager:
 
     # ------------------------------------------------------------ エンジン
     def engine_version(self):
-        text = self.engine_path.read_text(encoding="utf-8")
-        m = re.search(r"var ENGINE_VERSION = '([^']*)'", text)
-        return f"{m.group(1) if m else 'ws'}+{_file_hash(self.engine_path, self.shelf_dir)}"
+        return _engine_bundle(self.engine_path, self.shelf_dir)[2]
 
     def _engine_files(self, split=False):
         """GAS に入れるファイル。既定は appsscript と、全部をつないだ 1 本の Engine（順番は共通部 → Catalog → 棚）。
@@ -446,10 +469,6 @@ class WorkspaceManager:
                 continue
             break
         text = self._finish_do(st2, res, key)
-        if res.get("ok") and res.get("table") is not None:
-            st3 = self._load()
-            self._remember_table(st3, res.get("target") or {}, res.get("table"), res.get("sheets"))
-            self._save(st3)
         shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p.ops)
         if not res.get("ok"):
             return text + "\n撃った棚: " + shown
@@ -530,6 +549,8 @@ class WorkspaceManager:
             nk = tgt.get("id") or key
             fails[nk] = fails.get(nk, 0) + 1
             res["_fail_count"] = fails[nk]
+        if res.get("ok") and res.get("table") is not None:
+            self._remember_table(st, res.get("target") or {}, res.get("table"), res.get("sheets"))
         self._save(st)
         return self.format_do(res)
 
