@@ -10,8 +10,8 @@
     --panel: #ffffff;
     --border: #b8bcc4;
     --border-soft: #d5d9e0;
-    --text: #0f1419;
-    --muted: #4b5563;
+    --text: #000000;
+    --muted: #000000;
     --accent: #1d4ed8;
     --accent-hover: #1e40af;
     --accent-soft: #e8f0fe;
@@ -21,8 +21,8 @@
     --ok: #15803d;
     --err: #b91c1c;
     --warn: #92400e;
-    --font-ui: "BIZ UDPGothic", "BIZ UDPゴシック", "Meiryo", sans-serif;
-    --font-mono: "BIZ UDGothic", "BIZ UDゴシック", "Consolas", monospace;
+    --font-ui: "Meiryo", "Yu Gothic UI", "BIZ UDPGothic", sans-serif;
+    --font-mono: "BIZ UDGothic", "Meiryo", "Consolas", monospace;
   }
 
   * {
@@ -36,16 +36,21 @@
     height: 100%;
     overflow: hidden;
     background: var(--bg);
-    color: var(--text);
+    color: #000000;
     font-family: var(--font-ui);
-    font-size: 12px;
+    font-size: 13.5px;
     line-height: 1.35;
   }
 
   button, input, select, textarea {
     font-family: inherit;
     font-size: inherit;
-    color: var(--text);
+    color: #000000;
+  }
+
+  ::placeholder {
+    color: #333333;
+    opacity: 1;
   }
 
   .app {
@@ -62,10 +67,12 @@
   .btn {
     border: 1px solid var(--border);
     background: var(--btn-bg);
+    color: #000000;
     border-radius: 3px;
     padding: 4px 6px;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12.5px;
+    font-weight: 600;
     line-height: 1.25;
     text-align: center;
     white-space: nowrap;
@@ -96,11 +103,11 @@
   .btn-hero {
     width: 100%;
     padding: 6px 4px;
-    font-size: 11.5px;
+    font-size: 13px;
     font-weight: 700;
     background: var(--accent-soft);
     border-color: #7aa7e8;
-    color: #0b3b8c;
+    color: #000000;
     margin-bottom: 5px;
   }
   .btn-hero:hover:not(:disabled) {
@@ -123,7 +130,8 @@
     border: 1px solid var(--border);
     border-radius: 3px;
     background: var(--panel);
-    font-size: 12px;
+    color: #000000;
+    font-size: 13.5px;
     line-height: 1.4;
     outline: none;
   }
@@ -134,17 +142,17 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    width: 64px;
+    width: 66px;
     flex-shrink: 0;
   }
   .btn-run {
     flex: 1;
-    font-size: 12px;
+    font-size: 13.5px;
     padding: 4px 2px;
   }
   .btn-clear {
     padding: 3px 2px;
-    font-size: 10.5px;
+    font-size: 12px;
   }
 
   /* ---- オプション行 ---- */
@@ -154,7 +162,8 @@
     flex-wrap: wrap;
     gap: 3px 6px;
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 12px;
+    color: #000000;
   }
   .chk-label {
     display: inline-flex;
@@ -163,6 +172,7 @@
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
+    color: #000000;
   }
   .chk-label input {
     margin: 0;
@@ -170,9 +180,9 @@
   }
   .status-label {
     margin-left: auto;
-    font-size: 10.5px;
+    font-size: 12px;
     font-weight: 700;
-    color: #1f2937;
+    color: #000000;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -195,8 +205,9 @@
   }
   .target-name {
     max-width: 76px;
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 700;
+    color: #000000;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -205,16 +216,17 @@
   .sheet-select {
     flex: 1;
     min-width: 0;
-    height: 22px;
+    height: 24px;
     border: 1px solid var(--border);
     border-radius: 2px;
     background: var(--panel);
-    font-size: 11px;
+    color: #000000;
+    font-size: 12.5px;
     padding: 0 2px;
   }
   .target-bar .btn {
     padding: 3px 5px;
-    font-size: 10.5px;
+    font-size: 12px;
     flex-shrink: 0;
   }
 
@@ -239,7 +251,9 @@
     background: #e4e7ec;
     border-radius: 3px 3px 0 0;
     padding: 4px 2px;
-    font-size: 11px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #000000;
     cursor: pointer;
     text-align: center;
     white-space: nowrap;
@@ -286,7 +300,8 @@
   }
   .quick-grid .btn {
     padding: 5px 2px;
-    font-size: 10.8px;
+    font-size: 12.5px;
+    color: #000000;
   }
   .auto-status-box {
     display: flex;
@@ -297,8 +312,9 @@
     padding-top: 5px;
   }
   .status-line {
-    font-size: 11px;
+    font-size: 12.5px;
     line-height: 1.35;
+    color: #000000;
     word-break: break-word;
     overflow-wrap: anywhere;
     padding: 3px 5px;
@@ -318,7 +334,7 @@
     color: var(--warn);
   }
   .status-line.info-line {
-    color: #1f2937;
+    color: #000000;
     white-space: pre-line;
   }
 
@@ -332,8 +348,9 @@
     background: #fafafa;
     border-radius: 2px;
     padding: 5px;
+    color: #000000;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 12.5px;
     line-height: 1.4;
   }
   .log-entry {
@@ -360,8 +377,8 @@
     font-weight: 700;
   }
   .log-empty {
-    color: var(--muted);
-    font-size: 11px;
+    color: #000000;
+    font-size: 12.5px;
     padding: 6px;
     text-align: center;
   }
@@ -384,7 +401,8 @@
   }
   .hist-item {
     padding: 5px 6px;
-    font-size: 11.5px;
+    font-size: 13px;
+    color: #000000;
     border-bottom: 1px solid #eef0f4;
     cursor: pointer;
     word-break: break-word;
@@ -406,18 +424,19 @@
     margin-bottom: 7px;
   }
   .conf-label {
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 700;
-    color: #1f2937;
+    color: #000000;
   }
   .conf-control {
     width: 100%;
-    height: 25px;
+    height: 26px;
     border: 1px solid var(--border);
     border-radius: 2px;
     padding: 2px 5px;
     background: #ffffff;
-    font-size: 11.5px;
+    color: #000000;
+    font-size: 13px;
   }
   .conf-actions {
     display: flex;
@@ -429,8 +448,8 @@
     padding: 5px 4px;
   }
   .conf-note {
-    font-size: 10.5px;
-    color: var(--muted);
+    font-size: 12px;
+    color: #000000;
     word-break: break-word;
     background: #f8f9fb;
     border: 1px solid var(--border-soft);
@@ -448,8 +467,9 @@
   }
   .bottom-bar .btn {
     padding: 5px 2px;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 12px;
+    font-weight: 700;
+    color: #000000;
   }
 </style>
 </head>

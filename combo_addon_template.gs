@@ -149,10 +149,36 @@ function onAddonOpenWindow(e) {
 function doGet(e) {
   var id = e && e.parameter && e.parameter.id;
   if (id) { try { PropertiesService.getUserProperties().setProperty(COMBO_ADDON_TARGET_PROP, id); } catch (err) {} }
-  // サイドバー（幅 300px）用の画面を広い窓に出すので、文字と部品をまとめて大きくする
-  var z = Number((e && e.parameter && e.parameter.z) || 1.6) || 1.6;     // 広い窓は 1.6 倍・Chrome のサイドパネル（z=1）はそのまま
+  else { try { id = PropertiesService.getUserProperties().getProperty(COMBO_ADDON_TARGET_PROP) || ''; } catch (err2) {} }
+  // アドインの操作窓も Chrome のサイドパネルも等倍（z=1）で同じ見た目にする
+  var z = Number((e && e.parameter && e.parameter.z) || 1) || 1;
   var out = {lib_symbol}.createComboSidebarHtml();
   if (z !== 1) out.append('<style>html{zoom:' + z + '}</style>');
+  // 拡張機能を使えない環境向け：アドイン操作窓に「右寄せ・縦長」で開き直すボタンを追加する
+  if (!(e && e.parameter && String(e.parameter.z || '') === '1')) {
+    var popUrl = comboAddonWindowUrl_(id || '');
+    out.append(
+      '<script>(function(){' +
+      'var url=' + JSON.stringify(popUrl) + ';' +
+      'function openRight(){' +
+      'var sw=(screen&&screen.availWidth)||1280,sh=(screen&&screen.availHeight)||800;' +
+      'var sl=(screen&&screen.availLeft)||0,st=(screen&&screen.availTop)||0;' +
+      'var w=Math.min(540,Math.max(460,Math.round(sw*0.42)));' +
+      'var h=Math.max(600,sh);' +
+      'var l=sl+Math.max(0,sw-w),t=st;' +
+      'window.open(url,"gas_combo_right_"+Date.now(),"popup=yes,width="+w+",height="+h+",left="+l+",top="+t+",resizable=yes,scrollbars=yes");' +
+      'try{window.top.close();}catch(e1){}try{window.close();}catch(e2){}' +
+      '}' +
+      'function mount(){' +
+      'var bar=document.querySelector(".target-bar");if(!bar||document.getElementById("btnDockRight"))return;' +
+      'var b=document.createElement("button");b.id="btnDockRight";b.type="button";b.className="btn";' +
+      'b.textContent="右縦長";b.title="右寄せ・縦長の別窓で開き直す";b.onclick=openRight;' +
+      'bar.appendChild(b);' +
+      '}' +
+      'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",mount);else mount();' +
+      '})();<' + '/script>'
+    );
+  }
   // Chrome 拡張のサイドパネルの中に入れられるようにする
   return out.setTitle('GASコンボ').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
