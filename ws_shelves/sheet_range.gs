@@ -275,6 +275,50 @@ SHELF['fill.series'] = function (ctx, op) {
   chg_(ctx, sh, rg.getA1Notation(), '連番を記入（' + start + 'から step ' + step + '）');
 };
 
+// 棚: date.fix
+// 題: 文字で入った日付を本物の日付に直す
+// 分類: 範囲
+// 語: ちゃんとした日付|本物の日付|日付に直|日付にして|日付にしておいて|文字の日付|文字で入って|日付じゃなく|日付として扱|日付型|日付と認識
+// 違い: 日付の見せ方（「11月4日(水)」など）を変えるだけなら format の number_format。日付を下へ連続で入れるなら fill.date
+// 引数: col=列, range=範囲
+// どれか: col range
+// 例: 「日付の列に文字で入っている日付を、ちゃんとした日付にして」 → {"shelf":"date.fix","col":"日付"}
+// 例: 「B2:B30の日付が文字になっているので日付にして」 → {"shelf":"date.fix","range":"B2:B30"}
+// 触る: 値
+// 控え: 今
+SHELF['date.fix'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), rg, t = null;
+  if (op.col) { t = needTable_(sh); var ci = colIndexOf_(t, op.col); rg = sh.getRange(t.firstData, ci, t.lastData - t.firstData + 1, 1); }
+  else if (op.range) rg = sh.getRange(op.range);
+  else throw new ArgError('棚「date.fix」に col か range が要ります');
+  var vals = rg.getValues(), forms = rg.getFormulas(), fmts = rg.getNumberFormats();
+  // 年を書いていない日付（「11月4日」）は、同じ列の本物の日付の年に合わせる（無ければ今年）
+  var year = new Date().getFullYear(), dateFmt = '';
+  for (var r0 = 0; r0 < vals.length; r0++) for (var c0 = 0; c0 < vals[r0].length; c0++) {
+    var v0 = vals[r0][c0];
+    if (v0 instanceof Date && !isNaN(v0.getTime())) { year = v0.getFullYear(); if (!dateFmt && fmts[r0][c0] && fmts[r0][c0] !== '@') dateFmt = fmts[r0][c0]; }
+  }
+  var z2h = function (x) { return x.replace(/[０-９]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); }).replace(/[／－．]/g, function (ch) { return { '／': '/', '－': '-', '．': '.' }[ch]; }); };
+  var mk = function (y, m, d) { var dt = new Date(y, m - 1, d); return (dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d) ? dt : null; };
+  var fixed = [];
+  for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
+    var v = vals[r][c];
+    if (forms[r][c] || typeof v !== 'string' || !v.trim()) continue;
+    var s = z2h(v.trim()).replace(/\s*[(（][^)）]*[)）]\s*$/, '');      // 後ろの（水）は外して読む
+    var m = s.match(/^(\d{4})\s*[\/\-.年]\s*(\d{1,2})\s*[\/\-.月]\s*(\d{1,2})\s*日?$/), dt = null;
+    if (m) dt = mk(+m[1], +m[2], +m[3]);
+    else if ((m = s.match(/^(\d{1,2})\s*[\/月]\s*(\d{1,2})\s*日?$/))) dt = mk(year, +m[1], +m[2]);
+    if (!dt) continue;
+    vals[r][c] = dt;
+    if (!fmts[r][c] || fmts[r][c] === '@' || fmts[r][c] === 'General') fmts[r][c] = dateFmt || 'yyyy/mm/dd';
+    fixed.push(rg.getCell(r + 1, c + 1).getA1Notation());
+  }
+  if (!fixed.length) { note_(ctx, '文字で入った日付は見つかりませんでした（' + rg.getA1Notation() + '）'); return; }
+  rg.setNumberFormats(fmts);
+  rg.setValues(vals);
+  chg_(ctx, sh, fixed.slice(0, 5).join('・') + (fixed.length > 5 ? ' ほか ' + (fixed.length - 5) + ' 件' : ''), '文字の日付を日付に（' + fixed.length + ' 件）');
+};
+
 // 棚: fill.date
 // 題: 日付を下へ埋める
 // 分類: 範囲

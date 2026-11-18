@@ -475,9 +475,12 @@ var ComboPlanner = (function () {
   function _clauses(askText) {
     var parts = nfkc(askText).split(ASK_SPLIT);
     var out = [];
+    var placeOnly = /^.{1,12}(?:のとこ|のところ|の所|の列に|の列は|の列で|の欄に|の欄は)(?:は|も)?$/;   // 「日付のとこ」のような場所だけの節は、次の節につなげる
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i].trim();
-      if (p.length >= 2) out.push(p);
+      if (p.length < 2) continue;
+      if (out.length && placeOnly.test(out[out.length - 1])) out[out.length - 1] = out[out.length - 1] + " " + p;
+      else out.push(p);
     }
     return out;
   }
@@ -1703,6 +1706,14 @@ var ComboPlanner = (function () {
       }
     }
     p.cards = uniqCards;
+    // 同じ手が続いたら 1 つに（節が 2 つとも同じ棚に当たったとき）。足す・書く・埋める手は 2 回で意味が変わるのでまとめない
+    var dd = [];
+    for (var di = 0; di < p.ops.length; di++) {
+      var o = p.ops[di];
+      if (dd.length && JSON.stringify(o) === JSON.stringify(dd[dd.length - 1]) && !/insert|add|write|fill|copy|new/.test(String(o.shelf || ""))) continue;
+      dd.push(o);
+    }
+    p.ops = dd;
     p.fire = (!fatalErr) && (!p.missing.length) && (p.ops.length > 0);
     p.previewText = _buildPreviewText(p);
     return p;

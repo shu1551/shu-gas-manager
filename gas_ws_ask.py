@@ -85,9 +85,19 @@ def nfkc(s):
     return unicodedata.normalize("NFKC", s or "")
 
 
+PLACE_ONLY = re.compile(r"^.{1,12}(?:のとこ|のところ|の所|の列に|の列は|の列で|の欄に|の欄は)(?:は|も)?$")   # 「日付のとこ」のような場所だけの節は、次の節につなげる
+
+
 def clauses(ask):
     parts = [p.strip() for p in SPLIT.split(nfkc(ask))]
-    return [p for p in parts if len(p) >= 2]
+    parts = [p for p in parts if len(p) >= 2]
+    out = []
+    for p in parts:
+        if out and PLACE_ONLY.match(out[-1]):
+            out[-1] = out[-1] + " " + p
+        else:
+            out.append(p)
+    return out
 
 
 # ------------------------------------------------------------------ 型ごとの読み取り
@@ -748,6 +758,13 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             seen.add(s["name"])
             cards.append(s)
     p.cards = cards[:4]
+    # 同じ手が続いたら 1 つに（節が 2 つとも同じ棚に当たったとき）。足す・書く・埋める手は 2 回で意味が変わるのでまとめない
+    dd = []
+    for o in p.ops:
+        if dd and o == dd[-1] and not re.search(r"insert|add|write|fill|copy|new", o.get("shelf", "")):
+            continue
+        dd.append(o)
+    p.ops = dd
     p.fire = (not fatal_err) and (not p.missing) and bool(p.ops)
     return p
 
