@@ -577,6 +577,9 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
             "sheets": {"homepageTrigger": {"runFunction": "onHome"}, "onFileScopeGrantedTrigger": {"runFunction": "onFileScopeGranted"}},
         },
         "webapp": {"executeAs": "USER_ACCESSING", "access": "MYSELF"},   # 操作窓（前のサイドバーの HTML）を別の窓で開く
+        # Workspace アドインを正式にデプロイするには、外へ通信する先の一覧が要る（AI の API 鍵の道・Sheets API・書き出し）
+        "urlFetchWhitelist": ["https://generativelanguage.googleapis.com/", "https://api.anthropic.com/",
+                              "https://sheets.googleapis.com/", "https://www.googleapis.com/", "https://docs.google.com/"],
     }
     code = ADDON_TEMPLATE.read_text(encoding="utf-8").replace("{lib_symbol}", sym).replace("{webapp_url}", str(webapp_url or ""))
     planner = next(f for f in build_combo_files() if f["name"] == "ComboPlanner")
@@ -587,7 +590,7 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
     ]
 
 
-def install_combo_addon(addon_id="", force_engine_update=False, client=None, state_path=None):
+def install_combo_addon(addon_id="", force_engine_update=False, client=None, state_path=None, window_json=None):
     """アドイン版を作る・入れ直す。大元ライブラリを最新にし、アドインのプロジェクトへ push する。
     テスト デプロイ（Test latest code）は最新のコードで動くので、2 回目からはこれだけで全部のシートに効く。"""
     if client is None:
@@ -605,21 +608,23 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
     if not sid:
         sid = str(client.create_project(DEFAULT_ADDON_TITLE)["scriptId"]).strip()
         created = True
-    # 操作窓の番地＝HEAD のデプロイ（テスト デプロイ）の /dev。最新のコードで動くので、版を作らずに済む
-    webapp_url = ""
-    try:
-        for d in client.list_deployments(sid, use_cache=False) or []:
-            if str(d.get("versionNumber", "HEAD")) == "HEAD" and d.get("deploymentId"):
-                webapp_url = f"https://script.google.com/macros/s/{d['deploymentId']}/dev"
-                break
-    except Exception:
-        webapp_url = ""
+    # 操作窓の番地＝正式なウェブアプリのデプロイ（/exec）。/dev は Chrome 拡張のサイドパネルの中に入れると Google が通さない
+    # （持ち主でも「アクセス権が必要です」）。デプロイの ID は変わらないので、初回だけ作って、あとは版を上げる
+    dep_id = str(st.get("addon_webapp_dep") or "").strip() if not created else ""
+    if not dep_id:
+        client._put_content(sid, build_combo_addon_files(lib_id, ver, webapp_url=""))
+        d = client.deploy(sid, description="GASコンボ 操作窓", fast=True)
+        dep_id = str(d.get("deploymentId") or "").strip()
+    webapp_url = f"https://script.google.com/macros/s/{dep_id}/exec" if dep_id else ""
     client._put_content(sid, build_combo_addon_files(lib_id, ver, webapp_url=webapp_url))
+    if dep_id:
+        client.deploy(sid, description="GASコンボ 操作窓", deployment_id=dep_id, fast=True)
+    st["addon_webapp_dep"] = dep_id
     st["addon_sid"] = sid
     # Chrome 拡張（ws_browser_ext）のアイコンで操作窓を直接開けるよう、窓の番地を拡張のフォルダに書く（人ごとに違うので公開しない）
     if webapp_url:
         try:
-            (HERE / "ws_browser_ext" / "combo_window.json").write_text(json.dumps({"base": webapp_url}, ensure_ascii=False), encoding="utf-8")
+            (Path(window_json) if window_json else HERE / "ws_browser_ext" / "combo_window.json").write_text(json.dumps({"base": webapp_url}, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
     try:

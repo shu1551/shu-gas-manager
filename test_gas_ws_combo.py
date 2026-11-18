@@ -1359,12 +1359,14 @@ def test_install_combo_addon_reuses_saved_project_and_records_it(tmp_path, monke
     st.write_text(json.dumps({"addon_sid": "ADDON1"}), encoding="utf-8")
     monkeypatch.setattr(combo_mod, "ensure_combo_engine_project", lambda **kw: ("LIB9", "15", []))
     class C:
-        def __init__(self): self.put = []
+        def __init__(self): self.put = []; self.dep = []
         def _put_content(self, sid, files): self.put.append((sid, [f["name"] for f in files]))
         def create_project(self, title): raise AssertionError("作り直さない")
-        def list_deployments(self, sid, use_cache=True): return [{"deploymentId": "DEPHEAD", "versionNumber": "HEAD"}]
+        def deploy(self, sid, description="", deployment_id=None, fast=False):
+            self.dep.append(deployment_id); return {"deploymentId": deployment_id or "DEPEXEC"}
     c = C()
-    res = combo_mod.install_combo_addon(client=c, state_path=st)
-    assert res["scriptId"] == "ADDON1" and c.put == [("ADDON1", ["appsscript", "コード", "ComboPlanner"])]
+    res = combo_mod.install_combo_addon(client=c, state_path=st, window_json=tmp_path / "w.json")
+    assert res["scriptId"] == "ADDON1" and c.put[-1] == ("ADDON1", ["appsscript", "コード", "ComboPlanner"])
     assert "入れ直し" in res["next"]
-    assert res["window"] == "https://script.google.com/macros/s/DEPHEAD/dev"
+    assert res["window"] == "https://script.google.com/macros/s/DEPEXEC/exec"     # サイドパネルの中に入れられる正式な番地
+    assert c.dep == [None, "DEPEXEC"]                                              # 初回はデプロイを作り、番地を書いた版でもう一度上げる
