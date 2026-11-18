@@ -1089,6 +1089,8 @@ function runDo_(req, T0) {
       } else { entry.doc = backupDoc_(ctx.doc, n); lap_(tm, 'backup'); entry.beforeDoc = fingerDoc_(ctx.doc); }
     }
     ctx.bk = bk; lap_(tm, 'finger0');
+    var errBefore = (file && kind === 'sheet' && !created && errScanNeeded_(ops)) ? errScan_(ctx.ss) : null;   // 撃った後に新しく出たエラー・消えた式を返すため、撃つ前を数えておく
+    if (errBefore) lap_(tm, 'err0');
     if (!isLite && _TBL_CACHE) _TBL_CACHE._once = true;
     for (var i = 0; i < ops.length; i++) {
       var op = ops[i], fn = SHELF[op.shelf];
@@ -1099,6 +1101,7 @@ function runDo_(req, T0) {
       if (!isLite) _TBL_CACHE = null;
     }
     lap_(tm, 'ops');
+    if (errBefore) { SpreadsheetApp.flush(); errReport_(ctx, ops, errBefore, errScan_(ctx.ss)); lap_(tm, 'err1'); }
     if (file && kind === 'sheet' && (created || req.want_table || (useBackup && !(entry.sheets && entry.sheets.length)))) SpreadsheetApp.flush();
     if (file && kind === 'doc') { ctx.doc.saveAndClose(); ctx.doc = DocumentApp.openById(entry.id); file = ctx.doc; lap_(tm, 'save'); }
     if (useBackup) {
@@ -1127,7 +1130,7 @@ function runDo_(req, T0) {
       l.items.push(entry); ledgerSave_(l);
       lap_(tm, 'ledger');
     }
-    var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: (created || !useBackup) ? 0 : n, ms: msOut_(tm) };
+    var out = { ok: true, new_errors: ctx.newErrors || [], target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: (created || !useBackup) ? 0 : n, ms: msOut_(tm) };
     if (created) { out.created = created; }
     if (ctx.defaultFolder !== undefined) { out.default_folder = ctx.defaultFolder; }
     if (file && req.want_table && kind === 'sheet') {   // 撃った後の表の形（道具が覚えて、次の頼みの引数に使う・AI が確かめの look を撃たなくて済む）
@@ -1219,6 +1222,42 @@ function isNoop_(ops, entry, ctx) {
     return true;
   }
   return sameFinger_(entry.beforeDoc, entry.afterDoc);
+}
+
+// ---------------------------------------------------------------- 撃った後の点検（新しく出たエラー・消えた式）
+// 書式だけを変える棚は値も式も変えないので数えない（速さのため）
+var ERR_SCAN_SKIP = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|filter\.|tidy|sheet\.(color|hide|show|move|rename)|cols\.(hide|show)|rows\.(hide|show)|validation\.|checkbox|protect\.|name\.list|drive\.|folder|backup|find|cf\.list)/;
+var ERR_RE = /^#(REF!|VALUE!|DIV\/0!|N\/A|NAME\?|NUM!|NULL!|ERROR!)/;
+var FORMULA_DROP_OK = /^(rows\.delete|cols\.delete|dedupe|seiri|clear\.|sheet\.delete|formula\.tovalue|copy\.values|write|replace)/;   // 式が減ってよい（頼みがそういう物）
+function errScanNeeded_(ops) { return ops.some(function (o) { return !ERR_SCAN_SKIP.test(String(o.shelf || '')); }); }
+function errScan_(ss) {
+  var out = {};
+  ss.getSheets().forEach(function (sh) {
+    var lr = sh.getLastRow(), lc = sh.getLastColumn();
+    if (lr < 1 || lc < 1 || lr * lc > 60000) return;           // 大きいシートは見ない（6 万セルまで）
+    var rg = sh.getRange(1, 1, lr, lc), v = rg.getValues(), f = rg.getFormulas(), errs = {}, fcol = {};
+    for (var r = 0; r < lr; r++) for (var c = 0; c < lc; c++) {
+      if (typeof v[r][c] === 'string' && ERR_RE.test(v[r][c])) errs[a1_(r + 1, c + 1)] = v[r][c] + (f[r][c] ? '（' + f[r][c].slice(0, 40) + '）' : '');
+      if (f[r][c]) fcol[c] = (fcol[c] || 0) + 1;
+    }
+    out[sh.getSheetId()] = { name: sh.getName(), errs: errs, fcol: fcol };
+  });
+  return out;
+}
+function errReport_(ctx, ops, before, after) {
+  var news = [], drops = [];
+  var dropOk = ops.some(function (o) { return FORMULA_DROP_OK.test(String(o.shelf || '')); });
+  Object.keys(after).forEach(function (id) {
+    var a = after[id], b = before[id] || { errs: {}, fcol: {} };
+    Object.keys(a.errs).forEach(function (k) { if (!(k in b.errs)) news.push(a.name + '!' + k + ' ' + a.errs[k]); });
+    if (!dropOk && before[id]) Object.keys(b.fcol).forEach(function (c) {
+      var n0 = b.fcol[c], n1 = a.fcol[c] || 0;
+      if (n1 < n0) drops.push(a.name + ' の ' + colLetter_(+c + 1) + ' 列の式が ' + n0 + ' → ' + n1 + ' 個');
+    });
+  });
+  ctx.newErrors = news.concat(drops);
+  if (news.length) ctx.notes.push('新しいエラー: ' + news.slice(0, 5).join('・') + (news.length > 5 ? ' ほか ' + (news.length - 5) + ' 件' : '') + '（撃つ前には無かった物。直すか ws_undo で戻すかを決める）');
+  if (drops.length) ctx.notes.push('式が減った: ' + drops.slice(0, 3).join('・') + '（式が値に化けていないか確かめる。戻すなら ws_undo）');
 }
 
 function tgt_(ctx, file) {
@@ -1637,20 +1676,22 @@ function wideRange_(sh, rg) {
 function wideRowCount_(t, n) { return !!t && n > (t.lastData - t.firstData + 1) / 2; }
 function guardOverwrite_(ctx, rg, msg) {
   if (ctx.ok) return;
-  var vals = rg.getValues();
+  var vals = rg.getValues(), forms = rg.getFormulas();
   var r0 = rg.getRow(), c0 = rg.getColumn();
-  var hit = 0, first3 = [];
+  var hit = 0, first3 = [], nf = 0, f3 = [];
   for (var r = 0; r < vals.length; r++) {
     for (var c = 0; c < vals[r].length; c++) {
       var v = vals[r][c];
-      if (v !== '' && v !== null && v !== undefined) {
+      if (forms[r][c]) { nf++; if (f3.length < 3) f3.push(a1_(r0 + r, c0 + c)); }
+      if (v !== '' && v !== null && v !== undefined || forms[r][c]) {
         hit++;
         if (first3.length < 3) first3.push(a1_(r0 + r, c0 + c));
       }
     }
   }
   if (hit > 0) {
-    var desc = (msg ? msg + '（' : '（') + '書く先に空でないセルが ' + hit + ' 個あります: ' + first3.join('・') + (hit > 3 ? ' など' : '') + '。「上書きしてよい」の承認＝ok=True が要ります）';
+    var fNote = nf ? '。うち式のセルが ' + nf + ' 個（' + f3.join('・') + (nf > 3 ? ' など' : '') + '）＝上書きすると式が消えて値になります' : '';
+    var desc = (msg ? msg + '（' : '（') + '書く先に空でないセルが ' + hit + ' 個あります: ' + first3.join('・') + (hit > 3 ? ' など' : '') + fNote + '。「上書きしてよい」の承認＝ok=True が要ります）';
     throw new Blocked(desc);
   }
 }

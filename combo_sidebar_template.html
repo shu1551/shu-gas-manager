@@ -1232,7 +1232,7 @@
     var qName = "'" + String(sheetName).replace(/'/g, "''") + "'!A1:Z30";
     var url = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(state.target.id) +
       "?ranges=" + encodeURIComponent(qName) +
-      "&fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount)),bandedRanges(bandedRangeId),data(rowData(values(userEnteredFormat))))";
+      "&fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount)),bandedRanges(bandedRangeId),data(rowData(values(userEnteredFormat,userEnteredValue,effectiveValue(errorValue)))))";
     fetch(url, {
       method: "GET",
       headers: { "Authorization": "Bearer " + state.oauthToken }
@@ -1265,6 +1265,8 @@
           }
         }
         state.sheetSnapshot[sheetName] = {
+          errs: errsOfRowData(rowData),
+          vals: valsOfRowData(rowData),
           frozenRows: gp.frozenRowCount || 0,
           frozenCols: gp.frozenColumnCount || 0,
           bandedRangeIds: bIds,
@@ -1272,6 +1274,52 @@
         };
       })
       .catch(function() {});
+  }
+
+  // 写しの範囲（A1:Z30）の中のエラーのセル { "A1": "#REF!" }
+  var ERR_LABEL = { ERROR: "#ERROR!", NULL_VALUE: "#NULL!", DIVIDE_BY_ZERO: "#DIV/0!", VALUE: "#VALUE!", REF: "#REF!", NAME: "#NAME?", NUM: "#NUM!", N_A: "#N/A", LOADING: "" };
+  // 写しの範囲の「書く前の値」 { "A1": userEnteredValue }（空のセルは入れない）
+  function valsOfRowData(rowData) {
+    var out = {};
+    for (var r = 0; r < Math.min(rowData.length, 30); r++) {
+      var vs = (rowData[r] && rowData[r].values) || [];
+      for (var c = 0; c < Math.min(vs.length, 26); c++) {
+        if (vs[c] && vs[c].userEnteredValue) out[num0ToCol(c) + (r + 1)] = vs[c].userEnteredValue;
+      }
+    }
+    return out;
+  }
+
+  function errsOfRowData(rowData) {
+    var out = {};
+    for (var r = 0; r < Math.min(rowData.length, 30); r++) {
+      var vs = (rowData[r] && rowData[r].values) || [];
+      for (var c = 0; c < Math.min(vs.length, 26); c++) {
+        var ev = vs[c] && vs[c].effectiveValue && vs[c].effectiveValue.errorValue;
+        if (ev && ERR_LABEL[ev.type] !== "") out[num0ToCol(c) + (r + 1)] = ERR_LABEL[ev.type] || ("#" + ev.type);
+      }
+    }
+    return out;
+  }
+
+  // 値を書く手を直結で撃った後、写しの範囲を読み直して、撃つ前に無かったエラーだけを返す（書式だけの手では読まない）
+  function checkNewErrorsAfterDirect(sheetName, ops, done) {
+    var writes = ops.some(function(o) { return /^(write|clear\.)/.test(String(o.shelf || "")); });
+    var snap = state.sheetSnapshot[sheetName];
+    if (!writes || !snap || !snap.errs || typeof fetch !== "function") { done([]); return; }
+    var qName = "'" + String(sheetName).replace(/'/g, "''") + "'!A1:Z30";
+    var url = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(state.target.id) +
+      "?ranges=" + encodeURIComponent(qName) + "&fields=sheets(data(rowData(values(effectiveValue(errorValue)))))";
+    fetch(url, { method: "GET", headers: { "Authorization": "Bearer " + state.oauthToken } })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        var rowData = (data && data.sheets && data.sheets[0] && data.sheets[0].data && data.sheets[0].data[0] && data.sheets[0].data[0].rowData) || [];
+        var now = errsOfRowData(rowData), news = [];
+        Object.keys(now).forEach(function(k) { if (!(k in snap.errs)) news.push(k + " " + now[k]); });
+        snap.errs = now;
+        done(news);
+      })
+      .catch(function() { done([]); });
   }
 
   function getSnapCellFmt(sheetName, r0, c0) {
@@ -1655,9 +1703,26 @@
         if (op.tsv !== undefined || !op.cells || typeof op.cells !== "object" || Array.isArray(op.cells)) return null;
         var wKeys = Object.keys(op.cells);
         if (!wKeys.length) return null;
+        // 書く前の値が写しで分かるセルだけ直結で書く。空でないセルの上書きは GAS の道（上書きの止め・控えあり）に任せる
+        var wSnap = state.sheetSnapshot[sheetName];
+        if (!wSnap || !wSnap.vals) return null;
         for (var wi = 0; wi < wKeys.length; wi++) {
           var cellRg = parseSimpleA1Range(wKeys[wi], sheetId);
           if (!cellRg || cellRg.r1 !== cellRg.r2 || cellRg.c1 !== cellRg.c2) return null;
+          if (cellRg.r1 > 29 || cellRg.c1 > 25) return null;
+          var wPrev = wSnap.vals[cellRg.a1];
+          if (wPrev && !(els.chkOk && els.chkOk.checked)) return null;
+          undoRequests.unshift({
+            updateCells: {
+              start: { sheetId: sheetId, rowIndex: cellRg.r1, columnIndex: cellRg.c1 },
+              rows: [{ values: [wPrev ? { userEnteredValue: wPrev } : {}] }],
+              fields: "userEnteredValue"
+            }
+          });
+          (function(key, newV, oldV) {
+            snapshotMutators.push(function() { var sn = state.sheetSnapshot[sheetName]; if (sn && sn.vals) sn.vals[key] = newV; });
+            undoSnapshotMutators.push(function() { var sn = state.sheetSnapshot[sheetName]; if (sn && sn.vals) { if (oldV) sn.vals[key] = oldV; else delete sn.vals[key]; } });
+          })(cellRg.a1, toUserEnteredValue(op.cells[wKeys[wi]]), wPrev);
           requests.push({
             updateCells: {
               start: { sheetId: sheetId, rowIndex: cellRg.r1, columnIndex: cellRg.c1 },
@@ -1927,7 +1992,10 @@
         lines.push("対象: " + (state.target.name || "(名前なし)") + " › " + sheetName);
         lines.push("直した所: " + plan.changed.slice(0, 2).join(" ／ "));
         lines.push("控えなし（backup=OFF）");
-        recordExecution(true, label, lines.join("\n"), wallMs, 0, true, true);
+        checkNewErrorsAfterDirect(sheetName, ops, function(news) {
+          if (news.length) lines.push("⚠ 新しいエラー: " + news.slice(0, 5).join("・") + (news.length > 5 ? " ほか " + (news.length - 5) + " 件" : "") + "（直前を取り消すで戻せます）");
+          recordExecution(true, label, lines.join("\n"), wallMs, 0, true, true);
+        });
       })
       .catch(function() {
         setBusy(false);

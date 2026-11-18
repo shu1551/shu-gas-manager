@@ -47,6 +47,7 @@ class Range {
   constructor(sh, r, c, nr, nc) { this.sh = sh; this.r = r; this.c = c; this.nr = nr; this.nc = nc; }
   _grid(f) { const o = []; for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) row.push(f(this.sh.values[this.r - 1 + i][this.c - 1 + j])); o.push(row); } return o; }
   getFormulas() { return this._grid(() => ''); }
+  getValues() { return this._grid(v => v); }
   getDisplayValues() { return this._grid(v => String(v)); }
   getBackgrounds() { return this._grid(() => '#ffffff'); }
   getFontWeights() { return this._grid(() => 'normal'); }
@@ -94,7 +95,7 @@ vm.runInContext(`
     var c0 = JSON.parse(JSON.stringify(__counts));
     var res = runDo_({ target: { id: 'S', kind: 'sheet' }, ops: [{ shelf: s.shelf, v: s.v }], ok: false }, Date.now());
     var c1 = __counts, led = JSON.parse(__store['LEDGER'] || '{"seq":0,"items":[]}');
-    __out.push({ step: s.name, ok: res.ok, changed: res.changed, ms: res.ms, backup: res.backup, notes: res.notes, dGetSheets: c1.getSheetsBook - c0.getSheetsBook, dColW: c1.colWidth - c0.colWidth,
+    __out.push({ step: s.name, ok: res.ok, err: res.error, changed: res.changed, ms: res.ms, backup: res.backup, notes: res.notes, dGetSheets: c1.getSheetsBook - c0.getSheetsBook, dColW: c1.colWidth - c0.colWidth,
       dLedger: c1.setLedger - c0.setLedger, seq: led.seq, items: led.items.length, cell: __files['S'].sheets[0].values[1][0], tabs: __files[__store['BK_BOOK']].sheets.map(function (x) { return x.name; }) });
   });
   var __fp = { v2: [digest_('来期', 2), digest_('今期', 2)], v1: [digest_('来期', 1), digest_('今期', 1)], def: [digest_('来期'), digest_('今期')] };

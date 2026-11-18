@@ -1001,7 +1001,7 @@ dt.state.table = {
   ]
 };
 dt.state.sheetSnapshot = {
-  Sheet1: { frozenRows: 0, frozenCols: 0, bandedRangeIds: [901], cells: Array.from({ length: 30 }, () => Array.from({ length: 26 }, () => ({}))) }
+  Sheet1: { frozenRows: 0, frozenCols: 0, bandedRangeIds: [901], vals: {}, cells: Array.from({ length: 30 }, () => Array.from({ length: 26 }, () => ({}))) }
 };
 dt.els.chkBackup.checked = false;
 dt.els.chkOk.checked = false;
@@ -1222,7 +1222,7 @@ const tbl = {
   columns: [{col:'A',name:'日付'},{col:'B',name:'部門'},{col:'C',name:'担当者'},{col:'D',name:'金額',number:true}]
 };
 dt.state.table = tbl;
-dt.state.sheetSnapshot = { '売上表': { frozenRows: 0, frozenCols: 0, bandedRangeIds: [901], cells: Array.from({ length: 30 }, () => Array.from({ length: 26 }, () => ({}))) } };
+dt.state.sheetSnapshot = { '売上表': { frozenRows: 0, frozenCols: 0, bandedRangeIds: [901], vals: {}, cells: Array.from({ length: 30 }, () => Array.from({ length: 26 }, () => ({}))) } };
 dt.els.chkBackup.checked = false;
 dt.els.chkOk.checked = false;
 
@@ -1240,11 +1240,16 @@ const bgReq = dt.buildDirectBatchUpdate([{ shelf: 'bg.clear', header: true }], '
 const blue = { red: 0, green: 0, blue: 1 };
 dt.state.sheetSnapshot['売上表'].cells[0][0] = { textFormat: { foregroundColorStyle: { rgbColor: blue } } };
 const redReq = dt.buildDirectBatchUpdate([{ shelf: 'format', title: true, color: '赤' }], '売上表');
+// 書く手：空でないセルには直結で書かない（GAS の道の上書きの止めに任せる）。空のセルなら、取り消しで空に戻す
+dt.state.sheetSnapshot['売上表'].vals = { B2: { stringValue: '確定前' } };
+const wFull = dt.buildDirectBatchUpdate([{ shelf: 'write', cells: { B2: 'テスト' } }], '売上表');
+const wEmpty = dt.buildDirectBatchUpdate([{ shelf: 'write', cells: { A10: '合計' } }], '売上表');
+dt.state.sheetSnapshot['売上表'].vals = {};
 const saved = dt.state.sheetSnapshot['売上表'];
 delete dt.state.sheetSnapshot['売上表'];
 const noSnap = dt.buildDirectBatchUpdate([{ shelf: 'format', title: true, color: '赤' }], '売上表');
 dt.state.sheetSnapshot['売上表'] = saved;
-process.stdout.write(JSON.stringify({ total: input.cases.length, failures, bgReq, redUndo: redReq && redReq.undoRequests, noSnap }));
+process.stdout.write(JSON.stringify({ total: input.cases.length, failures, bgReq, redUndo: redReq && redReq.undoRequests, noSnap, wFull, wEmptyUndo: wEmpty && wEmpty.undoRequests }));
 """
     res = _run_node_json(node_code, {"scripts": scripts, "cases": cases})
     assert res["total"] == 64
@@ -1258,6 +1263,8 @@ process.stdout.write(JSON.stringify({ total: input.cases.length, failures, bgReq
     assert uc["fields"] == "userEnteredFormat.textFormat.foregroundColorStyle"
     assert uc["rows"][0]["values"][0]["userEnteredFormat"]["textFormat"]["foregroundColorStyle"] == {"rgbColor": {"red": 0, "green": 0, "blue": 1}}
     assert res["noSnap"] is None
+    assert res["wFull"] is None
+    assert res["wEmptyUndo"] == [{"updateCells": {"start": {"sheetId": 111, "rowIndex": 9, "columnIndex": 0}, "rows": [{"values": [{}]}], "fields": "userEnteredValue"}}]
 
 
 def _find_requests(obj):
@@ -1273,3 +1280,45 @@ def _find_requests(obj):
 
 
 
+
+
+@needs_node
+def test_engine_reports_only_new_errors_and_lost_formulas_after_ops():
+    """撃った後の点検：撃つ前に無かったエラーだけ・式が減った列だけを返す（もとからあるエラーは数えない）"""
+    eng = (HERE / "workspace_engine.gs").read_text(encoding="utf-8")
+    node_code = r"""
+const vm = require('vm'), fs = require('fs');
+const d = JSON.parse(fs.readFileSync(0, 'utf8'));
+const ctx = vm.createContext({ console });
+vm.runInContext(d.eng, ctx);
+vm.runInContext(`
+function mkSheet(id, name, vals, forms) {
+  return { getSheetId: () => id, getName: () => name, getLastRow: () => vals.length, getLastColumn: () => vals[0].length,
+    getRange: () => ({ getValues: () => vals, getFormulas: () => forms }) };
+}
+function scan(sheets) { return errScan_({ getSheets: () => sheets }); }
+var out = {};
+// 1. もとから #N/A があり、撃った後に #REF! が 1 つ増えた
+var b1 = scan([mkSheet(1, '集計', [['#N/A', 5]], [['=VLOOKUP(1,A:B,2,0)', '=SUM(B2:B9)']])]);
+var a1 = scan([mkSheet(1, '集計', [['#N/A', '#REF!']], [['=VLOOKUP(1,A:B,2,0)', '=SUM(#REF!)']])]);
+var c1 = { notes: [] }; errReport_(c1, [{ shelf: 'rows.insert' }], b1, a1); out.newErr = c1;
+// 2. 何も増えない
+var c2 = { notes: [] }; errReport_(c2, [{ shelf: 'write' }], b1, b1); out.none = c2;
+// 3. 式の列が値に化けた（書式の棚以外・式が減ってよい棚でもない）
+var b3 = scan([mkSheet(2, '明細', [[1], [2]], [['=1'], ['=2']])]);
+var a3 = scan([mkSheet(2, '明細', [[1], [2]], [[''], ['']])]);
+var c3 = { notes: [] }; errReport_(c3, [{ shelf: 'text.case' }], b3, a3); out.drop = c3;
+var c4 = { notes: [] }; errReport_(c4, [{ shelf: 'formula.tovalue' }], b3, a3); out.dropOk = c4;
+out.skipFormat = errScanNeeded_([{ shelf: 'format' }, { shelf: 'width' }]);
+out.needWrite = errScanNeeded_([{ shelf: 'format' }, { shelf: 'write' }]);
+__out = JSON.stringify(out);
+`, ctx);
+process.stdout.write(ctx.__out);
+"""
+    res = _run_node_json(node_code, {"eng": eng})
+    assert res["newErr"]["newErrors"] == ["集計!B1 #REF!（=SUM(#REF!)）"]
+    assert res["newErr"]["notes"][0].startswith("新しいエラー: 集計!B1 #REF!")
+    assert res["none"]["newErrors"] == [] and res["none"]["notes"] == []
+    assert res["drop"]["newErrors"] == ["明細 の A 列の式が 2 → 0 個"] and res["drop"]["notes"][0].startswith("式が減った")
+    assert res["dropOk"]["newErrors"] == []
+    assert res["skipFormat"] is False and res["needWrite"] is True

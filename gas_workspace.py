@@ -476,9 +476,12 @@ class WorkspaceManager:
             shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p0.ops)
             ch_text = " ／ ".join(res.get("changed") or []) or "なし"
             out_lines = [self._title(res.get("target") or {}), f"直した所: {ch_text}（撃った棚: {shown}）"]
-            if res.get("notes"):
-                out_lines.append("メモ: " + " ／ ".join(res["notes"][:3]))
-            out_lines.append("このまま使う人に報告して終える")
+            errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った"))]
+            rest = [x for x in (res.get("notes") or []) if x not in errs]
+            out_lines += errs
+            if rest:
+                out_lines.append("メモ: " + " ／ ".join(rest[:3]))
+            out_lines.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
             return "\n".join(out_lines)
         tgt, is_new = self.resolve_target(target, None, st)
         kind = tgt.get("kind") or ""
@@ -552,11 +555,13 @@ class WorkspaceManager:
             tail.append("新しく作りました")
         if res.get("backup"):
             tail.append(f"控え #{res['backup']}（ws_undo で戻せます）")
-        elif not st2.get("backup", False) and not res.get("created") and not res.get("local_only"):
+        elif not st2.get("backup", True) and not res.get("created") and not res.get("local_only"):
             tail.append("控えなし（backup=OFF）")
         if res.get("replayed"):
             tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
-        tail.append("このまま使う人に報告して終える")
+        errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った"))]
+        tail = errs + tail
+        tail.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
         return "\n".join([
             self._title(tgt_out),
             f"直した所: {ch_text}（撃った棚: {shown}）",
