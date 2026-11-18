@@ -35,7 +35,9 @@ function comboAddonCard_(e, msg) {
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonGrant')));
   } else {
     sec.addWidget(CardService.newTextParagraph().setText('<b>' + comboAddonEsc_(tg.title) + '</b>'));
-    sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle('頼み（例: タイトルの文字の色を赤に）').setMultiline(true));
+    // 1 行の入力欄。Enter（音声入力の終わりの Enter も）で確定したら、そのまま実行する
+    sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle('頼み（例: タイトルの文字の色を赤に）').setMultiline(false)
+      .setOnChangeAction(CardService.newAction().setFunctionName('onAddonRun')));
     sec.addWidget(CardService.newTextButton().setText('実行').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonRun')));
     sec.addWidget(CardService.newTextButton().setText('直前を取り消す')
@@ -56,6 +58,14 @@ function onAddonRun(e) {
   var t0 = Date.now(), res;
   var f = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
   var ask = (f.ask && f.ask.stringInputs && f.ask.stringInputs.value[0]) || '';
+  // Enter の確定と「実行」ボタンが続けて来ても 2 回撃たない（同じ頼みが 3 秒以内なら 2 回目は捨てる）
+  try {
+    var cache = CacheService.getUserCache(), key = 'addon_last_ask';
+    var last = cache.get(key);
+    if (last && last === ask) return comboAddonReply_(e, '（同じ頼みを続けて受けたので、2 回目は撃っていません）');
+    cache.put(key, ask, 3);
+  } catch (eC) {}
+  if (!String(ask).trim()) return comboAddonReply_(e, '');
   try {
     var tg = comboAddonTarget_(e);
     // 表の形（見出し・列・合計行）とシートの一覧を読み、棚に当てる。当たれば AI を通さずにそのまま撃つ
