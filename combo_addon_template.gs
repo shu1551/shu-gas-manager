@@ -22,6 +22,28 @@ function onAddonGrant(e) {
 }
 function onFileScopeGranted(e) { return comboAddonCard_(e, ''); }
 
+// 表の形（見出し・列・合計行）とシートの一覧を覚えておき、2 回目からは読み直さない（読むと 0.9 秒かかる）。
+// 表の形を変えない手（書式・幅・色・縞・条件付き書式・固定・絞り込み・並べ替え）のときだけ覚えを残す
+var COMBO_ADDON_KEEPS_SHAPE = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|filter\.|sort|tidy)/;
+function comboAddonKey_(tg, sheetName) { return 'addon_tbl:' + tg.id + ':' + sheetName; }
+function comboAddonInit_(tg) {
+  var sheetName = '';
+  try { sheetName = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName(); } catch (e0) {}
+  var cache = null;
+  try { cache = CacheService.getUserCache(); } catch (e1) {}
+  if (cache && sheetName) {
+    var hit = cache.get(comboAddonKey_(tg, sheetName));
+    if (hit) { try { var o = JSON.parse(hit); o._cached = true; return o; } catch (e2) {} }
+  }
+  var init = {lib_symbol}.comboInit({ targetId: tg.id });
+  var keep = { target: init.target, table: init.table, sheets: init.sheets };
+  try { if (cache) cache.put(comboAddonKey_(tg, (init.target && init.target.sheet) || sheetName), JSON.stringify(keep), 600); } catch (e3) {}
+  return keep;
+}
+function comboAddonForget_(tg, sheetName) {
+  try { CacheService.getUserCache().remove(comboAddonKey_(tg, sheetName)); } catch (e) {}
+}
+
 function comboAddonEsc_(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
 }
@@ -69,14 +91,20 @@ function onAddonRun(e) {
   try {
     var tg = comboAddonTarget_(e);
     // 表の形（見出し・列・合計行）とシートの一覧を読み、棚に当てる。当たれば AI を通さずにそのまま撃つ
-    var init = {lib_symbol}.comboInit({ targetId: tg.id });
+    var tA = Date.now();
+    var init = comboAddonInit_(tg);
+    var tB = Date.now();
     var curSheet = init.target && init.target.sheet;
     var p = ComboPlanner.plan(ask, 'sheet', init.table, init.sheets, curSheet, null);
+    var tC = Date.now();
     if (p && p.fire && p.ops && p.ops.length) {
       res = {lib_symbol}.comboRunAsk({ ops: p.ops, fastUndo: true, targetId: tg.id, sheet: curSheet, table: init.table, sheets: init.sheets });
     } else {
       res = {lib_symbol}.comboRunAsk({ ask: ask, fastUndo: true, targetId: tg.id, sheet: curSheet });   // 棚に当たらなければいつもの道（AI・郵便受け）
     }
+    var keepsShape = !!(p && p.fire && p.ops && p.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); }));
+    if (!keepsShape) comboAddonForget_(tg, curSheet);
+    res.text = (res.text || '') + (init._cached ? '\n（表の形は覚えから）' : '') + '\n内訳: 前 ' + (tA - t0) + 'ms・表 ' + (tB - tA) + 'ms・棚当て ' + (tC - tB) + 'ms・撃つ ' + (Date.now() - tC) + 'ms';
   } catch (err) {
     res = { ok: false, text: String(err && err.message || err) };
   }
@@ -85,7 +113,11 @@ function onAddonRun(e) {
 
 function onAddonUndo(e) {
   var t0 = Date.now(), res;
-  try { res = {lib_symbol}.comboUndo({ targetId: comboAddonTarget_(e).id }); }
+  try {
+    var tgU = comboAddonTarget_(e);
+    res = {lib_symbol}.comboUndo({ targetId: tgU.id });
+    try { comboAddonForget_(tgU, SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName()); } catch (eF) {}
+  }
   catch (err) { res = { ok: false, text: String(err && err.message || err) }; }
   return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0));
 }
