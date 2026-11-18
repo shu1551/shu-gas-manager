@@ -552,7 +552,7 @@ def build_combo_connector_files(
     ]
 
 
-def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboengine"):
+def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboengine", webapp_url=""):
     """Google Workspace アドイン版 GASコンボのファイル（appsscript・コード・ComboPlanner）を組み立てる。
     1 回インストールすれば全部のスプレッドシートに出る（シートごとのつなぎコードは要らない）。"""
     if not str(engine_lib_id or "").strip():
@@ -562,7 +562,9 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
         "timeZone": "Asia/Tokyo",
         "runtimeVersion": "V8",
         "exceptionLogging": "STACKDRIVER",
-        "dependencies": {"libraries": [{"userSymbol": sym, "libraryId": engine_lib_id, "version": str(engine_version or "1"), "developmentMode": False}]},
+        # Sheets の高度なサービスを入れると、このプロジェクトで Sheets API が有効になる（操作窓の直結の道＝画面から Sheets API を直接叩く 0.3 秒の道に要る。無いと 403）
+        "dependencies": {"libraries": [{"userSymbol": sym, "libraryId": engine_lib_id, "version": str(engine_version or "1"), "developmentMode": False}],
+                         "enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
         "oauthScopes": [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
@@ -574,8 +576,9 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
             "common": {"name": "GASコンボ", "logoUrl": "https://www.gstatic.com/images/icons/material/system/1x/bolt_black_48dp.png"},
             "sheets": {"homepageTrigger": {"runFunction": "onHome"}, "onFileScopeGrantedTrigger": {"runFunction": "onFileScopeGranted"}},
         },
+        "webapp": {"executeAs": "USER_ACCESSING", "access": "MYSELF"},   # 操作窓（前のサイドバーの HTML）を別の窓で開く
     }
-    code = ADDON_TEMPLATE.read_text(encoding="utf-8").replace("{lib_symbol}", sym)
+    code = ADDON_TEMPLATE.read_text(encoding="utf-8").replace("{lib_symbol}", sym).replace("{webapp_url}", str(webapp_url or ""))
     planner = next(f for f in build_combo_files() if f["name"] == "ComboPlanner")
     return [
         {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, ensure_ascii=False, indent=2)},
@@ -602,13 +605,22 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
     if not sid:
         sid = str(client.create_project(DEFAULT_ADDON_TITLE)["scriptId"]).strip()
         created = True
-    client._put_content(sid, build_combo_addon_files(lib_id, ver))
+    # 操作窓の番地＝HEAD のデプロイ（テスト デプロイ）の /dev。最新のコードで動くので、版を作らずに済む
+    webapp_url = ""
+    try:
+        for d in client.list_deployments(sid, use_cache=False) or []:
+            if str(d.get("versionNumber", "HEAD")) == "HEAD" and d.get("deploymentId"):
+                webapp_url = f"https://script.google.com/macros/s/{d['deploymentId']}/dev"
+                break
+    except Exception:
+        webapp_url = ""
+    client._put_content(sid, build_combo_addon_files(lib_id, ver, webapp_url=webapp_url))
     st["addon_sid"] = sid
     try:
         spath.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
-    res = {"ok": True, "mode": "addon", "scriptId": sid, "engineLibId": lib_id, "engineVersion": ver,
+    res = {"ok": True, "mode": "addon", "scriptId": sid, "engineLibId": lib_id, "engineVersion": ver, "window": webapp_url,
            "editor": f"https://script.google.com/home/projects/{sid}/edit"}
     if created:
         res["next"] = ("初回だけ: 上の editor を開き「デプロイ」→「デプロイをテスト」→「インストール」。"

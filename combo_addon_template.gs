@@ -57,10 +57,12 @@ function comboAddonCard_(e, msg) {
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonGrant')));
   } else {
     sec.addWidget(CardService.newTextParagraph().setText('<b>' + comboAddonEsc_(tg.title) + '</b>'));
+    sec.addWidget(CardService.newTextButton().setText('操作窓を開く（続けて頼むならこちら）').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .setOnClickAction(CardService.newAction().setFunctionName('onAddonOpenWindow')));
     // 1 行の入力欄。Enter（音声入力の終わりの Enter も）で確定したら、そのまま実行する
     sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle('頼み（例: タイトルの文字の色を赤に）').setMultiline(false)
       .setOnChangeAction(CardService.newAction().setFunctionName('onAddonRun')));
-    sec.addWidget(CardService.newTextButton().setText('実行').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+    sec.addWidget(CardService.newTextButton().setText('実行')
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonRun')));
     sec.addWidget(CardService.newTextButton().setText('直前を取り消す')
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonUndo')));
@@ -121,3 +123,49 @@ function onAddonUndo(e) {
   catch (err) { res = { ok: false, text: String(err && err.message || err) }; }
   return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0));
 }
+
+// ---------------------------------------------------------------- 操作窓（前のサイドバーと同じ HTML の画面を別の窓で開く）
+// カードはボタンのたびに描き直されて入力欄のカーソルが消える。操作窓はカーソルが残るので、音声入力→Enter を続けられる。
+// 直結の道（Sheets API を画面から直接叩く 0.3〜0.6 秒）もそのまま使える。シートにコードは入れない。
+var COMBO_ADDON_TARGET_PROP = 'ADDON_TARGET';
+
+// 窓の番地は、最新のコードで動くテスト用の番地（HEAD の /dev）。py gas.py combo addon が書き込む
+var COMBO_ADDON_WINDOW_BASE = '{webapp_url}';
+function comboAddonWindowUrl_(id) {
+  var base = COMBO_ADDON_WINDOW_BASE;
+  if (!base || base.indexOf('{') === 0) { try { base = ScriptApp.getService().getUrl() || ''; } catch (e) {} }
+  return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'id=' + encodeURIComponent(id || '');
+}
+
+function onAddonOpenWindow(e) {
+  var tg = comboAddonTarget_(e);
+  try { PropertiesService.getUserProperties().setProperty(COMBO_ADDON_TARGET_PROP, tg.id || ''); } catch (err) {}
+  return CardService.newActionResponseBuilder()
+    .setOpenLink(CardService.newOpenLink().setUrl(comboAddonWindowUrl_(tg.id))
+      .setOpenAs(CardService.OpenAs.OVERLAY).setOnClose(CardService.OnClose.NOTHING))
+    .build();
+}
+
+function doGet(e) {
+  var id = e && e.parameter && e.parameter.id;
+  if (id) { try { PropertiesService.getUserProperties().setProperty(COMBO_ADDON_TARGET_PROP, id); } catch (err) {} }
+  return {lib_symbol}.createComboSidebarHtml().setTitle('GASコンボ');
+}
+
+// 操作窓から呼ばれる入口。相手のシートは、窓を開いたときに覚えた物
+function comboAddonReq_(req) {
+  req = req || {};
+  if (!req.targetId) {
+    try { var id = PropertiesService.getUserProperties().getProperty(COMBO_ADDON_TARGET_PROP); if (id) req.targetId = id; } catch (e) {}
+  }
+  return req;
+}
+function comboInit(req) { return {lib_symbol}.comboInit(comboAddonReq_(req)); }
+function comboLook(req) { return {lib_symbol}.comboLook(comboAddonReq_(req)); }
+function comboRunAsk(req) { return {lib_symbol}.comboRunAsk(comboAddonReq_(req)); }
+function comboRunOps(req) { return {lib_symbol}.comboRunOps(comboAddonReq_(req)); }
+function comboFind(req) { return {lib_symbol}.comboFind(comboAddonReq_(req)); }
+function comboUndo(req) { return {lib_symbol}.comboUndo(comboAddonReq_(req)); }
+function comboPollSelection(req) { return {lib_symbol}.comboPollSelection(comboAddonReq_(req)); }
+function comboGetConfig() { return {lib_symbol}.comboGetConfig(); }
+function comboSaveConfig(cfg) { return {lib_symbol}.comboSaveConfig(cfg); }

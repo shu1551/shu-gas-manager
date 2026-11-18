@@ -1237,7 +1237,7 @@
       method: "GET",
       headers: { "Authorization": "Bearer " + state.oauthToken }
     })
-      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(r) { if (!r.ok) throw new Error("Sheets API HTTP " + r.status); return r.json(); })
       .then(function(data) {
         if (!data || !Array.isArray(data.sheets) || !data.sheets[0]) return;
         var shObj = data.sheets[0];
@@ -1272,8 +1272,9 @@
           bandedRangeIds: bIds,
           cells: cells
         };
+        state.prefetchError = "";
       })
-      .catch(function() {});
+      .catch(function(err) { state.prefetchError = String((err && err.message) || err || "写しを取れません"); });
   }
 
   // 写しの範囲（A1:Z30）の中のエラーのセル { "A1": "#REF!" }
@@ -1950,7 +1951,14 @@
     if (typeof fetch !== "function") return false;
     var sheetName = state.curSheet || (state.target && state.target.sheet) || "";
     var plan = buildDirectBatchUpdate(ops, sheetName);
-    if (!plan) return false;
+    if (!plan) {
+      // 直結の道に乗れなかった理由が写しの失敗なら、会話の欄に 1 回だけ出す（黙って遅い道に回らない）
+      if (state.prefetchError && !state.prefetchErrorShown) {
+        state.prefetchErrorShown = true;
+        appendLog(els.chatLog, "is-err", "⚠ 直結の道（0.3 秒）が使えません", state.prefetchError + "（GAS の道で撃ちます）");
+      }
+      return false;
+    }
 
     if (state.busy) {
       appendLog(els.chatLog, "is-err", "⚠ 別の処理を実行中です", "完了までお待ちください。");

@@ -1332,6 +1332,8 @@ def test_addon_files_have_workspace_manifest_library_and_planner(tmp_path):
     man = json.loads(by["appsscript"]["source"])
     assert man["addOns"]["sheets"]["homepageTrigger"]["runFunction"] == "onHome"
     assert man["dependencies"]["libraries"][0] == {"userSymbol": "shucomboengine", "libraryId": "LIB_X", "version": "7", "developmentMode": False}
+    assert man["dependencies"]["enabledAdvancedServices"][0]["serviceId"] == "sheets"   # 操作窓の直結の道（Sheets API）に要る
+    assert man["webapp"]["executeAs"] == "USER_ACCESSING"
     code = by["コード"]["source"]
     assert "{lib_symbol}" not in code and "shucomboengine.comboRunAsk" in code and "ComboPlanner.plan" in code
     assert "fastUndo: true" in code            # 取り消しのための記録を取る
@@ -1360,7 +1362,9 @@ def test_install_combo_addon_reuses_saved_project_and_records_it(tmp_path, monke
         def __init__(self): self.put = []
         def _put_content(self, sid, files): self.put.append((sid, [f["name"] for f in files]))
         def create_project(self, title): raise AssertionError("作り直さない")
+        def list_deployments(self, sid, use_cache=True): return [{"deploymentId": "DEPHEAD", "versionNumber": "HEAD"}]
     c = C()
     res = combo_mod.install_combo_addon(client=c, state_path=st)
     assert res["scriptId"] == "ADDON1" and c.put == [("ADDON1", ["appsscript", "コード", "ComboPlanner"])]
     assert "入れ直し" in res["next"]
+    assert res["window"] == "https://script.google.com/macros/s/DEPHEAD/dev"
