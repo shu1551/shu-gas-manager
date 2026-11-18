@@ -1681,6 +1681,7 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
     if not args_list or args_list[0].lower() in ("help", "-h", "--help"):
         return (
             "=== gas combo 使い方 ===\n"
+            "  combo addon [--id <script_id>] [--force]   アドイン版（1 回入れれば全部のシートで使える）\n"
             "  combo connect <script_id> [--lib <lib_id>] [--ver <ver>]\n"
             "  combo install <script_id> [--ss <ss_id>] [--preserve]\n"
             "  combo look <script_id> [--ss <ss_id>] [--sheet <sheet>] [--range <range>]\n"
@@ -1691,6 +1692,11 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
         )
 
     action = args_list[0].lower()
+    if action == "addon":
+        aid = ""
+        if len(args_list) >= 3 and args_list[1] == "--id":
+            aid = args_list[2]
+        return json.dumps(gas_ws_combo.install_combo_addon(addon_id=aid, force_engine_update="--force" in args_list, client=client), ensure_ascii=False, indent=2)
     if len(args_list) < 2 and action != "connect":
         return f"script_id を指定してください: combo {action} <script_id>"
     script_id = args_list[1] if len(args_list) >= 2 else ""

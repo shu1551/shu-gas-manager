@@ -29,6 +29,8 @@ import gas_ws_find
 PLANNER_TEMPLATE = HERE / "combo_planner_template.js"
 SERVER_TEMPLATE = HERE / "combo_server_template.gs"
 SIDEBAR_TEMPLATE = HERE / "combo_sidebar_template.html"
+ADDON_TEMPLATE = HERE / "combo_addon_template.gs"
+DEFAULT_ADDON_TITLE = "GASコンボ（アドイン）"
 
 COMBO_FILE_NAMES = ("appsscript", "Engine", "ComboPlanner", "ComboServer", "ComboSidebar")
 
@@ -548,6 +550,72 @@ def build_combo_connector_files(
         {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, ensure_ascii=False, indent=2)},
         {"name": "コード", "type": "SERVER_JS", "source": code_gs},
     ]
+
+
+def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboengine"):
+    """Google Workspace アドイン版 GASコンボのファイル（appsscript・コード・ComboPlanner）を組み立てる。
+    1 回インストールすれば全部のスプレッドシートに出る（シートごとのつなぎコードは要らない）。"""
+    if not str(engine_lib_id or "").strip():
+        raise ValueError("つなぐ大元ライブラリが決まっていません（install_combo_addon が自分の Drive に作ります）")
+    sym = str(lib_symbol or "shucomboengine").strip()
+    manifest = {
+        "timeZone": "Asia/Tokyo",
+        "runtimeVersion": "V8",
+        "exceptionLogging": "STACKDRIVER",
+        "dependencies": {"libraries": [{"userSymbol": sym, "libraryId": engine_lib_id, "version": str(engine_version or "1"), "developmentMode": False}]},
+        "oauthScopes": [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/script.external_request",
+            "https://www.googleapis.com/auth/script.locale",
+        ],
+        "addOns": {
+            "common": {"name": "GASコンボ", "logoUrl": "https://www.gstatic.com/images/icons/material/system/1x/bolt_black_48dp.png"},
+            "sheets": {"homepageTrigger": {"runFunction": "onHome"}, "onFileScopeGrantedTrigger": {"runFunction": "onFileScopeGranted"}},
+        },
+    }
+    code = ADDON_TEMPLATE.read_text(encoding="utf-8").replace("{lib_symbol}", sym)
+    planner = next(f for f in build_combo_files() if f["name"] == "ComboPlanner")
+    return [
+        {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, ensure_ascii=False, indent=2)},
+        {"name": "コード", "type": "SERVER_JS", "source": code},
+        {"name": "ComboPlanner", "type": "SERVER_JS", "source": planner["source"]},
+    ]
+
+
+def install_combo_addon(addon_id="", force_engine_update=False, client=None, state_path=None):
+    """アドイン版を作る・入れ直す。大元ライブラリを最新にし、アドインのプロジェクトへ push する。
+    テスト デプロイ（Test latest code）は最新のコードで動くので、2 回目からはこれだけで全部のシートに効く。"""
+    if client is None:
+        from gas_client import GasClient
+        client = GasClient()
+    lib_id, ver, _ = ensure_combo_engine_project(client=client, force_update=force_engine_update, state_path=state_path)
+    spath = Path(state_path) if state_path else COMBO_ENGINE_STATE_PATH
+    st = {}
+    try:
+        st = json.loads(spath.read_text(encoding="utf-8")) or {} if spath.exists() else {}
+    except Exception:
+        st = {}
+    sid = str(addon_id or st.get("addon_sid") or "").strip()
+    created = False
+    if not sid:
+        sid = str(client.create_project(DEFAULT_ADDON_TITLE)["scriptId"]).strip()
+        created = True
+    client._put_content(sid, build_combo_addon_files(lib_id, ver))
+    st["addon_sid"] = sid
+    try:
+        spath.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    res = {"ok": True, "mode": "addon", "scriptId": sid, "engineLibId": lib_id, "engineVersion": ver,
+           "editor": f"https://script.google.com/home/projects/{sid}/edit"}
+    if created:
+        res["next"] = ("初回だけ: 上の editor を開き「デプロイ」→「デプロイをテスト」→「インストール」。"
+                       "あとはどのスプレッドシートでも右の枠の ⚡ から使えます（初回に権限の許可が 1 回出ます）")
+    else:
+        res["next"] = "入れ直し済み（次に右の枠を開いたときから新しいコードで動きます）"
+    return res
 
 
 def install_combo_connector(
@@ -1113,6 +1181,10 @@ def _run_cli(argv=None):
     p_inst.add_argument("--lib-id", default="", help="大元ライブラリのスクリプトID（--connector 用）")
     p_inst.add_argument("--lib-ver", default="", help="大元ライブラリのバージョン番号（--connector 用）")
 
+    p_addon = sub.add_parser("addon", help="GASコンボを Google Workspace アドインとして作る・入れ直す（シートごとのつなぎコード不要）")
+    p_addon.add_argument("--id", default="", help="アドインのスクリプトID（省略時は前回作った物・無ければ新しく作る）")
+    p_addon.add_argument("--force", action="store_true", help="大元ライブラリの版を必ず上げる")
+
     p_conn = sub.add_parser("connect", help="スプレッドシート側へ大元ライブラリ shu-gas-combo-engine の30行繋ぎコードを配置する")
     p_conn.add_argument("script_id", nargs="?", default="", help="対象のスクリプトID または スプレッドシートの URL/ID")
     p_conn.add_argument("--ss", default="", help="スプレッドシートの URL または ID（新規コンテナバインド作成＋配置）")
@@ -1159,6 +1231,9 @@ def _run_cli(argv=None):
     from gas_client import GasClient
     client = GasClient()
 
+    if args.cmd == "addon":
+        print(json.dumps(install_combo_addon(addon_id=args.id, force_engine_update=args.force, client=client), ensure_ascii=False, indent=2))
+        return 0
     if args.cmd == "connect" or (args.cmd == "install" and getattr(args, "connector", False)):
         ss_arg = str(getattr(args, "ss", "") or "").strip()
         tgt_arg = str(getattr(args, "script_id", "") or "").strip()

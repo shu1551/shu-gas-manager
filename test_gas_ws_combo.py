@@ -1322,3 +1322,45 @@ process.stdout.write(ctx.__out);
     assert res["drop"]["newErrors"] == ["明細 の A 列の式が 2 → 0 個"] and res["drop"]["notes"][0].startswith("式が減った")
     assert res["dropOk"]["newErrors"] == []
     assert res["skipFormat"] is False and res["needWrite"] is True
+
+
+def test_addon_files_have_workspace_manifest_library_and_planner(tmp_path):
+    """アドイン版：Sheets の Workspace アドインの定義・大元ライブラリ・棚当てが揃い、つなぎコードに頼らない"""
+    files = combo_mod.build_combo_addon_files("LIB_X", "7")
+    by = {f["name"]: f for f in files}
+    assert set(by) == {"appsscript", "コード", "ComboPlanner"}
+    man = json.loads(by["appsscript"]["source"])
+    assert man["addOns"]["sheets"]["homepageTrigger"]["runFunction"] == "onHome"
+    assert man["dependencies"]["libraries"][0] == {"userSymbol": "shucomboengine", "libraryId": "LIB_X", "version": "7", "developmentMode": False}
+    code = by["コード"]["source"]
+    assert "{lib_symbol}" not in code and "shucomboengine.comboRunAsk" in code and "ComboPlanner.plan" in code
+    assert "fastUndo: true" in code            # 取り消しのための記録を取る
+    assert "getActiveSpreadsheet" in code      # シートごとの許可なしで今のシートを相手にする
+    with pytest.raises(ValueError):
+        combo_mod.build_combo_addon_files("", "1")
+
+
+@needs_node
+def test_addon_code_is_valid_javascript(tmp_path):
+    files = combo_mod.build_combo_addon_files("LIB_X", "7")
+    for f in files:
+        if f["type"] != "SERVER_JS":
+            continue
+        p = tmp_path / (f["name"] + ".js")
+        p.write_text(f["source"], encoding="utf-8")
+        proc = subprocess.run(["node", "--check", str(p)], capture_output=True, text=True, encoding="utf-8", timeout=15)
+        assert proc.returncode == 0, proc.stderr
+
+
+def test_install_combo_addon_reuses_saved_project_and_records_it(tmp_path, monkeypatch):
+    st = tmp_path / "state.json"
+    st.write_text(json.dumps({"addon_sid": "ADDON1"}), encoding="utf-8")
+    monkeypatch.setattr(combo_mod, "ensure_combo_engine_project", lambda **kw: ("LIB9", "15", []))
+    class C:
+        def __init__(self): self.put = []
+        def _put_content(self, sid, files): self.put.append((sid, [f["name"] for f in files]))
+        def create_project(self, title): raise AssertionError("作り直さない")
+    c = C()
+    res = combo_mod.install_combo_addon(client=c, state_path=st)
+    assert res["scriptId"] == "ADDON1" and c.put == [("ADDON1", ["appsscript", "コード", "ComboPlanner"])]
+    assert "入れ直し" in res["next"]
