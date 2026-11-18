@@ -14,6 +14,7 @@ import json
 import re
 import unicodedata
 
+import gas_ws_catalog
 import gas_ws_find
 
 MARGIN = 3              # 1 位と 2 位の点の差がこれ未満なら「割れた」
@@ -40,11 +41,20 @@ NUM_RE = re.compile(r"(?<![A-Za-z0-9.])([0-9]+(?:\.[0-9]+)?)(?![0-9])")
 # 色の言い方 → エンジンの色の名前（rgb_ が読む物）。長い順に当てる
 _COLORS = [
     ("薄い灰色", "薄灰"), ("薄い灰", "薄灰"), ("薄灰色", "薄灰"), ("薄いグレー", "薄灰"), ("薄グレー", "薄灰"),
-    ("薄い青", "薄青"), ("薄青", "薄青"), ("水色", "水色"), ("薄い赤", "薄赤"), ("薄い緑", "薄緑"), ("薄い黄", "薄黄"),
-    ("薄いオレンジ", "薄橙"), ("薄い紫", "薄紫"),
-    ("灰色", "灰"), ("グレー", "灰"), ("オレンジ", "橙"), ("ピンク", "桃"), ("ネイビー", "紺"), ("紺", "紺"), ("茶色", "茶"),
+    ("薄い青色", "薄青"), ("薄い青", "薄青"), ("薄青色", "薄青"), ("薄青", "薄青"), ("水色", "水色"), ("シアン", "水色"),
+    ("薄い赤色", "薄赤"), ("薄い赤", "薄赤"), ("薄い緑色", "薄緑"), ("薄い緑", "薄緑"),
+    ("薄い黄色", "薄黄"), ("薄い黄", "薄黄"), ("薄いオレンジ色", "薄橙"), ("薄いオレンジ", "薄橙"),
+    ("薄い紫色", "薄紫"), ("薄い紫", "薄紫"),
+    ("灰色", "灰"), ("グレー", "灰"), ("オレンジ色", "橙"), ("オレンジ", "橙"), ("ピンク色", "桃"), ("ピンク", "桃"),
+    ("ネイビー", "紺"), ("紺色", "紺"), ("紺", "紺"), ("茶色", "茶"),
+    ("赤色", "赤"), ("青色", "青"), ("緑色", "緑"), ("黄色", "黄"), ("紫色", "紫"), ("黒色", "黒"), ("白色", "白"),
     ("赤", "赤"), ("青", "青"), ("緑", "緑"), ("黄", "黄"), ("紫", "紫"), ("黒", "黒"), ("白", "白"),
 ]
+_HEX_COLOR_RE = re.compile(r"(?<![0-9A-Za-z])#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9A-Za-z])")
+_EN_COLOR_RE = re.compile(
+    r"(?<![A-Za-z])(lightred|lightgreen|lightyellow|lightgray|lightblue|orange|purple|yellow|green|black|white|brown|navy|pink|gray|grey|cyan|blue|red)(?![A-Za-z])",
+    re.IGNORECASE,
+)
 
 
 _RX = {}
@@ -193,8 +203,12 @@ def _letter_of(table, name):
     return None
 
 
-def _colors(text):
+def _color_hits(text):
     out, taken = [], [False] * len(text)
+    for m in _HEX_COLOR_RE.finditer(text):
+        for k in range(m.start(), m.end()):
+            taken[k] = True
+        out.append((m.start(), m.end(), m.group(0).upper()))
     for word, val in _COLORS:
         start = 0
         while True:
@@ -204,9 +218,18 @@ def _colors(text):
             if not any(taken[i:i + len(word)]):
                 for k in range(i, i + len(word)):
                     taken[k] = True
-                out.append((i, val))
+                out.append((i, i + len(word), val))
             start = i + 1
-    return [v for _, v in sorted(out)]
+    for m in _EN_COLOR_RE.finditer(text):
+        if not any(taken[m.start():m.end()]):
+            for k in range(m.start(), m.end()):
+                taken[k] = True
+            out.append((m.start(), m.end(), m.group(1).lower()))
+    return sorted(out)
+
+
+def _colors(text):
+    return [v for _, _, v in _color_hits(text)]
 
 
 def _quotes(text):
@@ -285,29 +308,54 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op[r["arg"]] = v if a["type"] in ("対応", "配列", "表") else _cast(a, v)
     scan = QUOTE_RE.sub(" ", text)          # 「」の中（タイトル・入れる文字など）は、列・範囲・行・色として読まない
     scan = re.sub(r"[（(][^）)]*[）)]", " ", scan)  # （）の中（計算式や補足説明など）も列・範囲として読まない
+    color_hits = _color_hits(scan)
+    scan = _HEX_COLOR_RE.sub(" ", scan)     # #FF6600 等をセル番地や数値として誤読しない
+    sheet_hits = [s for s in sorted((sheets or []), key=lambda x: len(str(x)), reverse=True) if s and nfkc(s) in nfkc(scan)]
+    for sh_nm in sheet_hits:
+        scan = scan.replace(sh_nm, " ")
+        scan = nfkc(scan).replace(nfkc(sh_nm), " ")
     names = _col_names(scan, table)
     letters = _col_letters(scan)
     explicit_range = _range_of(scan, table)
     rows = _rows_of(scan)
-    colors = _colors(scan)
     nums = _numbers(scan)
-    sheet_hits = [s for s in (sheets or []) if s and nfkc(s) in scan]
     named = bool(explicit_range or rows or letters or names or sheet_hits or shelf["name"] in ("dedupe", "seiri"))
     need = [a["name"] for a in shelf["args"] if a["req"]] + [k for k in shelf["any"]]
     col_pool = list(names) + [x for x in letters if x not in [_letter_of(table, n) for n in names]]
     range_given = False
-    # 色: 引数が 1 つならそれ。2 つ以上なら 背景／文字 の語で振り分け
-    color_args = [a["name"] for a in shelf["args"] if a["type"] == "色" and a["name"] not in op]
-    if colors and color_args:
-        if len(color_args) == 1:
-            op[color_args[0]] = colors[0]
+    # 色: 引数が 1 つならそれ。2 つ以上なら 背景／文字 の文脈で振り分け（複数色対応）
+    all_color_args = [a["name"] for a in shelf["args"] if a["type"] == "色"]
+    color_args = [k for k in all_color_args if k not in op]
+    if color_hits and color_args:
+        if len(all_color_args) == 1:
+            op[color_args[0]] = color_hits[0][2]
         else:
-            pick = None
-            if "文字" in text and "color" in color_args:
-                pick = "color"
-            elif "bg" in color_args:
-                pick = "bg"
-            op[pick or color_args[0]] = colors[0]
+            prev_end = 0
+            for pos, end, val in color_hits:
+                ctx = scan[prev_end:pos]
+                after = scan[end:end + 4]
+                prev_end = end
+                fg_i = max((ctx.rfind(k) for k in ("文字", "フォント", "持ち色")), default=-1)
+                bg_i = max((ctx.rfind(k) for k in ("背景", "塗り", "セル")), default=-1)
+                if re.match(r"^(?:文字|フォント|持ち色)", after):
+                    target_k = "color"
+                elif re.match(r"^(?:い|の)?(?:背景|塗り)", after):
+                    target_k = "bg"
+                elif fg_i > bg_i:
+                    target_k = "color"
+                elif bg_i > fg_i:
+                    target_k = "bg"
+                elif len(color_hits) == 1:
+                    if any(k in text for k in ("文字", "フォント", "持ち色")) and "背景" not in text:
+                        target_k = "color"
+                    else:
+                        target_k = "bg"
+                else:
+                    target_k = "bg" if "bg" in color_args and "bg" not in op else "color"
+                if target_k in color_args and target_k not in op:
+                    op[target_k] = val
+                elif len(color_hits) == 1 and color_args and color_args[0] not in op and len(all_color_args) == len(color_args):
+                    op[color_args[0]] = val
     has_col_arg = any(a["type"] == "列" for a in shelf["args"])
     req_text_filled = False
     for a in shelf["args"]:
@@ -333,7 +381,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             if v:
                 range_given = True
         elif t == "列":
-            if col_pool:
+            if col_pool and not (k in shelf["any"] and any(op.get(x) not in (None, "", []) for x in shelf["any"])):
                 v = col_pool.pop(0)
         elif t == "列[]":
             if col_pool:
@@ -361,6 +409,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 v = nums[0]
         if v not in (None, "", []):
             op[k] = v
+    if sheet_hits and shelf.get("kind") == "sheet" and not shelf.get("shared") and "sheet" not in op:
+        op["sheet"] = sheet_hits[0]
+    if shelf["name"] == "format" and "borders" in op and not any(k in op for k in ("range", "col", "header", "title")) and table and table.get("first_col") and table.get("last_col"):
+        fmt_first_r = table.get("header_row") or 1
+        fmt_last_r = table.get("total_row") or (str(table["data"]).split("-")[-1] if table.get("data") else fmt_first_r)
+        op["range"] = f"{table['first_col']}{fmt_first_r}:{table['last_col']}{fmt_last_r}"
+    if shelf["name"] == "sheet.rename" and "name" not in op and "to" in op and cur_sheet:
+        op["name"] = cur_sheet
+    if shelf["name"] == "width" and "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
+        op["auto"] = [op.pop("col")]
     if shelf["name"] == "filter.where":
         m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip())
         if m_name:
@@ -390,8 +448,169 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     return op, missing, named
 
 
+_HERE_ROW_RE = re.compile(r"(?:この|選択(?:中の?)?|今の)行")
+_HERE_COL_RE = re.compile(r"(?:この|選択(?:中の?)?|今の)列")
+_HERE_RANGE_RE = re.compile(
+    r"(?:ここ|このセル|この範囲|選択範囲|選択セル|選択中(?:のセル|の範囲|の場所|の箇所)?|今選んで(?:いる|る)(?:セル|範囲|ところ|箇所)?)"
+)
+
+
+def parse_selection_scope(selection):
+    """ブラウザの名前ボックスの値（例: B3, B3:D10, C:C, 3:5）から last_scope 辞書を組み立てる。"""
+    sel = nfkc(selection or "").strip().upper()
+    if not sel:
+        return {}
+    if "!" in sel:
+        sel = sel.rsplit("!", 1)[-1].strip()
+    m_cell = re.fullmatch(r"([A-Z]{1,3})([0-9]{1,7})", sel)
+    if m_cell:
+        col_s, row_n = m_cell.group(1), int(m_cell.group(2))
+        return {
+            "selection": sel,
+            "cell": sel,
+            "range": sel,
+            "col": col_s,
+            "cols": [col_s],
+            "rows": [row_n],
+            "from_browser": True,
+        }
+    m_rng = re.fullmatch(r"([A-Z]{1,3})([0-9]{1,7}):([A-Z]{1,3})([0-9]{1,7})", sel)
+    if m_rng:
+        c1, r1, c2, r2 = m_rng.group(1), int(m_rng.group(2)), m_rng.group(3), int(m_rng.group(4))
+        n1, n2 = sorted((_col_num(c1), _col_num(c2)))
+        r_lo, r_hi = sorted((r1, r2))
+        cols = [_col_letter(n) for n in range(n1, n2 + 1)] if n2 - n1 < 60 else [c1]
+        out = {"selection": sel, "range": f"{_col_letter(n1)}{r_lo}:{_col_letter(n2)}{r_hi}", "cols": cols, "from_browser": True}
+        if len(cols) == 1:
+            out["col"] = cols[0]
+            if r_lo == r_hi:
+                out["cell"] = f"{cols[0]}{r_lo}"
+        if r_hi - r_lo < 500:
+            out["rows"] = list(range(r_lo, r_hi + 1))
+        return out
+    m_col = re.fullmatch(r"([A-Z]{1,3}):([A-Z]{1,3})", sel)
+    if m_col:
+        n1, n2 = sorted((_col_num(m_col.group(1)), _col_num(m_col.group(2))))
+        cols = [_col_letter(n) for n in range(n1, n2 + 1)] if n2 - n1 < 60 else [m_col.group(1)]
+        out = {"selection": sel, "range": f"{_col_letter(n1)}:{_col_letter(n2)}", "cols": cols, "col_select": True, "from_browser": True}
+        if len(cols) == 1:
+            out["col"] = cols[0]
+        return out
+    m_row = re.fullmatch(r"([0-9]{1,7}):([0-9]{1,7})", sel)
+    if m_row:
+        r1, r2 = sorted((int(m_row.group(1)), int(m_row.group(2))))
+        rows = list(range(r1, r2 + 1)) if r2 - r1 < 5000 else [r1]
+        return {"selection": sel, "range": f"{r1}:{r2}", "rows": rows, "row_select": True, "from_browser": True}
+    return {}
+
+
+def _expand_selection_pronouns(text, source_scope):
+    """文中の「ここ」「選択範囲」「この行」「この列」等をブラウザ選択中の番地表現に置き換える。"""
+    if not isinstance(source_scope, dict) or not source_scope:
+        return text
+    out = text
+    rows = source_scope.get("rows")
+    if rows and _HERE_ROW_RE.search(out):
+        row_expr = f"{rows[0]}行目" if len(rows) == 1 else f"{rows[0]}行目から{rows[-1]}行目"
+        out = _HERE_ROW_RE.sub(row_expr, out)
+    cols = source_scope.get("cols") or ([source_scope["col"]] if source_scope.get("col") else [])
+    if cols and _HERE_COL_RE.search(out):
+        col_expr = f"{cols[0]}列" if len(cols) == 1 else f"{cols[0]}列から{cols[-1]}列"
+        out = _HERE_COL_RE.sub(col_expr, out)
+    rng = source_scope.get("cell") or source_scope.get("range")
+    if rng and _HERE_RANGE_RE.search(out):
+        if source_scope.get("cell") and re.search(
+            r"(?:ここ|このセル|選択セル|選択中のセル)に\s*([『「\"“]?[^』」\"”\s]+[』」\"”]?)\s*を(?:入れ|書|入力)(?:き込|て|して)?",
+            out,
+        ):
+            out = re.sub(
+                r"(?:ここ|このセル|選択セル|選択中のセル)に\s*([『「\"“]?[^』」\"”\s]+[』」\"”]?)\s*を(?:入れ|書|入力)(?:き込|て|して)?",
+                rf"{source_scope['cell']}の値を\1に打ち直して",
+                out,
+                count=1,
+            )
+        elif source_scope.get("cell") and re.search(
+            r"(?:ここ|このセル|選択セル|選択中のセル)(?:の[^\sを]{0,8})?を\s*([『「\"“]?[^』」\"”\s]+[』」\"”]?)\s*に(?:書き換|打ち直|変え|直)",
+            out,
+        ):
+            out = re.sub(
+                r"(?:ここ|このセル|選択セル|選択中のセル)(?:の[^\sを]{0,8})?を\s*([『「\"“]?[^』」\"”\s]+[』」\"”]?)\s*に(?:書き換|打ち直|変え|直)",
+                rf"{source_scope['cell']}の値を\1に打ち直",
+                out,
+                count=1,
+            )
+        else:
+            out = _HERE_RANGE_RE.sub(rng, out)
+    return out
+
+
+def _apply_scope_fallback(op, missing, source_scope, shelf=None, clause=""):
+    """未指定のスコープ（header/title/range/col/cols/rows/cells）を前の節または選択スコープから補う。"""
+    if not isinstance(source_scope, dict) or not source_scope:
+        return missing, False
+    loc_keys = ("header", "title", "range", "col", "cols", "rows", "cells", "at", "from")
+    if any(k in op and op[k] not in (None, "", []) for k in loc_keys):
+        return missing, False
+
+    # 従来の format 棚向けスコープ引き継ぎ
+    if shelf is None or not source_scope.get("from_browser"):
+        for scope_k in ("header", "title", "range", "col"):
+            if scope_k in source_scope and source_scope[scope_k] not in (None, "", []):
+                op[scope_k] = source_scope[scope_k]
+                missing = [m for m in missing if not any(x in m for x in ("range", "col", "header", "title"))]
+                return missing, True
+        return missing, False
+
+    # ブラウザ選択連動時の棚別スコープ補完
+    arg_names = {a["name"] for a in shelf.get("args") or []}
+    sh_name = shelf.get("name", "")
+    # write 棚で単一セル選択中に値だけが指定された場合
+    if sh_name == "write" and source_scope.get("cell") and not op.get("cells") and not op.get("tsv"):
+        qs = _quotes(clause)
+        ns = _numbers(clause)
+        val = qs[0] if qs else (ns[0] if len(ns) == 1 else None)
+        if val is not None:
+            op["cells"] = {source_scope["cell"]: val}
+            missing = [m for m in missing if "cells" not in m and "tsv" not in m]
+            return missing, True
+
+    # 場所引数が必須でない全体系棚（tidy / filter.on / banding.* 等）は、単一セル選択時は全体動作を優先する
+    is_multi_range = ":" in str(source_scope.get("range") or "")
+    has_pronoun = bool(_HERE_RANGE_RE.search(clause) or _HERE_COL_RE.search(clause) or _HERE_ROW_RE.search(clause))
+    if not missing and not has_pronoun and sh_name not in ("format", "clear.values"):
+        if not is_multi_range:
+            return missing, False
+
+    # 行選択優先、列選択優先、一般範囲の順で棚の受け取れる引数に当てはめる
+    candidates = []
+    if source_scope.get("row_select"):
+        candidates = [("rows", "rows"), ("range", "range")]
+    elif source_scope.get("col_select"):
+        candidates = [("cols", "cols"), ("auto", "cols"), ("col", "col"), ("range", "range")]
+    else:
+        candidates = [
+            ("header", "header"),
+            ("title", "title"),
+            ("range", "range"),
+            ("col", "col"),
+            ("cols", "cols"),
+            ("auto", "cols"),
+            ("rows", "rows"),
+        ]
+
+    for arg_k, src_k in candidates:
+        if arg_k in arg_names and source_scope.get(src_k) not in (None, "", []):
+            op[arg_k] = source_scope[src_k]
+            missing = [
+                m for m in missing
+                if not any(x in m for x in ("range", "col", "cols", "rows", "header", "title", "auto"))
+            ]
+            return missing, True
+    return missing, False
+
+
 # ------------------------------------------------------------------ 頼み → ops
-def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
+def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope=None):
     cur_sheet = cur_sheet or (sheets[0] if sheets else "")
     p = Plan()
     ask = (ask or "").strip()
@@ -401,15 +620,49 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
     q_all = gas_ws_find.norm(ask, finder.syn)
     p.guide = [text for nwords, text in finder._guide_norm if any(nw in q_all for nw in nwords)]
     cl = clauses(ask) or [nfkc(ask)]
-    ok_all = True
+    fatal_err = False
     if VAGUE.search(nfkc(ask)):
         p.reasons.append("どこを指すかが人にしか分かりません（" + VAGUE.search(nfkc(ask)).group(0) + "）")
-        ok_all = False
-    for c in cl:
+        fatal_err = True
+    # 直前の節が棚に当たったが引数不足（missing）のとき、続く補足文（「赤にしてください」等）を合流させるための状態
+    last_incomplete = None
+    for c_raw in cl:
+        c = _expand_selection_pronouns(c_raw, last_scope)
         scored = finder.score_all(c, kind)
+        # 前の節が不足ありで、この節単体では別の棚に強く当たらない場合は前の文と合流して補完を試みる
+        if last_incomplete is not None and (
+            not scored
+            or scored[0][0] < gas_ws_find.WEAK_SCORE
+            or scored[0][2]["name"] == last_incomplete["top"]["name"]
+        ):
+            prev_c = last_incomplete["clause"]
+            prev_top = last_incomplete["top"]
+            merged = prev_c + " " + c
+            m_op, m_missing, m_named = build_op(prev_top, merged, table, sheets, cur_sheet)
+            if isinstance(last_scope, dict) and (prev_top["name"] == "format" or last_scope.get("from_browser")) and (
+                any(k not in ("shelf", "sheet") for k in m_op) or m_missing
+            ):
+                m_missing, added = _apply_scope_fallback(m_op, m_missing, last_scope, shelf=prev_top, clause=merged)
+                m_named = m_named or added
+                if prev_top["danger"] and m_named and not VAGUE.search(nfkc(merged)) and not m_missing:
+                    m_op["ok"] = True
+            if len(m_missing) < last_incomplete["missing_n"] or (len(m_op) > len(p.ops[-1]) and len(m_missing) <= last_incomplete["missing_n"]):
+                p.ops[-1] = m_op
+                # 直前節が積んだ missing を取り除き、残った不足分だけ置き換える
+                del p.missing[last_incomplete["miss_start"]:]
+                if m_missing:
+                    p.missing += [f"{prev_top['name']}: " + m for m in m_missing]
+                    last_incomplete["clause"] = merged
+                    last_incomplete["missing_n"] = len(m_missing)
+                else:
+                    if last_incomplete["card_added"] and p.cards:
+                        p.cards.pop()
+                    last_incomplete = None
+                continue
         if not scored:
             p.reasons.append(f"「{c}」に当たる棚がありません")
-            ok_all = False
+            fatal_err = True
+            last_incomplete = None
             continue
         # 札の「頼み:」の正規表現が当たった棚は、点が近ければ（EVIDENCE_GAP 以内）その棚を 1 位にする（当たった棚が 1 本だけのとき）
         lead = scored[0][0]
@@ -424,7 +677,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
         if far and not hit:
             p.reasons.append(f"「{c}」の当てが割れた（{scored[0][2]['name']} と {far[0][2]['name']}）")
             p.cards += [scored[0][2], far[0][2]]
-            ok_all = False
+            fatal_err = True
+            last_incomplete = None
             continue
         if len(hit) == 1 and hit[0] is not scored[0]:
             scored = [hit[0]] + [x for x in scored if x is not hit[0]]
@@ -436,51 +690,65 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet=""):
         if top_t < gas_ws_find.WEAK_SCORE:
             p.reasons.append(f"「{c}」の当てが弱い（{top['name']}）")
             p.cards += [s for _, _, s, _ in scored[:3]]
-            ok_all = False
+            fatal_err = True
+            last_incomplete = None
             continue
         if second and top_t - second[0] < MARGIN:
             p.reasons.append(f"「{c}」の当てが割れた（{top['name']} と {second[2]['name']}）")
             p.cards += [s for _, _, s, _ in scored[:3]]
-            ok_all = False
+            fatal_err = True
+            last_incomplete = None
             continue
         if top["name"] == "api" or not top["searchable"]:
             p.reasons.append(f"「{c}」は棚に無い頼みです")
-            ok_all = False
+            fatal_err = True
+            last_incomplete = None
             continue
         op, missing, named = build_op(top, c, table, sheets, cur_sheet)
         if p.ops and p.ops[-1].get("shelf") == top["name"]:
             prev = p.ops[-1]
-            for scope_k in ("header", "range", "col"):
+            for scope_k in ("header", "title", "range", "col"):
                 if scope_k in prev and scope_k not in op:
                     op[scope_k] = prev[scope_k]
                     named = True
-                    missing = [m for m in missing if not any(x in m for x in ("range", "col", "header"))]
+                    missing = [m for m in missing if not any(x in m for x in ("range", "col", "header", "title"))]
             if top["name"] == "format":
                 if re.search(r"色[もを]付[け言]|色[もを]つ[け言]|色[もを]塗", c) and not op.get("bg") and not op.get("color"):
                     op["bg"] = "青"
+        elif isinstance(last_scope, dict) and (top["name"] == "format" or last_scope.get("from_browser")) and (
+            any(k not in ("shelf", "sheet") for k in op) or missing
+        ):
+            missing, added = _apply_scope_fallback(op, missing, last_scope, shelf=top, clause=c_raw)
+            named = named or added
+            if top["danger"] and named and not VAGUE.search(nfkc(c_raw)) and not missing:
+                op["ok"] = True
         p.ops.append(op)
         if missing:
+            miss_start = len(p.missing)
             p.missing += [f"{top['name']}: " + m for m in missing]
             p.cards.append(top)
-            ok_all = False
+            last_incomplete = {"clause": c, "top": top, "missing_n": len(missing), "miss_start": miss_start, "card_added": True}
         elif top["danger"] and not named and len(op) == 1:
             p.reasons.append(f"「{c}」は{top['danger']}棚で、場所の名指しがありません")
             p.cards.append(top)
-            ok_all = False
-    if any(("外です" in g or "ws_undo" in g or (("棚はありません" in g or "棚ではありません" in g) and not any(o["shelf"] in ("doc.outline", "filter.where", "filter.on") for o in p.ops))) for g in p.guide) or (p.guide and not p.ops):
+            fatal_err = True
+            last_incomplete = None
+        else:
+            last_incomplete = None
+    if any(("外です" in g or "ws_undo" in g or (("棚はありません" in g or "棚ではありません" in g) and not any(o["shelf"] in ("doc.outline", "filter.where", "filter.on", "drive.list") for o in p.ops))) for g in p.guide) or (p.guide and not p.ops):
         p.reasons.append("案内が出ています（棚でない頼み）")
-        ok_all = False
-    kinds = {finder.cat.by_name[o["shelf"]]["kind"] for o in p.ops}
+        fatal_err = True
+    kinds = {finder.cat.by_name[o["shelf"]]["kind"] for o in p.ops if not finder.cat.by_name[o["shelf"]].get("shared") and o["shelf"] not in gas_ws_catalog.LOCAL_HANDLERS}
     if len(kinds) > 1:
         p.reasons.append("シートの棚と文書の棚が混ざりました")
-        ok_all = False
+        fatal_err = True
     seen, cards = set(), []
     for s in p.cards:
         if s["name"] not in seen:
             seen.add(s["name"])
             cards.append(s)
     p.cards = cards[:4]
-    p.fire = ok_all and bool(p.ops)
+    p.fire = (not fatal_err) and (not p.missing) and bool(p.ops)
     return p
 
 

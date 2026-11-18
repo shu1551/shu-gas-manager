@@ -54,6 +54,9 @@ def reload_tools() -> str:
     if "gas_local_extras" in sys.modules:
         import gas_local_extras
         importlib.reload(gas_local_extras)
+    for _mod_name in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_workspace", "gas_ws_combo"):
+        if _mod_name in sys.modules:
+            importlib.reload(sys.modules[_mod_name])
 
     if _client is not None:
         old_client = _client
@@ -1672,6 +1675,146 @@ def gas_shelf(
     )
     return res.get("markdown_report", "")
 
+def _handle_combo_command(args_list: list, client: GasClient) -> str:
+    """gas('combo ...') サブコマンドの振り分け処理。"""
+    import gas_ws_combo
+    if not args_list or args_list[0].lower() in ("help", "-h", "--help"):
+        return (
+            "=== gas combo 使い方 ===\n"
+            "  combo connect <script_id> [--lib <lib_id>] [--ver <ver>]\n"
+            "  combo install <script_id> [--ss <ss_id>] [--preserve]\n"
+            "  combo look <script_id> [--ss <ss_id>] [--sheet <sheet>] [--range <range>]\n"
+            "  combo ask <script_id> <text> [--ss <ss_id>] [--sheet <sheet>] [--ok] [--backup] [--no-ai]\n"
+            "  combo ops <script_id> <ops_json> [--ss <ss_id>] [--sheet <sheet>] [--ok] [--backup]\n"
+            "  combo undo <script_id> [--ss <ss_id>] [--ok] [--to <num>]\n"
+            "  combo watch <script_id> --once [--model <model>]"
+        )
+
+    action = args_list[0].lower()
+    if len(args_list) < 2 and action != "connect":
+        return f"script_id を指定してください: combo {action} <script_id>"
+    script_id = args_list[1] if len(args_list) >= 2 else ""
+    rest = args_list[2:] if len(args_list) >= 2 else []
+
+    ss_id = ""
+    sheet = ""
+    rng = ""
+    to_ver = ""
+    model = ""
+    preserve = False
+    ok_flag = False
+    backup_flag = False
+    no_ai = False
+    once_flag = False
+    pos = []
+
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok == "--ss" and i + 1 < len(rest):
+            ss_id = rest[i + 1]; i += 2
+        elif tok == "--sheet" and i + 1 < len(rest):
+            sheet = rest[i + 1]; i += 2
+        elif tok == "--range" and i + 1 < len(rest):
+            rng = rest[i + 1]; i += 2
+        elif tok == "--to" and i + 1 < len(rest):
+            to_ver = rest[i + 1]; i += 2
+        elif tok == "--model" and i + 1 < len(rest):
+            model = rest[i + 1]; i += 2
+        elif tok == "--preserve":
+            preserve = True; i += 1
+        elif tok == "--ok":
+            ok_flag = True; i += 1
+        elif tok == "--backup":
+            backup_flag = True; i += 1
+        elif tok == "--no-ai":
+            no_ai = True; i += 1
+        elif tok == "--once":
+            once_flag = True; i += 1
+        else:
+            pos.append(tok); i += 1
+
+    if action == "connect":
+        lib_id = ""
+        lib_ver = ""
+        j = 0
+        while j < len(rest):
+            if rest[j] == "--lib" and j + 1 < len(rest):
+                lib_id = rest[j + 1]; j += 2
+            elif rest[j] == "--ver" and j + 1 < len(rest):
+                lib_ver = rest[j + 1]; j += 2
+            else:
+                j += 1
+        if ss_id:
+            res = gas_ws_combo.connect_spreadsheet(ss_id, engine_lib_id=lib_id, engine_version=lib_ver, client=client)
+        elif script_id:
+            kind, resolved = gas_ws_combo._detect_connect_target(script_id, client)
+            if kind == "sheet":
+                res = gas_ws_combo.connect_spreadsheet(resolved, engine_lib_id=lib_id, engine_version=lib_ver, client=client)
+            else:
+                res = gas_ws_combo.install_combo_connector(resolved, engine_lib_id=lib_id, engine_version=lib_ver, client=client)
+        else:
+            auto_ss_id, _ = gas_ws_combo._resolve_active_sheet_id()
+            res = gas_ws_combo.connect_spreadsheet(auto_ss_id, engine_lib_id=lib_id, engine_version=lib_ver, client=client)
+        return json.dumps(res, ensure_ascii=False, indent=2)
+
+    if action == "install":
+        res = gas_ws_combo.install_combo(script_id, target_ss_id=ss_id, client=client, preserve_existing=preserve)
+        return json.dumps(res, ensure_ascii=False, indent=2)
+
+    sid = client.resolve_script_id(script_id)
+    if action == "look":
+        req = {"targetId": ss_id, "sheet": sheet, "range": rng}
+        res = gas_ws_combo._unwrap_run_result(client.run_function(sid, "comboLook", [req]))
+        return res.get("text") or json.dumps(res, ensure_ascii=False, indent=2)
+
+    if action == "ask":
+        if not pos:
+            return "依頼文を指定してください: combo ask <script_id> <text>"
+        req = {
+            "ask": " ".join(pos),
+            "targetId": ss_id,
+            "sheet": sheet,
+            "ok": ok_flag,
+            "backup": backup_flag,
+            "aiAuto": not no_ai,
+        }
+        res = gas_ws_combo._unwrap_run_result(client.run_function(sid, "comboRunAsk", [req]))
+        text = res.get("text") or json.dumps(res, ensure_ascii=False, indent=2)
+        if isinstance(res, dict) and res.get("gasMs") is not None:
+            text += f"\n(gasMs: {res['gasMs']}ms)"
+        return text
+
+    if action == "ops":
+        if not pos:
+            return "ops JSON を指定してください: combo ops <script_id> <ops_json>"
+        req = {
+            "ops": json.loads(" ".join(pos)),
+            "targetId": ss_id,
+            "sheet": sheet,
+            "ok": ok_flag,
+            "backup": backup_flag,
+        }
+        res = gas_ws_combo._unwrap_run_result(client.run_function(sid, "comboRunOps", [req]))
+        text = res.get("text") or json.dumps(res, ensure_ascii=False, indent=2)
+        if isinstance(res, dict) and res.get("gasMs") is not None:
+            text += f"\n(gasMs: {res['gasMs']}ms)"
+        return text
+
+    if action == "undo":
+        req = {"targetId": ss_id, "ok": ok_flag, "to": to_ver}
+        res = gas_ws_combo._unwrap_run_result(client.run_function(sid, "comboUndo", [req]))
+        return res.get("text") or json.dumps(res, ensure_ascii=False, indent=2)
+
+    if action == "watch":
+        if not once_flag:
+            return "MCP からは常駐ループを実行できません。1回処理は `--once` を付けるか、端末で `py gas.py combo watch <script_id>` を実行してください。"
+        watcher = gas_ws_combo.ComboPostboxWatcher(sid, client=client, model=model or None)
+        res = watcher.poll_once()
+        return json.dumps(res, ensure_ascii=False, indent=2)
+
+    return f"不明な combo サブコマンドです: '{action}'。'combo help' を確認してください。"
+
 @mcp.tool()
 @safe_tool
 def gas(command: str) -> str:
@@ -1703,6 +1846,7 @@ def gas(command: str) -> str:
       - deploy <project> [description]
       - deployments <project>  (または deps)
       - webapp <url_or_project> [params] [--dev]
+      - combo <install|look|ask|ops|undo|watch> <script_id> ...
     """
     if not command or not command.strip():
         return "コマンドを指定してください。'help' で一覧を表示します。"
@@ -1742,6 +1886,7 @@ def gas(command: str) -> str:
             "  inspect-ui <p_or_url> [f] [--all] - Webアプリ実機画面撮影＆コントラスト監査（screenshot）\n"
             "  dock <project> [filename]         - GASドック（総合診断・100点満点・処方箋）\n"
             "  recipe [p] [--id Rxx] [--ask 文]  - 高速化レシピ棚（全12レシピ検出・自動変換）\n"
+            "  combo <install|look|ask|ops|undo> - GASコンボ配備・実行・取り消し\n"
             "  sync <project> [--force]          - デスクトップ常駐型ハイブリッド同期\n"
             "  reload                            - 常駐MCPサーバーのホットリロード\n"
             "  py-outline <file>                 - Pythonコード内関数一覧取得\n"
@@ -2514,6 +2659,9 @@ def gas(command: str) -> str:
         res = GasClient.py_patch_function(f_path, f_spec, target=target_str, replacement=repl_str, new_code=new_c, replace_all=is_all)
         return res.get("markdown_report", "")
 
+    if sub == "combo":
+        return _handle_combo_command(parts[1:], get_client())
+
     return f"不明なコマンドです: '{sub}'。'help' で使い方を確認してください。"
 
 @mcp.tool()
@@ -2615,7 +2763,7 @@ def ws_find(ask: str = "", kind: str = "") -> str:
 @mcp.tool()
 @safe_tool
 def ws_do(ask: str = "", ops: str = "", target: str = "", ok: bool = False) -> str:
-    """スプレッドシート・文書を作る・直す。まず ask="使う人の頼みの文そのまま" で 1 回撃つ（道具が棚を当て・引数を組み・控えを取って撃ち、直した所・撃った棚・撃った後の表の形を返す。成功後は確かめの ws_look を撃たずに答える）。
+    """スプレッドシート・文書を作る・直す。まず ask="使う人の頼みの文そのまま" で 1 回撃つ（道具が棚を当て・引数を組み・撃ち、直した所・撃った棚・撃った後の表の形を返す。成功後は確かめの ws_look を撃たずに答える）。
     「撃っていません」なら足りない引数・組みかけ・候補の札を見て ops=[{"shelf":"棚",…引数}] で撃つ（人にしか分からない物だけ聞く）。棚に無い設定は shelf="api"（batchUpdate の requests）。target=URL・ID・名前・"new:名前"（空なら今の相手）。
     値を消さない手（作成・書式・集計・整える等）は聞き返さず ok なしで即撃つ。消す・上書きの ok=True は、場所が名指しで 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。止まったら消える物を見せて聞く。"""
     return _ws_run(get_ws().do, ops=ops, target=target, ok=ok, ask=ask)

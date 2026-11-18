@@ -149,3 +149,24 @@ def used_types(path=None, min_count=2):
             if len(parts) >= 3 and parts[2] and parts[1] not in why:
                 why[parts[1]] = parts[2]
     return sorted([(t, n, why.get(t, "")) for t, n in cnt.items() if n >= min_count], key=lambda x: (-x[1], x[0]))
+
+
+def _handle_backup(st, op, **kw):
+    """backup 棚の実行: .ws_state.json の backup フラグを永続切替する"""
+    if kw.get("phase") == "post":
+        return None
+    on = bool(op.get("on"))
+    st["backup"] = on
+    return (
+        "バックアップ設定を ON（毎回控えを取る）に切り替えました"
+        if on
+        else "バックアップ設定を OFF（控えなし・高速）に切り替えました"
+    )
+
+
+gas_ws_catalog.LOCAL_HANDLERS["backup"] = _handle_backup
+gas_ws_catalog.NEEDS_TARGET_FN["folder"] = lambda op: (op.get("mode") or "move").lower() == "move"
+gas_ws_catalog.NEEDS_TARGET_FN["drive.list"] = lambda op: False
+gas_ws_catalog.NEEDS_TARGET_FN["drive.rename"] = lambda op: not op.get("item")
+gas_ws_catalog.NEEDS_TARGET_FN["drive.move"] = lambda op: not op.get("item")
+gas_ws_catalog.NEEDS_TARGET_FN["drive.trash"] = lambda op: not op.get("item")

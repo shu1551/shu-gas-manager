@@ -499,6 +499,9 @@ class GasClient:
         self._access_token = None
         self._token_expiry = 0
         self.session = requests.Session()
+        self._h2_client = None
+        self._h2_disabled = False
+        self._h2_lock = threading.Lock()
         self._cache_file = Path(cache_file) if cache_file else (Path(__file__).resolve().parent / ".cache.json")
         self._cache_data = self._load_cache()
         self._projects_list_cache = None
@@ -4522,6 +4525,53 @@ class GasClient:
     # ==========================================
 
 
+    def _get_h2_client(self):
+        """HTTP/2 対応の httpx.Client を遅延初期化して再利用する（未導入・非対応時は None）。"""
+        if self._h2_disabled:
+            return None
+        if self._h2_client is not None:
+            return self._h2_client
+        with self._h2_lock:
+            if self._h2_disabled:
+                return None
+            if self._h2_client is None:
+                try:
+                    import httpx
+                    self._h2_client = httpx.Client(http2=True, follow_redirects=True)
+                except Exception:
+                    self._h2_disabled = True
+                    return None
+        return self._h2_client
+
+    def _post_webapp_h2(self, url, req_params, body, headers, timeout_val):
+        """HTTP/2 (httpx) で Web アプリへ POST する。利用不可時は None を返す。"""
+        hc = self._get_h2_client()
+        if hc is None:
+            return None
+        import httpx
+        req_kwargs = {"params": req_params or None, "headers": dict(headers or {}), "timeout": timeout_val}
+        if isinstance(body, (dict, list)):
+            req_kwargs["json"] = body
+        elif isinstance(body, str):
+            try:
+                req_kwargs["json"] = json.loads(body)
+            except Exception:
+                req_kwargs["content"] = body.encode("utf-8")
+        else:
+            req_kwargs["content"] = body
+        try:
+            res = hc.post(url, **req_kwargs)
+            if res.status_code == 401 and "Authorization" in req_kwargs["headers"]:
+                with self._ensure_sync_state():
+                    self._access_token = None
+                    self._cache_data.pop("token", None)
+                    self._save_cache()
+                req_kwargs["headers"]["Authorization"] = f"Bearer {self.get_access_token()}"
+                res = hc.post(url, **req_kwargs)
+            return res
+        except httpx.TimeoutException as e:
+            raise TimeoutError(f"Webアプリの呼び出しがタイムアウトしました ({timeout_val}秒): {e}")
+
     def call_webapp(self, url, params=None, body=None, method="GET", key=None, timeout=15, use_auth=False, dev=False, no_rerun=False):
         """GAS Web アプリ（doGet/doPost）を直接呼び出し（中継機モード / dev=True で最新HEAD直撃）
 
@@ -4575,18 +4625,25 @@ class GasClient:
         method_str = (method or "GET").upper().strip()
         try:
             if method_str == "POST":
-                # POST は重複送信・二重実行（副作用）を避けるため retry_5xx=False, max_retries=0 で送信
-                if isinstance(body, (dict, list)):
-                    res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=body, headers=headers, timeout=timeout_val, allow_redirects=True)
-                elif isinstance(body, str):
-                    # JSON 文字列の場合は json パラメータで送信して Content-Type: application/json を保証
-                    try:
-                        parsed_json = json.loads(body)
-                        res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=parsed_json, headers=headers, timeout=timeout_val, allow_redirects=True)
-                    except Exception:
-                        res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body.encode("utf-8"), headers=headers, timeout=timeout_val, allow_redirects=True)
-                else:
-                    res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body, headers=headers, timeout=timeout_val, allow_redirects=True)
+                use_h2 = (
+                    not self._is_mock_obj(self.session)
+                    and not self._is_mock_obj(getattr(self.session, "request", None))
+                    and not self._is_mock_obj(self._request_with_retry)
+                )
+                res = self._post_webapp_h2(url, req_params, body, headers, timeout_val) if use_h2 else None
+                if res is None:
+                    # POST は重複送信・二重実行（副作用）を避けるため retry_5xx=False, max_retries=0 で送信
+                    if isinstance(body, (dict, list)):
+                        res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=body, headers=headers, timeout=timeout_val, allow_redirects=True)
+                    elif isinstance(body, str):
+                        # JSON 文字列の場合は json パラメータで送信して Content-Type: application/json を保証
+                        try:
+                            parsed_json = json.loads(body)
+                            res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, json=parsed_json, headers=headers, timeout=timeout_val, allow_redirects=True)
+                        except Exception:
+                            res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body.encode("utf-8"), headers=headers, timeout=timeout_val, allow_redirects=True)
+                    else:
+                        res = self._request_with_retry("POST", url, max_retries=0, retry_5xx=False, params=req_params, data=body, headers=headers, timeout=timeout_val, allow_redirects=True)
             else:
                 res = self._request_with_retry("GET", url, max_retries=3, retry_5xx=not no_rerun, retry_timeout=not no_rerun, params=req_params, headers=headers, timeout=timeout_val, allow_redirects=True)
         except requests.Timeout as e:
@@ -7706,13 +7763,15 @@ sandbox.self = sandbox;
         return xray_res
 
 
-    def create_project(self, title: str) -> dict:
-        """新しい GAS プロジェクトを Google ドライブ上に作成する"""
+    def create_project(self, title: str, parent_id: str = "") -> dict:
+        """新しい GAS プロジェクトを Google ドライブ（または parent_id 指定時はコンテナバインド）上に作成する"""
         if not title or not str(title).strip():
             raise ValueError("プロジェクト名を指定してください。")
         title = str(title).strip()
         url = "https://script.googleapis.com/v1/projects"
         payload = {"title": title}
+        if parent_id and str(parent_id).strip():
+            payload["parentId"] = str(parent_id).strip()
         res = self._request_with_retry("POST", url, headers=self._headers(), json=payload, timeout=15)
         if res.status_code != 200:
             raise RuntimeError(f"プロジェクトの作成に失敗しました ({res.status_code}): {res.text}")
@@ -10500,3 +10559,12 @@ try:
     GasClient.add_qquick_channel = gas_local_extras.add_qquick_channel
 except ImportError:
     pass
+
+# ホットリロード時（importlib.reload(gas_client)）に Workspace 系モジュールも連動して再読み込みする
+import importlib as _il
+for _ws_mod in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_workspace"):
+    if _ws_mod in sys.modules:
+        try:
+            _il.reload(sys.modules[_ws_mod])
+        except Exception:
+            pass

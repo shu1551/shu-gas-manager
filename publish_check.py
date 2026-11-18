@@ -76,6 +76,19 @@ PUBLIC_FILES = [
     "axe.min.js",
     "queue/README.md",
     "queue/001_sample_テンプレート指示書.md",
+    # GASコンボ（シートのサイドバー・つなぎコード・ライブラリの元）と Python の操作窓・ブラウザ連動の拡張
+    "gas_ws_combo.py",
+    "combo_server_template.gs",
+    "combo_lite_server.gs",
+    "combo_planner_template.js",
+    "combo_sidebar_template.html",
+    "test_gas_ws_combo.py",
+    "ws_window.py",
+    "ws_window_ai.py",
+    "GAS操作窓を開く.bat",
+    "ws_browser_ext/manifest.json",
+    "ws_browser_ext/background.js",
+    "ws_browser_ext/content.js",
 ]
 
 # 公開ファイル内に1件でも残っていたらNGとする禁止パターン
@@ -140,7 +153,8 @@ def main():
                                                   # 公開しない物（試験の道具・試験場の記録・手元の記録）。公開物に入らないことは、ホワイトリストと上の禁止パターンで見る
                                                   "ws_exam", "ws_shelves", "ws_trial", "gas_ws_ai.py", "gas_ws_coverage.py", "gas_ws_exam.py", "gas_ws_judge.py", "gas_ws_props.py", "gas_ws_sealreport.py", "gas_ws_shot.py", "gas_ws_tables.py", "gas_ws_trial.py",
                                                   "test_gas_ws_167.py", "test_gas_ws_ai.py", "test_gas_ws_coverage.py", "test_gas_ws_exam.py", "test_gas_ws_judge_extra.py", "test_gas_ws_lane.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_shot_sealed.py", "test_gas_ws_speed.py", "test_gas_ws_trial.py", "test_gas_ws_undo_side.py",
-                                                  ".ws_engine_all.gs", ".ws_trial.json", ".ws_api_uses.tsv", ".ws_misses.tsv", ".ws_ledger.json"}
+                                                  ".ws_engine_all.gs", ".ws_trial.json", ".ws_api_uses.tsv", ".ws_misses.tsv", ".ws_ledger.json",
+                                                  ".combo_engine_state.json", ".ws_recent_targets.json", ".ws_window_ver.txt", "ws_browser_ext"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")

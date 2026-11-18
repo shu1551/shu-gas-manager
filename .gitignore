@@ -51,3 +51,8 @@ test_gas_ws_props.py
 test_gas_ws_shot.py
 test_gas_ws_shot_sealed.py
 test_gas_ws_trial.py
+
+# GASコンボ・操作窓の手元の状態（人ごと）
+.combo_engine_state.json
+.ws_recent_targets.json
+.ws_window_ver.txt

@@ -243,3 +243,196 @@ SHELF['name.list'] = function (ctx, op) {
   var lines = list.map(function (x) { return x.name + ': ' + x.sheet + '!' + x.range; });
   note_(ctx, '名前付き範囲（' + list.length + ' 件）:\n' + lines.join('\n'));
 };
+
+// 棚: backup
+// 題: バックアップのオン・オフを切り替える
+// 分類: 守る
+// 語: バックアップ|控え|自動バックアップ|ロールバック|元に戻せる
+// 引数: on*=真偽
+// 頼み: on=false<取らない|取らなくて|取らず|不要|オフ|OFF|やめて|止めて|なし|無し|しない|外して|切る|切って ; on=true<取って|取る|オン|ON|有効|残して|戻せる|入れて
+// 例: 「バックアップを取って」 → {"shelf":"backup","on":true}
+// 例: 「バックアップ取らなくていい」 → {"shelf":"backup","on":false}
+// 触る: なし
+// 控え: なし
+SHELF['backup'] = function (ctx, op) {
+  chg_(ctx, null, '', 'バックアップ設定: ' + (op.on ? 'ON' : 'OFF'));
+};
+
+// 棚: folder
+// 題: フォルダの作成・移動・保存先を設定する
+// 対象: 両方
+// 分類: 守る
+// 語: フォルダに移動|フォルダへ移動|別フォルダ|保存先フォルダ|フォルダに入れる|フォルダに作|フォルダを作|フォルダを作成
+// 引数: to*=文字, mode=選択(move/default/create)=move, create=真偽=false
+// 頼み: create=true<フォルダを作|フォルダを作成|新設|なければ作 ; mode=move<移動|入れ ; mode=default<これから|今後は|既定|デフォルト|いつも|保存先に ; mode=create<フォルダを作|フォルダを作成|新設 ; to~[「『"“]([^」』"”]+)[」』"”] ; to~([^\s、。・「」]+?)(?:という)?フォルダ
+// 例: 「「営業部」フォルダに移動して」 → {"shelf":"folder","to":"営業部"}
+// 例: 「これからは「月次報告」フォルダに作って」 → {"shelf":"folder","to":"月次報告","mode":"default"}
+// 触る: なし
+// 控え: なし
+SHELF['folder'] = function (ctx, op) {
+  need_(op, ['to']);
+  var mode = String(op.mode || 'move').toLowerCase();
+  var create = !!op.create;
+  if (mode === 'create') {
+    try {
+      var ex = resolveFolder_(op.to, false);
+      chg_(ctx, null, '', 'フォルダ「' + ex.name + '」はすでに存在します（ID: ' + ex.id + '）');
+      return;
+    } catch (e) {
+      if (!e || String(e.message || e).indexOf('見つかりません') < 0) throw e;
+      var cr = resolveFolder_(op.to, true);
+      chg_(ctx, null, '', 'フォルダ「' + cr.name + '」を作成しました（ID: ' + cr.id + '）');
+      return;
+    }
+  }
+  if (mode === 'default') {
+    var fDef = resolveFolder_(op.to, create);
+    if (fDef.isRoot) {
+      ctx.defaultFolder = { id: 'root', name: 'マイドライブ' };
+      chg_(ctx, null, '', 'これからの新規作成先を「マイドライブ直下（既定解除）」に設定しました');
+    } else {
+      ctx.defaultFolder = { id: fDef.id, name: fDef.name };
+      chg_(ctx, null, '', 'これからの新規作成先を「' + fDef.name + '」フォルダ（ID: ' + fDef.id + '）に設定しました');
+    }
+    return;
+  }
+  if (!ctx.file) throw new ArgError('移動対象のファイルが開かれていません（target を指定してください）');
+  var fDest = resolveFolder_(op.to, create);
+  DriveApp.getFileById(ctx.file.getId()).moveTo(fDest.folder);
+  chg_(ctx, null, '', 'フォルダ「' + fDest.name + '」へ移動しました' + (fDest.created ? '（フォルダ新設）' : ''));
+};
+
+// 棚: drive.list
+// 題: ドライブ内のファイル・フォルダ一覧を見る
+// 対象: 両方
+// 分類: 守る
+// 語: ドライブ一覧|ファイル一覧|フォルダの中身|ドライブを検索|フォルダ一覧|ドライブを探す
+// 引数: folder=文字=マイドライブ, query=文字, kind=選択(all/folder/file/sheet/doc)=all, limit=数=30
+// 頼み: kind=folder<フォルダだけ|フォルダ一覧 ; kind=sheet<スプレッドシート|シートだけ ; kind=doc<文書|ドキュメント ; limit~(\d+)\s*件 ; folder~[「『"“]([^」』"”]+)[」』"”](?:の中身|フォルダ|内|配下|にある)?
+// 例: 「「TEST」フォルダの中身を一覧で見せて」 → {"shelf":"drive.list","folder":"TEST"}
+// 例: 「「見積」を含むファイルを探して」 → {"shelf":"drive.list","query":"見積"}
+// 触る: なし
+// 控え: なし
+SHELF['drive.list'] = function (ctx, op) {
+  var kind = String(op.kind || 'all').toLowerCase();
+  var lim = Math.max(1, Math.min(100, Number(op.limit) || 30));
+  var q = String(op.query || '').trim();
+  var items = [];
+  var wantFolder = kind === 'all' || kind === 'folder';
+  var wantFile = kind !== 'folder';
+  var mimeCond = '';
+  if (kind === 'sheet') mimeCond = " and mimeType = 'application/vnd.google-apps.spreadsheet'";
+  else if (kind === 'doc') mimeCond = " and mimeType = 'application/vnd.google-apps.document'";
+  if (q) {
+    var esc = q.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var fSpec = String(op.folder || '').trim();
+    var parentCond = '';
+    if (fSpec && fSpec !== 'マイドライブ' && fSpec !== 'root' && fSpec !== 'My Drive') {
+      parentCond = " and '" + resolveFolder_(fSpec, false).id + "' in parents";
+    }
+    if (wantFolder) {
+      var df = DriveApp.searchFolders("title contains '" + esc + "' and trashed = false" + parentCond);
+      while (df.hasNext() && items.length < lim) {
+        var d = df.next();
+        items.push('[フォルダ] ' + d.getName() + ' (ID: ' + d.getId() + ')');
+      }
+    }
+    if (wantFile && items.length < lim) {
+      var ff = DriveApp.searchFiles("title contains '" + esc + "' and trashed = false" + mimeCond + parentCond);
+      while (ff.hasNext() && items.length < lim) {
+        var f = ff.next();
+        items.push('[' + mimeLabel_(f.getMimeType()) + '] ' + f.getName() + ' (ID: ' + f.getId() + ')');
+      }
+    }
+  } else {
+    var base = resolveFolder_(op.folder || 'マイドライブ', false).folder;
+    if (wantFolder) {
+      var df2 = base.getFolders();
+      while (df2.hasNext() && items.length < lim) {
+        var d2 = df2.next();
+        if (!d2.isTrashed()) items.push('[フォルダ] ' + d2.getName() + ' (ID: ' + d2.getId() + ')');
+      }
+    }
+    if (wantFile && items.length < lim) {
+      var ff2 = base.getFiles();
+      while (ff2.hasNext() && items.length < lim) {
+        var f2 = ff2.next();
+        if (f2.isTrashed()) continue;
+        var m2 = f2.getMimeType();
+        if (kind === 'sheet' && m2 !== 'application/vnd.google-apps.spreadsheet') continue;
+        if (kind === 'doc' && m2 !== 'application/vnd.google-apps.document') continue;
+        items.push('[' + mimeLabel_(m2) + '] ' + f2.getName() + ' (ID: ' + f2.getId() + ')');
+      }
+    }
+  }
+  note_(ctx, items.length ? ('ドライブ一覧（' + items.length + ' 件）:\n' + items.join('\n')) : '該当する項目はありませんでした');
+};
+
+// 棚: drive.rename
+// 題: ファイルやフォルダの名前を変える
+// 対象: 両方
+// 分類: 守る
+// 語: ファイル名を変更|ファイル名を変える|フォルダ名を変更|フォルダ名を変える|ドライブ上の名前|リネーム
+// 引数: name*=文字, item=文字
+// 例: 「「資料_old.pdf」の名前を「資料_2026.pdf」に変えて」 → {"shelf":"drive.rename","item":"資料_old.pdf","name":"資料_2026.pdf"}
+// 例: 「今開いているファイルの名前を「売上確定」に変更して」 → {"shelf":"drive.rename","name":"売上確定"}
+// 触る: なし
+// 控え: なし
+SHELF['drive.rename'] = function (ctx, op) {
+  need_(op, ['name']);
+  var target = op.item
+    ? resolveDriveItem_(op.item)
+    : (ctx.file ? wrapDriveObj_(DriveApp.getFileById(ctx.file.getId()), false) : null);
+  if (!target) throw new ArgError('名前を変える対象（item または target）を指定してください');
+  var oldName = target.obj.getName();
+  target.obj.setName(String(op.name));
+  chg_(ctx, null, '', (target.isFolder ? 'フォルダ' : mimeLabel_(target.mime)) + '名を変更: 「' + oldName + '」→「' + op.name + '」');
+};
+
+// 棚: drive.move
+// 題: ファイルやフォルダを別のフォルダへ移動する
+// 対象: 両方
+// 分類: 守る
+// 語: ドライブ移動|フォルダごと移動|PDFを移動|画像を移動|項目を移動|ファイルを整理
+// 引数: to*=文字, item=文字, create=真偽=false
+// 例: 「「請求書.pdf」を「経理/2026」フォルダに移動して」 → {"shelf":"drive.move","item":"請求書.pdf","to":"経理/2026"}
+// 例: 「「作業用」フォルダを「アーカイブ」フォルダに入れて」 → {"shelf":"drive.move","item":"作業用","to":"アーカイブ"}
+// 触る: なし
+// 控え: なし
+SHELF['drive.move'] = function (ctx, op) {
+  need_(op, ['to']);
+  var target = op.item
+    ? resolveDriveItem_(op.item)
+    : (ctx.file ? wrapDriveObj_(DriveApp.getFileById(ctx.file.getId()), false) : null);
+  if (!target) throw new ArgError('移動する対象（item または target）を指定してください');
+  var dest = resolveFolder_(op.to, !!op.create);
+  if (target.isFolder && isAncestorFolder_(target.id, dest.folder)) {
+    throw new ArgError('フォルダ「' + target.name + '」を自分自身または配下のフォルダへは移動できません');
+  }
+  target.obj.moveTo(dest.folder);
+  chg_(ctx, null, '', (target.isFolder ? 'フォルダ' : mimeLabel_(target.mime)) + '「' + target.name + '」を「' + dest.name + '」へ移動しました' + (dest.created ? '（フォルダ新設）' : ''));
+};
+
+// 棚: drive.trash
+// 題: 不要なファイルやフォルダをゴミ箱に入れる
+// 対象: 両方
+// 分類: 守る
+// 語: ゴミ箱|ごみ箱|ファイルを削除|フォルダを削除|不要ファイル削除|ファイルを消して|フォルダを消して
+// 引数: item=文字
+// 例: 「「古い下書き.pdf」をゴミ箱に入れて」 → {"shelf":"drive.trash","item":"古い下書き.pdf"}
+// 例: 「「一時作業」フォルダを削除して」 → {"shelf":"drive.trash","item":"一時作業"}
+// 危ない: 消す
+// 触る: なし
+// 控え: なし
+SHELF['drive.trash'] = function (ctx, op) {
+  var target = op.item
+    ? resolveDriveItem_(op.item)
+    : (ctx.file ? wrapDriveObj_(DriveApp.getFileById(ctx.file.getId()), false) : null);
+  if (!target) throw new ArgError('ゴミ箱に入れる対象（item または target）を指定してください');
+  var subN = target.isFolder ? countFolderChildren_(target.obj) : undefined;
+  var desc = (target.isFolder ? 'フォルダ' : mimeLabel_(target.mime)) + '「' + target.name + '」をゴミ箱に入れます'
+    + (target.isFolder ? '（中の項目数: ' + subN + '）' : '');
+  guardDelete_(ctx, desc, target.isFolder, subN);
+  target.obj.setTrashed(true);
+  chg_(ctx, null, '', (target.isFolder ? 'フォルダ' : mimeLabel_(target.mime)) + '「' + target.name + '」をゴミ箱に入れました');
+};

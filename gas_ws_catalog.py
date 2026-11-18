@@ -20,7 +20,7 @@ CATEGORIES = ["作る", "シート", "範囲", "行と列", "見た目", "絞る
 TOUCH_ITEMS = ["値", "書式", "シート構成", "幅", "固定", "フィルタ", "入力規則", "条件付き", "交互の色", "隠し", "グループ", "保護", "名前", "グラフ", "タブ色"]
 BACKUP_ITEMS = ["今", "名前", "先", "全部", "なし"]
 DANGERS = ["消す", "上書き"]
-HEADINGS = ["棚", "題", "分類", "語", "違い", "引数", "どれか", "例", "危ない", "触る", "控え", "検索", "頼み"]
+HEADINGS = ["棚", "題", "分類", "対象", "語", "違い", "引数", "どれか", "例", "危ない", "触る", "控え", "検索", "頼み"]
 REQUIRED = ["棚", "題", "分類", "語", "引数", "例", "触る"]
 TYPES = ["シート", "範囲", "列", "列[]", "行[]", "色", "文字", "数", "真偽", "配列", "表", "対応"]
 GUARD = {"消す": "guardDelete_(", "上書き": "guardOverwrite_("}
@@ -31,6 +31,10 @@ _HEAD_LINE = re.compile(r"^//\s*([^\s:：]+)\s*[:：]\s?(.*)$")
 
 # 棚ごとの追加の形の検査（引数の形の後に呼ぶ）。{棚の名前: 関数(op) → 問題の文 or None}。棚の側のモジュールが自分で登録する
 EXTRA_CHECKS = {}
+# ローカル状態（.ws_state.json）のみを扱う棚の実行関数。{棚の名前: 関数(st, op) → メッセージ}
+LOCAL_HANDLERS = {}
+# 既定でターゲット（ファイル）を必要としない／引数によって決まる棚の判定関数。{棚の名前: 関数(op) → bool}
+NEEDS_TARGET_FN = {}
 
 
 class CatalogError(Exception):
@@ -157,6 +161,7 @@ def _build(f, name_in_code, fname, body):
     cat = f["分類"]
     sh = {
         "name": name, "title": f["題"], "category": cat, "kind": "doc" if cat == "文書" else "sheet",
+        "shared": f.get("対象", "") == "両方",
         "words": words, "args_raw": f["引数"], "diff": f.get("違い", ""), "args": args, "any": anyof, "danger": danger,
         "touch": touch, "backup": backup, "searchable": f.get("検索", "") != "しない",
         "examples": [], "file": fname, "body": body,
@@ -266,12 +271,21 @@ class Catalog:
 
     # ------------------------------------------------------------ 撃つ前にそろえる
     def normalize_op(self, op):
-        """`列[]`・`行[]` に 1 つだけ渡された値を配列にそろえる（エンジンは配列を前提にする）"""
+        """`列[]`・`行[]` に 1 つだけ渡された値を配列にそろえる（エンジンは配列を前提にする）。範囲の 'シート名'!A1 も分離する"""
         s = self.by_name[op["shelf"]]
         out = dict(op)
         for a in s["args"]:
             if a["type"] in ("列[]", "行[]") and a["name"] in out and out[a["name"]] is not None and not isinstance(out[a["name"]], list):
                 out[a["name"]] = [out[a["name"]]]
+            elif a["type"] == "範囲" and s["kind"] == "sheet" and isinstance(out.get(a["name"]), str):
+                raw_r = out[a["name"]].strip()
+                if "!" in raw_r and "," not in raw_r:
+                    m = re.match(r"^(?:'((?:[^']|'')+)'|([^!']+))!(.+)$", raw_r)
+                    if m and m.group(3).strip():
+                        sh_nm = (m.group(1).replace("''", "'") if m.group(1) is not None else m.group(2)).strip()
+                        if sh_nm and not out.get("sheet"):
+                            out["sheet"] = sh_nm
+                        out[a["name"]] = m.group(3).strip()
         return out
 
 

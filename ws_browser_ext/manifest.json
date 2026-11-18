@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "GASコンボ ブラウザ連動",
+  "version": "1.0.0",
+  "description": "Google スプレッドシート・ドキュメントの選択セル範囲・シートタブ・対象ファイルを GASコンボ へリアルタイム連携します。",
+  "permissions": [
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://docs.google.com/spreadsheets/*",
+    "https://docs.google.com/document/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://docs.google.com/spreadsheets/d/*",
+        "https://docs.google.com/document/d/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

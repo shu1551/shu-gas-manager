@@ -5889,7 +5889,11 @@ def test_ws_shelf_names_match_engine_source():
 def test_ws_engine_scopes_are_sheets_and_docs_only(ws_env):
     mgr, fc, _ = ws_env
     manifest = json.loads(mgr._engine_files()[0]["source"])
-    assert manifest["oauthScopes"] == ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/documents"]
+    assert manifest["oauthScopes"] == [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive",
+    ]
     assert manifest["webapp"] == {"executeAs": "USER_DEPLOYING", "access": "MYSELF"}
 
 
@@ -6204,7 +6208,7 @@ def test_1112_failed_do_does_not_remember_sheet(tmp_path):
     ws = gas_workspace.WorkspaceManager.__new__(gas_workspace.WorkspaceManager)
     saved = {}
     ws._save = lambda st: saved.update(st)
-    ws.format_do = lambda res: "ok"
+    ws.format_do = lambda res, **kw: "ok"
     res = {"ok": False, "target": {"id": "F", "name": "n", "kind": "sheet", "url": "u", "sheet": "作りかけ"}}
     ws._finish_do({}, res, "k")
     assert "sheet" not in saved["target"]

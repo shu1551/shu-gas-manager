@@ -187,7 +187,11 @@ class WorkspaceManager:
             "timeZone": "Asia/Tokyo", "exceptionLogging": "STACKDRIVER", "runtimeVersion": "V8",
             # 目（render）が罫線を読むのに Sheets の高度なサービスを使う（許可は spreadsheets のまま増えない）
             "dependencies": {"enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
-            "oauthScopes": ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/documents"],
+            "oauthScopes": [
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/documents",
+                "https://www.googleapis.com/auth/drive",
+            ],
             "webapp": {"executeAs": "USER_DEPLOYING", "access": "MYSELF"},
         }
         head = {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, indent=2)}
@@ -263,6 +267,9 @@ class WorkspaceManager:
                 # 版が違う（誰かがエンジンを書き換えた）→ 差し替えて 1 回だけ撃ち直す
                 self.install_engine(self._load())
                 return self._post(dict(body, _retried=True), timeout)
+            err_msg = str(data.get("error") or "")
+            if data.get("ok") is False and ("呼び出す権限がありません" in err_msg or "You do not have permission to call" in err_msg or "Required permissions:" in err_msg):
+                raise WorkspaceAuthNeeded(self._auth_message(data.get("auth_url") or url))
             return data
         text = (r.get("text") or "")
         if "Authorization needed" in text or "承認が必要" in text or "authorization" in text.lower()[:600]:
@@ -337,7 +344,7 @@ class WorkspaceManager:
 
     def validate_ops(self, ops):
         """棚の札（引数: どれか:）から形を検査する。意味（列があるか・範囲が表の中か）はエンジンが見る"""
-        kinds = set()
+        kinds, first_kind = set(), None
         for i, op in enumerate(ops, 1):
             if not isinstance(op, dict) or not isinstance(op.get("shelf"), str):
                 raise WorkspaceError(f"{i} 番目の ops に \"shelf\"（棚の名前）がありません。棚の名前と引数は ws_find（または ws_look の ask）で引けます。")
@@ -350,10 +357,25 @@ class WorkspaceManager:
             if msg:
                 s = self.catalog.by_name[name]
                 raise WorkspaceError(msg + "\nその棚の札:\n" + "\n".join(self.finder.card(s)) + "\n   引数: " + s["args_raw"])
-            kinds.add(spec["kind"])
+            if first_kind is None:
+                first_kind = spec["kind"]
+            if not self.catalog.by_name[name].get("shared") and name not in gas_ws_catalog.LOCAL_HANDLERS:
+                kinds.add(spec["kind"])
         if len(kinds) > 1:
             raise WorkspaceError("スプレッドシートの棚と文書の棚は、同じ ws_do にまとめられません。")
-        return kinds.pop()
+        return kinds.pop() if kinds else first_kind
+
+    @staticmethod
+    def _op_needs_target(op):
+        sh = op.get("shelf")
+        if sh in gas_ws_catalog.LOCAL_HANDLERS:
+            return False
+        fn = gas_ws_catalog.NEEDS_TARGET_FN.get(sh)
+        return bool(fn(op)) if fn else True
+
+    @classmethod
+    def _ops_need_target(cls, ops):
+        return any(cls._op_needs_target(o) for o in ops)
 
     # ------------------------------------------------------------ 相手を決める
     def resolve_target(self, target, kind, st):
@@ -364,13 +386,41 @@ class WorkspaceManager:
                 raise WorkspaceError("今の相手が決まっていません。target に URL・ID・名前、または \"new:名前\"（新規）を渡してください。")
             return dict(cur), False
         if target.lower().startswith("new:"):
-            name = target[4:].strip()
-            if not name:
+            raw = target[4:].strip()
+            if not raw:
                 raise WorkspaceError("new: のあとに新しいファイルの名前が要ります（例: new:見積書）。")
-            return {"new": name, "kind": kind}, True
+            if "/" in raw:
+                folder_spec, name = raw.rsplit("/", 1)
+                folder_spec, name = folder_spec.strip(), name.strip()
+                if not name:
+                    raise WorkspaceError("new:フォルダ名/ のあとに新しいファイルの名前が要ります（例: new:営業部/見積書）。")
+                out = {"new": name, "kind": kind}
+                if folder_spec:
+                    out["folder"] = folder_spec
+                return out, True
+            return {"new": raw, "kind": kind}, True
         m = re.search(r"/(spreadsheets|document)/d/([\w-]+)", target)
         if m:
-            return {"id": m.group(2), "kind": "sheet" if m.group(1) == "spreadsheets" else "doc"}, False
+            fid = m.group(2)
+            out = {"id": fid, "kind": "sheet" if m.group(1) == "spreadsheets" else "doc"}
+            if out["kind"] == "sheet":
+                mg = re.search(r"[?#&]gid=([0-9]+)", target)
+                tc = st.get("table_cache") or {}
+                if mg and int(mg.group(1)) == 0 and tc.get("id") == fid and tc.get("sheets"):
+                    out["sheet"] = tc["sheets"][0]
+                elif cur.get("id") == fid and cur.get("sheet"):
+                    out["sheet"] = cur["sheet"]
+            return out, False
+        m_open = re.search(r"(?:^|[?&])id=([\w-]{20,})", target)
+        if m_open and target.startswith("http"):
+            fid = m_open.group(1)
+            if cur.get("id") == fid:
+                return dict(cur), False
+            meta = self._drive_meta(fid)
+            k = self._kind_of_mime(meta["mimeType"])
+            if not k:
+                raise WorkspaceError(f"「{meta['name']}」はスプレッドシートでも文書でもありません。")
+            return {"id": meta["id"], "kind": k, "name": meta["name"]}, False
         if re.fullmatch(r"[\w-]{25,}", target):
             if cur.get("id") == target:
                 return dict(cur), False
@@ -415,6 +465,21 @@ class WorkspaceManager:
     def _do_ask(self, ask, target, ok, tim):
         import gas_ws_ask
         st = self._load()
+        # 相手が決まる前やターゲット不要の棚だけのときは、ファイルを開かずにそのまま実行する
+        p0 = gas_ws_ask.plan(ask, self.finder, "")
+        if p0.fire and p0.ops and not self._ops_need_target(p0.ops):
+            tim.lap("当て")
+            st2, res, key = self._do_res(p0.ops, target, ok, tim)
+            text = self._finish_do(st2, res, key)
+            if not res.get("ok"):
+                return text
+            shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p0.ops)
+            ch_text = " ／ ".join(res.get("changed") or []) or "なし"
+            out_lines = [self._title(res.get("target") or {}), f"直した所: {ch_text}（撃った棚: {shown}）"]
+            if res.get("notes"):
+                out_lines.append("メモ: " + " ／ ".join(res["notes"][:3]))
+            out_lines.append("このまま使う人に報告して終える")
+            return "\n".join(out_lines)
         tgt, is_new = self.resolve_target(target, None, st)
         kind = tgt.get("kind") or ""
         if not kind and tgt.get("id"):
@@ -443,19 +508,26 @@ class WorkspaceManager:
         tim.lap("表の形")
         for attempt in range(2):
             table = (tc or {}).get("table")
-            p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=tgt.get("sheet", ""))
+            cur_sh = tgt.get("sheet") or (tc or {}).get("sheet") or ""
+            ls_info = st.get("last_scope") or {}
+            ls = ls_info.get("scope") if ls_info.get("id") == tgt.get("id") and (not cur_sh or not ls_info.get("sheet") or ls_info.get("sheet") == cur_sh) else None
+            p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=cur_sh, last_scope=ls)
             tim.lap("当て")
             if not p.fire and p.missing and not p.reasons and not fresh and kind == "sheet" and not is_new:
                 # 覚えていた形で引数が決まらなかった → 形が変わったのかもしれない。1 回だけ見直して組み直す
                 tgt, tc = look_fresh()
                 fresh = True
                 table = (tc or {}).get("table")
-                p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=tgt.get("sheet", ""))
+                cur_sh = tgt.get("sheet") or (tc or {}).get("sheet") or ""
+                p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=cur_sh, last_scope=ls)
                 tim.lap("当て")
             if not p.fire:
                 return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
-            extra = {"want_table": True}
-            if table and kind == "sheet" and not is_new:
+            # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
+            # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
+            keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
+            extra = {} if keeps_shape else {"want_table": True}
+            if table and kind == "sheet" and not is_new and not keeps_shape:
                 extra["expect"] = table
             st2, res, key = self._do_res(p.ops, target, ok, tim, extra)
             if res.get("stale") and attempt == 0:
@@ -480,6 +552,8 @@ class WorkspaceManager:
             tail.append("新しく作りました")
         if res.get("backup"):
             tail.append(f"控え #{res['backup']}（ws_undo で戻せます）")
+        elif not st2.get("backup", False) and not res.get("created") and not res.get("local_only"):
+            tail.append("控えなし（backup=OFF）")
         if res.get("replayed"):
             tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
         tail.append("このまま使う人に報告して終える")
@@ -488,6 +562,13 @@ class WorkspaceManager:
             f"直した所: {ch_text}（撃った棚: {shown}）",
             " ／ ".join(tail),
         ])
+
+    def _keeps_shape(self, op):
+        """表の形を変えない棚か（触る に 値・シート構成 が無い。触る が引数で変わる api は変えるものとして扱う）"""
+        s = self.catalog.by_name.get(op.get("shelf"))
+        if not s or op.get("shelf") == "api":
+            return False
+        return not ({"値", "シート構成"} & set(s.get("touch") or []))
 
     def _do(self, ops, target, ok, tim):
         st, res, key = self._do_res(ops, target, ok, tim)
@@ -499,33 +580,88 @@ class WorkspaceManager:
         ops = [self.catalog.normalize_op(o) for o in ops]   # 列[]・行[] に 1 つだけ渡された値を配列にそろえる
         tim.lap("検査")
         st = self._load()
-        tgt, is_new = self.resolve_target(target, kind, st)
-        tim.lap("相手")
-        if tgt.get("kind") and tgt["kind"] != kind:
-            raise WorkspaceError("今の相手は" + ("文書" if tgt["kind"] == "doc" else "スプレッドシート")
-                                 + "ですが、頼みの棚は" + ("文書" if kind == "doc" else "シート") + "用です。target を替えてください。")
-        # やり直しは 3 回まで（同じ相手での失敗が続いたとき）
-        key = tgt.get("id") or tgt.get("new")
-        fails = st.get("fails") or {}
-        if not is_new and fails.get(key, 0) >= RETRY_MAX:
-            raise WorkspaceError(f"同じ相手（{tgt.get('name') or key}）で {RETRY_MAX} 回続けて通りませんでした。ここで止めます。"
-                                 "頼み方を変えるか、人の判断が要ります（ws_look で今の様子を見る・ws_undo list で控えを見る）。")
-        sheet = (st.get("target") or {}).get("sheet") if (st.get("target") or {}).get("id") == tgt.get("id") else ""
-        body_target = {k: v for k, v in tgt.items() if k in ("id", "kind", "new")}
-        if sheet:
-            body_target["sheet"] = sheet
+        local_ops = [o for o in ops if o["shelf"] in gas_ws_catalog.LOCAL_HANDLERS]
+        remote_ops = [o for o in ops if o["shelf"] not in gas_ws_catalog.LOCAL_HANDLERS]
+        pre_msgs, pending_local = [], []
+        for o in local_ops:
+            msg = gas_ws_catalog.LOCAL_HANDLERS[o["shelf"]](st, o, mgr=self, target=target, phase="pre")
+            if msg is None:
+                pending_local.append(o)
+            else:
+                pre_msgs.append(msg)
+        if pre_msgs:
+            self._save(st)
+        if not remote_ops:
+            tgt_out = dict(st.get("target") or {})
+            if pending_local:
+                tgt_out, _ = self.resolve_target(target, None, st)
+                for o in pending_local:
+                    msg = gas_ws_catalog.LOCAL_HANDLERS[o["shelf"]](
+                        st, o, mgr=self, target=target, target_id=tgt_out.get("id"), phase="post"
+                    )
+                    if msg:
+                        pre_msgs.append(msg)
+            return st, {"ok": True, "target": tgt_out, "changed": pre_msgs, "notes": [], "remaining": [], "backup": 0, "local_only": True}, None
+        backup = bool(st.get("backup", True))   # 既定は控えを取る（README・WORKSPACE.md の約束）。「バックアップ取らなくていい」で以後ずっと切れる
+        need_tgt = bool((target or "").strip()) or self._ops_need_target(remote_ops)
+        if need_tgt:
+            tgt, is_new = self.resolve_target(target, kind, st)
+            tim.lap("相手")
+            if tgt.get("kind") and tgt["kind"] != kind:
+                raise WorkspaceError("今の相手は" + ("文書" if tgt["kind"] == "doc" else "スプレッドシート")
+                                     + "ですが、頼みの棚は" + ("文書" if kind == "doc" else "シート") + "用です。target を替えてください。")
+            # やり直しは 3 回まで（同じ相手での失敗が続いたとき）
+            key = tgt.get("id") or tgt.get("new")
+            fails = st.get("fails") or {}
+            if not is_new and fails.get(key, 0) >= RETRY_MAX:
+                raise WorkspaceError(f"同じ相手（{tgt.get('name') or key}）で {RETRY_MAX} 回続けて通りませんでした。ここで止めます。"
+                                     "頼み方を変えるか、人の判断が要ります（ws_look で今の様子を見る・ws_undo list で控えを見る）。")
+            sheet = tgt.get("sheet") or ((st.get("target") or {}).get("sheet") if (st.get("target") or {}).get("id") == tgt.get("id") else "")
+            body_target = {k: v for k, v in tgt.items() if k in ("id", "kind", "new", "folder", "name")}
+            if is_new and not body_target.get("folder") and st.get("default_folder", {}).get("id"):
+                body_target["folder_id"] = st["default_folder"]["id"]
+            if sheet:
+                body_target["sheet"] = sheet
+        else:
+            tgt, is_new, key = {}, False, ""
+            tim.lap("相手")
+            body_target = {"no_file": True}
         # 呼び直しで二重にならない番号：時間切れで終わった同じ頼みは同じ番号で撃つ
-        h = _digest(body_target, ops, bool(ok)) if not extra else _digest(body_target, ops, bool(ok), extra)
+        if extra or not backup:
+            h = _digest(body_target, remote_ops, bool(ok), extra, bool(backup))
+        else:
+            h = _digest(body_target, remote_ops, bool(ok))
         pend = st.get("pending") or {}
         call_id = pend["call_id"] if pend.get("hash") == h else uuid.uuid4().hex
         st["pending"] = {"hash": h, "call_id": call_id}
         self._save(st)
         tim.lap("状態")
-        body = {"action": "do", "call_id": call_id, "target": body_target, "ops": ops, "ok": bool(ok)}
+        body = {"action": "do", "call_id": call_id, "target": body_target, "ops": remote_ops, "ok": bool(ok), "backup": bool(backup)}
         body.update(extra or {})
-        res = self._post(body)
+        try:
+            res = self._post(body)
+        except WorkspaceAuthNeeded:
+            st0 = self._load()
+            if st0.pop("pending", None) is not None:
+                self._save(st0)
+            raise
+        post_msgs = []
         if res.get("ok"):
-            gas_ws_api.log_uses(ops, self.api_uses_path)       # 撃った api の型と頼みの 1 行（棚に上げる候補の材料）
+            gas_ws_api.log_uses(remote_ops, self.api_uses_path)       # 撃った api の型と頼みの 1 行（棚に上げる候補の材料）
+            for o in reversed(remote_ops):
+                sc = next(({k: o[k]} for k in ("header", "title", "col", "range") if o.get(k) not in (None, "", [])), None)
+                if sc:
+                    res["_last_scope"] = sc
+                    break
+            tid = (res.get("created") or res.get("target") or {}).get("id") or tgt.get("id")
+            for o in pending_local:
+                msg = gas_ws_catalog.LOCAL_HANDLERS[o["shelf"]](
+                    st, o, mgr=self, target=target, target_id=tid, phase="post"
+                )
+                if msg:
+                    post_msgs.append(msg)
+            if pre_msgs or post_msgs:
+                res["changed"] = pre_msgs + (res.get("changed") or []) + post_msgs
         tim.engine = res.get("ms") or {}
         tim.last = time.perf_counter()
         st = self._load()
@@ -541,18 +677,42 @@ class WorkspaceManager:
             # 失敗して戻したときのシート名は、作りかけて消えたシートかもしれないので覚えない（11/12 実機で踏んだ）
             keys = ("id", "name", "kind", "url", "sheet") if res.get("ok") else ("id", "name", "kind", "url")
             st["target"] = {k: tgt[k] for k in keys if tgt.get(k)}
+        df = res.get("default_folder")
+        if isinstance(df, dict):
+            if df.get("id") == "root" or not df.get("id"):
+                st.pop("default_folder", None)
+            else:
+                st["default_folder"] = {"id": df["id"], "name": df.get("name", "")}
         fails = st.setdefault("fails", {})
         if res.get("ok"):
             for k in (key, tgt.get("id")):
-                fails.pop(k, None)
+                if k:
+                    fails.pop(k, None)
         elif not res.get("blocked") and not res.get("arg"):
             nk = tgt.get("id") or key
-            fails[nk] = fails.get(nk, 0) + 1
-            res["_fail_count"] = fails[nk]
+            if nk:
+                fails[nk] = fails.get(nk, 0) + 1
+                res["_fail_count"] = fails[nk]
         if res.get("ok") and res.get("table") is not None:
             self._remember_table(st, res.get("target") or {}, res.get("table"), res.get("sheets"))
+        if res.get("ok") and res.get("_last_scope") and tgt.get("id"):
+            prev_ls = st.get("last_scope") or {}
+            new_sc = dict(res["_last_scope"])
+            sel_keep = ""
+            if (
+                prev_ls.get("id") == tgt["id"]
+                and prev_ls.get("sheet", "") == tgt.get("sheet", "")
+                and prev_ls.get("selection")
+                and new_sc.get("range") == prev_ls.get("selection")
+            ):
+                new_sc = dict(prev_ls.get("scope") or new_sc)
+                sel_keep = prev_ls["selection"]
+            ls_entry = {"id": tgt["id"], "sheet": tgt.get("sheet", ""), "scope": new_sc}
+            if sel_keep:
+                ls_entry["selection"] = sel_keep
+            st["last_scope"] = ls_entry
         self._save(st)
-        return self.format_do(res)
+        return self.format_do(res, backup=True) if st.get("backup", True) else self.format_do(res)
 
     @staticmethod
     def _title(tgt):
@@ -561,7 +721,7 @@ class WorkspaceManager:
             s += " › " + tgt["sheet"]
         return "対象: " + s
 
-    def format_do(self, res):
+    def format_do(self, res, backup=False):
         tgt = res.get("target") or res.get("created") or {}
         lines = [self._title(tgt)]
         if res.get("ok"):
@@ -586,6 +746,8 @@ class WorkspaceManager:
                 tail.insert(0, "新しく作りました")
             if res.get("backup"):
                 tail.append(f"控え #{res['backup']}（ws_undo で戻せます）")
+            elif not backup and not res.get("created") and not res.get("local_only"):
+                tail.append("控えなし（backup=OFF）")
             if res.get("replayed"):
                 tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
             if tail:
@@ -660,7 +822,7 @@ class WorkspaceManager:
         if not body_target.get("kind"):
             meta = self._drive_meta(tgt["id"])
             body_target["kind"] = self._kind_of_mime(meta["mimeType"])
-        res = self._post({"action": "look", "target": body_target, "sheet": sheet or (cur.get("sheet") if cur.get("id") == tgt.get("id") else ""), "range": range})
+        res = self._post({"action": "look", "target": body_target, "sheet": sheet or tgt.get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else ""), "range": range})
         if not res.get("ok"):
             raise WorkspaceError(res.get("error") or "見られませんでした")
         t = res["target"]

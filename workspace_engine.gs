@@ -25,6 +25,7 @@ var DYNAMIC = {};   // 棚ごとに、控えるシートと触る物をその呼
 var EXTRA_ACTIONS = {};   // 別の入口を足すときの口（ふつうは空。エンジンに別のファイルを足すと、そこが名前で登録する）
 
 function doGet(e) { return json_({ ok: true, engine: 'shu-workspace-engine', version: ENGINE_VERSION }); }
+function authorizeDrive() { return { ok: true, root: DriveApp.getRootFolder().getName() }; }
 
 function doPost(e) {
   var req;
@@ -61,7 +62,7 @@ function doPost(e) {
     res.ms = res.ms || {}; res.ms.lock = lockMs;     // 鍵を待った時間（ほかの処理と重なると伸びる）
     return json_(res);
   } catch (err) {
-    return json_({ ok: false, error: String(err && err.message || err), version: ENGINE_VERSION });
+    return json_({ ok: false, error: String(err && err.message || err), arg: !!(err && err.isArg), version: ENGINE_VERSION });
   } finally {
     if (laneOn) { try { PropertiesService.getScriptProperties().deleteProperty('LOCK@' + LANE); } catch (e2) { } }
     else lock.releaseLock();
@@ -143,12 +144,17 @@ function findTable_(sh) {
     return c0 ? { sheet: sh, headerRow: c0.headerRow, firstCol: c0.firstCol, lastCol: c0.lastCol, firstData: c0.firstData, lastData: c0.lastData, totalRow: c0.totalRow, vals: c0.vals } : null;
   }
   if (_TBL_CACHE && _TBL_CACHE._once) _TBL_CACHE = null;
-  var lr = sh.getLastRow(), lc = sh.getLastColumn();
+  var vals = sh.getDataRange().getValues();   // 行数・列数を別に聞かず、値と一緒に 1 回で読む（速さのため）
+  var lr = vals.length, lc = vals[0] ? vals[0].length : 0;
   if (lr < 1 || lc < 1) { if (_TBL_CACHE) _TBL_CACHE[sid] = null; return null; }
-  var vals = sh.getRange(1, 1, lr, lc).getValues();
   var nonEmpty = function (row) { return row.filter(function (v) { return !isBlank_(v); }).length; };
   var h = -1;
   for (var r = 0; r < vals.length; r++) { if (nonEmpty(vals[r]) >= 2) { h = r; break; } }
+  // 見出しの行：2 つ以上埋まった最初の行。ただしすぐ下の行がその倍以上埋まっていれば、その行は表の前の欄（「表示部門 | すべて」等の選ぶ欄）として下へ送る
+  for (var hs = 0; h >= 0 && hs < 10; hs++) {
+    var nx = h + 1; while (nx < vals.length && nonEmpty(vals[nx]) === 0) nx++;
+    if (nx < vals.length && nonEmpty(vals[nx]) >= 2 * nonEmpty(vals[h])) h = nx; else break;
+  }
   if (h < 0) { if (_TBL_CACHE) _TBL_CACHE[sid] = null; return null; }
   var hdr = vals[h], fc = -1, lcol = -1;
   for (var c = 0; c < hdr.length; c++) if (!isBlank_(hdr[c])) { if (fc < 0) fc = c; lcol = c; }
@@ -171,6 +177,26 @@ function needTable_(sh) {
   var t = findTable_(sh);
   if (!t) throw new ArgError('シート「' + sh.getName() + '」に表が見つかりません（見出しの行がありません）');
   return t;
+}
+function titleRange_(sh) {
+  var t = findTable_(sh);
+  var limit = t ? t.headerRow - 1 : 1;
+  var vals = t ? t.vals : sh.getDataRange().getValues();   // 行数・列数を別に聞かず 1 回で読む（速さのため）
+  if (!t && (!vals.length || !vals[0].length || (vals.length === 1 && vals[0].length === 1 && isBlank_(vals[0][0])))) throw new ArgError('シート「' + sh.getName() + '」が空です');
+  if (limit < 1) throw new ArgError('シート「' + sh.getName() + '」に見出しの上の行がありません（range でセルを指定してください）');
+  for (var r = 0; r < limit; r++) {
+    for (var c = 0; c < vals[r].length; c++) {
+      if (!isBlank_(vals[r][c])) {
+        var rg = sh.getRange(r + 1, c + 1);
+        if (typeof rg.isPartOfMerge === 'function' && rg.isPartOfMerge()) {
+          var mr = rg.getMergedRanges();
+          if (mr && mr.length) return mr[0];
+        }
+        return rg;
+      }
+    }
+  }
+  throw new ArgError('シート「' + sh.getName() + '」に見出しの上の行にタイトルが見つかりません（range でセルを指定してください）');
 }
 function dataRange_(t) { return t.sheet.getRange(t.firstData, t.firstCol, Math.max(1, t.lastData - t.firstData + 1), t.lastCol - t.firstCol + 1); }
 function headerNames_(t) { return t.vals[t.headerRow - 1].slice(t.firstCol - 1, t.lastCol).map(String); }
@@ -827,6 +853,148 @@ function restoreDoc_(doc, b, n) {
   copyBody_(bk.getBody(), doc.getBody());
 }
 
+// ---------------------------------------------------------------- Drive フォルダ・ファイル操作
+
+function extractDriveId_(s) {
+  var raw = String(s || '').trim();
+  var m = raw.match(/\/folders\/([A-Za-z0-9_-]+)/) || raw.match(/\/d\/([A-Za-z0-9_-]+)/) || raw.match(/[?&]id=([A-Za-z0-9_-]+)/);
+  if (m) return m[1];
+  if (/^[A-Za-z0-9_-]{20,}$/.test(raw) && raw.indexOf('/') < 0) return raw;
+  return '';
+}
+
+function activeDriveList_(it, maxN) {
+  var out = [];
+  while (it.hasNext()) {
+    var x = it.next();
+    if (!x.isTrashed()) {
+      out.push(x);
+      if (maxN && out.length >= maxN) break;
+    }
+  }
+  return out;
+}
+
+function activeFolders_(parent, name) { return activeDriveList_(parent.getFoldersByName(name)); }
+function activeFiles_(parent, name) { return activeDriveList_(parent.getFilesByName(name)); }
+
+function mimeLabel_(mime) {
+  if (mime === 'application/vnd.google-apps.folder') return 'フォルダ';
+  if (mime === 'application/vnd.google-apps.spreadsheet') return 'シート';
+  if (mime === 'application/vnd.google-apps.document') return '文書';
+  if (mime === 'application/pdf') return 'PDF';
+  if (mime && mime.indexOf('image/') === 0) return '画像';
+  return 'ファイル';
+}
+
+function wrapDriveObj_(obj, isFolder) {
+  var mime = isFolder ? 'application/vnd.google-apps.folder' : obj.getMimeType();
+  return { obj: obj, id: obj.getId(), name: obj.getName(), mime: mime, isFolder: isFolder };
+}
+
+function resolveDriveItem_(spec) {
+  var raw = String(spec || '').trim();
+  if (!raw) throw new ArgError('対象のファイルやフォルダの名前・ID を指定してください');
+  var id = extractDriveId_(raw);
+  if (id) {
+    try {
+      var f0 = DriveApp.getFileById(id);
+      if (f0 && !f0.isTrashed()) {
+        var isDir = f0.getMimeType() === 'application/vnd.google-apps.folder';
+        return wrapDriveObj_(isDir ? DriveApp.getFolderById(id) : f0, isDir);
+      }
+    } catch (eId) { /* ID でなければ名前検索へ */ }
+  }
+  var hits = [];
+  if (raw.indexOf('/') >= 0) {
+    var parts = raw.replace(/^\/+|\/+$/g, '').split('/').map(function (s) { return s.trim(); }).filter(Boolean);
+    var first = parts[0];
+    var startIdx = (first === 'マイドライブ' || first === 'My Drive' || first === 'root') ? 1 : 0;
+    var cur = DriveApp.getRootFolder();
+    for (var i = startIdx; i < parts.length - 1; i++) {
+      var dirs = activeFolders_(cur, parts[i]);
+      if (!dirs.length) throw new ArgError('フォルダ「' + parts.slice(0, i + 1).join('/') + '」が見つかりません');
+      if (dirs.length > 1) throw new ArgError('フォルダ「' + parts[i] + '」が複数あります（ID で指定してください）');
+      cur = dirs[0];
+    }
+    var last = parts[parts.length - 1];
+    if (!last) return wrapDriveObj_(cur, true);
+    activeFolders_(cur, last).forEach(function (d) { hits.push(wrapDriveObj_(d, true)); });
+    activeFiles_(cur, last).forEach(function (f) { hits.push(wrapDriveObj_(f, false)); });
+  } else {
+    activeDriveList_(DriveApp.getFoldersByName(raw), 6).forEach(function (d) { hits.push(wrapDriveObj_(d, true)); });
+    activeDriveList_(DriveApp.getFilesByName(raw), 6).forEach(function (f) { hits.push(wrapDriveObj_(f, false)); });
+  }
+  if (!hits.length) throw new ArgError('「' + raw + '」が見つかりません（パス名や URL・ID でも指定できます）');
+  if (hits.length > 1) {
+    var desc = hits.slice(0, 5).map(function (h) { return '[' + mimeLabel_(h.mime) + '] ' + h.name + ' (ID: ' + h.id + ')'; }).join(' ／ ');
+    throw new ArgError('「' + raw + '」に一致する項目が ' + hits.length + ' 件以上あります。ID または「フォルダ/名前」で指定してください: ' + desc);
+  }
+  return hits[0];
+}
+
+function isAncestorFolder_(ancestorId, folder) {
+  var q = [folder], seen = {};
+  while (q.length) {
+    var cur = q.shift(), cid = cur.getId();
+    if (cid === ancestorId) return true;
+    if (seen[cid]) continue;
+    seen[cid] = true;
+    var ps = cur.getParents();
+    while (ps.hasNext()) q.push(ps.next());
+  }
+  return false;
+}
+
+function countFolderChildren_(folder) {
+  var n = 0;
+  var df = folder.getFolders(); while (df.hasNext()) { if (!df.next().isTrashed()) n++; }
+  var ff = folder.getFiles(); while (ff.hasNext()) { if (!ff.next().isTrashed()) n++; }
+  return n;
+}
+
+function folderLabel_(f) {
+  return (f && typeof f.getName === 'function') ? f.getName() : 'マイドライブ';
+}
+
+function resolveFolder_(spec, createMissing) {
+  var raw = String(spec || '').trim();
+  var idHit = extractDriveId_(raw);
+  if (idHit) raw = idHit;
+  if (!raw || raw === 'root' || raw === 'マイドライブ' || raw === 'My Drive' || raw === '直下' || raw === 'ルート') {
+    var root = DriveApp.getRootFolder();
+    return { folder: root, id: root.getId(), name: 'マイドライブ', created: false, isRoot: true };
+  }
+  if (/^[A-Za-z0-9_-]{20,}$/.test(raw) && raw.indexOf('/') < 0) {
+    try {
+      var byId = DriveApp.getFolderById(raw);
+      if (byId && !byId.isTrashed()) {
+        return { folder: byId, id: byId.getId(), name: byId.getName(), created: false, isRoot: false };
+      }
+    } catch (eId) { /* ID でなければパス名として探す */ }
+  }
+  var parts = raw.replace(/^\/+|\/+$/g, '').split('/').map(function (s) { return s.trim(); }).filter(Boolean);
+  var cur = DriveApp.getRootFolder();
+  var anyCreated = false;
+  for (var i = 0; i < parts.length; i++) {
+    var name = parts[i];
+    if (i === 0 && (name === 'マイドライブ' || name === 'My Drive' || name === 'root')) continue;
+    var hits = activeFolders_(cur, name);
+    if (hits.length > 1) {
+      throw new ArgError('同じ名前のフォルダ「' + name + '」が ' + hits.length + ' 個あります（' + folderLabel_(cur) + ' 配下）');
+    }
+    if (hits.length === 1) {
+      cur = hits[0];
+    } else if (createMissing) {
+      cur = cur.createFolder(name);
+      anyCreated = true;
+    } else {
+      throw new ArgError('フォルダ「' + parts.slice(0, i + 1).join('/') + '」が見つかりません（新しく作るなら create=true を付けてください）');
+    }
+  }
+  return { folder: cur, id: cur.getId(), name: cur.getName(), created: anyCreated, isRoot: false };
+}
+
 // ---------------------------------------------------------------- do
 
 function summarizeOps_(ops) { return ops.map(function (o) { return o.shelf; }).join('・'); }
@@ -844,7 +1012,7 @@ function actDo_(req) {
   var cacheGetMs = Date.now() - tc;
   var res = runDo_(req, Date.now());
   if (res && res.ms) res.ms.cacheGet = cacheGetMs;
-  if (req.call_id && !(res && res.stale)) { try { var s = JSON.stringify(res); if (s.length < 90000) cache.put('call_' + req.call_id, s, 21600); } catch (e) { } }
+  if (req.call_id && res && !(res.stale || res.auth_needed)) { try { var s = JSON.stringify(res); if (s.length < 90000) cache.put('call_' + req.call_id, s, 21600); } catch (e) { } }
   return res;
 }
 
@@ -853,17 +1021,28 @@ function runDo_(req, T0) {
   var tm = { t0: T0 || Date.now() }; tm.last = tm.t0;
   var ops = req.ops || [];
   if (!ops.length) return { ok: false, error: 'ops が空です' };
-  var t = req.target || {}, created = null, file, kind;
+  var t = req.target || {}, created = null, file = null, kind = t.kind === 'doc' ? 'doc' : 'sheet', destFolder = null;
   if (t.new) {
-    kind = t.kind === 'doc' ? 'doc' : 'sheet';
+    if (t.folder_id) {
+      try {
+        destFolder = DriveApp.getFolderById(t.folder_id);
+        if (destFolder.isTrashed()) throw new ArgError('保存先フォルダがゴミ箱に入っています');
+      } catch (eDf) {
+        if (eDf && eDf.isArg) throw eDf;
+        throw new ArgError('既定フォルダ（' + t.folder_id + '）を開けません。設定し直してください');
+      }
+    } else if (t.folder) {
+      destFolder = resolveFolder_(t.folder, false).folder;
+    }
     file = kind === 'doc' ? DocumentApp.create(t.new) : SpreadsheetApp.create(t.new);
     created = { id: file.getId(), name: t.new, kind: kind, url: file.getUrl() };
-  } else {
+    if (destFolder) DriveApp.getFileById(created.id).moveTo(destFolder);
+  } else if (t.id || !t.no_file) {
     var o = openTarget_(t); file = o.file; kind = o.kind;
   }
   lap_(tm, 'open');
   _TBL_CACHE = {};
-  if (req.expect && kind === 'sheet' && !created) {
+  if (file && req.expect && kind === 'sheet' && !created) {
     var shE = (t.sheet && file.getSheetByName(t.sheet)) ? t.sheet : file.getSheets()[0].getName(), nowT = tableOfSheet_(file, shE);
     if (!sameTable_(nowT, req.expect)) {
       _TBL_CACHE = null;
@@ -872,17 +1051,21 @@ function runDo_(req, T0) {
     }
     lap_(tm, 'expect');
   }
-  var l = ledger_(); l.seq++; var n = l.seq;   // 番号は最後の書き込みでまとめて残す（鍵の中なので重ならない。失敗・変更なしでは番号を使い回す）
+  var useBackup = !!file && req.backup !== false;
+  var l = null, n = 0;
+  if (useBackup) {
+    l = ledger_(); l.seq++; n = l.seq;   // 番号は最後の書き込みでまとめて残す（鍵の中なので重ならない。失敗・変更なしでは番号を使い回す）
+  }
   lap_(tm, 'seq');
-  var fid = created ? created.id : (t.id || file.getId()), fname = created ? created.name : file.getName();
-  var ctx = { wideKey: digest_(fid + '|' + JSON.stringify(ops), FP_VER), kind: kind, file: file, ss: kind === 'sheet' ? file : null, doc: kind === 'doc' ? file : null,
-    sheetName: t.sheet || '', ok: !!req.ok, changed: [], notes: [], remaining: [], createdSheets: [], n: n, isNew: !!created,
+  var fid = created ? created.id : (file ? (t.id || file.getId()) : ''), fname = created ? created.name : (t.name || (file ? file.getName() : ''));
+  var ctx = { wideKey: digest_(fid + '|' + JSON.stringify(ops), FP_VER), kind: kind, file: file, ss: (file && kind === 'sheet') ? file : null, doc: (file && kind === 'doc') ? file : null,
+    sheetName: t.sheet || '', ok: !!req.ok, changed: destFolder ? ['フォルダ「' + destFolder.getName() + '」に配置'] : [], notes: [], remaining: [], createdSheets: [], n: n, isNew: !!created,
     _file: { id: fid, name: fname, url: created ? created.url : null } };
   var entry = { n: n, time: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'), id: fid,
     name: fname, kind: kind, what: summarizeOps_(ops), isNew: !!created, fp: FP_VER };
   var bk = null, sideItems = [], liteItems = null, isLite = false;
   try {
-    if (!created) {
+    if (!created && useBackup) {
       if (kind === 'sheet') {
         var names = touchedSheets_(ctx, ops);
         liteItems = liteTouch_(ops);
@@ -915,36 +1098,39 @@ function runDo_(req, T0) {
       fn(ctx, op);
       if (!isLite) _TBL_CACHE = null;
     }
-    if (kind === 'sheet' && (created || !(entry.sheets && entry.sheets.length))) SpreadsheetApp.flush();
     lap_(tm, 'ops');
-    if (kind === 'doc') { ctx.doc.saveAndClose(); ctx.doc = DocumentApp.openById(entry.id); file = ctx.doc; lap_(tm, 'save'); }
-    // 書き終わりの指紋
-    if (kind === 'sheet') {
-      entry.after = {};
-      var keepName = !touchesItem_(ops, 'シート構成'), keepFix = !touchesItem_(ops, '固定');
-      (entry.sheets || []).forEach(function (b) {
-        var s = byId_(ctx.ss, b.id);
-        if (s) entry.after[b.id] = fingerSheet_(s, FP_VER, { name: keepName ? b.name : undefined, frozenR: keepFix ? b.frozenR : undefined, frozenC: keepFix ? b.frozenC : undefined });
-      });
-      entry.created = {};
-      ctx.createdSheets.forEach(function (nm) { var s = ctx.ss.getSheetByName(nm); if (s) entry.created[nm] = fingerSheet_(s); });
-    } else entry.afterDoc = fingerDoc_(ctx.doc);
-    // 何も変わらなかった（すでにその状態）なら、記録も控えも残さない（undo が空振りしないように）
-    lap_(tm, 'finger');
-    var noop = !created && isNoop_(ops, entry, ctx);
-    lap_(tm, 'noop');
-    if (noop) {
-      discardBackup_(bk); lap_(tm, 'discard');
-      return { ok: true, target: tgt_(ctx, file), changed: [], notes: ['変更はありませんでした（すでにその状態です）'].concat(ctx.notes.filter(function (x) { return x.indexOf('変更なし') < 0; })), remaining: ctx.remaining, backup: 0, ms: msOut_(tm) };
+    if (file && kind === 'sheet' && (created || req.want_table || (useBackup && !(entry.sheets && entry.sheets.length)))) SpreadsheetApp.flush();
+    if (file && kind === 'doc') { ctx.doc.saveAndClose(); ctx.doc = DocumentApp.openById(entry.id); file = ctx.doc; lap_(tm, 'save'); }
+    if (useBackup) {
+      // 書き終わりの指紋
+      if (kind === 'sheet') {
+        entry.after = {};
+        var keepName = !touchesItem_(ops, 'シート構成'), keepFix = !touchesItem_(ops, '固定');
+        (entry.sheets || []).forEach(function (b) {
+          var s = byId_(ctx.ss, b.id);
+          if (s) entry.after[b.id] = fingerSheet_(s, FP_VER, { name: keepName ? b.name : undefined, frozenR: keepFix ? b.frozenR : undefined, frozenC: keepFix ? b.frozenC : undefined });
+        });
+        entry.created = {};
+        ctx.createdSheets.forEach(function (nm) { var s = ctx.ss.getSheetByName(nm); if (s) entry.created[nm] = fingerSheet_(s); });
+      } else entry.afterDoc = fingerDoc_(ctx.doc);
+      // 何も変わらなかった（すでにその状態）なら、記録も控えも残さない（undo が空振りしないように）
+      lap_(tm, 'finger');
+      var noop = !created && isNoop_(ops, entry, ctx);
+      lap_(tm, 'noop');
+      if (noop) {
+        discardBackup_(bk); lap_(tm, 'discard');
+        return { ok: true, target: tgt_(ctx, file), changed: [], notes: ['変更はありませんでした（すでにその状態です）'].concat(ctx.notes.filter(function (x) { return x.indexOf('変更なし') < 0; })), remaining: ctx.remaining, backup: 0, ms: msOut_(tm) };
+      }
+      var preStr = bk && bk._packedStr;
+      var sideRec = preStr ? { items: bk._packedItems } : ((bk && bk.length) ? packSide_(bk, isLite ? liteItems : sideItems) : null);
+      if (sideRec) { saveSide_(n, sideRec, preStr); entry.hasSide = true; entry.sideItems = sideRec.items; entry.sheets = stripSide_(bk); }
+      l.items.push(entry); ledgerSave_(l);
+      lap_(tm, 'ledger');
     }
-    var preStr = bk && bk._packedStr;
-    var sideRec = preStr ? { items: bk._packedItems } : ((bk && bk.length) ? packSide_(bk, isLite ? liteItems : sideItems) : null);
-    if (sideRec) { saveSide_(n, sideRec, preStr); entry.hasSide = true; entry.sideItems = sideRec.items; entry.sheets = stripSide_(bk); }
-    l.items.push(entry); ledgerSave_(l);
-    lap_(tm, 'ledger');
-    var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: created ? 0 : n, ms: msOut_(tm) };
+    var out = { ok: true, target: tgt_(ctx, file), changed: ctx.changed, notes: ctx.notes, remaining: ctx.remaining, backup: (created || !useBackup) ? 0 : n, ms: msOut_(tm) };
     if (created) { out.created = created; }
-    if (req.want_table && kind === 'sheet') {   // 撃った後の表の形（道具が覚えて、次の頼みの引数に使う・AI が確かめの look を撃たなくて済む）
+    if (ctx.defaultFolder !== undefined) { out.default_folder = ctx.defaultFolder; }
+    if (file && req.want_table && kind === 'sheet') {   // 撃った後の表の形（道具が覚えて、次の頼みの引数に使う・AI が確かめの look を撃たなくて済む）
       try { out.table = tableOfSheet_(ctx.ss, out.target.sheet); out.sheets = ctx.ss.getSheets().map(function (s) { return s.getName(); }); lap_(tm, 'table'); out.ms = msOut_(tm); } catch (eT) { }
     }
     return out;
@@ -952,13 +1138,19 @@ function runDo_(req, T0) {
     var restored = false, why = '';
     try {
       if (created) resetNew_(ctx, kind);
-      else if (kind === 'sheet') { restoreAll_(ctx.ss, bk || [], ctx.createdSheets); }
-      else if (entry.doc) { restoreDoc_(DocumentApp.openById(entry.id), entry.doc, n); }
-      restored = true;
-      discardBackup_(bk);
+      else if (useBackup && kind === 'sheet') { restoreAll_(ctx.ss, bk || [], ctx.createdSheets); }
+      else if (useBackup && entry.doc) { restoreDoc_(DocumentApp.openById(entry.id), entry.doc, n); }
+      restored = !!(created || useBackup);
+      if (bk) discardBackup_(bk);
     } catch (e2) { why = String(e2.message || e2); }
     var out2 = { ok: false, error: String(err.message || err), where: '棚 #' + (ctx.opNo || 0) + ' ' + (ctx.opName || ''),
       restored: restored, restore_error: why, blocked: !!err.isBlocked, needs_ok: !!err.isBlocked, arg: !!err.isArg, target: tgt_(ctx, file), stack: String(err.stack || '').slice(0, 400) };
+    var errStr = String(err.message || err);
+    if (errStr.indexOf('権限がありません') >= 0 || errStr.indexOf('permission to call') >= 0 || errStr.indexOf('Required permissions:') >= 0) out2.auth_needed = true;
+    try {
+      var ai = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+      if (ai && ai.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.REQUIRED) { out2.auth_needed = true; out2.auth_url = ai.getAuthorizationUrl(); }
+    } catch (eAi) { }
     if (created) out2.created = created;
     return out2;
   } finally {
@@ -1030,8 +1222,9 @@ function isNoop_(ops, entry, ctx) {
 }
 
 function tgt_(ctx, file) {
+  if (!file && !(ctx._file && ctx._file.id)) return {};
   var f = ctx._file || {};
-  var o = { id: f.id || file.getId(), name: f.name || file.getName(), kind: ctx.kind, url: f.url || file.getUrl() };
+  var o = { id: f.id || file.getId(), name: f.name || file.getName(), kind: ctx.kind, url: f.url || ('https://docs.google.com/' + (ctx.kind === 'doc' ? 'document' : 'spreadsheets') + '/d/' + (f.id || file.getId()) + '/edit') };
   if (ctx.kind === 'sheet') o.sheet = ctx.curSheet || ctx.sheetName || ctx._sheet0 || ctx.ss.getSheets()[0].getName();
   return o;
 }

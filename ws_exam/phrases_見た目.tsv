@@ -35,3 +35,8 @@ banding.remove	表の交互の色を外して
 banding.remove	1行おきのしましまを消して
 banding.remove	縞模様のストライプを解除して
 ?banding.remove	交互の色 解除 消す 外す
+bg.clear	A1の背景色を消して
+bg.clear	見出しの背景色をなしにして
+bg.clear	B2:E5の塗りつぶしを消して
+?bg.clear	セルの背景を塗りなしに戻したい
+?bg.clear	背景色 消す 塗りつぶし なし

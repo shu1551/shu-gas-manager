@@ -100,7 +100,7 @@ class Finder:
         grams = {q[i:i + 2] for i in range(len(q) - 1) if len(q[i:i + 2]) == 2 and not _HIRA.match(q[i:i + 2])}
         out = []
         for order, s, words, text in self._index:
-            if not s["searchable"] or (kind and s["kind"] != kind):
+            if not s["searchable"] or (kind and s["kind"] != kind and not s.get("shared") and s["name"] not in gas_ws_catalog.LOCAL_HANDLERS):
                 continue
             wp = sum(len(w) for w in words if w and w in q) * 2
             cp = sum(1 for g in grams if g in text)
@@ -177,7 +177,7 @@ class Finder:
         if m:
             cat = m.group(1).strip()
             target_kind = "doc" if cat == "文書" else kind
-            shelves = [s for s in self.cat.shelves if s["category"] == cat and s["searchable"] and (not target_kind or s["kind"] == target_kind)]
+            shelves = [s for s in self.cat.shelves if s["category"] == cat and s["searchable"] and (not target_kind or s["kind"] == target_kind or s.get("shared") or s["name"] in gas_ws_catalog.LOCAL_HANDLERS)]
             if not shelves:
                 return f"分類「{cat}」の棚はありません。分類: " + "・".join(gas_ws_catalog.CATEGORIES)
             return self.render(shelves, [])
@@ -207,7 +207,7 @@ class Finder:
     def overview(self, kind=""):
         counts = {}
         for s in self.cat.shelves:
-            if s["searchable"] and (not kind or s["kind"] == kind):
+            if s["searchable"] and (not kind or s["kind"] == kind or s.get("shared") or s["name"] in gas_ws_catalog.LOCAL_HANDLERS):
                 counts[s["category"]] = counts.get(s["category"], 0) + 1
         lines = ["棚の分類と本数（ws_find(ask=\"分類:名前\") でその分類の札、ask=\"頼みの文\" で候補）:"]
         lines += [f"  {c}: {counts[c]} 本" for c in gas_ws_catalog.CATEGORIES if c in counts]

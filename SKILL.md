@@ -60,12 +60,19 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 
 スプレッドシートやドキュメントを会話形式で安全に作成・編集・整形するツール群です。実行前に自動で控え（バックアップ）を取り、失敗時は自動でロールバックします。
 
-| 道具 | 役割 | 主な引数・使い方 |
+| 道具 | 役割 | 正確な引数定義（`.json` の事前 `read_file` 不要・即呼び出し可） |
 | :--- | :--- | :--- |
-| `ws_look` | **状態確認＋棚引き** | `target`（URL・ID・名前）、`range`（セル範囲）、`image=True`（PNG画像確認）、`ask="頼み"` で棚札も同時提示 |
-| `ws_find` | **棚札の検索 (通信なし)** | `ask="頼みの文"` または `ask="分類:行と列"`、`ask="棚:sort"`、空で分類一覧。`kind="sheet" \| "doc"` |
-| `ws_do` | **作成・修正の実行** | `ask="頼みの文"`（初手直撃）または `ops=[{"shelf":"棚名", ...}]`。削除・上書きは名指し時のみ `ok=True` |
-| `ws_undo` | **直前・過去へ巻き戻し** | 空で直前を取り消し、`to="番号"` で特定時点まで一括復元、`list=True` で履歴台帳（戻し済み管理）を表示 |
+| `ws_look` | **状態確認＋棚引き** | `target: str = ""`, `sheet: str = ""`, `range: str = ""`, `image: bool = False`, `ask: str = ""` |
+| `ws_find` | **棚札の検索 (通信なし)** | `ask: str = ""`, `kind: str = ""` (`"sheet"` \| `"doc"`) |
+| `ws_do` | **作成・修正の実行** | `ask: str = ""`, `ops: str = ""` (JSON配列文字列), `target: str = ""`, `ok: bool = False` |
+| `ws_undo` | **直前・過去へ巻き戻し** | `to: str = ""`, `list: bool = False`, `ok: bool = False` |
+
+#### Workspace 最速 1 発直撃ルール（長考・無駄な往復の禁止）
+1. **スキーマ `.json` の読み込み省略**: 上表の通り引数は確定しているため、`ws_look.json` や `ws_do.json` を `read_file` せず初手から直接 `call_mcp_tool` を呼び出します。
+2. **`ws_look` は 1 回で済ませる**: スプレッドシートの中身確認は `ws_look(target=..., range="A1:Z30")` の **1 回のみ** で完了させます。頼まれていない別シートまで連続で `ws_look` して「今の相手シート」を勝手に切り替えないでください。
+3. **`ws_do` は考え込まず 1 発で棚にかける**:
+   - `ws_do(ask="ユーザーの頼みの文そのまま")` で撃つ際、AI が勝手に括弧 `（A1）` 等の余計な語を足して文を改変しないでください。
+   - 書式変更（`format` 棚）など型が自明な操作は、`ops='[{"shelf":"format","title":true,"color":"青"}]'`（引数: `range`, `col`, `header`, `title`, `bold`, `italic`, `color`, `bg`, `size`, `font`, `number_format`, `align`, `valign`, `wrap`, `borders`, `merge`）または `ask` で即座に 1 発実行し、成功後に確認の `ws_look` は撃たずに即答してください。
 
 ### GAS 棚ルーター群（高速化・診断・骨格）
 

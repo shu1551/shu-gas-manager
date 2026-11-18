@@ -3,20 +3,21 @@
 // 棚: format
 // 題: 範囲の書式を変える
 // 分類: 見た目
-// 語: 書式を|太字に|色を付け|背景色|表示に|中央揃え|罫線|赤く|見出しの行|見出しを|黄色の背景|青い背景|薄い青色|色も付けて
+// 語: 書式を|太字に|斜体に|色を付け|色を変え|色に変え|色にして|背景色|背景を|文字の色|文字色|フォントの色|フォント色|フォントを|文字サイズ|フォントサイズ|表示に|中央揃え|右揃え|左揃え|中央寄せ|右寄せ|左寄せ|桁区切り|桁区切りに|カンマ区切り|罫線を引|罫線を消|罫線をつけ|罫線を付け|外枠|外枠だけ|外枠を|結合解除|結合を解除|マージ|折り返し|赤く|青く|黄色く|緑に|赤にして|青にして|黄色にして|緑にして|黒にして|白にして|水色にして|紺にして|見出しの行|見出しを|黄色の背景|青い背景|薄い青色|色も付けて|を結合して|セルを結合|セルの結合|に罫線を引|表に罫線
 // 違い: 「〜の列」は範囲を切らず col:"列名" で渡す。条件付きは cf.add、1行おきは banding.add
-// 引数: range=範囲, col=列, header=真偽, bold=真偽, italic=真偽, color=色, bg=色, size=数, font=文字, number_format=文字, align=文字, valign=文字, wrap=真偽, borders=文字, merge=真偽
-// 頼み: bold=true<太字|太く ; italic=true<斜体|イタリック ; header=true<見出し ; number_format=¥#,##0<円マーク|¥|円表示 ; number_format=#,##0<カンマ|桁区切り ; wrap=true<折り返 ; align=center<中央寄せ|中央揃え ; size~([0-9]+)\s*(?:pt|ポイント)
-// どれか: range col header
+// 引数: range=範囲, col=列, header=真偽, title=真偽, bold=真偽, italic=真偽, color=色, bg=色, size=数, font=文字, number_format=文字, align=文字, valign=文字, wrap=真偽, borders=文字, merge=真偽
+// 頼み: bold=true<太字|太く ; italic=true<斜体|イタリック ; header=true<見出し|ヘッダ ; title=true<タイトル|表題 ; number_format=¥#,##0<円マーク|¥|円表示 ; number_format=#,##0<カンマ|桁区切り ; wrap=true<折り返 ; align=center<中央寄せ|中央揃え ; align=left<左寄せ|左揃え ; align=right<右寄せ|右揃え ; borders=false<罫線なし|罫線を消|罫線を削除|罫線解除|枠線なし|枠線を消|枠線解除 ; borders=outer<外枠|外罫線 ; borders=true<罫線を引|罫線をつけ|罫線を付け|罫線で囲|枠線を引|枠線をつけ|枠線を付け ; merge=false<結合解除|結合を解除|結合を外|結合を消|マージ解除 ; merge=true<結合|マージ ; size~([0-9]+)\s*(?:pt|ポイント)
+// どれか: range col header title
 // 例: 「見出しを太字で青い背景に」 → {"shelf":"format","header":true,"bold":true,"bg":"#1F4E79","color":"#FFFFFF"}
 // 例: 「金額の列を桁区切りに」 → {"shelf":"format","col":"金額","number_format":"#,##0"}
 // 触る: 書式
 SHELF['format'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = null, rg;
   if (op.header) { t = needTable_(sh); rg = sh.getRange(t.headerRow, t.firstCol, 1, t.lastCol - t.firstCol + 1); }
+  else if (op.title) { rg = titleRange_(sh); }
   else if (op.col) { t = needTable_(sh); var ci = colIndexOf_(t, op.col); rg = sh.getRange(t.firstData, ci, (t.totalRow || t.lastData) - t.firstData + 1, 1); }
   else if (op.range) rg = sh.getRange(op.range);
-  else throw new ArgError('棚「format」に range・col・header のどれかが要ります');
+  else throw new ArgError('棚「format」に range・col・header・title のどれかが要ります');
   var did = [];
   var set = function (key, fn) { if (op[key] !== undefined) { fn(op[key]); did.push(key); } };
   set('bold', function (v) { rg.setFontWeight(v ? 'bold' : 'normal'); });
@@ -35,11 +36,34 @@ SHELF['format'] = function (ctx, op) {
   chg_(ctx, sh, rg.getA1Notation(), did.join('・'));
 };
 
+// 棚: bg.clear
+// 題: 背景色を消す（塗りつぶしなしに戻す）
+// 分類: 見た目
+// 語: 背景色を消|背景色をなし|背景色を無し|背景色をなく|背景色を無く|背景色を取|背景色を外|背景色を解除|背景を消|背景をなし|背景を無し|塗りつぶしを消|塗りつぶしなし|塗りつぶしを解除|塗りなし|の色を消|背景色を消して|の背景色を消|背景色をなしに|背景色を無しに|の背景色をなし|の背景色を無し|背景色を白に戻
+// 違い: 1行おきの縞を消すなら banding.remove。文字色や罫線も含めて書式ごと消すなら clear.format。別の色に塗るなら format（bg）
+// 引数: range=範囲, col=列, header=真偽, title=真偽
+// 頼み: header=true<見出し|ヘッダ ; title=true<タイトル|表題
+// どれか: range col header title
+// 例: 「A1の背景色を消して」 → {"shelf":"bg.clear","range":"A1"}
+// 例: 「見出しの背景色をなしにして」 → {"shelf":"bg.clear","header":true}
+// 触る: 書式
+SHELF['bg.clear'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), t = null, rg;
+  if (op.header) { t = needTable_(sh); rg = sh.getRange(t.headerRow, t.firstCol, 1, t.lastCol - t.firstCol + 1); }
+  else if (op.title) { rg = titleRange_(sh); }
+  else if (op.col) { t = needTable_(sh); var ci = colIndexOf_(t, op.col); rg = sh.getRange(t.firstData, ci, (t.totalRow || t.lastData) - t.firstData + 1, 1); }
+  else if (op.range) rg = sh.getRange(op.range);
+  else throw new ArgError('棚「bg.clear」に range・col・header・title のどれかが要ります');
+  rg.setBackground(null);
+  chg_(ctx, sh, rg.getA1Notation(), '背景色なし');
+};
+
 // 棚: width
 // 題: 列の幅・行の高さを変える
 // 分類: 見た目
-// 語: 列幅を|列の幅|幅を広げ|幅を狭め|行の高さ|幅を自動|広げて
+// 語: 列幅を|列の幅|幅を広げ|幅を狭め|行の高さ|幅を自動|自動調整|中身に合わせ|広げて
 // 引数: cols=対応, col=列, width=数, rows=対応, auto=列[]
+// 頼み: width~(?:幅を?|横幅を?)\s*([0-9]+)
 // どれか: cols col rows auto
 // 例: 「A列を幅200にして」 → {"shelf":"width","col":"A","width":200}
 // 例: 「B列とC列の幅を中身に合わせて」 → {"shelf":"width","auto":["B","C"]}
@@ -62,7 +86,7 @@ SHELF['width'] = function (ctx, op) {
 // 棚: cf.add
 // 題: 条件付き書式を付ける
 // 分類: 見た目
-// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色
+// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色|未満は黄色|未満なら|以上は|以下は|より大きい|より小さい
 // 違い: いつも同じ色なら format
 // 引数: range*=範囲, when*=選択(gt/ge/lt/le/eq/ne/contains/blank/notblank/formula), value=文字, bg=色, color=色, bold=真偽
 // 頼み: when=ge<以上 ; when=le<以下 ; when=lt<未満|より小さい|より少ない ; when=gt<より大きい|を超え|超える|より多い ; when=contains<が入っている|を含む|が含まれ ; when=blank<空欄のセル|空白のセル ; value~([0-9][0-9,]*)(?:円|個|件|人)?(?:以上|以下|未満|より|を超|超) ; value~[『「]([^』」]+)[』」]
@@ -214,9 +238,10 @@ SHELF['cf.list'] = function (ctx, op) {
 // 棚: banding.add
 // 題: 交互の色を付ける
 // 分類: 見た目
-// 語: 交互の色|交互に色|しましま|縞模様|1行おきに色|ストライプ
+// 語: 交互の背景色|交互の背景色を|交互に背景色|交互の色|交互に色|しましま|縞模様|1行おきに色|ストライプ
 // 違い: 自分で色を選ぶなら format
 // 引数: range=範囲, theme=選択(gray/blue/green/orange)=gray
+// 頼み: theme=blue<青|ブルー ; theme=green<緑|グリーン ; theme=orange<橙|オレンジ ; theme=gray<灰|グレー
 // 例: 「表を1行おきに薄いグレーにして」 → {"shelf":"banding.add","theme":"gray"}
 // 触る: 交互の色
 // 控え: 今
@@ -247,7 +272,7 @@ SHELF['banding.add'] = function (ctx, op) {
 // 棚: banding.remove
 // 題: 交互の色を外す
 // 分類: 見た目
-// 語: 交互の色を外|交互の色を消|しましまを消|縞模様を消|ストライプを解除|縞模様を解除|ストライプを消
+// 語: 交互の背景色を消して|交互の背景色を消|交互の背景色を解除|交互の背景を消|交互の色を外|交互の色を消|しましまを消|縞模様を消|ストライプを解除|縞模様を解除|ストライプを消|1行おきの色を消|1行おきのしましまを消
 // 引数: range=範囲
 // 例: 「1行おきについてる色を外して」 → {"shelf":"banding.remove"}
 // 触る: 交互の色

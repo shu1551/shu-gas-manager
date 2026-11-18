@@ -1,6 +1,85 @@
 // 絞る・整える棚（整える手伝い tidyRange_ もここ）
 
+// 速い版：書式・幅・固定を Sheets API の batchUpdate 1 回にまとめる（セルごとの呼び出しをやめる）。失敗したら従来の版（tidyRangeLegacy_）でやり直す
+function hexColor_(h) { return { red: parseInt(h.substr(1, 2), 16) / 255, green: parseInt(h.substr(3, 2), 16) / 255, blue: parseInt(h.substr(5, 2), 16) / 255 }; }
+function tidyNumText_(v, dec) {
+  var s = Math.abs(v).toFixed(dec ? 2 : 0), p = s.split('.');
+  p[0] = p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return (v < 0 ? '-' : '') + p.join('.');
+}
 function tidyRange_(ctx, sh, rangeA1) {
+  if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets || typeof Sheets.Spreadsheets.batchUpdate !== 'function') return tidyRangeLegacy_(ctx, sh, rangeA1);
+  var t = findTable_(sh);
+  if (!t) { note_(ctx, 'tidy: 表が見つからないので整えていません'); return; }
+  try {
+    if (rangeA1) {
+      var r = sh.getRange(rangeA1);
+      t.firstCol = r.getColumn(); t.lastCol = r.getLastColumn();
+    }
+    var sid = sh.getSheetId(), nc = t.lastCol - t.firstCol + 1, last = t.totalRow || t.lastData;
+    var grid = function (r1, r2, c1, c2) { return { sheetId: sid, startRowIndex: r1 - 1, endRowIndex: r2, startColumnIndex: c1 - 1, endColumnIndex: c2 }; };
+    var bd = { style: 'SOLID', color: hexColor_(STYLE.border) };
+    var reqs = [
+      { updateBorders: { range: grid(t.headerRow, last, t.firstCol, t.lastCol), top: bd, bottom: bd, left: bd, right: bd, innerHorizontal: bd, innerVertical: bd } },
+      { repeatCell: { range: grid(t.headerRow, last, t.firstCol, t.lastCol), cell: { userEnteredFormat: { verticalAlignment: 'MIDDLE' } }, fields: 'userEnteredFormat.verticalAlignment' } },
+      { repeatCell: { range: grid(t.headerRow, t.headerRow, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.headBg), textFormat: { bold: true, foregroundColor: hexColor_(STYLE.headFg) }, horizontalAlignment: 'CENTER', wrapStrategy: 'WRAP' } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor),horizontalAlignment,wrapStrategy)' } }
+    ];
+    var colFmt = {};   // 列ごとの書式（幅の見積もりに使う）
+    if (t.lastData - t.firstData + 1 >= 1) {
+      var rows = (t.totalRow ? t.totalRow : t.lastData) - t.firstData + 1;
+      for (var ci = t.firstCol; ci <= t.lastCol; ci++) {
+        var vals = [];
+        for (var rr = t.firstData; rr <= t.lastData; rr++) vals.push(t.vals[rr - 1][ci - 1]);
+        var fmt = null, align = null, kind = null;
+        if (isNoCol_(t, ci)) align = 'center';
+        else {
+          var nums = vals.filter(function (v) { return typeof v === 'number'; });
+          var dates = vals.filter(function (v) { return Object.prototype.toString.call(v) === '[object Date]'; });
+          var nonEmpty = vals.filter(function (v) { return !isBlank_(v); }).length;
+          if (nonEmpty && nums.length / nonEmpty > 0.5) { var dec = nums.some(function (v) { return v % 1 !== 0; }); fmt = dec ? STYLE.numFmtDec : STYLE.numFmt; align = 'right'; kind = dec ? 'dec' : 'int'; }
+          else if (nonEmpty && dates.length / nonEmpty > 0.5) { fmt = STYLE.dateFmt; align = 'center'; kind = 'date'; }
+        }
+        colFmt[ci] = kind;
+        var uf = {}, fl = [];
+        if (fmt) { uf.numberFormat = { type: kind === 'date' ? 'DATE' : 'NUMBER', pattern: fmt }; fl.push('numberFormat'); }
+        if (align) { uf.horizontalAlignment = align.toUpperCase(); fl.push('horizontalAlignment'); }
+        if (fl.length) reqs.push({ repeatCell: { range: grid(t.firstData, t.firstData + rows - 1, ci, ci), cell: { userEnteredFormat: uf }, fields: 'userEnteredFormat(' + fl.join(',') + ')' } });
+      }
+    }
+    if (t.totalRow) reqs.push({ repeatCell: { range: grid(t.totalRow, t.totalRow, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.totalBg), textFormat: { bold: true } } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold))' } });
+    // 列幅：中身に合わせる。数値・日付は、これから付ける書式で表示される形に見積もる
+    var disp = sh.getRange(t.headerRow, t.firstCol, last - t.headerRow + 1, nc).getDisplayValues();
+    for (var c = 0; c < nc; c++) {
+      var k = colFmt[t.firstCol + c], mx = 0;
+      disp.forEach(function (row, ri) {
+        var s = row[c], v = t.vals[t.headerRow - 1 + ri][t.firstCol - 1 + c];
+        if (k && ri > 0) {
+          if (k === 'date' && Object.prototype.toString.call(v) === '[object Date]') s = '0000/00/00';
+          else if ((k === 'int' || k === 'dec') && typeof v === 'number') s = tidyNumText_(v, k === 'dec');
+        }
+        mx = Math.max(mx, wlen_(s));
+      });
+      reqs.push({ updateDimensionProperties: { range: { sheetId: sid, dimension: 'COLUMNS', startIndex: t.firstCol - 1 + c, endIndex: t.firstCol + c }, properties: { pixelSize: Math.max(STYLE.colMin, Math.min(STYLE.colMax, mx * STYLE.px + STYLE.pad)) }, fields: 'pixelSize' } });
+    }
+    // 見出しの行までを固定する。結合セルが固定の線をまたぐと Google が断るので、またぐ結合の終わりの行まで広げる
+    var fr = t.headerRow;
+    try {
+      for (var pass = 0; pass < 4; pass++) {
+        var fr0 = fr;
+        sh.getRange(1, 1, fr, Math.max(1, sh.getLastColumn())).getMergedRanges().forEach(function (m) { fr = Math.max(fr, m.getLastRow()); });
+        if (fr === fr0) break;
+      }
+    } catch (e) { fr = t.headerRow; }
+    reqs.push({ updateSheetProperties: { properties: { sheetId: sid, gridProperties: { frozenRowCount: fr } }, fields: 'gridProperties.frozenRowCount' } });
+    if (ctx.changed.length) SpreadsheetApp.flush();   // 前の書き込み（値・行の削除）を先に反映してから、行番号で指す
+    batchRetry_(sh.getParent(), reqs);
+  } catch (e) {
+    note_(ctx, '速い整え方が使えなかったので従来の方法で整えました（' + String(e && e.message || e).slice(0, 120) + '）');
+    tidyRangeLegacy_(ctx, sh, rangeA1);   // うまくいかなければ従来のやり方で整える
+  }
+}
+
+function tidyRangeLegacy_(ctx, sh, rangeA1) {
   var t = findTable_(sh);
   if (!t) { note_(ctx, 'tidy: 表が見つからないので整えていません'); return; }
   if (rangeA1) {
@@ -108,9 +187,10 @@ SHELF['seiri'] = function (ctx, op) {
       }
     }
     chg_(ctx, sh, fixed.slice(0, 4).join('・') + (fixed.length > 4 ? ' ほか' + (fixed.length - 4) + ' 件' : ''), '空白' + nTrim + '・全角→半角' + nHalf + '・数値化' + nNum);
+    if (_TBL_CACHE) _TBL_CACHE = { _once: true };   // 値を書いたので表の読み取り結果を捨てる
   }
   // 空行を詰める＊ / 重複行を消す＊
-  var t2 = findTable_(sh);
+  var t2 = op.blank_rows ? findTable_(sh) : null;   // 空行・重複を扱わないときは読み直さない（速さのため）
   if (op.blank_rows && t2) {
     var blanks = [];
     for (var rr = t2.firstData; rr <= t2.lastData; rr++) {
@@ -122,9 +202,10 @@ SHELF['seiri'] = function (ctx, op) {
       guardDelete_(ctx, '空行 ' + blanks.join('・') + ' 行目を詰めます', wideRowCount_(t2, blanks.length), blanks.length + ' 行');
       for (var k = blanks.length - 1; k >= 0; k--) sh.deleteRow(blanks[k]);
       chg_(ctx, sh, blanks.join('・') + ' 行目', '空行を削除（' + blanks.length + ' 行）');
+      if (_TBL_CACHE) _TBL_CACHE = { _once: true };
     }
   }
-  t2 = findTable_(sh);
+  t2 = op.dedupe ? findTable_(sh) : null;
   if (op.dedupe && t2) {
     var seen = {}, dups = [];
     for (var d = t2.firstData; d <= t2.lastData; d++) {
@@ -135,6 +216,7 @@ SHELF['seiri'] = function (ctx, op) {
       guardDelete_(ctx, '全列が同じ重複行 ' + dups.join('・') + ' 行目を消します', wideRowCount_(t2, dups.length), dups.length + ' 行');
       for (var k2 = dups.length - 1; k2 >= 0; k2--) sh.deleteRow(dups[k2]);
       chg_(ctx, sh, dups.join('・') + ' 行目', '重複行を削除（' + dups.length + ' 行）');
+      if (_TBL_CACHE) _TBL_CACHE = { _once: true };
     }
   }
   if (op.renumber) SHELF['renumber'](ctx, { shelf: 'renumber', col: op.renumber, sheet: op.sheet });
@@ -212,7 +294,7 @@ SHELF['filter.where'] = function (ctx, op) {
 // 棚: filter.on
 // 題: フィルタを付ける
 // 分類: 絞る
-// 語: フィルタを付|フィルタをかけ|フィルタを設定|絞り込めるように|見出しに▼|オートフィルタ
+// 語: フィルタを付|フィルターを付|フィルタをつ|フィルターをつ|フィルタをかけ|フィルターをかけ|フィルタを設定|フィルターを設定|絞り込めるように|見出しに▼|オートフィルタ|オートフィルター
 // 違い: 条件で絞り込むなら filter.where、並べ替えなら sort
 // 引数: range=範囲
 // 例: 「表にフィルタを付けて」 → {"shelf":"filter.on"}
@@ -331,7 +413,7 @@ SHELF['split.col'] = function (ctx, op) {
 // 棚: filter.off
 // 題: フィルタを外す
 // 分類: 絞る
-// 語: フィルタを外|フィルタを解除|絞り込みを解除|フィルタを消|全部表示に戻|▼を外
+// 語: フィルタを外|フィルターを外|オートフィルタを外|オートフィルターを外|フィルタを解除|フィルターを解除|オートフィルタを解除|オートフィルターを解除|絞り込みを解除|フィルタを消|フィルターを消|全部表示に戻|▼を外
 // 違い: フィルタを付けるなら filter.on、条件付き書式を外すなら cf.clear
 // 引数: なし
 // 例: 「フィルタを解除して全部表示に戻して」 → {"shelf":"filter.off"}

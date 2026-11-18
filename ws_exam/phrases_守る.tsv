@@ -23,3 +23,27 @@ name.list	定義されている名前付き範囲を一覧で教えて
 name.list	名前付き範囲がどこにあるか確認したい
 ?name.list	どんな名前がついてるか調べたい
 ?name.list	名前付き範囲 一覧 確認
+backup	バックアップを取って
+backup	バックアップ取らなくていい
+?backup	変更前に控えを残しておきたい
+?backup	バックアップ 控え オン オフ
+folder	「営業部」フォルダに移動して
+folder	これからは「月次報告」フォルダに作って
+?folder	別のフォルダに整理したい
+?folder	保存先 フォルダ 移動 設定
+drive.list	「TEST」フォルダの中身を一覧で見せて
+drive.list	ドライブを検索して「見積」を探して
+?drive.list	ドライブにどんなファイルがあるか一覧で確認したい
+?drive.list	ドライブ一覧 ファイル一覧 フォルダ一覧
+drive.rename	「資料_old.pdf」のファイル名を「資料_2026.pdf」に変えて
+drive.rename	「作業用」のフォルダ名を変更して
+?drive.rename	ドライブにある資料をリネームしたい
+?drive.rename	ファイル名 フォルダ名 変更 リネーム
+drive.move	「請求書.pdf」を移動してファイルを整理したい
+drive.move	「作業用」フォルダごと移動して
+?drive.move	PDFや画像やフォルダを別のフォルダに整理したい
+?drive.move	PDF 画像 フォルダごと 移動 ドライブ移動
+drive.trash	「古い下書き.pdf」をゴミ箱に入れて
+drive.trash	「一時作業」フォルダを削除して
+?drive.trash	ドライブの不要ファイルを消して整理したい
+?drive.trash	ゴミ箱 ごみ箱 削除 不要ファイル
