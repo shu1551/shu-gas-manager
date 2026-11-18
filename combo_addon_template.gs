@@ -150,9 +150,11 @@ function doGet(e) {
   var id = e && e.parameter && e.parameter.id;
   if (id) { try { PropertiesService.getUserProperties().setProperty(COMBO_ADDON_TARGET_PROP, id); } catch (err) {} }
   // サイドバー（幅 300px）用の画面を広い窓に出すので、文字と部品をまとめて大きくする
-  return {lib_symbol}.createComboSidebarHtml()
-    .append('<style>html{zoom:1.6}</style>')
-    .setTitle('GASコンボ');
+  var z = Number((e && e.parameter && e.parameter.z) || 1.6) || 1.6;     // 広い窓は 1.6 倍・Chrome のサイドパネル（z=1）はそのまま
+  var out = {lib_symbol}.createComboSidebarHtml();
+  if (z !== 1) out.append('<style>html{zoom:' + z + '}</style>');
+  // Chrome 拡張のサイドパネルの中に入れられるようにする
+  return out.setTitle('GASコンボ').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 // 操作窓から呼ばれる入口。相手のシートは、窓を開いたときに覚えた物

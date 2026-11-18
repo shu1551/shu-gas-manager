@@ -90,6 +90,8 @@ PUBLIC_FILES = [
     "ws_browser_ext/manifest.json",
     "ws_browser_ext/background.js",
     "ws_browser_ext/content.js",
+    "ws_browser_ext/sidepanel.html",
+    "ws_browser_ext/sidepanel.js",
 ]
 
 # 公開ファイル内に1件でも残っていたらNGとする禁止パターン
