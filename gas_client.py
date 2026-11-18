@@ -4018,6 +4018,11 @@ class GasClient:
         payload = {"description": description}
         res = self._request_with_retry("POST", url, headers=self._headers(), json=payload, timeout=15)
         if res.status_code != 200:
+            if "limit of 200 versions" in (res.text or ""):
+                # Apps Script は 1 つのスクリプトに版を 200 までしか持てず、API では版を消せない。消す場所を返す
+                raise RuntimeError(
+                    "版が上限の 200 に達しました。Apps Script の「プロジェクトの履歴」で右下のゴミ箱から古い版を消してください"
+                    f"（一度に 100 版まで・デプロイで使っている版は一覧に出ません）: https://script.google.com/home/projects/{sid}/projecthistory")
             raise RuntimeError(f"バージョンの作成に失敗しました ({res.status_code}): {res.text}")
         v_num_ret = res.json().get("versionNumber")
         self._clear_deployments_cache(sid)

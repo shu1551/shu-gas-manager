@@ -786,7 +786,10 @@ def render_unfired(p, finder):
             c = finder.card(s, with_diff=False)
             lines.append(f"{i}. " + c[0])
             lines.extend(c[1:])
-    lines.append("決まったら ws_do(ops=…) で撃つ（足りない物が人にしか分からないときだけ聞く）。")
+    if any("人にしか分かりません" in r for r in p.reasons):
+        lines.append("表を調べに行かず、どこ（どれ）を指すかを使う人に聞いて終える。")
+    else:
+        lines.append("決まったら ws_do(ops=…) で撃つ（足りない物が人にしか分からないときだけ聞く）。")
     return "\n".join(lines)
 
 
