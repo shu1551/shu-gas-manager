@@ -551,13 +551,23 @@ SHELF['text.case'] = function (ctx, op) {
   guardOverwrite_(ctx, rg, '文字列ケース変換「' + rg.getA1Notation() + '」');
   var mode = (op.mode || 'upper').toLowerCase();
   var fnName = mode === 'lower' ? 'LOWER' : mode === 'proper' ? 'PROPER' : mode === 'asc' ? 'ASC' : mode === 'jis' ? 'JIS' : 'UPPER';
-  var forms = rg.getFormulas(), vals = rg.getValues();
+  // 値の列を式の列に変えない：文字の値は Google の関数で変換した「値」を書き戻す。もとが式のセルだけ式で包む。数・日付・空は触らない
+  var forms = rg.getFormulas(), vals = rg.getValues(), tmp = [], isText = [], n = 0;
   for (var r = 0; r < forms.length; r++) {
+    tmp.push([]); isText.push([]);
     for (var c = 0; c < forms[r].length; c++) {
-      var src = forms[r][c] ? forms[r][c].replace(/^=/, '') : ('"' + vals[r][c] + '"');
-      forms[r][c] = '=' + fnName + '(' + src + ')';
+      var f0 = forms[r][c], v0 = vals[r][c], txt = !f0 && typeof v0 === 'string' && v0 !== '';
+      isText[r].push(txt);
+      if (f0) { tmp[r].push('=' + fnName + '(' + f0.replace(/^=/, '') + ')'); n++; }
+      else if (txt) { tmp[r].push('=' + fnName + '("' + v0.replace(/"/g, '""') + '")'); n++; }
+      else tmp[r].push(v0 === '' ? '' : v0);
     }
   }
-  rg.setFormulas(forms);
-  chg_(ctx, sh, rg.getA1Notation(), fnName + ' 関数を適用');
+  if (!n) { note_(ctx, '文字のセルがないので変えていません（' + rg.getA1Notation() + '）'); return; }
+  rg.setValues(tmp);
+  SpreadsheetApp.flush();
+  var got = rg.getValues();
+  for (var r2 = 0; r2 < tmp.length; r2++) for (var c2 = 0; c2 < tmp[r2].length; c2++) if (isText[r2][c2]) tmp[r2][c2] = String(got[r2][c2]);
+  rg.setValues(tmp);
+  chg_(ctx, sh, rg.getA1Notation(), fnName + ' でそろえた');
 };

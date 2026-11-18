@@ -39,7 +39,7 @@ SHELF['table.new'] = function (ctx, op) {
     if (same) { note_(ctx, '同じ表がすでにあります（変更なし）'); return; }
     throw new ArgError('シート「' + name + '」はすでにあります（中身が違います）。別の名前にするか、write・format で直してください');
   }
-  if (ctx.isNew) { sh = ss.getSheets()[0]; sh.setName(name); } else { sh = ss.insertSheet(name); ctx.createdSheets.push(name); }
+  if (ctx.isNew) { sh = ss.getSheets()[0]; sh.setName(name); } else { sh = ss.insertSheet(name, ss.getSheets().length); ctx.createdSheets.push(name); }
   ctx.curSheet = name;
   if (title) { sh.getRange(1, 1).setValue(title).setFontWeight('bold').setFontSize(14); }
   var rg = sh.getRange(hr, 1, grid.length, nc);
@@ -141,7 +141,7 @@ SHELF['summary'] = function (ctx, op) {
     if (same) { note_(ctx, '集計シート「' + into + '」は最新です（変更なし）'); return; }
     guardDelete_(ctx, '集計シート「' + into + '」はすでにあり、中身が変わります（作り直します）');
     dst.clear();
-  } else { dst = ctx.ss.insertSheet(into); ctx.createdSheets.push(into); }
+  } else { dst = ctx.ss.insertSheet(into, ctx.ss.getSheets().length); ctx.createdSheets.push(into); }
   dst.getRange(1, 1, grid.length, grid[0].length).setValues(grid);
   ctx.curSheet = src.getName();
   chg_(ctx, dst, a1_(1, 1, grid.length, grid[0].length), 'シート「' + into + '」へ「' + src.getName() + '」の ' + hdr[0] + ' ごとの集計（元の表を直すと追従）');
@@ -175,7 +175,7 @@ SHELF['pivot.new'] = function (ctx, op) {
   else if (funcStr === 'avg') sumFn = SpreadsheetApp.PivotTableSummarizeFunction.AVERAGE;
 
   var sourceRange = src.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1);
-  var dst = ctx.ss.insertSheet(into);
+  var dst = ctx.ss.insertSheet(into, ctx.ss.getSheets().length);
   ctx.createdSheets.push(into);
 
   var anchor = dst.getRange('A1');

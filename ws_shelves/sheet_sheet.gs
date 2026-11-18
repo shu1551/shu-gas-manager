@@ -14,7 +14,7 @@ SHELF['sheet.add'] = function (ctx, op) {
   var ss = ctx.ss;
   if (op.name && !op.rename && !op.move) {
     if (ss.getSheetByName(op.name)) { note_(ctx, 'シート「' + op.name + '」はすでにあります（変更なし）'); ctx.curSheet = op.name; return; }
-    var s = ss.insertSheet(op.name); ctx.createdSheets.push(op.name);
+    var s = ss.insertSheet(op.name, ss.getSheets().length); ctx.createdSheets.push(op.name);
     if (op.before) { var bs = sheetOf_(ss, op.before, ''); ss.setActiveSheet(s); ss.moveActiveSheet(bs.getIndex()); }
     ctx.curSheet = op.name; chg_(ctx, s, '', 'シートを追加');
   }
