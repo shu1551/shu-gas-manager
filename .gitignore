@@ -56,3 +56,4 @@ test_gas_ws_trial.py
 .combo_engine_state.json
 .ws_recent_targets.json
 .ws_window_ver.txt
+ws_browser_ext/combo_window.json

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GASコンボ ブラウザ連動",
-  "version": "1.0.0",
-  "description": "Google スプレッドシート・ドキュメントの選択セル範囲・シートタブ・対象ファイルを GASコンボ へリアルタイム連携します。",
+  "version": "1.1.0",
+  "description": "GASコンボ：拡張のアイコン（または Alt+G）で、今開いているスプレッドシートの操作窓を直接開く。選択セル範囲などを GASコンボの操作窓（Python）へも知らせる。",
   "permissions": [
     "activeTab",
     "tabs"
@@ -26,5 +26,16 @@
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "action": {
+    "default_title": "GASコンボの操作窓を開く（Alt+G）"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+G"
+      },
+      "description": "GASコンボの操作窓を開く"
+    }
+  }
 }

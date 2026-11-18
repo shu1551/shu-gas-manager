@@ -616,6 +616,12 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
         webapp_url = ""
     client._put_content(sid, build_combo_addon_files(lib_id, ver, webapp_url=webapp_url))
     st["addon_sid"] = sid
+    # Chrome 拡張（ws_browser_ext）のアイコンで操作窓を直接開けるよう、窓の番地を拡張のフォルダに書く（人ごとに違うので公開しない）
+    if webapp_url:
+        try:
+            (HERE / "ws_browser_ext" / "combo_window.json").write_text(json.dumps({"base": webapp_url}, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
     try:
         spath.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:

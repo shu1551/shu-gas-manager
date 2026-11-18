@@ -38,3 +38,28 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     // ignore
   }
 });
+
+// ---------------------------------------------------------------- 操作窓を 1 回で開く
+// 拡張のアイコン（または Alt+G）で、今のタブのスプレッドシートの操作窓（アドインの /dev）を小さな窓で開く。
+// 窓の番地は py gas.py combo addon が combo_window.json に書く（人ごとに違う）。
+async function comboWindowBase() {
+  try {
+    const res = await fetch(chrome.runtime.getURL("combo_window.json"), { cache: "no-store" });
+    if (!res.ok) return "";
+    const j = await res.json();
+    return String((j && j.base) || "");
+  } catch (_e) {
+    return "";
+  }
+}
+
+chrome.action.onClicked.addListener(async (tab) => {
+  const m = String((tab && tab.url) || "").match(/docs\.google\.com\/spreadsheets\/d\/([\w-]+)/);
+  const base = await comboWindowBase();
+  if (!base) {
+    chrome.tabs.create({ url: "data:text/plain;charset=utf-8," + encodeURIComponent("GASコンボの操作窓の番地がまだありません。py gas.py combo addon を撃ってから、chrome://extensions でこの拡張を「再読み込み」してください。") });
+    return;
+  }
+  const url = base + (base.indexOf("?") >= 0 ? "&" : "?") + (m ? "id=" + encodeURIComponent(m[1]) : "");
+  chrome.windows.create({ url, type: "popup", width: 560, height: 820 });
+});
