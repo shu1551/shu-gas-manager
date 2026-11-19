@@ -71,7 +71,7 @@ py gas.py setup --open
   }
 }
 ```
-※ リポジトリ内の [`SKILL.md`](./SKILL.md) を AI エージェントのスキルフォルダに配置すると、AI が最短手数（`outline` → `get_function` → `patch_function` / `batch_patch` → `diagnose`）で動くようになります。
+※ 登録したら AI のアプリを起動し直してください。AI が動くのに要る決まりは MCP サーバーの説明に入っているので、**登録するだけで動きます**（ファイルの移動などは要りません）。リポジトリ内の [`SKILL.md`](./SKILL.md) は任意で、AI のスキルフォルダに置くと手数がもう少し減ります。
 
 ---
 
