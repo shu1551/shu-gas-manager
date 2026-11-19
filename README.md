@@ -17,7 +17,7 @@ Google Drive 上にあるスプレッドシートやドキュメントを、AI�
 
 ## ⚡ はじめての方へ（1分セットアップ）
 
-ガスマネージャーは、Google公式の `clasp` の認証トークン（`~/.clasprc.json`）をそのまま利用して Google Apps Script API / Drive API と直接高速通信します。面倒な GCP プロジェクト作成や OAuth 同意画面の設定は一切不要です。
+ガスマネージャーは、`py gas.py login` でブラウザから Google にログインして作った鍵（`~/.clasprc.json`。`clasp login` と同じ形）で Google Apps Script API / Drive API と直接高速通信します。面倒な GCP プロジェクト作成や OAuth 同意画面の設定は一切不要です。
 
 ```bash
 # 1. Python 依存パッケージのインストール
@@ -28,17 +28,17 @@ py gas.py setup --open
 ```
 または、AIアシスタントに「**`py gas.py setup --open` を実行して初期設定を案内して**」と伝えるだけでOKです。
 
-### 必要な準備（たったの2ステップ）
-0. **Node.js**（clasp を入れるのに要ります。未導入なら `winget install OpenJS.NodeJS.LTS`／Mac は `brew install node`／[nodejs.org](https://nodejs.org/) の LTS 版。`setup` が無いことを見つけて案内します）
-1. **clasp のログイン**（すでに `clasp login` 済みの方は不要です）:
+### 必要な準備（たったの2ステップ・clasp も Node.js も要りません）
+1. **Google にログイン**:
    ```bash
-   npm install -g @google/clasp
-   clasp login
+   py gas.py login
    ```
-   ブラウザで Google アカウントへのアクセスを許可します（`~/.clasprc.json` にトークンが保存されます。新旧どちらの `clasp` 形式にも自動対応しています）。
+   ブラウザに Google の許可画面が出るので、アカウントを選んで「許可」を押します（鍵が `~/.clasprc.json` に置かれます）。AI からは `gas('login')` です。すでに `clasp login` 済みの方は、その鍵がそのまま使えます。
 2. **Google Apps Script API の有効化**:
    `--open` オプションによりブラウザで [Google Apps Script ユーザー設定](https://script.google.com/home/usersettings) が自動で開きます。
    画面内の **「Google Apps Script API」を『オン』** に切り替えてください。
+
+（任意）Node.js が入っていると、書き込む前にコードの構文を検査します。無くても、その検査を飛ばして動きます。
 
 ---
 

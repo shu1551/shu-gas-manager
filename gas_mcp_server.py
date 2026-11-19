@@ -36,7 +36,7 @@ GAS_MANAGER_INSTRUCTIONS = (
     "構文検査・裏送り・デプロイ未実施の補足は書かない。「複数」時は filename/func_name で絞り、「無し」の時だけ patch_function（HTML関数外・トップレベルは func_name=''）へ。"
     "GASコンボで頼みが棚に当たらない（撃っていません）と言われたら、コードを探さず gas('combo phrase \"頼みの文\" [ops_json]') を 1 回。棚当て・サイドバー等の元を直したら gas('combo push --ask \"変わる頼み\" ...') を 1 回（棚当ての結果を並べ・点検し・大元とアドオンへ同時に送る）。試験は回さない。"
     "「GASコンボを入れて」「アドオンを使いたい」と言われたら、gas('setup --open') → ready になったら gas('combo addon') を 1 回撃つ。"
-    "setup が needs_login なら『npm install -g @google/clasp』と『clasp login』は AI がターミナルで撃ち（手順に⓪ Node.js があればそれも先に撃つ）、ブラウザに出る許可だけ人に押してもらう。"
+    "setup が needs_login なら gas('login') を撃ち（clasp も Node.js も要らない）、ブラウザに出る Google の許可だけ人に押してもらう。"
     "needs_api_enable なら開いた設定画面で「Google Apps Script API」をオンにしてもらう。"
     "combo addon の後は、返事の install_guide を上から 1 段ずつ人に案内する（1 段言ったら押せたかを聞いて次へ・詰まったら if_stuck を言う・全部を一度に並べない）。入れ終わったら、拡張を入れていない人には chrome_extension.install_guide を同じく 1 段ずつ手ほどきする（入れ済みなら要らない）。それで終える。"
     "「GASコンボのテンプレートを作って」「シートをコピーするだけで使いたい」「人に配りたい」ときは gas('combo template') を 1 回撃ち、返事の install_guide（コピーを作成 → メニューの ⚡ GASコンボ → 初回の許可）を同じく 1 段ずつ手ほどきする。"
@@ -1914,6 +1914,14 @@ def gas(command: str) -> str:
     if sub == "setup":
         open_b = "--open" in parts
         return setup_check(open_browser=open_b)
+
+    if sub == "login":
+        # clasp なしで Google にログインして鍵を作る（ブラウザに許可画面が出る。押すのは人）
+        res = GasClient.login(open_browser="--no-open" not in parts)
+        out = res["message"]
+        if not res.get("ok") and res.get("url"):
+            out += "\nブラウザが開かなかったときは、この番地を開いてください: " + res["url"]
+        return out
 
     if sub == "list":
         limit = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20

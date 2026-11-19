@@ -807,12 +807,12 @@ class GasClient:
 
     def _load_clasprc(self):
         if not self.clasprc_path.exists():
-            raise FileNotFoundError(f"clasp 設定ファイルが見つかりません: {self.clasprc_path}")
+            raise FileNotFoundError(f"Google の鍵が見つかりません: {self.clasprc_path}（py gas.py login でログインしてください）")
         with open(self.clasprc_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         self._token_data = self._extract_token_data(data)
         if not self._token_data.get("refresh_token"):
-            raise ValueError(".clasprc.json に有効な refresh_token がありません。clasp login を確認してください。")
+            raise ValueError(".clasprc.json に有効な refresh_token がありません。py gas.py login でログインし直してください。")
 
     def get_access_token(self):
         """アクセストークンを取得（有効期限内ならキャッシュを再利用、切れていれば更新）"""
@@ -8852,6 +8852,104 @@ function doGet() {{
                     pass
 
 
+    # clasp（Google 公式の GAS 道具・Apache 2.0）が公開している既定の OAuth クライアントと、clasp login と同じ許可の範囲。
+    # これで鍵を作ると ~/.clasprc.json が clasp login と同じ形になるので、Node.js も clasp も入れずに済む
+    CLASP_CLIENT_ID = "1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com"
+    CLASP_CLIENT_SECRET = "v6V3fKV_zWU7iw1DrpO1rknX"
+    LOGIN_SCOPES = [
+        "https://www.googleapis.com/auth/script.deployments",
+        "https://www.googleapis.com/auth/script.projects",
+        "https://www.googleapis.com/auth/script.webapp.deploy",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/service.management",
+        "https://www.googleapis.com/auth/logging.read",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/cloud-platform",
+    ]
+
+    @classmethod
+    def login(cls, out_path=None, open_browser=True, timeout=300, on_url=None):
+        """clasp を入れずに Google にログインして鍵（~/.clasprc.json）を作る。
+        手元に小さな受け口（localhost）を立ててブラウザで Google の許可画面を開き、許可が返ってきたら鍵に替えて書く。
+        既にある鍵は .bak に控えてから書き換える。"""
+        import base64, secrets, socket, urllib.parse
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        verifier = secrets.token_urlsafe(64)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        state = secrets.token_urlsafe(16)
+        got = {}
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                if "code" not in q and "error" not in q:
+                    self.send_response(404); self.end_headers(); return
+                got.update({k: v[0] for k, v in q.items()})
+                ok = "code" in q and q.get("state", [""])[0] == state
+                msg = ("ログインできました。この画面は閉じて、元の画面に戻ってください。" if ok
+                       else "ログインできませんでした。元の画面に戻って、もう一度やり直してください。")
+                body = f"<!doctype html><meta charset='utf-8'><title>GASマネージャー</title><p style='font:16px sans-serif;margin:2em'>{msg}</p>".encode("utf-8")
+                self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer(("localhost", 0), _Handler)
+        srv.timeout = 1
+        redirect = f"http://localhost:{srv.server_address[1]}"
+        url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
+            "client_id": cls.CLASP_CLIENT_ID, "redirect_uri": redirect, "response_type": "code",
+            "scope": " ".join(cls.LOGIN_SCOPES), "access_type": "offline", "prompt": "consent",
+            "state": state, "code_challenge": challenge, "code_challenge_method": "S256"})
+        if on_url:
+            on_url(url)
+        if open_browser:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        deadline = time.time() + timeout
+        try:
+            while not got and time.time() < deadline:
+                srv.handle_request()
+        finally:
+            srv.server_close()
+        if not got:
+            return {"ok": False, "url": url, "message": f"{timeout} 秒待ちましたが、許可が返ってきませんでした。もう一度 login を撃ってください"}
+        if got.get("state") != state or "code" not in got:
+            return {"ok": False, "url": url, "message": f"許可が取れませんでした（{got.get('error') or '照合が合わない'}）"}
+        r = requests.post("https://oauth2.googleapis.com/token", data={
+            "code": got["code"], "client_id": cls.CLASP_CLIENT_ID, "client_secret": cls.CLASP_CLIENT_SECRET,
+            "redirect_uri": redirect, "grant_type": "authorization_code", "code_verifier": verifier}, timeout=20)
+        if r.status_code != 200:
+            return {"ok": False, "url": url, "message": f"鍵に替えられませんでした（{r.status_code}）: {r.text[:200]}"}
+        tok = r.json()
+        if not tok.get("refresh_token"):
+            return {"ok": False, "url": url, "message": "Google から長持ちする鍵（refresh_token）が返りませんでした。もう一度 login を撃ってください"}
+        p = Path(out_path or os.path.expanduser("~/.clasprc.json"))
+        data = {"tokens": {"default": {
+            "client_id": cls.CLASP_CLIENT_ID, "client_secret": cls.CLASP_CLIENT_SECRET, "type": "authorized_user",
+            "refresh_token": tok["refresh_token"], "access_token": tok.get("access_token", ""),
+            "token_type": tok.get("token_type", "Bearer"), "scope": tok.get("scope", ""),
+            "expiry_date": int((time.time() + int(tok.get("expires_in", 3600))) * 1000)}}}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists():
+            p.with_name(p.name + ".bak").write_bytes(p.read_bytes())
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        email = ""
+        try:
+            u = requests.get("https://www.googleapis.com/oauth2/v2/userinfo",
+                             headers={"Authorization": f"Bearer {tok.get('access_token', '')}"}, timeout=10)
+            email = (u.json() or {}).get("email", "") if u.status_code == 200 else ""
+        except Exception:
+            pass
+        return {"ok": True, "path": str(p), "email": email,
+                "message": f"ログインしました{('（' + email + '）') if email else ''}。鍵を {p} に置きました。clasp は要りません"}
+
     @staticmethod
     def install_skill_files(home=None):
         """同梱の SKILL.md を、入っている AI のスキルの置き場へ道具が自分で置く（使う人にファイルを動かさせない）。
@@ -8945,16 +9043,10 @@ function doGet() {{
                 "【未セットアップ】Google アカウントの認証情報 (~/.clasprc.json) が見つかりません。\n"
                 "以下の手順で 1分でセットアップできます："
             )
-            result["steps"] = []
-            if not result["node_installed"]:
-                result["message"] += "\n（Node.js が入っていません。clasp は Node.js の npm で入れるので、先に Node.js を入れてください）"
-                result["steps"].append(
-                    "⓪ Node.js を入れる（入れた後はターミナルを開き直す）:\n   Windows: winget install OpenJS.NodeJS.LTS\n   Mac: brew install node\n   または https://nodejs.org/ から LTS 版"
-                )
-            result["steps"] += [
-                "① コマンドプロンプト等で clasp をインストール:\n   npm install -g @google/clasp",
-                "② clasp で Google にログインして許可:\n   clasp login",
-                "③ ブラウザで設定ページを開き、Google Apps Script API を『オン』に設定:\n   https://script.google.com/home/usersettings"
+            result["steps"] = [
+                "① Google にログインして許可（clasp も Node.js も要りません。ブラウザに許可画面が出ます）:\n   py gas.py login\n   （AI からは gas('login')）",
+                "② ブラウザで設定ページを開き、Google Apps Script API を『オン』に設定:\n   https://script.google.com/home/usersettings",
+                "（clasp をもう使っている人は clasp login 済みの鍵がそのまま使えます）"
             ]
             return result
 

@@ -33,7 +33,7 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 ### パターンD: GASコンボ（シートを言葉で直すアドオン）を入れる
 「GASコンボを入れて」「アドオンを使いたい」と頼まれたら、AI が次の順に進めます。人が押すのは Google の画面の 3 か所だけです。
 1. `gas('setup --open')` で点検します。
-   - `needs_login`: AI がターミナルで `npm install -g @google/clasp` と `clasp login` を撃ち（Node.js が無いと手順に ⓪ が出るので、`winget install OpenJS.NodeJS.LTS` 等を先に撃つ）、ブラウザに出る許可だけ人に押してもらいます。
+   - `needs_login`: AI が `gas('login')` を撃ちます（clasp も Node.js も要りません）。ブラウザに出る Google の許可だけ人に押してもらいます。
    - `needs_api_enable`: 開いた設定画面で「Google Apps Script API」をオンにしてもらいます。
 2. `ready` になったら `gas('combo addon')` を 1 回撃ちます（本体のライブラリとアドオンを、その人の Drive に作ります）。
 3. 返事の `install_guide` を上から 1 段ずつ案内します（1 段言ったら押せたかを聞いて次へ。詰まったらその段の `if_stuck` を言う。全部を一度に並べない）。中身は、`editor` を開く →「デプロイ」→「デプロイをテスト」→「Google Workspace アドオン」の段の「インストール」→「完了」→ シートの右端の ⚡ → 初回の許可（「確認されていません」は「詳細」→「〜に移動」）です。

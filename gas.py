@@ -70,6 +70,12 @@ def main():
     setup_p = subparsers.add_parser("setup", help="動作環境・認証トークン・API接続状態の点検とセットアップ案内")
     setup_p.add_argument("--open", action="store_true", help="設定ページ (Google Apps Script API) を自動でブラウザ起動")
 
+    # 0b. login（clasp を入れずに Google にログインして鍵を作る）
+    login_p = subparsers.add_parser("login", help="clasp なしで Google にログインし、鍵（~/.clasprc.json）を作る")
+    login_p.add_argument("--out", default="", help="鍵を書く場所（既定: ~/.clasprc.json）")
+    login_p.add_argument("--no-open", action="store_true", help="ブラウザを自動で開かない（表示した番地を自分で開く）")
+    login_p.add_argument("--timeout", type=int, default=300, help="許可を待つ秒数")
+
     # 1. list (projects)
     list_p = subparsers.add_parser("list", help="GAS プロジェクト一覧表示")
     list_p.add_argument("-n", "--limit", type=int, default=20, help="取得件数 (デフォルト: 20)")
@@ -466,6 +472,12 @@ def main():
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
+        return
+
+    if args.command == "login":
+        res = GasClient.login(out_path=args.out or None, open_browser=not args.no_open, timeout=args.timeout,
+                              on_url=lambda u: print("ブラウザで Google の許可画面を開きます。開かないときはこの番地を開いてください:\n" + u + "\n", flush=True))
+        print(res["message"])
         return
 
     # setup コマンドは ~/.clasprc.json が無い環境でも動作可能にするため GasClient() の前で実行
