@@ -3,6 +3,24 @@
 
 const SYNC_URL = "http://127.0.0.1:18765/sync";
 
+// 拡張のファイル（フォルダの今の中身）の指紋。道具が拡張を直したら、サイドパネルを開いたときに自分で入れ直すのに使う
+const STAMP_FILES = ["manifest.json", "background.js", "content.js", "sidepanel.js", "sidepanel.html"];
+async function diskStamp() {
+  let h = 0;
+  for (const f of STAMP_FILES) {
+    try {
+      const t = await (await fetch(chrome.runtime.getURL(f), { cache: "no-store" })).text();
+      for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0;
+    } catch (_e) {}
+  }
+  return String(h);
+}
+
+// 入れたとき・入れ直したときの指紋を覚える（サイドパネルはこれとフォルダの今の中身を比べる）
+chrome.runtime.onInstalled.addListener(async () => {
+  chrome.storage.local.set({ stamp: await diskStamp() });
+});
+
 async function postToGasCombo(payload) {
   try {
     const res = await fetch(SYNC_URL, {

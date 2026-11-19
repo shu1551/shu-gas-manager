@@ -796,8 +796,8 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
     res["chrome_extension"] = {
         "folder": ext_dir,
         "how": ("Chrome の右のサイドパネルで開く拡張（任意・おすすめ）: chrome://extensions を開き、右上の「デベロッパー モード」をオン →"
-                f"「パッケージ化されていない拡張機能を読み込む」→ {ext_dir} を選ぶ。入れてあるなら「再読み込み」を押す"
-                "（操作窓の番地を今書いたため）。あとは拡張のアイコンか Alt+G で、今開いているシートが相手の GASコンボが開きます"),
+                f"「パッケージ化されていない拡張機能を読み込む」→ {ext_dir} を選ぶ。入れてあるなら何もしなくてよい"
+                "（ファイルが変わると、サイドパネルを開いたときに拡張が自分で入れ直す）。あとは拡張のアイコンか Alt+G で、今開いているシートが相手の GASコンボが開きます"),
     }
     return res
 

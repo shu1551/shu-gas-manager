@@ -4,6 +4,29 @@ const frame = document.getElementById("combo");
 const msg = document.getElementById("msg");
 let curId = "";
 
+// 拡張のファイル（フォルダの今の中身）の指紋。道具が拡張を直したら、サイドパネルを開いたときに自分で入れ直すのに使う
+const STAMP_FILES = ["manifest.json", "background.js", "content.js", "sidepanel.js", "sidepanel.html"];
+async function diskStamp() {
+  let h = 0;
+  for (const f of STAMP_FILES) {
+    try {
+      const t = await (await fetch(chrome.runtime.getURL(f), { cache: "no-store" })).text();
+      for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0;
+    } catch (_e) {}
+  }
+  return String(h);
+}
+
+// フォルダの中身が入れたときと違えば（道具が拡張を直した）、自分で入れ直す＝chrome://extensions の再読み込みが要らない
+(async () => {
+  try {
+    const cur = await diskStamp();
+    const { stamp } = await chrome.storage.local.get("stamp");
+    if (!stamp) { chrome.storage.local.set({ stamp: cur }); return; }
+    if (stamp !== cur) { show("拡張の新しい版を読み込んでいます…（サイドパネルが閉じたら、もう一度開いてください）"); chrome.runtime.reload(); }
+  } catch (_e) {}
+})();
+
 function show(text) {
   msg.textContent = text;
   msg.style.display = "block";
