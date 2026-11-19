@@ -6772,6 +6772,11 @@ def test_171_stage2_edit_shelves_e01_and_e02(mock_client):
     assert r_app["result"]["delivery"] == "送り中"
     assert "<button>保存</button>" in files[1]["source"]
 
+    # E01: apply 省略（「戻して」表現）でも 1 発で反映されること
+    r_omitted = mock_client.gas_shelf(sid, query="『保存』を『送信』に戻して")
+    assert r_omitted["result"]["status"] == "success"
+    assert "<button>送信</button>" in files[1]["source"]
+
     # E02: 日本語表現 -> 候補一覧のみで変更しない（かつ URL 内の // が欠けないこと）
     r_jp = mock_client.gas_shelf(sid, query="上限を 100 に", apply=True)
     assert r_jp["result"]["status"] == "candidates"
@@ -6841,3 +6846,9 @@ def test_171_stage3_s06_settings_externalize(mock_client):
     assert "var MAX_ROWS = getSetting_(\"MAX_ROWS\", 300);" in new_src
     assert "function getSetting_(key, fallback)" in new_src
     assert "getSetting_._cache" in new_src
+
+
+def test_e02_no_false_positive_on_general_requests(mock_client):
+    """一般の改修依頼が E02（値替え）に誤爆しないことを検証"""
+    assert mock_client.match_shelf("新しい承認ワークフローを全部設計して")["shelf_id"] == ""
+    assert mock_client.match_shelf("毎月1日に経理へメール通知する機能を追加して")["shelf_id"] == ""

@@ -10845,7 +10845,7 @@ function doGet() {{
         q = query.strip()
         q = re.sub(r"^(?:定数|変数|設定値|設定)\s+", "", q)
         m = re.match(
-            r"^[「『'\"]?([A-Za-z0-9_\u3040-\u30ff\u4e00-\u9fffー$]+)[」』'\"]?\s*(?:の値)?\s*(?:を|は)\s*(.+?)\s*(?:に(?:替え|変え|変更|し|直し|セット|設定)?(?:て|る|ます)?|へ(?:替え|変え|変更)?(?:て|る)?)?$",
+            r"^[「『'\"]?([A-Za-z0-9_\u3040-\u30ff\u4e00-\u9fffー$]+)[」』'\"]?\s*(?:の値)?\s*(?:を|は)\s*(.+?)\s*(に(?:替え|変え|変更|し|直し|セット|設定)?(?:て|る|ます)?|へ(?:替え|変え|変更)?(?:て|る)?)$",
             q,
         )
         if not m:
@@ -10856,6 +10856,16 @@ function doGet() {{
         val_raw = re.sub(r"\s*に$", "", val_raw).strip()
         if not name or not val_raw:
             return None, None
+        # 値として妥当（数値・真偽・引用文字・短いトークン）でない長文動詞句は誤爆防止で除外
+        is_quoted = len(val_raw) >= 2 and (
+            (val_raw[0] == "「" and val_raw[-1] == "」")
+            or (val_raw[0] == "『" and val_raw[-1] == "』")
+            or (val_raw[0] in ("'", '"') and val_raw[-1] == val_raw[0])
+        )
+        is_scalar = bool(re.match(r"^(?:-?\d+(?:\.\d+)?|true|false|null)$", val_raw, re.IGNORECASE))
+        if not (is_quoted or is_scalar):
+            if re.search(r"(?:して|作って|追加|削除|設計|修正|調べ|教え)", val_raw) or len(val_raw) > 40:
+                return None, None
         return name, val_raw
 
     def _find_line_func_name(self, ftype: str, source: str, line_no: int) -> str:
@@ -11373,7 +11383,7 @@ function doGet() {{
         }
 
     @_track_sid_op
-    def gas_shelf(self, script_id="", query="", shelf_id="", filename="Index", func_name="", apply=False, deploy=False, list_only=False, check_only=False) -> dict:
+    def gas_shelf(self, script_id="", query="", shelf_id="", filename="Index", func_name="", apply=None, deploy=False, list_only=False, check_only=False) -> dict:
         """GAS 先撃ち総合棚ルーター（全28棚直結・棚当て検査・自動ディスパッチ）"""
         if check_only:
             return self.check_shelves()
@@ -11431,13 +11441,15 @@ function doGet() {{
 
         sid = self.resolve_script_id(script_id)
         h_type = target_shelf["handler_type"]
+        # 省略時（None）は小さな直し棚（E01/E02）のみ 1 発で反映し、大規模変更棚は安全側（下見）にする
+        effective_apply = (h_type == "edit") if apply is None else bool(apply)
 
         if h_type == "recipe":
-            dispatch_res = self.gas_recipe(sid, filename=filename, func_name=func_name, recipe_id=target_shelf["id"], apply=apply, deploy=deploy)
+            dispatch_res = self.gas_recipe(sid, filename=filename, func_name=func_name, recipe_id=target_shelf["id"], apply=effective_apply, deploy=deploy)
         elif h_type == "scaffold":
-            dispatch_res = self.gas_scaffold(sid, scaffold_id=target_shelf["id"], filename=filename, apply=apply, deploy=deploy)
+            dispatch_res = self.gas_scaffold(sid, scaffold_id=target_shelf["id"], filename=filename, apply=effective_apply, deploy=deploy)
         elif h_type == "skin":
-            if apply:
+            if effective_apply:
                 dispatch_res = self.design_skin(sid, filename=filename, preset=target_shelf.get("preset", "linear"), deploy=deploy)
             else:
                 dispatch_res = {
@@ -11451,11 +11463,11 @@ function doGet() {{
         elif h_type == "xray":
             dispatch_res = self.xray(sid, filename=filename)
         elif h_type == "clean_dead":
-            dispatch_res = self.clean_dead(sid, dry_run=not apply, deploy=deploy)
+            dispatch_res = self.clean_dead(sid, dry_run=not effective_apply, deploy=deploy)
         elif h_type == "rpc_contracts":
             dispatch_res = self.check_rpc_contracts(sid, filename=filename)
         elif h_type == "edit":
-            dispatch_res = self._gas_edit_shelf(sid, target_shelf["id"], query=query, apply=apply, deploy=deploy)
+            dispatch_res = self._gas_edit_shelf(sid, target_shelf["id"], query=query, apply=effective_apply, deploy=deploy)
         else:
             raise ValueError(f"未対応のハンドラ種別: {h_type}")
 

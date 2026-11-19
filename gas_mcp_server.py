@@ -28,12 +28,12 @@ import functools
 
 GAS_MANAGER_INSTRUCTIONS = (
     "ガスマネージャー（gas-manager）。GAS のコードを直す頼みは、自分で探して直す前に、まず "
-    "gas_shelf(project=プロジェクト名, query=使う人の頼みの文をそのまま, apply=True) を 1 回撃つ（先撃ち）。"
-    "「『送信』を『保存』に替えて」のような文字の替え（E01）や「上限を 100 に」のような値の替え（E02）は、"
-    "場所探し・直し・構文検査・控えまで道具が 1 回で済ませ、すぐ返る（Google への送りは裏で続く）。"
-    "search_code や get_function で場所を探してから patch_* を撃つと往復が 4 回になって遅いので、"
+    "gas_shelf(project=プロジェクト名, query=使う人の頼みの文をそのまま) を 1 回撃つ（先撃ち）。"
+    "「『送信』を『保存』に替えて／戻して」のような文字の替え（E01）や「上限を 100 に」のような値の替え（E02）は、"
+    "apply 省略でも場所探し・直し・構文検査・控えまで道具が 1 回で済ませ、すぐ返る（Google への送りは裏で続く）。"
+    "search_code や get_function で場所を探してから patch_* を撃つと往復が増えて遅いので、"
     "gas_shelf が「当たりが複数」「当たらない」と返したときだけ、その返事の番地を使って patch_function を撃つ。"
-    "棚の返事が出たら、それを使う人に短く報告して終える（読み直し・確かめの撃ち直しを足さない）。"
+    "棚の返事が出たら、結果だけ 1〜2 行で短く報告して終える（読み直し・確かめの撃ち直しを足さない）。"
 )
 
 mcp = FastMCP("gas-manager", instructions=GAS_MANAGER_INSTRUCTIONS)
@@ -1656,22 +1656,22 @@ def gas_shelf(
     shelf_id: str = "",
     filename: str = "Index",
     func_name: str = "",
-    apply: bool = False,
+    apply: bool | None = None,
     deploy: bool = False,
     list_only: bool = False,
     check_only: bool = False
 ) -> str:
     """GAS 先撃ち総合棚ルーター（全28棚直結・頼み文からの自動判定・棚当て検査・自動ディスパッチ）を実行します。
-    コードを直す頼みの 1 手目はこれ：query に使う人の頼みの文をそのまま渡し apply=True。文字の替え（E01）・値の替え（E02）は
-    場所探しから直しまで 1 回で返る（search_code・get_function で先に探さない）。「当たりが複数／無し」のときだけ patch_function へ。
+    コードを直す頼みの 1 手目はこれ：query に使う人の頼みの文をそのまま渡す。文字の替え（E01）・値の替え（E02）は
+    apply 省略でも場所探しから直しまで 1 回で返る（search_code・get_function で先に探さない）。「当たりが複数／無し」のときだけ patch_function へ。
 
     Args:
         project: プロジェクト名またはスクリプトID
-        query: 日本語・自然言語の頼み文 (例: "シートに追記するのを速くして", "GASドックで診断して")
+        query: 日本語・自然言語の頼み文 (例: "『送信』を『保存』に替えて", "上限を100に", "GASドックで診断して")
         shelf_id: 直接指定する棚ID ("R01"〜"R12", "S01"〜"S06", "K01"〜"K04", "D01"〜"D04", "E01"〜"E02")
         filename: 対象HTMLファイル名 (デフォルト: Index)
         func_name: 対象関数名 (レシピ適用時など)
-        apply: 実際にプロジェクトへ変更を反映するか (デフォルト: False でプレビュー)
+        apply: 反映するか (省略時: E01/E02 の小さな直しは即反映、大規模変更棚は下見。明示で True/False 指定可)
         deploy: 反映後に本番Webアプリを自動デプロイするか (デフォルト: False)
         list_only: 全28棚の一覧カタログのみ表示するか (デフォルト: False)
         check_only: 全28棚のゴールデン頼み文検査 (--check) を実行するか (デフォルト: False)
@@ -1942,6 +1942,19 @@ def gas(command: str) -> str:
     if sub == "list":
         limit = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
         return list_projects(limit=limit)
+
+    if sub in ("aliases", "list-aliases"):
+        return list_aliases()
+
+    if sub in ("alias", "set-alias"):
+        if len(parts) < 3:
+            return "別名とスクリプトIDを指定してください: alias <name> <script_id>"
+        return set_alias(parts[1], parts[2])
+
+    if sub in ("del-alias", "delete-alias"):
+        if len(parts) < 2:
+            return "解除する別名を指定してください: del-alias <name>"
+        return delete_alias(parts[1])
 
     if sub == "files":
         if len(parts) < 2:
@@ -2817,9 +2830,31 @@ def ws_undo(to: str = "", list: bool = False, ok: bool = False) -> str:
 
 # 表を直すだけの人向けの起こし方: 環境変数 GAS_MCP_ONLY=ws で ws の 4 本だけを出す（AI が読む道具の説明が 59 本→4 本に減り、速く安くなる）
 WS_TOOLS = ("ws_do", "ws_look", "ws_find", "ws_undo")
+# 標準露出を厳選 15 本に絞る（Excel マネージャーの 12 本と同等規模。他機能は gas(command) 窓口から利用可能。GAS_MCP_ALL_TOOLS=1 で全 59 本を露出）
+CORE_MCP_TOOLS = (
+    "gas_shelf",
+    "gas",
+    "get_file",
+    "get_function",
+    "patch_function",
+    "replace_function",
+    "batch_patch",
+    "deploy",
+    "push_project",
+    "pull_project",
+    "reload_tools",
+    "ws_look",
+    "ws_find",
+    "ws_do",
+    "ws_undo",
+)
 if os.environ.get("GAS_MCP_ONLY", "").strip().lower() == "ws":
     for _t in list(mcp._tool_manager.list_tools()):
         if _t.name not in WS_TOOLS:
+            mcp.remove_tool(_t.name)
+elif os.environ.get("GAS_MCP_ALL_TOOLS", "").strip().lower() not in ("1", "true", "yes"):
+    for _t in list(mcp._tool_manager.list_tools()):
+        if _t.name not in CORE_MCP_TOOLS:
             mcp.remove_tool(_t.name)
 
 if __name__ == "__main__":
