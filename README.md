@@ -124,6 +124,7 @@ py gas.py combo template
 ```bash
 py gas.py combo addon
 ```
+- AI（Claude Code・Antigravity 等）に「GASコンボを入れて」と頼めば、点検・clasp の導入とログイン・`combo addon` まで AI が進めます。人が押すのは Google の画面の許可・API のオン・「インストール」の 3 か所だけです。
 - 初回は、本体のライブラリ `shu-gas-combo-engine` と、アドインのプロジェクト「GASコンボ（アドイン）」を**ご自分の Drive に作ります**。
 - 返事の `editor` を開き、「デプロイ」→「デプロイをテスト」→「インストール」を 1 回だけ押します。
 - あとは、どのスプレッドシートでも、右の枠の ⚡「GASコンボ」から使えます（シートにコードは入れません。初回に権限の許可が 1 回出ます）。

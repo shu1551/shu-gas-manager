@@ -30,6 +30,14 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
 - **ユーザーからの指示例**: 「スクリプトID `xxxx` を『〇〇』として登録して」「このID `xxxx` をプロジェクト『〇〇』に追加して」
 - **対応フロー**: MCP ツール `set_alias(name="プロジェクト名", script_id="xxxx")` を実行。以降は `list_files(project="プロジェクト名")` 等で通常プロジェクト同様に直接操作可能になります。登録済み一覧は `list_aliases()` で確認できます。
 
+### パターンD: GASコンボ（シートを言葉で直すアドオン）を入れる
+「GASコンボを入れて」「アドオンを使いたい」と頼まれたら、AI が次の順に進めます。人が押すのは Google の画面の 3 か所だけです。
+1. `gas('setup --open')` で点検します。
+   - `needs_login`: AI がターミナルで `npm install -g @google/clasp` と `clasp login` を撃ち、ブラウザに出る許可だけ人に押してもらいます。
+   - `needs_api_enable`: 開いた設定画面で「Google Apps Script API」をオンにしてもらいます。
+2. `ready` になったら `gas('combo addon')` を 1 回撃ちます（本体のライブラリとアドインを、その人の Drive に作ります）。
+3. 返事の `editor` を開いて「デプロイ」→「デプロイをテスト」→「インストール」を押してもらいます。シートを開き直すと、右の枠に ⚡GASコンボが出ます（初回だけ権限の許可が出ます）。
+
 ## 3. GAS設計のベストプラクティス
 
 1. **スプレッドシート**: ループ内の `getValue/setValue` 連打を避け、`getValues()` → メモリ処理 → `setValues()` で一括代入。
