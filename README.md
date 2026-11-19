@@ -29,6 +29,7 @@ py gas.py setup --open
 または、AIアシスタントに「**`py gas.py setup --open` を実行して初期設定を案内して**」と伝えるだけでOKです。
 
 ### 必要な準備（たったの2ステップ）
+0. **Node.js**（clasp を入れるのに要ります。未導入なら `winget install OpenJS.NodeJS.LTS`／Mac は `brew install node`／[nodejs.org](https://nodejs.org/) の LTS 版。`setup` が無いことを見つけて案内します）
 1. **clasp のログイン**（すでに `clasp login` 済みの方は不要です）:
    ```bash
    npm install -g @google/clasp

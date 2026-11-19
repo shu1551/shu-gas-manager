@@ -8915,7 +8915,13 @@ function doGet() {{
                 "【未セットアップ】Google アカウントの認証情報 (~/.clasprc.json) が見つかりません。\n"
                 "以下の手順で 1分でセットアップできます："
             )
-            result["steps"] = [
+            result["steps"] = []
+            if not result["node_installed"]:
+                result["message"] += "\n（Node.js が入っていません。clasp は Node.js の npm で入れるので、先に Node.js を入れてください）"
+                result["steps"].append(
+                    "⓪ Node.js を入れる（入れた後はターミナルを開き直す）:\n   Windows: winget install OpenJS.NodeJS.LTS\n   Mac: brew install node\n   または https://nodejs.org/ から LTS 版"
+                )
+            result["steps"] += [
                 "① コマンドプロンプト等で clasp をインストール:\n   npm install -g @google/clasp",
                 "② clasp で Google にログインして許可:\n   clasp login",
                 "③ ブラウザで設定ページを開き、Google Apps Script API を『オン』に設定:\n   https://script.google.com/home/usersettings"
