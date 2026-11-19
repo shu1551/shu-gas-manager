@@ -563,6 +563,7 @@
           <div class="log-empty">実行結果がここに表示されます。</div>
         </div>
         <div class="pane-footer">
+          <button id="btnCopyLog" class="btn" type="button">会話をコピー</button>
           <button id="btnClearLog" class="btn" type="button">会話消去</button>
         </div>
       </div>
@@ -727,6 +728,7 @@
     infoLabel: document.getElementById("infoLabel"),
     chatLog: document.getElementById("chatLog"),
     btnClearLog: document.getElementById("btnClearLog"),
+    btnCopyLog: document.getElementById("btnCopyLog"),
     histList: document.getElementById("histList"),
     btnUseHist: document.getElementById("btnUseHist"),
     btnRerunHist: document.getElementById("btnRerunHist"),
@@ -2696,6 +2698,15 @@
       }
     });
   }
+
+  els.btnCopyLog.addEventListener("click", function() {
+    var b = els.btnCopyLog, label = "会話をコピー";
+    var txt = els.chatLog.querySelector(".log-empty") ? "" : String(els.chatLog.innerText || "").trim();
+    function flash(t) { b.textContent = t; setTimeout(function() { b.textContent = label; }, 1500); }
+    if (!txt) { flash("会話がありません"); return; }
+    copyToClipboard(txt).then(function() { flash("コピーしました"); })
+      .catch(function(err) { flash("コピー失敗"); });
+  });
 
   els.btnClearLog.addEventListener("click", function() {
     clearLogBox(els.chatLog, "実行結果がここに表示されます。");
