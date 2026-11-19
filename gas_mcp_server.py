@@ -26,7 +26,17 @@ from gas_client import GasClient
 
 import functools
 
-mcp = FastMCP("gas-manager")
+GAS_MANAGER_INSTRUCTIONS = (
+    "ガスマネージャー（gas-manager）。GAS のコードを直す頼みは、自分で探して直す前に、まず "
+    "gas_shelf(project=プロジェクト名, query=使う人の頼みの文をそのまま, apply=True) を 1 回撃つ（先撃ち）。"
+    "「『送信』を『保存』に替えて」のような文字の替え（E01）や「上限を 100 に」のような値の替え（E02）は、"
+    "場所探し・直し・構文検査・控えまで道具が 1 回で済ませ、すぐ返る（Google への送りは裏で続く）。"
+    "search_code や get_function で場所を探してから patch_* を撃つと往復が 4 回になって遅いので、"
+    "gas_shelf が「当たりが複数」「当たらない」と返したときだけ、その返事の番地を使って patch_function を撃つ。"
+    "棚の返事が出たら、それを使う人に短く報告して終える（読み直し・確かめの撃ち直しを足さない）。"
+)
+
+mcp = FastMCP("gas-manager", instructions=GAS_MANAGER_INSTRUCTIONS)
 _client = None
 
 def safe_tool(func):
@@ -231,6 +241,7 @@ def list_functions(project: str, filename: str = "") -> str:
 @safe_tool
 def patch_code(project: str, filename: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False, verify: bool = False, dev: bool = False, fast: bool = False) -> str:
     """ファイル内の特定コード文字列を置換し、Google クラウドへ反映します。
+    文字・値を替えるだけの頼みは、先に gas_shelf(query=頼みの文, apply=True) を 1 回（こちらは棚が当たらなかったときに使う）。
     置換前に自動バックアップと Node.js vm による構文検査を実施します。
     patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
     deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
@@ -507,6 +518,7 @@ if gas_local_extras and hasattr(gas_local_extras, "register_mcp"):
 @safe_tool
 def patch_function(project: str, filename: str, func_name: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False, fast: bool = False) -> str:
     """指定ファイル内の特定関数スコープ内に限定してコード置換を行います（他関数にある同一コードの誤爆を物理的に防止）。
+    文字・値を替えるだけの頼みは、先に gas_shelf(query=頼みの文, apply=True) を 1 回（こちらは棚が当たらなかったときに使う）。
     置換前の自動バックアップ、構文検査、diff 出力を完備しています。
     patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
     deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
@@ -724,6 +736,7 @@ def replace_function(project: str, filename: str, func_name: str, code: str, for
 @safe_tool
 def search_code(project: str, pattern: str, regex: bool = False, filename: str = "", exclude: str = "", max_hits: int = 100) -> str:
     """プロジェクト内の全ファイル（または指定ファイル）を高速横断検索（grep）します。
+    文字・値を替える頼みの場所探しには使わない（gas_shelf に頼みの文を渡せば、探すところから 1 回で直す）。
 
     Args:
         project: プロジェクト名またはスクリプトID
@@ -1649,6 +1662,8 @@ def gas_shelf(
     check_only: bool = False
 ) -> str:
     """GAS 先撃ち総合棚ルーター（全28棚直結・頼み文からの自動判定・棚当て検査・自動ディスパッチ）を実行します。
+    コードを直す頼みの 1 手目はこれ：query に使う人の頼みの文をそのまま渡し apply=True。文字の替え（E01）・値の替え（E02）は
+    場所探しから直しまで 1 回で返る（search_code・get_function で先に探さない）。「当たりが複数／無し」のときだけ patch_function へ。
 
     Args:
         project: プロジェクト名またはスクリプトID
