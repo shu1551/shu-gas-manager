@@ -32,6 +32,9 @@ function doPost(e) {
   try { req = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: '荷物が JSON ではありません' }); }
   var a = req.action;
   if (a === 'ping') return json_({ ok: true, version: ENGINE_VERSION });
+  // GAS 側の鍵（このエンジンの許可＝シート・文書・Drive）を渡す。道具はこれで Sheets API を直接叩き、エンジンの往復を省く（右の枠と同じ道）。
+  // Web アプリは「自分だけ」が呼べるので、鍵が渡るのは持ち主本人だけ
+  if (a === 'token') return json_({ ok: true, token: ScriptApp.getOAuthToken(), version: ENGINE_VERSION });
   if (a === 'render') {  // 見るだけ（書かない）ので鍵は掛けない
     try { var rr = actRender_(req); rr.version = ENGINE_VERSION; return json_(rr); }
     catch (err) { return json_({ ok: false, error: String(err && err.message || err), version: ENGINE_VERSION }); }

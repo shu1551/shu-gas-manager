@@ -1169,7 +1169,7 @@ def test_check_setup_wizard(tmp_path):
     res_no_login = GasClient.check_setup(clasprc_path=str(non_existent), open_browser=False)
     assert res_no_login["status"] == "needs_login"
     assert res_no_login["clasprc_found"] is False
-    assert "npm install -g @google/clasp" in "".join(res_no_login["steps"])
+    assert "py gas.py login" in "".join(res_no_login["steps"])
 
     # 2. .clasprc.json が存在し API 疎通が成功する場合: ready を返すこと
     valid_clasprc = tmp_path / "valid_clasprc.json"

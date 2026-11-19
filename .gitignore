@@ -58,3 +58,4 @@ test_gas_ws_trial.py
 .ws_recent_targets.json
 .ws_window_ver.txt
 ws_browser_ext/combo_window.json
+.ws_direct_fp.json

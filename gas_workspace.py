@@ -631,6 +631,24 @@ class WorkspaceManager:
             tgt, is_new, key = {}, False, ""
             tim.lap("相手")
             body_target = {"no_file": True}
+        # 直接の道（Sheets API をエンジンの鍵で直接叩く。右の枠と同じ道）。戻しまで作れる棚だけ。乗らなければ下のエンジンの道
+        if need_tgt and not is_new and not pending_local and not os.environ.get("WS_NO_DIRECT"):
+            import gas_ws_direct
+            cur = st.get("target") or {}
+            dt = dict(tgt, kind=tgt.get("kind") or kind, sheet=sheet)
+            if cur.get("id") == dt.get("id"):
+                for k in ("name", "url"):
+                    dt.setdefault(k, cur.get(k))
+            dres = gas_ws_direct.DirectRunner(self).try_do(st, dt, remote_ops, tim)
+            if dres is not None:
+                for o in reversed(remote_ops):
+                    sc = next(({k: o[k]} for k in ("header", "title", "col", "range") if o.get(k) not in (None, "", [])), None)
+                    if sc:
+                        dres["_last_scope"] = sc
+                        break
+                tim.last = time.perf_counter()
+                return st, dres, key
+            self._save(st)          # 鍵・乗らなかった理由を残す
         # 呼び直しで二重にならない番号：時間切れで終わった同じ頼みは同じ番号で撃つ
         if extra or not backup:
             h = _digest(body_target, remote_ops, bool(ok), extra, bool(backup))
@@ -671,6 +689,10 @@ class WorkspaceManager:
         tim.last = time.perf_counter()
         st = self._load()
         st.pop("pending", None)
+        if res.get("ok") and not res.get("local_only"):     # エンジンの道で書いた時刻（ws_undo がどちらの道の直しを先に戻すか決める）
+            tid = (res.get("created") or res.get("target") or {}).get("id")
+            if tid:
+                st.setdefault("engine_last", {})[tid] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return st, res, key
 
     def _finish_do(self, st, res, key):
@@ -869,16 +891,42 @@ class WorkspaceManager:
 
     # ------------------------------------------------------------ ws_undo
     def undo(self, to="", list=False, ok=False):
+        import gas_ws_direct
         if list:
             res = self._post({"action": "list"})
             items = res.get("ledger") or []
-            if not items:
+            st0 = self._load()
+            rows = [(it["time"][:16], f"#{it['n']} {it['time'][5:16]} {it['target']} {it['what']}" + ("（戻し済み）" if it.get("undone") else "")) for it in items[:15]]
+            rows += [(it["time"][:16], f"#D{it['n']} {it['time'][5:16]} {it.get('name') or it['id']} {it['what']}" + ("（戻し済み）" if it.get("undone") else ""))
+                     for it in (st0.get("direct_ledger") or [])[-15:]]
+            if not rows:
                 return "控えの記録はまだありません。"
-            out = ["番号 / 時刻 / 相手 / した事"]
-            for it in items[:15]:
-                out.append(f"#{it['n']} {it['time'][5:16]} {it['target']} {it['what']}" + ("（戻し済み）" if it.get("undone") else ""))
-            return "\n".join(out)
+            rows.sort(key=lambda x: x[0], reverse=True)
+            return "\n".join(["番号 / 時刻 / 相手 / した事"] + [r for _, r in rows[:20]])
         st = self._load()
+        dr = gas_ws_direct.DirectRunner(self)
+        tid = (st.get("target") or {}).get("id", "")
+        item = None
+        to_s = str(to or "").strip().lstrip("#")
+        if to_s.upper().startswith("D"):
+            item = next((x for x in (st.get("direct_ledger") or []) if str(x["n"]) == to_s[1:]), None)
+            if not item:
+                return f"戻せませんでした: 直接の道の控え #{to_s} がありません"
+            if item.get("undone"):
+                return f"戻せませんでした: #{to_s} はもう戻してあります"
+        elif not to_s and tid:
+            item = dr.latest(st, tid)
+            if item and (st.get("engine_last") or {}).get(tid, "") > item["time"]:
+                item = None          # エンジンの道の直しの方が新しい → そちらを戻す
+        if item:
+            res = dr.undo(st, item, ok=bool(ok))
+            self._save(st)
+            t = {"name": item.get("name") or "", "sheet": item.get("sheet", "")}
+            if res.get("ok"):
+                return "\n".join([self._title(t), f"戻した: #D{item['n']}（{item['what']}）を取り消しました"])
+            if res.get("needs_ok"):
+                return "\n".join([self._title(t), "止めました: " + res["error"]])
+            return "戻せませんでした: " + str(res.get("error") or "")
         res = self._post({"action": "undo", "to": str(to or ""), "ok": bool(ok),
                           "target_id": (st.get("target") or {}).get("id", "")})
         t = res.get("target") or {}
