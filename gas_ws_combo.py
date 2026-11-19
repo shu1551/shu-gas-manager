@@ -793,10 +793,12 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
     except Exception as e:
         res["postbox_watcher"] = f"受け手を起こせませんでした: {e}"
     if created:
-        res["next"] = ("初回だけ: 上の editor を開き「デプロイ」→「デプロイをテスト」→「インストール」。"
-                       "あとはどのスプレッドシートでも右の枠の ⚡ から使えます（初回に権限の許可が 1 回出ます）")
+        res["next"] = ("初回だけ、人がアドインを入れる（AI は install_guide を上から 1 段ずつ読み上げ、"
+                       "押せたかを聞いてから次の段へ進む。全部を一度に並べない）")
     else:
-        res["next"] = "入れ直し済み（次に右の枠を開いたときから新しいコードで動きます）"
+        res["next"] = ("入れ直し済み（次に右の枠を開いたときから新しいコードで動きます）。"
+                       "シートの右端に ⚡ GASコンボが無い人＝まだ入れていない人には install_guide で案内する")
+    res["install_guide"] = _addon_install_guide(res["editor"])
     ext_dir = str(HERE / "ws_browser_ext")
     res["chrome_extension"] = {
         "folder": ext_dir,
@@ -805,6 +807,24 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
                 "（ファイルが変わると、サイドパネルを開いたときに拡張が自分で入れ直す）。あとは拡張のアイコンか Alt+G で、今開いているシートが相手の GASコンボが開きます"),
     }
     return res
+
+
+def _addon_install_guide(editor_url):
+    """アドインを人が入れるときの手ほどき（画面の名前は 2026-11 の Apps Script・スプレッドシートの表示のまま）。
+    AI が 1 段ずつ読み上げ、押せたかを聞いてから次へ進むための台本。"""
+    return [
+        {"step": 1, "say": f"この番地を開いてください: {editor_url}（Apps Script の編集画面が開きます。AI がブラウザを開けるなら AI が開く）"},
+        {"step": 2, "say": "右上の青い「デプロイ」ボタンを押し、出てきた一覧の「デプロイをテスト」を押してください"},
+        {"step": 3, "say": "「デプロイをテスト」の窓が開きます。窓の右側を下へ送ると「Google Workspace アドオン」の段があります"
+                           "（デプロイ: Test latest code、Application(s): Sheets）。その段の「インストール」を押し、最後に右下の「完了」を押してください",
+         "if_stuck": "「インストール」ではなく「アンインストール」と出ているなら、もう入っています。「完了」を押して次へ"},
+        {"step": 4, "say": "使いたいスプレッドシートを開いてください（開いていたら再読み込み F5）。画面の右端の縦に並んだアイコンに ⚡（GASコンボ）があるので押してください",
+         "if_stuck": "見えないときは右端のアイコン列の下の「…」（その他のアドオン）の中にあります。それでも無ければシートを再読み込み"},
+        {"step": 5, "say": "初回だけ権限の画面が出ます。「アクセスを承認」→ ご自分のアカウントを選ぶ →「このアプリは Google で確認されていません」と出たら、"
+                           "ご自分の Drive に作ったアドインなので「詳細」→「GASコンボ（アドイン）（安全ではないページ）に移動」→ 許可の一覧で「すべて選択」に印を付けて「続行」",
+         "if_stuck": "「続行」を押した後に右の枠が白いままなら、枠を閉じてもう一度 ⚡ を押す"},
+        {"step": 6, "say": "右の枠に GASコンボが出たら入れ終わりです。頼みを書いて「実行」で使えます（入れるのはこの 1 回だけで、ほかのスプレッドシートでも右端の ⚡ から使えます）"},
+    ]
 
 
 def install_combo_connector(

@@ -36,7 +36,7 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
    - `needs_login`: AI がターミナルで `npm install -g @google/clasp` と `clasp login` を撃ち（Node.js が無いと手順に ⓪ が出るので、`winget install OpenJS.NodeJS.LTS` 等を先に撃つ）、ブラウザに出る許可だけ人に押してもらいます。
    - `needs_api_enable`: 開いた設定画面で「Google Apps Script API」をオンにしてもらいます。
 2. `ready` になったら `gas('combo addon')` を 1 回撃ちます（本体のライブラリとアドインを、その人の Drive に作ります）。
-3. 返事の `editor` を開いて「デプロイ」→「デプロイをテスト」→「インストール」を押してもらいます。シートを開き直すと、右の枠に ⚡GASコンボが出ます（初回だけ権限の許可が出ます）。
+3. 返事の `install_guide` を上から 1 段ずつ案内します（1 段言ったら押せたかを聞いて次へ。詰まったらその段の `if_stuck` を言う。全部を一度に並べない）。中身は、`editor` を開く →「デプロイ」→「デプロイをテスト」→「Google Workspace アドオン」の段の「インストール」→「完了」→ シートの右端の ⚡ → 初回の許可（「確認されていません」は「詳細」→「〜に移動」）です。
 4. 返事の `chrome_extension.how` をそのまま案内します（任意・おすすめ）。chrome://extensions で「デベロッパー モード」をオン →「パッケージ化されていない拡張機能を読み込む」→ 返事の `chrome_extension.folder`（`ws_browser_ext`）を選んでもらいます。入れてあるなら何もしなくてかまいません（ファイルが変わると、サイドパネルを開いたときに拡張が自分で入れ直します）。あとは拡張のアイコンか Alt+G で、Chrome の右のサイドパネルに GASコンボが開きます。
 
 ## 3. GAS設計のベストプラクティス
