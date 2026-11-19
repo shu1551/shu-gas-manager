@@ -412,6 +412,34 @@ def load_combo_phrases(path=None):
     return data if isinstance(data, dict) else {}
 
 
+def _planner_eval_many(asks, table=None):
+    """頼みを何本でも node 1 回で棚当てに通し、[{ask, fire, ops, suggest, reasons}] を返す。"""
+    import subprocess
+    planner = next(f["source"] for f in build_combo_files() if f["name"] == "ComboPlanner")
+    tbl = table or {"title_a1": "A1", "header_row": 3, "header": ["日付", "部門", "担当者", "商品名", "数量", "単価", "売上金額"],
+                    "first_row": 4, "last_row": 9, "total_row": 9, "range": "A3:G9"}
+    js = ("const vm=require('vm'),fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));"
+          "const ctx=vm.createContext({});vm.runInContext(d.pj,ctx);const P=ctx.ComboPlanner;"
+          "process.stdout.write(JSON.stringify(d.asks.map(a=>{const p=P.plan(a,'sheet',d.t,['売上表'],'売上表',null);"
+          "return {ask:a,fire:!!p.fire,ops:p.ops,suggest:p.suggest||null,reasons:p.reasons};})));")
+    r = subprocess.run(["node", "-e", js], input=json.dumps({"pj": planner, "asks": list(asks), "t": tbl}, ensure_ascii=False).encode("utf-8"),
+                       capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("棚当ての実行に失敗しました: " + r.stderr.decode("utf-8", "replace")[:400])
+    return json.loads(r.stdout.decode("utf-8"))
+
+
+def _publish_leak_check():
+    """公開してはいけない物（手元のパス・鍵・メールアドレス・知らないファイル）が混ざっていないかだけを見る。"""
+    import subprocess
+    pc = HERE / "publish_check.py"
+    if not pc.exists():
+        return True, ""
+    r = subprocess.run([sys.executable, str(pc)], cwd=str(HERE), capture_output=True, timeout=60)
+    text = r.stdout.decode("utf-8", "replace").strip()
+    return r.returncode == 0, (text.splitlines()[-1] if text else "")
+
+
 def _planner_eval(ask, table=None):
     """棚当て（JS）を node で 1 回動かし、learnKey・当たり・候補を返す。"""
     import subprocess
@@ -429,13 +457,27 @@ def _planner_eval(ask, table=None):
     return json.loads(r.stdout.decode("utf-8"))
 
 
-def push_combo_dev(client=None, state_path=None):
+def push_combo_dev(client=None, state_path=None, asks=None):
     """元（combo_*_template と言い方の表）を直したら、これ 1 回で届く。
     大元ライブラリとアドインへ同時に送り、操作窓（/exec）の版だけ上げる。大元の版は上げない（アドインは開発モードでつなぐ）。
     テンプレート（人がコピーする物）は版でつなぐので、配る節目に combo template で上げる。"""
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
     t0 = _time.time()
+    # 1. 確かめ: 渡した頼みが、どの棚にどの引数で当たるか（送る前に並べる）
+    checks = []
+    if asks:
+        for r in _planner_eval_many(asks):
+            if r["fire"]:
+                checks.append("当たる: " + r["ask"] + " → " + json.dumps(r["ops"], ensure_ascii=False))
+            elif r.get("suggest"):
+                checks.append("候補: " + r["ask"] + " → " + json.dumps(r["suggest"], ensure_ascii=False) + "（［はい］で撃つ）")
+            else:
+                checks.append("当たらない: " + r["ask"] + "（" + "／".join(r.get("reasons") or []) + "）")
+    # 2. 公開してはいけない物が混ざっていないか（混ざっていたら送らない）
+    ok_leak, leak_line = _publish_leak_check()
+    if not ok_leak:
+        return {"ok": False, "mode": "push", "checks": checks, "leak": leak_line, "text": "公開前の点検で止めました（送っていません）"}
     if client is None:
         from gas_client import GasClient
         client = GasClient()
@@ -464,7 +506,7 @@ def push_combo_dev(client=None, state_path=None):
         futs = [ex.submit(_send_lib), ex.submit(_send_addon)]
         for f in futs:
             f.result()
-    return {"ok": True, "mode": "push", "engineLibId": lib_id, "addon": addon_sid, "window": webapp_url,
+    return {"ok": True, "mode": "push", "checks": checks, "leak": leak_line, "engineLibId": lib_id, "addon": addon_sid, "window": webapp_url,
             "seconds": round(_time.time() - t0, 1),
             "next": "アドイン（カード・操作窓）は次に開いたときから新しいコード。テンプレートは配る節目に combo template"}
 
@@ -1412,6 +1454,7 @@ def _run_cli(argv=None):
     p_conn.add_argument("--lib-ver", default="", help="大元ライブラリのバージョン番号")
 
     p_push = sub.add_parser("push", help="元を直したら 1 回＝大元とアドインへ同時に送る（版は上げない・テンプレートは配る節目に template）")
+    p_push.add_argument("--ask", action="append", default=[], help="送る前に棚当てに通して見る頼み（何本でも）")
     p_phr = sub.add_parser("phrase", help="当たらなかった頼みを言い方の表に足し、大元とアドインへ送るまで 1 回で")
     p_phr.add_argument("ask", help="頼みの文（例: タイトルの文字を赤）")
     p_phr.add_argument("ops", nargs="?", default="", help="撃つ ops の JSON（省くと棚当ての近い候補）")
@@ -1456,7 +1499,7 @@ def _run_cli(argv=None):
     client = GasClient()
 
     if args.cmd == "push":
-        print(json.dumps(push_combo_dev(client=client), ensure_ascii=False, indent=2))
+        print(json.dumps(push_combo_dev(client=client, asks=args.ask), ensure_ascii=False, indent=2))
         return 0
     if args.cmd == "phrase":
         print(json.dumps(add_combo_phrase(args.ask, ops=args.ops or None, deploy=not args.no_deploy), ensure_ascii=False, indent=2))
