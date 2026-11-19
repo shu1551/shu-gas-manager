@@ -64,6 +64,14 @@ def reload_tools() -> str:
         if _mod_name in sys.modules:
             importlib.reload(sys.modules[_mod_name])
 
+    # サーバー本体の下請け関数（_ で始まる物。gas('combo …') の振り分け等）も読み直す。
+    # 道具の窓口は呼ばれるたびに下請けを名前で引くので、差し替えれば再起動なしで効く
+    import ast
+    _src = Path(__file__).read_text(encoding="utf-8")
+    _tree = ast.parse(_src)
+    _helpers = [n for n in _tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("_") and n.name != "reload_tools"]
+    exec(compile(ast.Module(body=_helpers, type_ignores=[]), __file__, "exec"), globals())
+
     if _client is not None:
         old_client = _client
         new_client = gas_client.GasClient(

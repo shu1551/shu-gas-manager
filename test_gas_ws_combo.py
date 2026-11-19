@@ -1487,3 +1487,11 @@ def test_create_combo_template_creates_and_reuses_template(tmp_path, monkeypatch
         assert rc == 0
     assert len(created_sheets) == 2 and created_sheets[1] == ("TMPL_SS_2", "カスタムテンプレート")
     assert len(created_projects) == 2 and created_projects[1][1] == "TMPL_SS_2"
+
+
+def test_reload_tools_rebinds_server_helpers():
+    """reload_tools がサーバー本体の下請け（combo の振り分け）も読み直し、再起動なしで combo phrase が効く。"""
+    import gas_mcp_server as m
+    m._handle_combo_command = lambda args, client: "old"
+    m.reload_tools()
+    assert "combo phrase" in m._handle_combo_command(["phrase"], None)
