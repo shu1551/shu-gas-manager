@@ -34,7 +34,7 @@ GAS_MANAGER_INSTRUCTIONS = (
     "（E01は文字替え・『対象』削除対応、E01/E02はapply省略で即反映、Webアプリ画面修正はdeploy=Trueを付ける。search_code等で先に探さない）。"
     "返事が[完了]なら読み直し・確かめをせず、1行20文字以内で即答して終える（例: コード doGet(L143) を変更しました。）。"
     "構文検査・裏送り・デプロイ未実施の補足は書かない。「複数」時は filename/func_name で絞り、「無し」の時だけ patch_function（HTML関数外・トップレベルは func_name=''）へ。"
-    "GASコンボで頼みが棚に当たらない（撃っていません）と言われたら、コードを探さず gas('combo phrase \"頼みの文\" [ops_json]') を 1 回。棚当て・サイドバー等の元を直したら gas('combo push --ask \"変わる頼み\" ...') を 1 回（棚当ての結果を並べ・点検し・大元とアドインへ同時に送る）。試験は回さない。"
+    "GASコンボで頼みが棚に当たらない（撃っていません）と言われたら、コードを探さず gas('combo phrase \"頼みの文\" [ops_json]') を 1 回。棚当て・サイドバー等の元を直したら gas('combo push --ask \"変わる頼み\" ...') を 1 回（棚当ての結果を並べ・点検し・大元とアドオンへ同時に送る）。試験は回さない。"
     "「GASコンボを入れて」「アドオンを使いたい」と言われたら、gas('setup --open') → ready になったら gas('combo addon') を 1 回撃つ。"
     "setup が needs_login なら『npm install -g @google/clasp』と『clasp login』は AI がターミナルで撃ち（手順に⓪ Node.js があればそれも先に撃つ）、ブラウザに出る許可だけ人に押してもらう。"
     "needs_api_enable なら開いた設定画面で「Google Apps Script API」をオンにしてもらう。"
@@ -1673,10 +1673,10 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
     if not args_list or args_list[0].lower() in ("help", "-h", "--help"):
         return (
             "=== gas combo 使い方 ===\n"
-            "  combo push [--ask <頼み> ...]  元（combo_*_template）を直したら 1 回＝頼みを棚当てに通して並べ・公開前の点検・大元とアドインへ同時に送る（版は上げない）\n"
-            "  combo phrase <頼みの文> [ops_json] [--no-deploy]  当たらなかった言い方を表に足して大元とアドインへ送る\n"
+            "  combo push [--ask <頼み> ...]  元（combo_*_template）を直したら 1 回＝頼みを棚当てに通して並べ・公開前の点検・大元とアドオンへ同時に送る（版は上げない）\n"
+            "  combo phrase <頼みの文> [ops_json] [--no-deploy]  当たらなかった言い方を表に足して大元とアドオンへ送る\n"
             "  combo template [--title <name>] [--new] [--force]  テンプレート版（コピーを作成だけで使える）\n"
-            "  combo addon [--id <script_id>] [--force]   アドイン版（1 回入れれば全部のシートで使える）\n"
+            "  combo addon [--id <script_id>] [--force]   アドオン版（1 回入れれば全部のシートで使える）\n"
             "  combo connect <script_id> [--lib <lib_id>] [--ver <ver>]\n"
             "  combo install <script_id> [--ss <ss_id>] [--preserve]\n"
             "  combo look <script_id> [--ss <ss_id>] [--sheet <sheet>] [--range <range>]\n"

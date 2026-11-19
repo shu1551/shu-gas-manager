@@ -1,4 +1,4 @@
-// GASコンボ サイドパネル：今のタブのスプレッドシートを相手に、アドインの画面（/dev）を中に開く。
+// GASコンボ サイドパネル：今のタブのスプレッドシートを相手に、アドオンの画面（/dev）を中に開く。
 // 窓の番地は py gas.py combo addon が combo_window.json に書く（人ごとに違う）。タブを替えたら相手も替える。
 const frame = document.getElementById("combo");
 const msg = document.getElementById("msg");

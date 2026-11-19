@@ -31,7 +31,7 @@ PHRASES_PATH = HERE / "combo_phrases.json"   # 言い方の表（頼み→ops。
 SERVER_TEMPLATE = HERE / "combo_server_template.gs"
 SIDEBAR_TEMPLATE = HERE / "combo_sidebar_template.html"
 ADDON_TEMPLATE = HERE / "combo_addon_template.gs"
-DEFAULT_ADDON_TITLE = "GASコンボ（アドイン）"
+DEFAULT_ADDON_TITLE = "GASコンボ（アドオン）"
 DEFAULT_COMBO_TEMPLATE_TITLE = "GASコンボ テンプレート"
 
 COMBO_FILE_NAMES = ("appsscript", "Engine", "ComboPlanner", "ComboServer", "ComboSidebar")
@@ -460,7 +460,7 @@ def _planner_eval(ask, table=None):
 
 def push_combo_dev(client=None, state_path=None, asks=None):
     """元（combo_*_template と言い方の表）を直したら、これ 1 回で届く。
-    大元ライブラリとアドインへ同時に送り、操作窓（/exec）の版だけ上げる。大元の版は上げない（アドインは開発モードでつなぐ）。
+    大元ライブラリとアドオンへ同時に送り、操作窓（/exec）の版だけ上げる。大元の版は上げない（アドオンは開発モードでつなぐ）。
     テンプレート（人がコピーする物）は版でつなぐので、配る節目に combo template で上げる。"""
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
@@ -509,11 +509,11 @@ def push_combo_dev(client=None, state_path=None, asks=None):
             f.result()
     return {"ok": True, "mode": "push", "checks": checks, "leak": leak_line, "engineLibId": lib_id, "addon": addon_sid, "window": webapp_url,
             "seconds": round(_time.time() - t0, 1),
-            "next": "アドイン（カード・操作窓）は次に開いたときから新しいコード。テンプレートは配る節目に combo template"}
+            "next": "アドオン（カード・操作窓）は次に開いたときから新しいコード。テンプレートは配る節目に combo template"}
 
 
 def add_combo_phrase(ask, ops=None, deploy=True, client=None, path=None):
-    """当たらなかった頼みを言い方の表に足し、大元とアドインへ送るまでを 1 回で。
+    """当たらなかった頼みを言い方の表に足し、大元とアドオンへ送るまでを 1 回で。
     ops を省くと棚当ての「近い候補」を使う。既に一発で当たる頼みは足さない。"""
     import subprocess
     import time as _time
@@ -706,7 +706,7 @@ def build_combo_connector_files(
 
 
 def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboengine", webapp_url="", development_mode=True):
-    """Google Workspace アドイン版 GASコンボのファイル（appsscript・コード・ComboPlanner）を組み立てる。
+    """Google Workspace アドオン版 GASコンボのファイル（appsscript・コード・ComboPlanner）を組み立てる。
     1 回インストールすれば全部のスプレッドシートに出る（シートごとのつなぎコードは要らない）。"""
     if not str(engine_lib_id or "").strip():
         raise ValueError("つなぐ大元ライブラリが決まっていません（install_combo_addon が自分の Drive に作ります）")
@@ -716,7 +716,7 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
         "runtimeVersion": "V8",
         "exceptionLogging": "STACKDRIVER",
         # Sheets の高度なサービスを入れると、このプロジェクトで Sheets API が有効になる（操作窓の直結の道＝画面から Sheets API を直接叩く 0.3 秒の道に要る。無いと 403）
-        # 大元は「いつも最新」（開発モード）でつなぐ＝元を直して大元へ送れば、版を上げずにアドインに届く（アドインは持ち主が使う物）
+        # 大元は「いつも最新」（開発モード）でつなぐ＝元を直して大元へ送れば、版を上げずにアドオンに届く（アドオンは持ち主が使う物）
         "dependencies": {"libraries": [{"userSymbol": sym, "libraryId": engine_lib_id, "version": str(engine_version or "1"), "developmentMode": bool(development_mode)}],
                          "enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
         "oauthScopes": [
@@ -731,7 +731,7 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
             "sheets": {"homepageTrigger": {"runFunction": "onHome"}, "onFileScopeGrantedTrigger": {"runFunction": "onFileScopeGranted"}},
         },
         "webapp": {"executeAs": "USER_ACCESSING", "access": "MYSELF"},   # 操作窓（前のサイドバーの HTML）を別の窓で開く
-        # Workspace アドインを正式にデプロイするには、外へ通信する先の一覧が要る（AI の API 鍵の道・Sheets API・書き出し）
+        # Workspace アドオンを正式にデプロイするには、外へ通信する先の一覧が要る（AI の API 鍵の道・Sheets API・書き出し）
         "urlFetchWhitelist": ["https://generativelanguage.googleapis.com/", "https://api.anthropic.com/",
                               "https://sheets.googleapis.com/", "https://www.googleapis.com/", "https://docs.google.com/"],
     }
@@ -745,7 +745,7 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
 
 
 def install_combo_addon(addon_id="", force_engine_update=False, client=None, state_path=None, window_json=None):
-    """アドイン版を作る・入れ直す。大元ライブラリを最新にし、アドインのプロジェクトへ push する。
+    """アドオン版を作る・入れ直す。大元ライブラリを最新にし、アドオンのプロジェクトへ push する。
     テスト デプロイ（Test latest code）は最新のコードで動くので、2 回目からはこれだけで全部のシートに効く。"""
     if client is None:
         from gas_client import GasClient
@@ -793,7 +793,7 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
     except Exception as e:
         res["postbox_watcher"] = f"受け手を起こせませんでした: {e}"
     if created:
-        res["next"] = ("初回だけ、人がアドインを入れる（AI は install_guide を上から 1 段ずつ読み上げ、"
+        res["next"] = ("初回だけ、人がアドオンを入れる（AI は install_guide を上から 1 段ずつ読み上げ、"
                        "押せたかを聞いてから次の段へ進む。全部を一度に並べない）")
     else:
         res["next"] = ("入れ直し済み（次に右の枠を開いたときから新しいコードで動きます）。"
@@ -810,7 +810,7 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
 
 
 def _addon_install_guide(editor_url):
-    """アドインを人が入れるときの手ほどき（画面の名前は 2026-11 の Apps Script・スプレッドシートの表示のまま）。
+    """アドオンを人が入れるときの手ほどき（画面の名前は 2026-11 の Apps Script・スプレッドシートの表示のまま）。
     AI が 1 段ずつ読み上げ、押せたかを聞いてから次へ進むための台本。"""
     return [
         {"step": 1, "say": f"この番地を開いてください: {editor_url}（Apps Script の編集画面が開きます。AI がブラウザを開けるなら AI が開く）"},
@@ -821,7 +821,7 @@ def _addon_install_guide(editor_url):
         {"step": 4, "say": "使いたいスプレッドシートを開いてください（開いていたら再読み込み F5）。画面の右端の縦に並んだアイコンに ⚡（GASコンボ）があるので押してください",
          "if_stuck": "見えないときは右端のアイコン列の下の「…」（その他のアドオン）の中にあります。それでも無ければシートを再読み込み"},
         {"step": 5, "say": "初回だけ権限の画面が出ます。「アクセスを承認」→ ご自分のアカウントを選ぶ →「このアプリは Google で確認されていません」と出たら、"
-                           "ご自分の Drive に作ったアドインなので「詳細」→「GASコンボ（アドイン）（安全ではないページ）に移動」→ 許可の一覧で「すべて選択」に印を付けて「続行」",
+                           "ご自分の Drive に作ったアドオンなので「詳細」→「GASコンボ（アドオン）（安全ではないページ）に移動」→ 許可の一覧で「すべて選択」に印を付けて「続行」",
          "if_stuck": "「続行」を押した後に右の枠が白いままなら、枠を閉じてもう一度 ⚡ を押す"},
         {"step": 6, "say": "右の枠に GASコンボが出たら入れ終わりです。頼みを書いて「実行」で使えます（入れるのはこの 1 回だけで、ほかのスプレッドシートでも右端の ⚡ から使えます）"},
     ]
@@ -1553,8 +1553,8 @@ def _run_cli(argv=None):
     p_tmpl.add_argument("--new", action="store_true", help="記録を無視してテンプレートを新しく作り直す")
     p_tmpl.add_argument("--force", action="store_true", help="大元ライブラリの版を必ず上げる")
 
-    p_addon = sub.add_parser("addon", help="GASコンボを Google Workspace アドインとして作る・入れ直す（シートごとのつなぎコード不要）")
-    p_addon.add_argument("--id", default="", help="アドインのスクリプトID（省略時は前回作った物・無ければ新しく作る）")
+    p_addon = sub.add_parser("addon", help="GASコンボを Google Workspace アドオンとして作る・入れ直す（シートごとのつなぎコード不要）")
+    p_addon.add_argument("--id", default="", help="アドオンのスクリプトID（省略時は前回作った物・無ければ新しく作る）")
     p_addon.add_argument("--force", action="store_true", help="大元ライブラリの版を必ず上げる")
 
     p_conn = sub.add_parser("connect", help="スプレッドシート側へ大元ライブラリ shu-gas-combo-engine の30行繋ぎコードを配置する")
@@ -1564,9 +1564,9 @@ def _run_cli(argv=None):
     p_conn.add_argument("--lib-id", default="", help="大元ライブラリのスクリプトID")
     p_conn.add_argument("--lib-ver", default="", help="大元ライブラリのバージョン番号")
 
-    p_push = sub.add_parser("push", help="元を直したら 1 回＝大元とアドインへ同時に送る（版は上げない・テンプレートは配る節目に template）")
+    p_push = sub.add_parser("push", help="元を直したら 1 回＝大元とアドオンへ同時に送る（版は上げない・テンプレートは配る節目に template）")
     p_push.add_argument("--ask", action="append", default=[], help="送る前に棚当てに通して見る頼み（何本でも）")
-    p_phr = sub.add_parser("phrase", help="当たらなかった頼みを言い方の表に足し、大元とアドインへ送るまで 1 回で")
+    p_phr = sub.add_parser("phrase", help="当たらなかった頼みを言い方の表に足し、大元とアドオンへ送るまで 1 回で")
     p_phr.add_argument("ask", help="頼みの文（例: タイトルの文字を赤）")
     p_phr.add_argument("ops", nargs="?", default="", help="撃つ ops の JSON（省くと棚当ての近い候補）")
     p_phr.add_argument("--no-deploy", action="store_true", help="入れ直さない（表に足して試験だけ）")

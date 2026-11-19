@@ -1,5 +1,5 @@
 /**
- * GASコンボ（Google Workspace アドイン）
+ * GASコンボ（Google Workspace アドオン）
  * 1 回入れれば、どのスプレッドシートでも右の枠（⚡）から頼みを撃てる。シートごとのつなぎコードは要らない。
  * 本体・棚は大元ライブラリ {lib_symbol}、棚当ては同じプロジェクトの ComboPlanner（サイドバーと同じ物）。
  * 入れ方: py gas.py combo addon → Apps Script の「デプロイ」→「デプロイをテスト」→「インストール」（初回だけ）
@@ -191,11 +191,11 @@ function doGet(e) {
   var id = e && e.parameter && e.parameter.id;
   if (id) { try { PropertiesService.getUserProperties().setProperty(COMBO_ADDON_TARGET_PROP, id); } catch (err) {} }
   else { try { id = PropertiesService.getUserProperties().getProperty(COMBO_ADDON_TARGET_PROP) || ''; } catch (err2) {} }
-  // アドインの操作窓も Chrome のサイドパネルも等倍（z=1）で同じ見た目にする
+  // アドオンの操作窓も Chrome のサイドパネルも等倍（z=1）で同じ見た目にする
   var z = Number((e && e.parameter && e.parameter.z) || 1) || 1;
   var out = {lib_symbol}.createComboSidebarHtml();
   if (z !== 1) out.append('<style>html{zoom:' + z + '}</style>');
-  // 拡張機能を使えない環境向け：アドイン操作窓に「右寄せ・縦長」で開き直すボタンを追加する
+  // 拡張機能を使えない環境向け：アドオン操作窓に「右寄せ・縦長」で開き直すボタンを追加する
   if (!(e && e.parameter && String(e.parameter.z || '') === '1')) {
     var popUrl = comboAddonWindowUrl_(id || '');
     out.append(

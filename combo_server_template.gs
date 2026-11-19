@@ -1145,7 +1145,7 @@ function comboLearn(req) {
   if (!ask || !Array.isArray(ops) || !ops.length) return { ok: false, text: '覚える頼みと ops がありません' };
   var map = comboGetLearned().learned;
   if (req.key) {
-    // 呼び手（サイドバー・アドインのカード）の棚当てが作った鍵をそのまま使う（軽量版はここに棚当てが無い）
+    // 呼び手（サイドバー・アドオンのカード）の棚当てが作った鍵をそのまま使う（軽量版はここに棚当てが無い）
     delete map[req.key];
     map[String(req.key)] = ops;
     var ks = Object.keys(map);

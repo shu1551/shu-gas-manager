@@ -1906,7 +1906,7 @@ class GasClient:
             ("template", "テンプレート"),
             ("engine", "エンジン"),
             ("test", "テスト"),
-            ("addin", "アドイン"),
+            ("addin", "アドオン"),
             ("runner", "ランナー"),
             ("slides", "スライド"),
             ("sheets", "シーツ"),

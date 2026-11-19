@@ -1368,7 +1368,7 @@ process.stdout.write(ctx.__out);
 
 
 def test_addon_files_have_workspace_manifest_library_and_planner(tmp_path):
-    """アドイン版：Sheets の Workspace アドインの定義・大元ライブラリ・棚当てが揃い、つなぎコードに頼らない"""
+    """アドオン版：Sheets の Workspace アドオンの定義・大元ライブラリ・棚当てが揃い、つなぎコードに頼らない"""
     files = combo_mod.build_combo_addon_files("LIB_X", "7")
     by = {f["name"]: f for f in files}
     assert set(by) == {"appsscript", "コード", "ComboPlanner"}
