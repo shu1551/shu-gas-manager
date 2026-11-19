@@ -13,6 +13,7 @@ import time
 import re
 import copy
 import threading
+import functools
 import bisect
 from datetime import datetime, timezone
 from pathlib import Path
@@ -340,6 +341,41 @@ function runSafeRpc_(fnName, fnBody, options = {}) {
         "desc": "S01〜S03 を HTML に、S04 を SERVER_JS にまとめて注入する上級GASアーキテクチャ統合セット",
         "keywords": ["フルセット", "上級骨格", "full", "アーキテクチャ", "一括注入", "モダン骨格一括"],
         "code": ""
+    },
+    {
+        "id": "S06",
+        "name": "settings_externalize",
+        "title": "定数・設定値の「設定」シート外出し基盤",
+        "target_type": "SERVER_JS & SHEET",
+        "marker": "/* @gas-scaffold:S06 */",
+        "desc": "コード内の表示文字・上限・シート名などの定数を紐づいたスプレッドシートの「設定」シート（項目・値）へ外出しする下見・変換",
+        "keywords": ["設定を外に出", "設定シート", "定数を外", "外出し", "settings", "ハードコード"],
+        "code": """/* @gas-scaffold:S06 */
+function getSetting_(key, fallback) {
+  let cache = getSetting_._cache;
+  if (!cache) {
+    cache = {};
+    getSetting_._cache = cache;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sh = ss ? ss.getSheetByName("設定") : null;
+    if (sh) {
+      const lastRow = sh.getLastRow();
+      if (lastRow >= 2) {
+        const rows = sh.getRange(2, 1, lastRow - 1, 2).getValues();
+        for (let i = 0; i < rows.length; i++) {
+          const k = String(rows[i][0]).trim();
+          if (k && !Object.prototype.hasOwnProperty.call(cache, k)) {
+            cache[k] = rows[i][1];
+          }
+        }
+      }
+    }
+  }
+  const sk = String(key);
+  if (!Object.prototype.hasOwnProperty.call(cache, sk)) return fallback;
+  const v = cache[sk];
+  return v === "" || v === null || v === undefined ? fallback : v;
+}"""
     }
 ]
 
@@ -406,7 +442,7 @@ GAS_UNIFIED_SHELVES = [
         "keywords": ["lockservice", "排他ロック", "6分制限", "タイムアウト", "多重起動防止", "チャンク分割", "排他"]
     },
 
-    # 2. 上級アーキテクチャ骨格棚 (5棚: S01〜S05)
+    # 2. 上級アーキテクチャ骨格棚 (6棚: S01〜S06)
     {
         "id": "S01", "category": "SCAFFOLD", "name": "promise_rpc", "handler_type": "scaffold",
         "desc": "Promise化RPCクライアント＋自動リトライ＋エラートースト基盤",
@@ -431,6 +467,11 @@ GAS_UNIFIED_SHELVES = [
         "id": "S05", "category": "SCAFFOLD", "name": "full_architecture", "handler_type": "scaffold",
         "desc": "上級GASフルセット骨格一括注入（S01〜S04統合）",
         "keywords": ["上級骨格フルセット", "モダン骨格一括", "アーキテクチャ全部", "フルセット骨格", "モダン骨格"]
+    },
+    {
+        "id": "S06", "category": "SCAFFOLD", "name": "settings_externalize", "handler_type": "scaffold",
+        "desc": "表示文字・上限・シート名などの定数を「設定」シートへ外出し",
+        "keywords": ["設定を外に出", "設定シートに出", "定数を外に出", "設定を外", "定数を設定シート", "settings_externalize"]
     },
 
     # 3. デザイン着せ替え棚 (4棚: K01〜K04)
@@ -475,8 +516,74 @@ GAS_UNIFIED_SHELVES = [
         "id": "D04", "category": "DIAG", "name": "rpc_contracts", "handler_type": "rpc_contracts",
         "desc": "RPC戻り値プロパティ整合＆エラー防御検査",
         "keywords": ["戻り値のズレ", "プロパティ不一致", "データ契約", "withfailurehandler漏れ", "契約検査", "rpc戻り値"]
+    },
+
+    # 5. 小さな直しの棚 (2棚: E01〜E02)
+    {
+        "id": "E01", "category": "EDIT", "name": "replace_text", "handler_type": "edit",
+        "desc": "プロジェクト全体（SERVER_JS・HTML）から文字を探して1か所なら置換",
+        "keywords": ["文字を替え", "文字を変え", "文言を替え", "文言を変え", "ボタンの文字", "ラベルを替え", "テキストを替え", "書き換え"]
+    },
+    {
+        "id": "E02", "category": "EDIT", "name": "replace_const", "handler_type": "edit",
+        "desc": "定数・変数の宣言行（const/var/let 名前 = 値）の値だけ置換",
+        "keywords": ["上限を", "定数を", "設定値を", "値を替え", "値を変え", "max_", "sheet_name", "最大件数"]
     }
 ]
+
+def _track_sid_op(fn):
+    """script_id への読み書きで裏送り完了待ち・送り中・失敗通知を統一処理するデコレータ"""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        self._ensure_sync_state()
+        tl = self._op_state_tl
+        prev_depth = getattr(tl, "depth", 0)
+        tl.depth = prev_depth + 1
+        is_outer = (prev_depth == 0)
+
+        script_arg = kwargs.get("script_id")
+        if script_arg is None:
+            script_arg = kwargs.get("project")
+        if script_arg is None and args:
+            script_arg = args[0]
+
+        sid = ""
+        prev_err = None
+        if is_outer:
+            tl.async_put_sids = set()
+            if script_arg:
+                try:
+                    sid = self.resolve_script_id(script_arg)
+                    self._wait_pending_put(sid)
+                    prev_err = self._pop_put_error(sid)
+                except Exception:
+                    sid = ""
+
+        deploy_sync = bool(kwargs.get("deploy", False))
+        try:
+            with self._sync_put_context(enabled=deploy_sync):
+                res = fn(self, *args, **kwargs)
+        except Exception as e:
+            if is_outer and prev_err:
+                warn_msg = f"前の直しが届いていません（{prev_err}）"
+                raise type(e)(f"{warn_msg}\n{e}") from e
+            raise
+        finally:
+            tl.depth = prev_depth
+            async_sids = getattr(tl, "async_put_sids", set()) if is_outer else set()
+            if is_outer:
+                tl.async_put_sids = set()
+
+        if is_outer:
+            if not sid and script_arg:
+                try:
+                    sid = self.resolve_script_id(script_arg)
+                except Exception:
+                    sid = ""
+            return self._decorate_sid_op_result(res, sid, prev_err, async_sids)
+        return res
+    return wrapper
+
 
 class GasClient:
     STANDARD_ENTRY_POINTS = (
@@ -527,6 +634,10 @@ class GasClient:
         self._self_fresh_at = {}
         self._bound_sids = set()
         self._in_write_lookup = threading.local()
+        self._put_threads = {}
+        self._put_errors = {}
+        self._sync_put_tl = threading.local()
+        self._op_state_tl = threading.local()
         self._last_run_context = self._load_last_run_context()
         self._load_clasprc()
 
@@ -550,6 +661,14 @@ class GasClient:
             self._bound_sids = set()
         if not hasattr(self, "_in_write_lookup") or self._in_write_lookup is None:
             self._in_write_lookup = threading.local()
+        if not hasattr(self, "_put_threads") or self._put_threads is None:
+            self._put_threads = {}
+        if not hasattr(self, "_put_errors") or self._put_errors is None:
+            self._put_errors = {}
+        if not hasattr(self, "_sync_put_tl") or self._sync_put_tl is None:
+            self._sync_put_tl = threading.local()
+        if not hasattr(self, "_op_state_tl") or self._op_state_tl is None:
+            self._op_state_tl = threading.local()
         return lock
 
     @property
@@ -967,7 +1086,8 @@ class GasClient:
         return t
 
     def wait_prefetch(self, script_id=None, timeout=5.0):
-        """進行中の裏確認スレッドの完了を待つ（テスト・ベンチマーク用）"""
+        """進行中の裏確認・裏送りスレッドの完了を待つ（テスト・ベンチマーク用）"""
+        self._wait_pending_put(script_id=script_id, timeout=timeout)
         lock = self._ensure_sync_state()
         with lock:
             if script_id is not None:
@@ -981,6 +1101,109 @@ class GasClient:
             if t is not None and t.is_alive():
                 rem = max(0.0, deadline - time.time())
                 t.join(timeout=rem)
+
+    def _can_async_put(self):
+        """裏送り PUT を使ってよいか判定（モック試験では明示指定時のみ裏送り）"""
+        self._ensure_sync_state()
+        if getattr(self._sync_put_tl, "depth", 0) > 0:
+            return False
+        if getattr(self, "_force_async_put", False):
+            return True
+        if getattr(self, "_disable_async_put", False):
+            return False
+        if self._is_mock_obj(getattr(self, "_request_with_retry", None)):
+            return False
+        if self._is_mock_obj(getattr(self, "session", None)):
+            return False
+        return True
+
+    def _wait_pending_put(self, script_id=None, timeout=30.0):
+        """指定 script_id（または全て）の裏送りスレッド完了を待つ（同一スレッド自身は待たない）"""
+        lock = self._ensure_sync_state()
+        cur_th = threading.current_thread()
+        deadline = time.time() + max(0.0, float(timeout))
+        while True:
+            with lock:
+                if not self._put_threads:
+                    threads = []
+                elif script_id is not None:
+                    th = self._put_threads.get(script_id)
+                    if th is None:
+                        try:
+                            sid = self.resolve_script_id(script_id)
+                            th = self._put_threads.get(sid)
+                        except Exception:
+                            th = None
+                    threads = [th] if (th is not None and th is not cur_th) else []
+                else:
+                    threads = [th for th in self._put_threads.values() if th is not None and th is not cur_th]
+            alive = [t for t in threads if t.is_alive()]
+            if not alive:
+                break
+            rem = deadline - time.time()
+            if rem <= 0:
+                break
+            for t in alive:
+                t.join(timeout=max(0.0, deadline - time.time()))
+
+    def _pop_put_error(self, sid):
+        """前回の裏送り失敗理由を取り出してクリアする"""
+        lock = self._ensure_sync_state()
+        with lock:
+            return self._put_errors.pop(sid, None)
+
+    def _mark_async_put_used(self, sid):
+        """最外側の呼び出しへ、この sid で裏送りが開始されたことを伝える"""
+        self._ensure_sync_state()
+        sids = getattr(self._op_state_tl, "async_put_sids", None)
+        if sids is not None:
+            sids.add(sid)
+
+    class _SyncPutCtx:
+        def __init__(self, client, enabled=True):
+            self.client = client
+            self.enabled = bool(enabled)
+
+        def __enter__(self):
+            if self.enabled:
+                self.client._ensure_sync_state()
+                tl = self.client._sync_put_tl
+                tl.depth = getattr(tl, "depth", 0) + 1
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if self.enabled:
+                tl = self.client._sync_put_tl
+                tl.depth = max(0, getattr(tl, "depth", 0) - 1)
+            return False
+
+    def _sync_put_context(self, enabled=True):
+        """deploy=True やロールバック時に同期 PUT を強制するコンテキスト"""
+        return self._SyncPutCtx(self, enabled=enabled)
+
+    def _decorate_sid_op_result(self, res, sid, prev_err, async_sids):
+        """最外側の読み書き返事に「送り中」または「前の直しが届いていません（理由）」を付与する"""
+        used_async = sid in async_sids if sid else bool(async_sids)
+        if isinstance(res, dict):
+            out = dict(res)
+            if used_async:
+                out.setdefault("delivery", "送り中")
+                out.setdefault("notice", "送り中")
+                if isinstance(out.get("markdown_report"), str) and "送り中" not in out["markdown_report"]:
+                    out["markdown_report"] = out["markdown_report"].rstrip() + "\n\n（送り中）"
+            if prev_err:
+                warn_msg = f"前の直しが届いていません（{prev_err}）"
+                out = {"warning": warn_msg, **out}
+                if isinstance(out.get("markdown_report"), str):
+                    out["markdown_report"] = f"{warn_msg}\n\n" + out["markdown_report"]
+            return out
+        if isinstance(res, str) and prev_err:
+            return f"前の直しが届いていません（{prev_err}）\n" + res
+        if prev_err and sid:
+            # リスト等を返す読み取りで消費できなかった場合は次の返事まで残す
+            with self._ensure_sync_state():
+                self._put_errors.setdefault(sid, prev_err)
+        return res
 
     def _remote_modified_epoch(self, sid):
         """クラウド上のプロジェクトの最終更新時刻（UNIX 秒）。取れなければ None。
@@ -1018,6 +1241,7 @@ class GasClient:
         """書き換え用の読み（差分リベース用の元版と変更有無も返す）。
         裏確認の結果が 30 秒以内なら通信待ちゼロで判定し、古い・失敗時はその場で同期確認する。
         クラウドが先へ進んでいれば最新を取得し、(最新, 元の手元の写し, True) を返す。"""
+        self._wait_pending_put(sid)
         lock = self._ensure_sync_state()
         with lock:
             had_copy = sid in self._content_cache or sid in self._load_disk_content_cache()
@@ -1711,9 +1935,11 @@ class GasClient:
 
         raise ValueError(f"指定されたプロジェクトが見つかりません: '{target}'")
 
+    @_track_sid_op
     def get_content(self, script_id, use_cache=True):
         """プロジェクト内の全ファイルコンテンツを取得（メモリ・ディスクキャッシュ＆404時再試行対応）"""
         sid = self.resolve_script_id(script_id)
+        self._wait_pending_put(sid)
         now = time.time()
 
         lock = self._ensure_sync_state()
@@ -1928,6 +2154,7 @@ class GasClient:
 
         raise FileNotFoundError(f"ファイルが見つかりません: '{filename}'")
 
+    @_track_sid_op
     def get_file(self, script_id, filename, start_line=None, end_line=None):
         """特定ファイルのコードを取得（行範囲指定 start_line, end_line 対応）"""
         content = self.get_content(script_id)
@@ -2259,6 +2486,7 @@ class GasClient:
                 raise ValueError(f"関数 '{func_name}' がファイル '{filename}' 内に見つかりません。")
             return span[0], span[1]
 
+    @_track_sid_op
     def get_function(self, script_id, filename, func_name):
         """指定ファイルから特定関数の定義コードブロックを抽出"""
         file_info = self.get_file(script_id, filename)
@@ -2347,6 +2575,7 @@ class GasClient:
 
         return results
 
+    @_track_sid_op
     def replace_function(self, script_id, filename, func_name, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイル内の特定関数定義ブロックを丸ごと置換（Excel の replace_procedure 相当）"""
         sid = self.resolve_script_id(script_id)
@@ -2412,6 +2641,7 @@ class GasClient:
             ret["deployment"] = dep_info
         return ret
 
+    @_track_sid_op
     def patch_function(self, script_id, filename, func_name, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """関数定義スコープ内限定のコード置換（他関数に影響を与えずにピンポイント置換）"""
         sid = self.resolve_script_id(script_id)
@@ -2502,6 +2732,7 @@ class GasClient:
             ret["deployment"] = dep_info
         return ret
 
+    @_track_sid_op
     def add_function(self, script_id, filename, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイルに関数を追加（既存関数との重複チェック付き）"""
         sid = self.resolve_script_id(script_id)
@@ -2562,6 +2793,7 @@ class GasClient:
             ret["deployment"] = dep_info
         return ret
 
+    @_track_sid_op
     def delete_function(self, script_id, filename, func_name, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイルから関数を削除"""
         sid = self.resolve_script_id(script_id)
@@ -2622,6 +2854,7 @@ class GasClient:
             ret["deployment"] = dep_info
         return ret
 
+    @_track_sid_op
     def batch_patch(self, script_id, operations, force=False, dry_run=False, deploy=False, deploy_desc="Batch deployed via GasClient", fast=False):
         """複数ファイル・複数関数の修正をメモリ上で一括合成し、1回通信でアトミック反映"""
         sid = self.resolve_script_id(script_id)
@@ -2821,6 +3054,7 @@ class GasClient:
             ret["deployment"] = dep_info
         return ret
 
+    @_track_sid_op
     def search_code(self, script_id, pattern, regex=False, filename="", exclude="", max_hits=100):
         """プロジェクト内の全ファイル（または指定ファイル）を高速横断検索（grep）"""
         content = self.get_content(script_id)
@@ -3370,7 +3604,9 @@ class GasClient:
         reasons = self._check_broken_transition(orig_files, new_files)
         if reasons:
             if not dry_run:
-                self._put_content(sid, orig_files)
+                # 戻し通信は送り終わりまで待つ
+                with self._sync_put_context(True):
+                    self._put_content(sid, orig_files)
             raise ValueError("【壊したか自動復元】変更により破壊的不整合が発生したため直前の状態へ戻しました: " + " / ".join(reasons))
         return "passed"
 
@@ -3523,28 +3759,17 @@ class GasClient:
             self._cleanup_old_backups(script_id, keep=30)
         return backup_file
 
-    def _put_content(self, script_id, files_list):
-        """Google Apps Script API の content エンドポイントへファイルを PUT 更新"""
-        if not files_list:
-            raise ValueError("保護エラー: 反映対象ファイルが空です。プロジェクト全消去を未然に阻止しました。")
+    def _purge_sid_derived_caches(self, sid):
+        """該当 sid に関連する診断・dock・xray キャッシュを無効化する"""
+        for k in [k for k in self._diag_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
+            self._diag_cache.pop(k, None)
+        for k in [k for k in self._dock_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
+            self._dock_cache.pop(k, None)
+        for k in [k for k in self._xray_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
+            self._xray_cache.pop(k, None)
 
-        sid = self.resolve_script_id(script_id)
-        url = f"https://script.googleapis.com/v1/projects/{sid}/content"
-
-        # API PUT 時に余計な読み取り専用フィールド（createTime, updateTime 等）をサニタイズ
-        cleaned_files = []
-        for f in files_list:
-            cleaned_files.append({
-                "name": f.get("name"),
-                "type": f.get("type"),
-                "source": f.get("source", "")
-            })
-
-        payload = {"files": cleaned_files}
-        res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
-        if res.status_code != 200:
-            raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text}")
-        res_json = res.json() if res.content else {}
+    def _commit_put_success(self, sid, cleaned_files, res_json):
+        """PUT 成功レスポンスに基づいて手元キャッシュとメタ情報を確定する"""
         now = time.time()
         c_dict = copy.deepcopy(res_json if "files" in res_json else {"files": cleaned_files})
         file_ut = self._extract_files_update_epoch(res_json)
@@ -3570,15 +3795,11 @@ class GasClient:
         disk_cache = self._load_disk_content_cache()
         disk_cache[sid] = disk_entry
         self._save_disk_content_cache(disk_cache)
+        with lock:
+            if sid in self._content_cache and self._disk_cache_mtime > now:
+                self._content_cache[sid] = (self._disk_cache_mtime, self._content_cache[sid][1])
         self._schedule_remote_check(sid, set_copy_epoch=True, force=True, min_copy_epoch=file_ut)
-
-        # スマートパージ: 該当 sid に関連する古い診断・dock・xrayキャッシュを即時無効化
-        for k in [k for k in self._diag_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
-            self._diag_cache.pop(k, None)
-        for k in [k for k in self._dock_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
-            self._dock_cache.pop(k, None)
-        for k in [k for k in self._xray_cache if (k[0] == sid if isinstance(k, tuple) else k == sid)]:
-            self._xray_cache.pop(k, None)
+        self._purge_sid_derived_caches(sid)
 
         # projects_list キャッシュ内の該当プロジェクトの modifiedTime を現在日時に即時更新
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -3594,12 +3815,130 @@ class GasClient:
                     p["modifiedTime"] = now_iso
                     break
         self._save_cache()
-        return res_json
+
+    def _restore_put_rollback_state(self, sid, reason, prev_mem, prev_copy_ep, prev_rem_chk, prev_fresh, prev_synced, prev_disk):
+        """裏送り PUT 失敗時に失敗理由を記録し、手元の写しを直前の控え状態へ戻す"""
+        lock = self._ensure_sync_state()
+        with lock:
+            self._put_errors[sid] = reason
+            if prev_mem is not None:
+                self._content_cache[sid] = copy.deepcopy(prev_mem)
+            else:
+                self._content_cache.pop(sid, None)
+            if prev_copy_ep is not None:
+                self._copy_remote_epochs[sid] = copy.deepcopy(prev_copy_ep)
+            else:
+                self._copy_remote_epochs.pop(sid, None)
+            if prev_rem_chk is not None:
+                self._remote_check_cache[sid] = copy.deepcopy(prev_rem_chk)
+            else:
+                self._remote_check_cache.pop(sid, None)
+            if prev_fresh is not None:
+                self._self_fresh_at[sid] = prev_fresh
+            else:
+                self._self_fresh_at.pop(sid, None)
+            if prev_synced:
+                self._synced_sids.add(sid)
+            else:
+                self._synced_sids.discard(sid)
+            self._write_gens[sid] = self._write_gens.get(sid, 0) + 1
+        disk_cache = self._load_disk_content_cache()
+        if prev_disk is not None:
+            disk_cache[sid] = copy.deepcopy(prev_disk)
+        else:
+            disk_cache.pop(sid, None)
+        self._save_disk_content_cache(disk_cache)
+        self._purge_sid_derived_caches(sid)
+
+    def _put_content(self, script_id, files_list):
+        """Google Apps Script API の content エンドポイントへファイルを PUT 更新（既定で裏送り）"""
+        if not files_list:
+            raise ValueError("保護エラー: 反映対象ファイルが空です。プロジェクト全消去を未然に阻止しました。")
+
+        sid = self.resolve_script_id(script_id)
+        self._wait_pending_put(sid)
+        url = f"https://script.googleapis.com/v1/projects/{sid}/content"
+
+        # API PUT 時に余計な読み取り専用フィールド（createTime, updateTime 等）をサニタイズ
+        cleaned_files = []
+        for f in files_list:
+            cleaned_files.append({
+                "name": f.get("name"),
+                "type": f.get("type"),
+                "source": f.get("source", "")
+            })
+
+        payload = {"files": cleaned_files}
+
+        # 失敗時に手元の写しを戻せるよう、直前の状態を退避
+        lock = self._ensure_sync_state()
+        with lock:
+            prev_mem = copy.deepcopy(self._content_cache.get(sid))
+            prev_copy_ep = copy.deepcopy(self._copy_remote_epochs.get(sid))
+            prev_rem_chk = copy.deepcopy(self._remote_check_cache.get(sid))
+            prev_fresh = self._self_fresh_at.get(sid)
+            prev_synced = (sid in self._synced_sids)
+        disk_cache_before = self._load_disk_content_cache()
+        prev_disk = copy.deepcopy(disk_cache_before.get(sid))
+
+        if not self._can_async_put():
+            res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
+            if res.status_code != 200:
+                raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text}")
+            res_json = res.json() if res.content else {}
+            self._commit_put_success(sid, cleaned_files, res_json)
+            return res_json
+
+        # 手元キャッシュを即座に更新し、実通信は裏スレッドで送る
+        now = time.time()
+        optimistic_dict = {"files": copy.deepcopy(cleaned_files)}
+        with lock:
+            while len(self._content_cache) >= 32:
+                self._content_cache.pop(next(iter(self._content_cache)), None)
+            self._content_cache[sid] = (now, copy.deepcopy(optimistic_dict))
+            self._synced_sids.add(sid)
+            self._write_gens[sid] = self._write_gens.get(sid, 0) + 1
+            self._self_fresh_at[sid] = now
+            self._copy_remote_epochs.pop(sid, None)
+            self._remote_check_cache.pop(sid, None)
+        disk_cache = self._load_disk_content_cache()
+        disk_cache[sid] = {"ts": now, "content": copy.deepcopy(optimistic_dict)}
+        self._save_disk_content_cache(disk_cache)
+        with lock:
+            if sid in self._content_cache and self._disk_cache_mtime > now:
+                self._content_cache[sid] = (self._disk_cache_mtime, self._content_cache[sid][1])
+        self._purge_sid_derived_caches(sid)
+
+        def _bg_put_worker():
+            try:
+                res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
+                if res.status_code != 200:
+                    raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text}")
+                res_json = res.json() if res.content else {}
+                self._commit_put_success(sid, cleaned_files, res_json)
+            except Exception as e:
+                reason = str(e).strip().splitlines()[0][:200] if str(e) else type(e).__name__
+                self._restore_put_rollback_state(
+                    sid, reason, prev_mem, prev_copy_ep, prev_rem_chk, prev_fresh, prev_synced, prev_disk
+                )
+            finally:
+                with lock:
+                    cur = self._put_threads.get(sid)
+                    if cur is threading.current_thread():
+                        self._put_threads.pop(sid, None)
+
+        th = threading.Thread(target=_bg_put_worker, name=f"gas-put-{sid[:8]}", daemon=False)
+        with lock:
+            self._put_threads[sid] = th
+        self._mark_async_put_used(sid)
+        th.start()
+        return {"status": "sending", "delivery": "送り中", "files": cleaned_files}
 
     # ==========================================
     # ファイル書き込み / 置換 / 削除 / 復元
     # ==========================================
 
+    @_track_sid_op
     def patch_code(self, script_id, filename, target="", replacement="", replace_all=False, force=False, dry_run=False, patches=None, deploy=False, deploy_desc="Auto deployed via GasClient", verify=False, dev=False, fast=False):
         """ファイル内の特定文字列を置換（複数箇所ヒット時は警告停止、diff 出力・構文検査対応、複数一括置換 patches 対応、自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
@@ -3693,6 +4032,7 @@ class GasClient:
                 ret["verify"] = verify_res
         return ret
 
+    @_track_sid_op
     def replace_file(self, script_id, filename, new_source, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """ファイルの中身を丸ごと置き換え（自動デプロイ対応）"""
         sid = self.resolve_script_id(script_id)
@@ -3759,6 +4099,7 @@ class GasClient:
             ret["deployment"] = dep_info
         return ret
 
+    @_track_sid_op
     def add_file(self, script_id, filename, file_type, source="", force=False):
         """新規ファイルを追加"""
         raw_name = re.sub(r'[\u200b-\u200d\ufeff\x00-\x1f]', '', str(filename)).strip() if filename else ""
@@ -3814,6 +4155,7 @@ class GasClient:
             "syntax_check": syntax_status
         }
 
+    @_track_sid_op
     def delete_file(self, script_id, filename):
         """ファイルを削除"""
         sid = self.resolve_script_id(script_id)
@@ -3858,6 +4200,7 @@ class GasClient:
                 pass
         return results
 
+    @_track_sid_op
     def restore_backup(self, script_id, backup_file, filename="", force=False):
         """バックアップから復元（復元直前の安全スナップショット退避付き）"""
         sid = self.resolve_script_id(script_id)
@@ -4014,6 +4357,7 @@ class GasClient:
     def create_version(self, script_id, description="Auto version via GasClient"):
         """プロジェクトの不変バージョンを作成"""
         sid = self.resolve_script_id(script_id)
+        self._wait_pending_put(sid)
         url = f"https://script.googleapis.com/v1/projects/{sid}/versions"
         payload = {"description": description}
         res = self._request_with_retry("POST", url, headers=self._headers(), json=payload, timeout=15)
@@ -4170,6 +4514,7 @@ class GasClient:
             "diff": diff_text
         }
 
+    @_track_sid_op
     def restore_version(self, script_id, version_number, filename="", deploy=False, deploy_desc="Restored from version"):
         """Googleクラウド上の指定バージョンから全体または特定ファイルを復元"""
         sid = self.resolve_script_id(script_id)
@@ -4400,6 +4745,7 @@ class GasClient:
     def deploy(self, script_id, description="Auto deployed via GasClient", deployment_id=None, refresh=False, fast=False):
         """新バージョンを作成し、既存の Web アプリデプロイを更新（再デプロイ）"""
         sid = self.resolve_script_id(script_id)
+        self._wait_pending_put(sid)
 
         # 直前キャッシュ再利用判定（fast=True、または直前5秒以内に_content_cache更新がある場合）
         use_c = bool(fast) or (sid in self._content_cache and (time.time() - self._content_cache[sid][0] < 5.0))
@@ -4950,6 +5296,7 @@ class GasClient:
             args_list = [args]
 
         sid = self.resolve_script_id(script_id)
+        self._wait_pending_put(sid)
 
         # 同じ関数を直して再実行しても通らない回数（verify_fix 以外の再実行でも数える）
         _prev = self._last_run_context.get(sid, {})
@@ -5941,6 +6288,7 @@ class GasClient:
             ret["deployment"] = dep_info
         return ret
 
+    @_track_sid_op
     def diagnose(self, script_id):
         """GAS プロジェクトの包括的健康診断（構文検査・重複衝突・RPCリンク切れ・テンプレート検証・エントリーポイント）
 
@@ -6805,6 +7153,7 @@ class GasClient:
 
         return score, grade, prescriptions
 
+    @_track_sid_op
     def gas_dock(self, script_id, filename="Index"):
         """GASドック（diagnose + xray 統合診断、健康点算出、直す手処方箋）"""
         sid = self.resolve_script_id(script_id)
@@ -7362,6 +7711,7 @@ sandbox.self = sandbox;
                 "file": target_file.get("name", "")
             }
 
+    @_track_sid_op
     def xray(self, script_id, filename="Index"):
         """GAS プロジェクトのフロントエンド（HTML）とバックエンド（SERVER_JS）を深層リバースエンジニアリング（レントゲン解析）する。
 
@@ -7980,6 +8330,7 @@ function doGet() {{
         }
 
 
+    @_track_sid_op
     def clean_dead(self, script_id: str, dry_run: bool = True, names: list = None, force: bool = False, deploy: bool = False, deploy_desc: str = "Clean dead functions via GasClient") -> dict:
         """レントゲン解析で検出された孤立した死にコード（Dead Functions）を名指しで安全に削除する"""
         notice_msg = "Apps Script の画面で作ったトリガー・シートの式から呼ぶ関数は、コードからは見えません。消す前に［トリガー］画面とシートの式を確かめてください。"
@@ -9175,6 +9526,7 @@ function doGet() {{
         }
 
 
+    @_track_sid_op
     def design_skin(self, project: str, filename: str = "Index", preset: str = "linear", deploy: bool = False) -> dict:
         """
         HTMLファイルにプロ仕様の視覚レイヤー（CSS変数・タイポグラフィ・8pxグリッド・多層シャドウ・半透明サーフェス）を安全に注入・着せ替えします。
@@ -9561,6 +9913,7 @@ function doGet() {{
         scored.sort(key=lambda x: x[0], reverse=True)
         return [item[1] for item in scored]
 
+    @_track_sid_op
     def gas_recipe(self, script_id="", filename="", func_name="", recipe_id="", apply=False, ttl=300, deploy=False, ask="", list_only=False):
         """GAS 高速化レシピ棚（頻出パターンの検出・処方コード生成・自動変換・自然言語直撃）"""
         if list_only:
@@ -10017,11 +10370,12 @@ function doGet() {{
             "markdown_report": md_report
         }
 
+    @_track_sid_op
     def gas_scaffold(self, script_id="", scaffold_id="", filename="Index", server_file="Code", apply=False, deploy=False, list_only=False) -> dict:
         """上級GASアーキテクチャ骨格・部品棚（プレビュー・安全注入・二重防止）"""
         if list_only or not scaffold_id:
             lines = [
-                "=== 🏗️ 上級GASアーキテクチャ骨格棚カタログ (全5種) ===",
+                "=== 🏗️ 上級GASアーキテクチャ骨格棚カタログ (全6種) ===",
                 "| ID | 部品名 | 対象 | 概要 | キーワード |",
                 "| --- | --- | --- | --- | --- |"
             ]
@@ -10041,7 +10395,10 @@ function doGet() {{
                 matched = s
                 break
         if not matched:
-            raise ValueError(f"指定された骨格棚ID '{scaffold_id}' が見つかりません。S01〜S05 または部品名を指定してください。")
+            raise ValueError(f"指定された骨格棚ID '{scaffold_id}' が見つかりません。S01〜S06 または部品名を指定してください。")
+
+        if matched["id"] == "S06":
+            return self._gas_scaffold_s06(script_id, apply=apply, deploy=deploy)
 
         # プレビュー時 (apply=False)
         if not apply:
@@ -10191,12 +10548,702 @@ function doGet() {{
             "markdown_report": "\n".join(lines)
         }
 
+    def _get_bound_spreadsheet_id(self, sid: str):
+        """コンテナバインドされたスプレッドシートの ID を返す（紐づいていなければ None）"""
+        url = f"https://script.googleapis.com/v1/projects/{sid}"
+        res = self._request_with_retry("GET", url, headers=self._headers(), timeout=15)
+        if res.status_code != 200:
+            return None
+        data = res.json() if res.content else {}
+        parent_id = (data.get("parentId") or "").strip()
+        if not parent_id:
+            return None
+        # スプレッドシートか念のため確認（モック等で Drive が無い場合は parentId をそのまま信じる）
+        try:
+            d_res = self._request_with_retry(
+                "GET",
+                f"https://www.googleapis.com/drive/v3/files/{parent_id}",
+                headers=self._headers(),
+                params={"fields": "id,name,mimeType"},
+                timeout=10,
+            )
+            if d_res.status_code == 200:
+                mime = (d_res.json() or {}).get("mimeType", "")
+                if mime and mime != "application/vnd.google-apps.spreadsheet":
+                    return None
+        except Exception:
+            pass
+        return parent_id
+
+    @staticmethod
+    def _parse_js_literal_value(raw_val: str):
+        """単純な JS リテラル（文字列・数値・真偽値）を Python 値に変換する。対象外なら (False, None)"""
+        s = raw_val.strip()
+        if not s:
+            return False, None
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+            inner = s[1:-1].replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+            return True, inner
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", s):
+            return True, float(s) if "." in s else int(s)
+        if s == "true":
+            return True, True
+        if s == "false":
+            return True, False
+        return False, None
+
+    @staticmethod
+    def _split_js_decl_rhs(rhs: str):
+        """宣言行の右辺からクォート外の末尾セミコロンと // コメントを切り離す -> (value_raw, suffix)"""
+        in_quote = None
+        escaped = False
+        comment_idx = -1
+        for i, ch in enumerate(rhs):
+            if escaped:
+                escaped = False
+                continue
+            if in_quote is not None:
+                if ch == "\\":
+                    escaped = True
+                elif ch == in_quote:
+                    in_quote = None
+                continue
+            if ch in ("'", '"', "`"):
+                in_quote = ch
+                continue
+            if ch == "/" and i + 1 < len(rhs) and rhs[i + 1] == "/":
+                comment_idx = i
+                break
+        if comment_idx >= 0:
+            code_part = rhs[:comment_idx]
+            comment_part = rhs[comment_idx:]
+        else:
+            code_part = rhs
+            comment_part = ""
+        trimmed_code = code_part.rstrip()
+        ws_after_code = code_part[len(trimmed_code):]
+        semi = ""
+        if trimmed_code.endswith(";"):
+            semi = ";"
+            trimmed_code = trimmed_code[:-1].rstrip()
+        return trimmed_code.strip(), f"{semi}{ws_after_code}{comment_part}"
+
+    def _collect_top_level_constants(self, files: list) -> list:
+        """SERVER_JS ファイルからトップレベルの表示文字・上限・シート名等の定数宣言を抽出する"""
+        const_pat = re.compile(
+            r"^(const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+)$"
+        )
+        items = []
+        for f in files:
+            if f.get("type") != "SERVER_JS":
+                continue
+            fname = f.get("name", "")
+            src = f.get("source", "")
+            lines = src.splitlines()
+            # 関数範囲内はトップレベル対象外とする
+            fn_ranges = [
+                (fn["start_line"], fn["end_line"])
+                for fn in self._extract_functions_from_js(src, 0)
+            ]
+            for idx, line in enumerate(lines, 1):
+                if any(s <= idx <= e for s, e in fn_ranges):
+                    continue
+                if line[:1].isspace():
+                    continue
+                m = const_pat.match(line)
+                if not m:
+                    continue
+                kw, name = m.group(1), m.group(2)
+                raw_val, _ = self._split_js_decl_rhs(m.group(3))
+                if "getSetting_(" in raw_val:
+                    continue
+                ok, parsed = self._parse_js_literal_value(raw_val)
+                if not ok:
+                    continue
+                items.append({
+                    "file": fname,
+                    "line": idx,
+                    "kw": kw,
+                    "name": name,
+                    "raw_value": raw_val,
+                    "value": parsed,
+                    "orig_line": line,
+                })
+        return items
+
+    def _gas_scaffold_s06(self, script_id: str, apply: bool = False, deploy: bool = False) -> dict:
+        """S06: コード内の定数を紐づいたスプレッドシートの「設定」シートへ外出しする下見・反映"""
+        if not script_id:
+            raise ValueError("S06 を実行するプロジェクト名またはスクリプトIDを指定してください。")
+        sid = self.resolve_script_id(script_id)
+        parent_ss_id = self._get_bound_spreadsheet_id(sid)
+        if not parent_ss_id:
+            msg = (
+                "=== 🏗️ 上級GAS骨格 [S06] 設定を外に出す ===\n"
+                "判定: 対象外（このプロジェクトに紐づいたスプレッドシートがありません）"
+            )
+            return {
+                "status": "not_applicable",
+                "script_id": sid,
+                "reason": "紐づいたスプレッドシートがありません",
+                "applied": False,
+                "markdown_report": msg,
+            }
+
+        content, _, _ = self._get_content_for_write_with_status(sid)
+        files = content.get("files", [])
+        orig_files = copy.deepcopy(files)
+        constants = self._collect_top_level_constants(files)
+        if not constants:
+            msg = (
+                "=== 🏗️ 上級GAS骨格 [S06] 設定を外に出す ===\n"
+                f"紐づきシートID: {parent_ss_id}\n"
+                "状態: 外出し対象のトップレベル定数が見つかりませんでした。"
+            )
+            return {
+                "status": "no_constants",
+                "script_id": sid,
+                "spreadsheet_id": parent_ss_id,
+                "applied": False,
+                "settings": [],
+                "markdown_report": msg,
+            }
+
+        # 「設定」シート（項目・値の 2 列）のデータと 2 号機向け操作を組み立てる
+        sheet_rows = [["項目", "値"]] + [[c["name"], c["value"]] for c in constants]
+        tsv_text = "\n".join(
+            f"{row[0]}\t" + str(row[1]).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+            for row in sheet_rows
+        )
+        ws_ops = [
+            {"shelf": "sheet.add", "name": "設定"},
+            {"shelf": "write", "sheet": "設定", "range": "A1", "tsv": tsv_text},
+        ]
+
+        # コード側の差し替え下見を作成
+        s06_item = next(s for s in GAS_SCAFFOLD_CATALOG if s["id"] == "S06")
+        by_file = collections.defaultdict(list)
+        for c in constants:
+            by_file[c["file"]].append(c)
+
+        new_files = copy.deepcopy(files)
+        diff_chunks = []
+        changed_file_names = []
+        helper_added_file = None
+
+        for f in new_files:
+            fname = f.get("name", "")
+            if f.get("type") != "SERVER_JS" or fname not in by_file:
+                continue
+            orig_src = f.get("source", "")
+            lines = orig_src.splitlines(keepends=True)
+            for c in by_file[fname]:
+                l_idx = c["line"] - 1
+                eol = "\r\n" if lines[l_idx].endswith("\r\n") else ("\n" if lines[l_idx].endswith("\n") else "")
+                lines[l_idx] = f"{c['kw']} {c['name']} = getSetting_({json.dumps(c['name'], ensure_ascii=False)}, {c['raw_value']});{eol}"
+            new_src = "".join(lines)
+            if helper_added_file is None and s06_item["marker"] not in new_src and "function getSetting_(" not in new_src:
+                new_src = new_src.rstrip() + "\n\n" + s06_item["code"] + "\n"
+                helper_added_file = fname
+            f["source"] = new_src
+            changed_file_names.append(fname)
+            d_iter = list(difflib.unified_diff(
+                orig_src.splitlines(keepends=True),
+                new_src.splitlines(keepends=True),
+                fromfile=f"a/{fname}",
+                tofile=f"b/{fname}",
+                n=2,
+            ))
+            diff_chunks.append("".join(d_iter))
+
+        combined_diff = "\n".join(diff_chunks)
+        table_lines = ["| 項目 | 値 | 元ファイル |", "| --- | --- | --- |"]
+        for c in constants:
+            table_lines.append(f"| {c['name']} | {c['value']} | {c['file']}:L{c['line']} |")
+
+        if not apply:
+            report_lines = [
+                f"=== 🏗️ 上級GAS骨格下見 [S06] {s06_item['title']} ===",
+                f"紐づきスプレッドシート: {parent_ss_id}",
+                f"検出定数: {len(constants)}件",
+                "",
+                "### 📋 「設定」シート出力内容（項目・値）",
+                *table_lines,
+                "",
+                "### 📝 コード変更下見 (Diff)",
+                "```diff",
+                combined_diff.rstrip(),
+                "```",
+                "",
+                "※ 読み込み方式（毎回／キャッシュ）は確認事項のため暫定の単純読み込み関数を提示しています。",
+                "💡 反映するには apply=True を指定してください。",
+            ]
+            return {
+                "status": "preview",
+                "script_id": sid,
+                "spreadsheet_id": parent_ss_id,
+                "applied": False,
+                "settings": [{"name": c["name"], "value": c["value"], "file": c["file"], "line": c["line"]} for c in constants],
+                "sheet_rows": sheet_rows,
+                "ws_ops": ws_ops,
+                "diff": combined_diff,
+                "markdown_report": "\n".join(report_lines),
+            }
+
+        # apply=True のときのみコードを書き換える
+        for f in new_files:
+            if f.get("name") in changed_file_names:
+                self._validate_syntax(f["name"], f["source"], file_type="SERVER_JS")
+        backup_path = self._save_backup(sid, content)
+        put_res = self._put_content(sid, new_files)
+        self._verify_and_rollback_if_broken(sid, orig_files, new_files, fast=False)
+
+        ret = {
+            "status": "success",
+            "script_id": sid,
+            "spreadsheet_id": parent_ss_id,
+            "applied": True,
+            "delivery": put_res.get("delivery", "") if isinstance(put_res, dict) else "",
+            "settings": [{"name": c["name"], "value": c["value"], "file": c["file"], "line": c["line"]} for c in constants],
+            "sheet_rows": sheet_rows,
+            "ws_ops": ws_ops,
+            "backup_file": str(backup_path),
+            "diff": combined_diff,
+            "markdown_report": "\n".join([
+                f"=== 🏗️ 上級GAS骨格反映 [S06] {s06_item['title']} ===",
+                f"紐づきスプレッドシート: {parent_ss_id}",
+                f"対象定数: {len(constants)}件 | 設定シート用データ準備済み（2列: 項目・値）",
+                *table_lines,
+                "```diff",
+                combined_diff.rstrip(),
+                "```",
+            ]),
+        }
+        if deploy:
+            ret["deployment"] = self.deploy(sid, description="S06 settings externalized", fast=True)
+        return ret
+
+    @staticmethod
+    def _parse_e01_query(query: str):
+        """E01 頼み文からかぎかっこ内の (変更前, 変更後) の 2 語を取り出す"""
+        if not query:
+            return None, None
+        tokens = []
+        for m in re.finditer(r"「([^」]+)」|『([^』]+)』|'([^']+)'|\"([^\"]+)\"", query):
+            val = m.group(1) or m.group(2) or m.group(3) or m.group(4)
+            if val is not None:
+                tokens.append(val)
+        if len(tokens) >= 2:
+            return tokens[0], tokens[1]
+        return None, None
+
+    @staticmethod
+    def _parse_e02_query(query: str):
+        """E02 頼み文から (対象名, 新しい値) を取り出す"""
+        if not query:
+            return None, None
+        q = query.strip()
+        q = re.sub(r"^(?:定数|変数|設定値|設定)\s+", "", q)
+        m = re.match(
+            r"^[「『'\"]?([A-Za-z0-9_\u3040-\u30ff\u4e00-\u9fffー$]+)[」』'\"]?\s*(?:の値)?\s*(?:を|は)\s*(.+?)\s*(?:に(?:替え|変え|変更|し|直し|セット|設定)?(?:て|る|ます)?|へ(?:替え|変え|変更)?(?:て|る)?)?$",
+            q,
+        )
+        if not m:
+            return None, None
+        name = m.group(1).strip()
+        val_raw = (m.group(2) or "").strip()
+        # 末尾の助詞「に」が残った場合を剥がす
+        val_raw = re.sub(r"\s*に$", "", val_raw).strip()
+        if not name or not val_raw:
+            return None, None
+        return name, val_raw
+
+    def _find_line_func_name(self, ftype: str, source: str, line_no: int) -> str:
+        """指定行が属する関数名（見つからなければトップレベル／HTML）を返す"""
+        if ftype == "SERVER_JS":
+            for fn in self._extract_functions_from_js(source, 0):
+                if fn["start_line"] <= line_no <= fn["end_line"]:
+                    return fn["name"]
+            return "(トップレベル)"
+        if ftype == "HTML":
+            for sm in re.finditer(r"(<script[^>]*>)([\s\S]*?)(</script>)", source, re.IGNORECASE):
+                if not self._is_js_script_tag(sm.group(1)):
+                    continue
+                offset = source.count("\n", 0, sm.start(2))
+                for fn in self._extract_functions_from_js(sm.group(2), offset):
+                    if fn["start_line"] <= line_no <= fn["end_line"]:
+                        return fn["name"]
+            return "(HTML)"
+        return f"({ftype})"
+
+    def _gas_edit_text(self, sid: str, query: str, apply: bool = False, deploy: bool = False) -> dict:
+        """E01: 全ファイル（SERVER_JS・HTML）から文字を探して 1 か所なら替える"""
+        old_text, new_text = self._parse_e01_query(query)
+        if old_text is None or new_text is None:
+            return {
+                "status": "need_args",
+                "shelf_id": "E01",
+                "applied": False,
+                "markdown_report": "=== ✏️ [E01] 文字を替える ===\n変更前と変更後の文字を「」や『』で 2 つ指定してください（例: 『送信』を『保存』に替えて）。",
+            }
+
+        content, _, _ = self._get_content_for_write_with_status(sid)
+        files = content.get("files", [])
+        orig_files = copy.deepcopy(files)
+
+        hits = []
+        for f in files:
+            ftype = f.get("type", "")
+            if ftype not in ("SERVER_JS", "HTML"):
+                continue
+            fname = f.get("name", "")
+            src = f.get("source", "")
+            lines = src.splitlines()
+            pos = 0
+            while True:
+                idx = src.find(old_text, pos)
+                if idx < 0:
+                    break
+                line_no = src.count("\n", 0, idx) + 1
+                func_name = self._find_line_func_name(ftype, src, line_no)
+                line_preview = lines[line_no - 1].strip() if 0 <= line_no - 1 < len(lines) else ""
+                hits.append({
+                    "file": fname,
+                    "type": ftype,
+                    "function": func_name,
+                    "line": line_no,
+                    "start": idx,
+                    "end": idx + len(old_text),
+                    "line_text": line_preview,
+                    "file_obj": f,
+                })
+                pos = idx + max(1, len(old_text))
+
+        if not hits:
+            return {
+                "status": "not_found",
+                "shelf_id": "E01",
+                "old_text": old_text,
+                "new_text": new_text,
+                "hits": 0,
+                "applied": False,
+                "markdown_report": f"=== ✏️ [E01] 文字を替える ===\n『{old_text}』は全ファイル（SERVER_JS・HTML）で 0 か所（見つかりませんでした）。",
+            }
+
+        if len(hits) >= 2:
+            loc_lines = [
+                f"  - {h['file']} | 関数: {h['function']} | L{h['line']}: `{h['line_text']}`"
+                for h in hits
+            ]
+            return {
+                "status": "ambiguous",
+                "shelf_id": "E01",
+                "old_text": old_text,
+                "new_text": new_text,
+                "hits": len(hits),
+                "matches": [{k: v for k, v in h.items() if k != "file_obj"} for h in hits],
+                "applied": False,
+                "markdown_report": "\n".join([
+                    f"=== ✏️ [E01] 文字を替える（{len(hits)} か所ヒットのため変更せず） ===",
+                    f"対象: 『{old_text}』 -> 『{new_text}』",
+                    *loc_lines,
+                ]),
+            }
+
+        hit = hits[0]
+        target_file = hit["file_obj"]
+        old_src = target_file.get("source", "")
+        new_src = old_src[:hit["start"]] + new_text + old_src[hit["end"]:]
+        diff_text = "".join(difflib.unified_diff(
+            old_src.splitlines(keepends=True),
+            new_src.splitlines(keepends=True),
+            fromfile=f"a/{target_file['name']}",
+            tofile=f"b/{target_file['name']}",
+            n=2,
+        ))
+        syntax_status = self._validate_syntax(target_file["name"], new_src, file_type=target_file.get("type", "SERVER_JS"))
+
+        if not apply:
+            return {
+                "status": "preview",
+                "shelf_id": "E01",
+                "file": target_file["name"],
+                "function": hit["function"],
+                "line": hit["line"],
+                "hits": 1,
+                "applied": False,
+                "syntax_check": syntax_status,
+                "diff": diff_text,
+                "markdown_report": "\n".join([
+                    f"=== ✏️ [E01] 文字を替える（下見） ===",
+                    f"箇所: {target_file['name']} ({hit['function']} L{hit['line']})",
+                    f"構文検査: {syntax_status}",
+                    "```diff",
+                    diff_text.rstrip(),
+                    "```",
+                ]),
+            }
+
+        backup_path = self._save_backup(sid, content)
+        target_file["source"] = new_src
+        put_res = self._put_content(sid, files)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, fast=False)
+        ret = {
+            "status": "success",
+            "shelf_id": "E01",
+            "file": target_file["name"],
+            "function": hit["function"],
+            "line": hit["line"],
+            "hits": 1,
+            "applied": True,
+            "delivery": put_res.get("delivery", "") if isinstance(put_res, dict) else "",
+            "backup_file": str(backup_path),
+            "syntax_check": syntax_status,
+            "diff": diff_text,
+            "markdown_report": "\n".join([
+                f"=== ✏️ [E01] 文字を替える（反映完了） ===",
+                f"箇所: {target_file['name']} ({hit['function']} L{hit['line']})",
+                f"構文検査: {syntax_status}",
+                "```diff",
+                diff_text.rstrip(),
+                "```",
+            ]),
+        }
+        if deploy:
+            ret["deployment"] = self.deploy(sid, description="E01 replace_text", fast=True)
+        return ret
+
+    def _gas_edit_const(self, sid: str, query: str, apply: bool = False, deploy: bool = False) -> dict:
+        """E02: const/var/let 名前 = 値 の 1 行を探して値だけ替える（日本語名は候補一覧のみ）"""
+        name, val_raw = self._parse_e02_query(query)
+        if not name or not val_raw:
+            return {
+                "status": "need_args",
+                "shelf_id": "E02",
+                "applied": False,
+                "markdown_report": "=== 🔢 [E02] 値を替える ===\n定数名と新しい値を指定してください（例: 上限を 100 に、SHEET_NAME を『名簿』に）。",
+            }
+
+        content, _, _ = self._get_content_for_write_with_status(sid)
+        files = content.get("files", [])
+        orig_files = copy.deepcopy(files)
+
+        decl_pat = re.compile(
+            r"^([ \t]*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*)(.+)$"
+        )
+        all_consts = []
+        for f in files:
+            ftype = f.get("type", "")
+            if ftype not in ("SERVER_JS", "HTML"):
+                continue
+            fname = f.get("name", "")
+            src = f.get("source", "")
+            for line_no, line in enumerate(src.splitlines(), 1):
+                m = decl_pat.match(line)
+                if not m:
+                    continue
+                val_raw_part, suffix_part = self._split_js_decl_rhs(m.group(3))
+                all_consts.append({
+                    "file": fname,
+                    "type": ftype,
+                    "line": line_no,
+                    "name": m.group(2),
+                    "prefix": m.group(1),
+                    "value_raw": val_raw_part,
+                    "suffix": suffix_part,
+                    "orig_line": line,
+                    "function": self._find_line_func_name(ftype, src, line_no),
+                    "file_obj": f,
+                })
+
+        is_ident = bool(re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name))
+        if not is_ident:
+            # 名前が日本語の言い方のときは、当たりそうな定数を並べて返すだけ（直さない）
+            hint_map = {
+                "上限": ("max", "limit", "cap", "upper"),
+                "最大": ("max", "limit"),
+                "最小": ("min",),
+                "シート": ("sheet",),
+                "件数": ("count", "limit", "max", "rows", "num"),
+                "行数": ("row", "rows", "max"),
+                "タイムアウト": ("timeout", "wait", "ms", "sec"),
+                "待ち": ("wait", "delay", "sleep", "timeout"),
+                "名前": ("name", "title"),
+                "名称": ("name", "title", "label"),
+                "リトライ": ("retry", "retries"),
+            }
+            hints = []
+            for k, words in hint_map.items():
+                if k in name:
+                    hints.extend(words)
+            scored = []
+            for c in all_consts:
+                low = (c["name"] + " " + c["orig_line"]).lower()
+                sc = sum(2 for w in hints if w in low) + (3 if name in c["orig_line"] else 0)
+                if c["name"].isupper():
+                    sc += 1
+                scored.append((sc, c))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            cand_list = [x[1] for x in scored[:15]]
+            cand_lines = [
+                f"  - {c['name']} = {c['value_raw']}  ({c['file']} {c['function']} L{c['line']})"
+                for c in cand_list
+            ]
+            return {
+                "status": "candidates",
+                "shelf_id": "E02",
+                "query_name": name,
+                "requested_value": val_raw,
+                "applied": False,
+                "candidates": [{k: v for k, v in c.items() if k != "file_obj"} for c in cand_list],
+                "markdown_report": "\n".join([
+                    f"=== 🔢 [E02] 値を替える（日本語指定「{name}」のため候補一覧のみ） ===",
+                    "対象の英数字定数名を指定して実行してください（例: MAX_ROWS を 100 に）:",
+                    *(cand_lines if cand_lines else ["  (const/var/let の定数宣言が見つかりませんでした)"]),
+                ]),
+            }
+
+        hits = [c for c in all_consts if c["name"] == name]
+        if not hits:
+            return {
+                "status": "not_found",
+                "shelf_id": "E02",
+                "const_name": name,
+                "applied": False,
+                "markdown_report": f"=== 🔢 [E02] 値を替える ===\n定数/変数 `{name}` の宣言行が見つかりませんでした。",
+            }
+
+        if len(hits) >= 2:
+            loc_lines = [f"  - {c['file']} ({c['function']} L{c['line']}): `{c['orig_line'].strip()}`" for c in hits]
+            return {
+                "status": "ambiguous",
+                "shelf_id": "E02",
+                "const_name": name,
+                "hits": len(hits),
+                "applied": False,
+                "markdown_report": "\n".join([
+                    f"=== 🔢 [E02] 値を替える（{len(hits)} か所ヒットのため変更せず） ===",
+                    *loc_lines,
+                ]),
+            }
+
+        hit = hits[0]
+        # 新しい値をリテラル整形（『』や「」は元のクォート種別に合わせて文字列化）
+        q_m = re.fullmatch(r"[「『](.*)[」』]", val_raw)
+        orig_val = hit["value_raw"]
+        orig_quote = orig_val[0] if len(orig_val) >= 2 and orig_val[0] in ("'", '"') and orig_val[-1] == orig_val[0] else "'"
+        if q_m:
+            new_lit = json.dumps(q_m.group(1), ensure_ascii=False)
+            if orig_quote == "'":
+                new_lit = "'" + q_m.group(1).replace("\\", "\\\\").replace("'", "\\'") + "'"
+        elif re.fullmatch(r"(?:-?\d+(?:\.\d+)?|true|false|null|['\"].*['\"])", val_raw):
+            new_lit = val_raw
+        elif orig_val and orig_val[0] in ("'", '"'):
+            new_lit = f"{orig_quote}{val_raw}{orig_quote}"
+        else:
+            new_lit = val_raw
+
+        # 値末尾のセミコロンが value_raw 側に入っていた場合の保護
+        val_core = orig_val.rstrip()
+        semi = ""
+        if val_core.endswith(";"):
+            semi = ";"
+        new_line = f"{hit['prefix']}{new_lit}{semi}{hit['suffix']}"
+
+        target_file = hit["file_obj"]
+        old_src = target_file.get("source", "")
+        src_lines = old_src.splitlines(keepends=True)
+        l_idx = hit["line"] - 1
+        eol = "\r\n" if src_lines[l_idx].endswith("\r\n") else ("\n" if src_lines[l_idx].endswith("\n") else "")
+        src_lines[l_idx] = new_line + eol
+        new_src = "".join(src_lines)
+
+        diff_text = "".join(difflib.unified_diff(
+            old_src.splitlines(keepends=True),
+            new_src.splitlines(keepends=True),
+            fromfile=f"a/{target_file['name']}",
+            tofile=f"b/{target_file['name']}",
+            n=2,
+        ))
+        syntax_status = self._validate_syntax(target_file["name"], new_src, file_type=target_file.get("type", "SERVER_JS"))
+
+        if not apply:
+            return {
+                "status": "preview",
+                "shelf_id": "E02",
+                "file": target_file["name"],
+                "function": hit["function"],
+                "line": hit["line"],
+                "const_name": name,
+                "old_value": orig_val,
+                "new_value": new_lit,
+                "applied": False,
+                "syntax_check": syntax_status,
+                "diff": diff_text,
+                "markdown_report": "\n".join([
+                    f"=== 🔢 [E02] 値を替える（下見） ===",
+                    f"箇所: {target_file['name']} ({hit['function']} L{hit['line']})",
+                    f"構文検査: {syntax_status}",
+                    "```diff",
+                    diff_text.rstrip(),
+                    "```",
+                ]),
+            }
+
+        backup_path = self._save_backup(sid, content)
+        target_file["source"] = new_src
+        put_res = self._put_content(sid, files)
+        self._verify_and_rollback_if_broken(sid, orig_files, files, fast=False)
+        ret = {
+            "status": "success",
+            "shelf_id": "E02",
+            "file": target_file["name"],
+            "function": hit["function"],
+            "line": hit["line"],
+            "const_name": name,
+            "old_value": orig_val,
+            "new_value": new_lit,
+            "applied": True,
+            "delivery": put_res.get("delivery", "") if isinstance(put_res, dict) else "",
+            "backup_file": str(backup_path),
+            "syntax_check": syntax_status,
+            "diff": diff_text,
+            "markdown_report": "\n".join([
+                f"=== 🔢 [E02] 値を替える（反映完了） ===",
+                f"箇所: {target_file['name']} ({hit['function']} L{hit['line']})",
+                f"構文検査: {syntax_status}",
+                "```diff",
+                diff_text.rstrip(),
+                "```",
+            ]),
+        }
+        if deploy:
+            ret["deployment"] = self.deploy(sid, description="E02 replace_const", fast=True)
+        return ret
+
+    def _gas_edit_shelf(self, sid: str, shelf_id: str, query: str = "", apply: bool = False, deploy: bool = False) -> dict:
+        """EDIT 棚（E01/E02）のディスパッチ"""
+        if shelf_id.upper() == "E01":
+            return self._gas_edit_text(sid, query=query, apply=apply, deploy=deploy)
+        if shelf_id.upper() == "E02":
+            return self._gas_edit_const(sid, query=query, apply=apply, deploy=deploy)
+        raise ValueError(f"未対応の編集棚ID: {shelf_id}")
+
     def match_shelf(self, query: str) -> dict:
-        """頼み文（日本語・英語）から最適な棚（全25棚）を特定して返す"""
+        """頼み文（日本語・英語）から最適な棚（全28棚）を特定して返す"""
         if not query or not query.strip():
             return {"shelf_id": "", "category": "", "name": "", "score": 0, "candidates": []}
 
         q = query.strip().lower()
+        e01_pair = self._parse_e01_query(query)
+        e02_pair = self._parse_e02_query(query)
+        has_other_kw = any(
+            kw.lower() in q
+            for s in GAS_UNIFIED_SHELVES
+            if s["category"] not in ("EDIT",)
+            for kw in s.get("keywords", [])
+            if kw not in ("書き換え",)
+        )
         scored = []
 
         for s in GAS_UNIFIED_SHELVES:
@@ -10213,6 +11260,12 @@ function doGet() {{
                     score += 15 + len(kw_low) * 2
                 elif any(tok in kw_low for tok in q.split() if len(tok) >= 2):
                     score += 5
+
+            # E01/E02 の構文パターン加点（他棚の固有キーワードと衝突しない場合）
+            if s["id"] == "E01" and e01_pair[0] is not None and not has_other_kw:
+                score += 45
+            elif s["id"] == "E02" and e02_pair[0] is not None and e01_pair[0] is None and not has_other_kw:
+                score += 40
 
             if score > 0:
                 scored.append((score, s))
@@ -10234,7 +11287,7 @@ function doGet() {{
         }
 
     def check_shelves(self) -> dict:
-        """全25棚のゴールデン頼み文テスト（34問）を機械検証"""
+        """全28棚のゴールデン頼み文テスト（42問）を機械検証"""
         golden_cases = [
             ("シートに1行ずつ追記するのを速くして", "R01"),
             ("appendRow を配列一括にしたい", "R01"),
@@ -10269,7 +11322,15 @@ function doGet() {{
             ("死にコードを削除して", "D03"),
             ("戻り値のズレやプロパティ不一致を検査して", "D04"),
             ("withFailureHandler漏れとデータ契約を点検して", "D04"),
-            ("RPC戻り値プロパティ契約の検査をして", "D04")
+            ("RPC戻り値プロパティ契約の検査をして", "D04"),
+            ("『送信』を『保存』に替えて", "E01"),
+            ("ボタンの文字を「決定」から「登録」に変えて", "E01"),
+            ("「エラーが発生しました」を「入力を確認してください」に書き換えて", "E01"),
+            ("上限を 100 に", "E02"),
+            ("SHEET_NAME を『名簿』に", "E02"),
+            ("MAX_RETRY を 5 に変えて", "E02"),
+            ("設定を外に出して", "S06"),
+            ("コードの定数を設定シートに出して", "S06")
         ]
 
         total = len(golden_cases)
@@ -10291,7 +11352,7 @@ function doGet() {{
 
         passed = (matched == total)
         lines = [
-            "=== 🎯 GAS 全25棚・ゴールデン棚当て検査 (shelf --check) ===",
+            "=== 🎯 GAS 全28棚・ゴールデン棚当て検査 (shelf --check) ===",
             f"判定: {'🟢 [PASS] 合格 (誤爆 0件)' if passed else '🔴 [FAIL] 不一致あり'}",
             f"検証件数: {total}問 | 正解: {matched}問 | 不一致: {len(mismatches)}件",
             ""
@@ -10311,14 +11372,15 @@ function doGet() {{
             "markdown_report": "\n".join(lines)
         }
 
+    @_track_sid_op
     def gas_shelf(self, script_id="", query="", shelf_id="", filename="Index", func_name="", apply=False, deploy=False, list_only=False, check_only=False) -> dict:
-        """GAS 先撃ち総合棚ルーター（全25棚直結・棚当て検査・自動ディスパッチ）"""
+        """GAS 先撃ち総合棚ルーター（全28棚直結・棚当て検査・自動ディスパッチ）"""
         if check_only:
             return self.check_shelves()
 
         if list_only:
             lines = [
-                "=== 🧭 GAS 先撃ち総合棚カタログ (全25棚) ===",
+                "=== 🧭 GAS 先撃ち総合棚カタログ (全28棚) ===",
                 "| 棚ID | 分類 | 棚名 | 概要 | キーワード |",
                 "| --- | --- | --- | --- | --- |"
             ]
@@ -10342,7 +11404,7 @@ function doGet() {{
             lines = [
                 "=== 🧭 GAS 先撃ち総合棚ルーター ===",
                 f"頼み文: 「{query}」",
-                "該当する棚が見つかりませんでした。shelf --list で全25棚を確認してください。"
+                "該当する棚が見つかりませんでした。shelf --list で全28棚を確認してください。"
             ]
             return {
                 "status": "not_found",
@@ -10392,6 +11454,8 @@ function doGet() {{
             dispatch_res = self.clean_dead(sid, dry_run=not apply, deploy=deploy)
         elif h_type == "rpc_contracts":
             dispatch_res = self.check_rpc_contracts(sid, filename=filename)
+        elif h_type == "edit":
+            dispatch_res = self._gas_edit_shelf(sid, target_shelf["id"], query=query, apply=apply, deploy=deploy)
         else:
             raise ValueError(f"未対応のハンドラ種別: {h_type}")
 

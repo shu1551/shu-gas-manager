@@ -1612,11 +1612,11 @@ def gas_scaffold(
     deploy: bool = False,
     list_only: bool = False
 ) -> str:
-    """上級GASアーキテクチャ骨格棚（S01〜S05: Promise化RPC・SWR即時描画・楽観UI・サーバー統一応答・一括注入）のプレビューおよび安全注入を行います。
+    """上級GASアーキテクチャ骨格棚（S01〜S06: Promise化RPC・SWR即時描画・楽観UI・サーバー統一応答・一括注入・設定外出し）のプレビューおよび安全注入を行います。
 
     Args:
         project: プロジェクト名またはスクリプトID
-        scaffold_id: 骨格棚ID ("S01"〜"S05" または部品名)
+        scaffold_id: 骨格棚ID ("S01"〜"S06" または部品名)
         filename: 対象HTMLファイル名 (デフォルト: Index)
         server_file: 対象サーバー側ファイル名 (デフォルト: Code)
         apply: 実際にプロジェクトへ注入するか (デフォルト: False でプレビュー)
@@ -1648,18 +1648,18 @@ def gas_shelf(
     list_only: bool = False,
     check_only: bool = False
 ) -> str:
-    """GAS 先撃ち総合棚ルーター（全25棚直結・頼み文からの自動判定・棚当て検査・自動ディスパッチ）を実行します。
+    """GAS 先撃ち総合棚ルーター（全28棚直結・頼み文からの自動判定・棚当て検査・自動ディスパッチ）を実行します。
 
     Args:
         project: プロジェクト名またはスクリプトID
         query: 日本語・自然言語の頼み文 (例: "シートに追記するのを速くして", "GASドックで診断して")
-        shelf_id: 直接指定する棚ID ("R01"〜"R12", "S01"〜"S05", "K01"〜"K04", "D01"〜"D04")
+        shelf_id: 直接指定する棚ID ("R01"〜"R12", "S01"〜"S06", "K01"〜"K04", "D01"〜"D04", "E01"〜"E02")
         filename: 対象HTMLファイル名 (デフォルト: Index)
         func_name: 対象関数名 (レシピ適用時など)
         apply: 実際にプロジェクトへ変更を反映するか (デフォルト: False でプレビュー)
         deploy: 反映後に本番Webアプリを自動デプロイするか (デフォルト: False)
-        list_only: 全25棚の一覧カタログのみ表示するか (デフォルト: False)
-        check_only: 全25棚のゴールデン頼み文検査 (--check) を実行するか (デフォルト: False)
+        list_only: 全28棚の一覧カタログのみ表示するか (デフォルト: False)
+        check_only: 全28棚のゴールデン頼み文検査 (--check) を実行するか (デフォルト: False)
     """
     client = get_client()
     res = client.gas_shelf(

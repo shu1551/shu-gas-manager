@@ -3991,9 +3991,9 @@ def test_009_gas_scaffold_catalog_and_apply_full_architecture(mock_client):
     import copy
     # 1. カタログ取得
     res_list = mock_client.gas_scaffold(list_only=True)
-    assert res_list["count"] == 5
+    assert res_list["count"] == 6
     ids = [s["id"] for s in res_list["scaffolds"]]
-    assert ids == ["S01", "S02", "S03", "S04", "S05"]
+    assert ids == ["S01", "S02", "S03", "S04", "S05", "S06"]
 
     # 2. S05 (full_architecture) の注入
     files = [
@@ -4037,13 +4037,14 @@ def test_010_unified_shelf_25_catalog_and_golden_check(mock_client):
     import copy
     from gas_client import GAS_UNIFIED_SHELVES
 
-    # 1. 全25棚（R:12 + S:5 + K:4 + D:4 = 25棚）の検証
-    assert len(GAS_UNIFIED_SHELVES) == 25
+    # 1. 全28棚（R:12 + S:6 + K:4 + D:4 + E:2 = 28棚）の検証
+    assert len(GAS_UNIFIED_SHELVES) == 28
     categories = [s["category"] for s in GAS_UNIFIED_SHELVES]
     assert categories.count("SPEEDUP") == 12
-    assert categories.count("SCAFFOLD") == 5
+    assert categories.count("SCAFFOLD") == 6
     assert categories.count("DESIGN") == 4
     assert categories.count("DIAG") == 4
+    assert categories.count("EDIT") == 2
 
     # 2. check_shelves によるゴールデン頼み文全問一致検証
     chk = mock_client.check_shelves()
@@ -6596,3 +6597,247 @@ def test_157_stale_check_syncs_and_prefetches(mock_client, tmp_path):
     assert cloud.counts["content_get"] == cg_disk
     assert sid2 in c2._copy_remote_epochs
     assert sid2 in c2._remote_check_cache
+
+
+def test_171_stage1_async_put_wait_and_failure_rollback(mock_client, tmp_path):
+    """段1: 裏送り PUT の即返事・次操作での完了待ち・失敗時ロールバックと次回通知を検証"""
+    import copy
+    import threading
+    import time
+    from unittest.mock import MagicMock
+
+    sid = "sid_async_171"
+    orig_files = [
+        {"name": "Code", "type": "SERVER_JS", "source": "function hello() {\n  return 'v1';\n}\n"},
+    ]
+    cloud_files = copy.deepcopy(orig_files)
+    put_started = threading.Event()
+    allow_put_finish = threading.Event()
+    fail_next_put = {"flag": False}
+    put_log = []
+
+    mock_client.resolve_script_id = MagicMock(return_value=sid)
+    mock_client._ensure_sync_state()
+    mock_client._force_async_put = True
+    now_ts = time.time()
+    mock_client._content_cache[sid] = (now_ts, {"files": copy.deepcopy(orig_files)})
+    disk_init = mock_client._load_disk_content_cache()
+    disk_init[sid] = {"ts": now_ts, "content": {"files": copy.deepcopy(orig_files)}}
+    mock_client._save_disk_content_cache(disk_init)
+    mock_client._self_fresh_at[sid] = now_ts
+    mock_client._synced_sids.add(sid)
+    mock_client._remote_check_cache[sid] = {"remote_epoch": 1000.0, "checked_at": now_ts, "tentative": False}
+    mock_client._copy_remote_epochs[sid] = (1000.0, False)
+    mock_client._validate_syntax = MagicMock(return_value="OK")
+    mock_client._verify_and_rollback_if_broken = MagicMock()
+
+    def fake_request(method, url, **kwargs):
+        resp = MagicMock()
+        if method == "PUT" and "/content" in url:
+            put_started.set()
+            allow_put_finish.wait(timeout=3.0)
+            if fail_next_put["flag"]:
+                resp.status_code = 500
+                resp.text = "backend boom"
+                resp.raise_for_status.side_effect = RuntimeError("HTTP 500 backend boom")
+                return resp
+            body = kwargs.get("json", {})
+            cloud_files.clear()
+            cloud_files.extend(copy.deepcopy(body.get("files", [])))
+            put_log.append(copy.deepcopy(cloud_files))
+            resp.status_code = 200
+            resp.json.return_value = {"files": copy.deepcopy(cloud_files)}
+            return resp
+        if method == "GET" and "/content" in url:
+            resp.status_code = 200
+            resp.json.return_value = {"files": copy.deepcopy(cloud_files)}
+            return resp
+        if "drive/v3/files" in url:
+            resp.status_code = 200
+            resp.json.return_value = {"modifiedTime": "2026-11-19T00:00:00Z", "version": "1"}
+            return resp
+        resp.status_code = 200
+        resp.json.return_value = {}
+        return resp
+
+    mock_client._request_with_retry = MagicMock(side_effect=fake_request)
+
+    # 1. 非同期 PUT が「送り中」で即返り、裏で待機している間に次読み取りが待たされること
+    put_res = mock_client._put_content(
+        sid,
+        [{"name": "Code", "type": "SERVER_JS", "source": "function hello() {\n  return 'v2';\n}\n"}],
+    )
+    assert put_res["delivery"] == "送り中"
+    assert put_started.wait(timeout=1.0)
+    # まだ PUT 完了前なのでクラウドには v1 のまま
+    assert "v1" in cloud_files[0]["source"]
+
+    # 0.05秒後に PUT を完了させる別スレッドを立て、get_content が完了を待ってから取得することを検証
+    def release_soon():
+        time.sleep(0.05)
+        allow_put_finish.set()
+
+    threading.Thread(target=release_soon, daemon=True).start()
+    got = mock_client.get_content(sid, use_cache=True)
+    assert "v2" in got["files"][0]["source"]
+    assert "v2" in cloud_files[0]["source"]
+
+    # 2. 裏 PUT 失敗時にローカルキャッシュが直前状態 (v2) に戻り、次回操作で警告が出ること
+    put_started.clear()
+    allow_put_finish.clear()
+    fail_next_put["flag"] = True
+    put_res2 = mock_client._put_content(
+        sid,
+        [{"name": "Code", "type": "SERVER_JS", "source": "function hello() {\n  return 'v3_bad';\n}\n"}],
+    )
+    assert put_res2["delivery"] == "送り中"
+    assert put_started.wait(timeout=1.0)
+    allow_put_finish.set()
+    mock_client._wait_pending_put(sid, timeout=2.0)
+
+    # ローカルキャッシュが v2 へロールバックされ、エラーが記録されていること
+    assert "v2" in mock_client._content_cache[sid][1]["files"][0]["source"]
+    assert sid in mock_client._put_errors
+
+    fail_next_put["flag"] = False
+    next_res = mock_client.get_content(sid, use_cache=True)
+    assert "前の直しが届いていません" in next_res.get("warning", "")
+    assert "v2" in next_res["files"][0]["source"]
+    # 1度通知したら警告は消費される
+    next_res2 = mock_client.get_content(sid, use_cache=True)
+    assert "warning" not in next_res2
+
+
+def test_171_stage2_edit_shelves_e01_and_e02(mock_client):
+    """段2: 小さな直しの棚 E01(replace_text) と E02(replace_const) の動作を検証"""
+    import copy
+    from unittest.mock import MagicMock
+
+    sid = "sid_edit_171"
+    files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": (
+                "const MAX_ROWS = 50;\n"
+                "const API_URL = 'https://script.googleapis.com/v1/projects'; // API\n"
+                "function greet() {\n"
+                "  return 'こんにちは';\n"
+                "}\n"
+                "function bye() {\n"
+                "  return 'さようなら';\n"
+                "}\n"
+            ),
+        },
+        {
+            "name": "Index",
+            "type": "HTML",
+            "source": "<button>送信</button><p>エラー</p>",
+        },
+    ]
+
+    mock_client.resolve_script_id = MagicMock(return_value=sid)
+    mock_client._get_content_for_write_with_status = MagicMock(
+        side_effect=lambda s: ({"files": copy.deepcopy(files)}, False, None)
+    )
+    mock_client._validate_syntax = MagicMock(return_value="OK")
+    mock_client._verify_and_rollback_if_broken = MagicMock()
+
+    def fake_put(s, new_files):
+        files.clear()
+        files.extend(copy.deepcopy(new_files))
+        return {"files": copy.deepcopy(files), "delivery": "送り中"}
+
+    mock_client._put_content = MagicMock(side_effect=fake_put)
+
+    # E01: 0件ヒット
+    r_zero = mock_client.gas_shelf(sid, query="『存在しない文言』を『別文字』に替えて", apply=True)
+    assert r_zero["result"]["status"] == "not_found"
+    assert r_zero["result"]["hits"] == 0
+
+    # E01: 2件以上ヒット -> 箇所一覧のみで変更しない
+    r_many = mock_client.gas_shelf(sid, query="「return」を「RETURN」に替えて", apply=True)
+    assert r_many["result"]["status"] == "ambiguous"
+    assert r_many["result"]["hits"] == 2
+    assert mock_client._put_content.call_count == 0
+
+    # E01: 1件ヒット -> 下見して反映
+    r_prev = mock_client.gas_shelf(sid, query="『送信』を『保存』に替えて", apply=False)
+    assert r_prev["result"]["status"] == "preview"
+    assert r_prev["result"]["hits"] == 1
+    assert "<button>送信</button>" in files[1]["source"]
+
+    r_app = mock_client.gas_shelf(sid, query="『送信』を『保存』に替えて", apply=True)
+    assert r_app["result"]["status"] == "success"
+    assert r_app["result"]["delivery"] == "送り中"
+    assert "<button>保存</button>" in files[1]["source"]
+
+    # E02: 日本語表現 -> 候補一覧のみで変更しない（かつ URL 内の // が欠けないこと）
+    r_jp = mock_client.gas_shelf(sid, query="上限を 100 に", apply=True)
+    assert r_jp["result"]["status"] == "candidates"
+    url_cand = next(c for c in r_jp["result"]["candidates"] if c["name"] == "API_URL")
+    assert url_cand["value_raw"] == "'https://script.googleapis.com/v1/projects'"
+    assert "MAX_ROWS = 50;" in files[0]["source"]
+
+    # E02: 英数字定数指定 -> 値だけ置換（コメントや他行を壊さない）
+    r_const = mock_client.gas_shelf(sid, query="MAX_ROWS を 120 に", apply=True)
+    assert r_const["result"]["status"] == "success"
+    assert "const MAX_ROWS = 120;\n" in files[0]["source"]
+    assert "'https://script.googleapis.com/v1/projects'; // API" in files[0]["source"]
+
+
+def test_171_stage3_s06_settings_externalize(mock_client):
+    """段3: S06 設定を外に出す（非紐づき対象外・紐づき下見と反映）を検証"""
+    import copy
+    from unittest.mock import MagicMock
+
+    sid = "sid_s06_171"
+    files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": (
+                "const SHEET_NAME = '名簿';\n"
+                "var MAX_ROWS = 300;\n"
+                "const ENDPOINT = 'https://example.com/api'; // URL\n"
+                "function main() {\n"
+                "  return SHEET_NAME + MAX_ROWS;\n"
+                "}\n"
+            ),
+        }
+    ]
+
+    mock_client.resolve_script_id = MagicMock(return_value=sid)
+    mock_client._get_content_for_write_with_status = MagicMock(
+        side_effect=lambda s: ({"files": copy.deepcopy(files)}, False, None)
+    )
+    mock_client._validate_syntax = MagicMock(return_value="OK")
+    mock_client._verify_and_rollback_if_broken = MagicMock()
+    mock_client._put_content = MagicMock(side_effect=lambda s, nf: (files.clear(), files.extend(copy.deepcopy(nf)), {"delivery": "送り中"})[2])
+
+    # 1. 紐づきスプレッドシートなし -> 対象外
+    mock_client._get_bound_spreadsheet_id = MagicMock(return_value=None)
+    r_unbound = mock_client.gas_shelf(sid, query="設定を外に出して", apply=False)
+    assert r_unbound["matched_shelf"]["id"] == "S06"
+    assert r_unbound["result"]["status"] == "not_applicable"
+    assert "対象外" in r_unbound["result"]["markdown_report"]
+
+    # 2. 紐づきスプレッドシートあり -> 下見で ws_ops（sheet.add + write）と置換差分を作成
+    mock_client._get_bound_spreadsheet_id = MagicMock(return_value="ss_bound_001")
+    r_prev = mock_client.gas_scaffold(sid, scaffold_id="S06", apply=False)
+    assert r_prev["status"] == "preview"
+    assert r_prev["spreadsheet_id"] == "ss_bound_001"
+    assert [s["name"] for s in r_prev["settings"]] == ["SHEET_NAME", "MAX_ROWS", "ENDPOINT"]
+    assert r_prev["ws_ops"][0] == {"shelf": "sheet.add", "name": "設定"}
+    assert r_prev["ws_ops"][1]["shelf"] == "write"
+    assert "ENDPOINT\thttps://example.com/api" in r_prev["ws_ops"][1]["tsv"]
+
+    # 3. apply=True で getSetting_ 呼び出し + ヘルパー関数が注入されること
+    r_app = mock_client.gas_scaffold(sid, scaffold_id="S06", apply=True)
+    assert r_app["status"] == "success"
+    assert r_app["delivery"] == "送り中"
+    new_src = files[0]["source"]
+    assert "const SHEET_NAME = getSetting_(\"SHEET_NAME\", '名簿');" in new_src
+    assert "var MAX_ROWS = getSetting_(\"MAX_ROWS\", 300);" in new_src
+    assert "function getSetting_(key, fallback)" in new_src
+    assert "getSetting_._cache" in new_src
