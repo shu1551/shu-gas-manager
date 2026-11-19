@@ -1768,6 +1768,8 @@ var ComboPlanner = (function () {
     var cands = [];
     var seen = {};
     var add = function (sh) {
+      // 外す・消す手（〜.clear・〜.remove・〜.off・un〜）と条件付き書式（条件を当て推量で決めてしまう）は候補にしない＝頼みと逆の手や見当違いの手を［はい］で撃たせない
+      if (sh && /(^un|\.(clear|remove|off|delete)$|^cf\.)/.test(String(sh.name))) return;
       if (sh && !seen[sh.name] && sh.searchable !== false && sh.name !== "api" && !sh.danger) {
         seen[sh.name] = true;
         cands.push(sh);
