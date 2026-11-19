@@ -1562,7 +1562,13 @@ function comboPostboxPoll() {
     var raw = p.getProperty(COMBO_PROP_PB_QUEUE);
     if (raw) q = JSON.parse(raw) || [];
   } catch (e) { q = []; }
-  return { ok: true, queue: q, count: q.length };
+  // 古い頼み（5 分より前）は撃たずに捨てる＝受け手が止まっていた間に溜まった頼みを、あとでまとめてシートに撃たない
+  var now = Date.now(), fresh = q.filter(function (it) { return it && it.ts && now - it.ts < 5 * 60 * 1000; });
+  if (fresh.length !== q.length) {
+    if (fresh.length) p.setProperty(COMBO_PROP_PB_QUEUE, JSON.stringify(fresh));
+    else p.deleteProperty(COMBO_PROP_PB_QUEUE);
+  }
+  return { ok: true, queue: fresh, count: fresh.length, dropped: q.length - fresh.length };
 }
 
 /**
