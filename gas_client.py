@@ -24,6 +24,7 @@ import collections
 import webbrowser
 import hashlib
 import importlib
+import unicodedata
 
 # ホットリロード時のみ Workspace 道具・キャッシュをフラッシュ（初回 import 時の二重ロードを防ぐ）
 if globals().get("_GAS_CLIENT_LOADED"):
@@ -522,7 +523,7 @@ GAS_UNIFIED_SHELVES = [
     {
         "id": "E01", "category": "EDIT", "name": "replace_text", "handler_type": "edit",
         "desc": "プロジェクト全体（SERVER_JS・HTML）から文字を探して1か所なら置換",
-        "keywords": ["文字を替え", "文字を変え", "文言を替え", "文言を変え", "ボタンの文字", "ラベルを替え", "テキストを替え", "書き換え"]
+        "keywords": ["文字を替え", "文字を変え", "文言を替え", "文言を変え", "ボタンの文字", "ラベルを替え", "テキストを替え", "書き換え", "を削除", "を消して", "を消去", "を取り除"]
     },
     {
         "id": "E02", "category": "EDIT", "name": "replace_const", "handler_type": "edit",
@@ -1679,6 +1680,22 @@ class GasClient:
             new_hand = _append_fn(h_src) if has_cloud_diff else new_latest
             return new_hand, new_latest, {"function": fn_name}
 
+        # patch_function で func_name 省略・関数外指定時はファイル全体を対象にする
+        if action == "patch_function" and (not func_name or func_name in ("(HTML)", "(トップレベル)", "__file__", "*")):
+            scope_label = f"{fname}::{func_name or '(file)'}"
+            new_h_src, new_l_src, total_occ = self._rebase_patch_items(
+                h_src,
+                l_src,
+                patch_list or [],
+                scope_label=scope_label,
+                default_replace_all=default_replace_all,
+                err_scope_label=err_scope_label if err_scope_label is not None else (func_name or fname),
+                not_found_tmpl=not_found_tmpl,
+                multi_tmpl=multi_tmpl,
+                base_offset_line=0,
+            )
+            return new_h_src, new_l_src, {"function": func_name or "(file)", "replaced_occurrences": total_occ}
+
         # replace_function / delete_function / patch_function
         check_hand = hand_file if hand_file is not None else latest_file
         h_start, h_end = self._get_function_absolute_span(check_hand, func_name)
@@ -1878,6 +1895,28 @@ class GasClient:
         self._save_cache()
         return self._merge_aliases(files)[:limit]
 
+    @staticmethod
+    def _normalize_project_key(name: str) -> str:
+        """英語・カタカナ表記揺れや空白・ハイフンを吸収した照合用キーを生成"""
+        s = unicodedata.normalize("NFKC", str(name or "")).lower()
+        for en, ja in (
+            ("quick", "クイック"),
+            ("combo", "コンボ"),
+            ("manager", "マネージャー"),
+            ("template", "テンプレート"),
+            ("engine", "エンジン"),
+            ("test", "テスト"),
+            ("addin", "アドイン"),
+            ("runner", "ランナー"),
+            ("slides", "スライド"),
+            ("sheets", "シーツ"),
+            ("workspace", "ワークスペース"),
+            ("mydrive", "マイドライブ"),
+            ("forge", "フォージ"),
+        ):
+            s = s.replace(en, ja)
+        return re.sub(r"[\s_\-・]+", "", s)
+
     def resolve_script_id(self, name_or_id):
         """プロジェクト名またはスクリプトIDから正規の scriptId を解決"""
         target = re.sub(r'[\u200b-\u200d\ufeff\x00-\x1f]', '', str(name_or_id)).strip() if name_or_id else ""
@@ -1891,6 +1930,11 @@ class GasClient:
         alias_matches = [aid for aname, aid in aliases.items() if target.lower() in aname.lower()]
         if len(alias_matches) == 1:
             return alias_matches[0]
+        t_norm = self._normalize_project_key(target)
+        if t_norm:
+            norm_alias_ids = list({aid for aname, aid in aliases.items() if self._normalize_project_key(aname) == t_norm})
+            if len(norm_alias_ids) == 1:
+                return norm_alias_ids[0]
 
         # 30文字以上の英数字記号はスクリプトIDとみなす
         if len(target) >= 30 and re.match(r"^[A-Za-z0-9_-]+$", target):
@@ -1927,6 +1971,25 @@ class GasClient:
         elif len(partial_matches) > 1:
             candidates = [f"- {p['name']} (ID: {p['id']})" for p in partial_matches]
             raise ValueError(f"プロジェクト名 '{target}' に部分一致する候補が複数あります ({len(partial_matches)}件):\n" + "\n".join(candidates) + "\n名前をより具体的に指定するか、スクリプトIDを直接指定してください。")
+
+        # 2.5 表記揺れ正規化一致（英語⇔カタカナ・空白・ハイフン吸収）
+        if t_norm:
+            norm_matches = [p for p in projects if t_norm == self._normalize_project_key(p.get("name", ""))]
+            if len(norm_matches) == 1:
+                p = norm_matches[0]
+                self._cache_data.setdefault("projects", {})[target] = p["id"]
+                self._save_cache()
+                return p["id"]
+            if not norm_matches:
+                norm_partial = [p for p in projects if t_norm in self._normalize_project_key(p.get("name", ""))]
+                if len(norm_partial) == 1:
+                    p = norm_partial[0]
+                    self._cache_data.setdefault("projects", {})[target] = p["id"]
+                    self._save_cache()
+                    return p["id"]
+                elif len(norm_partial) > 1:
+                    candidates = [f"- {p['name']} (ID: {p['id']})" for p in norm_partial]
+                    raise ValueError(f"プロジェクト名 '{target}' に表記揺れ一致する候補が複数あります ({len(norm_partial)}件):\n" + "\n".join(candidates))
 
         # 3. 一覧で見つからない場合、ローカルキャッシュに完全一致キーがあれば救済利用
         cached_id = self._cache_data.get("projects", {}).get(target)
@@ -10825,16 +10888,18 @@ function doGet() {{
 
     @staticmethod
     def _parse_e01_query(query: str):
-        """E01 頼み文からかぎかっこ内の (変更前, 変更後) の 2 語を取り出す"""
+        """E01 頼み文からかぎかっこ内の (変更前, 変更後) の 2 語（または 1 語＋削除指示）を取り出す"""
         if not query:
             return None, None
         tokens = []
-        for m in re.finditer(r"「([^」]+)」|『([^』]+)』|'([^']+)'|\"([^\"]+)\"", query):
-            val = m.group(1) or m.group(2) or m.group(3) or m.group(4)
+        for m in re.finditer(r"「([^」]*)」|『([^』]*)』|'([^']*)'|\"([^\"]*)\"", query):
+            val = next((g for g in m.groups() if g is not None), None)
             if val is not None:
                 tokens.append(val)
-        if len(tokens) >= 2:
+        if len(tokens) >= 2 and tokens[0]:
             return tokens[0], tokens[1]
+        if len(tokens) == 1 and tokens[0] and re.search(r"(?:削除|消して|消去|取り除|なくして|外して)", query):
+            return tokens[0], ""
         return None, None
 
     @staticmethod
@@ -10886,7 +10951,7 @@ function doGet() {{
             return "(HTML)"
         return f"({ftype})"
 
-    def _gas_edit_text(self, sid: str, query: str, apply: bool = False, deploy: bool = False) -> dict:
+    def _gas_edit_text(self, sid: str, query: str, apply: bool = False, deploy: bool = False, target_func: str = "", target_file: str = "") -> dict:
         """E01: 全ファイル（SERVER_JS・HTML）から文字を探して 1 か所なら替える"""
         old_text, new_text = self._parse_e01_query(query)
         if old_text is None or new_text is None:
@@ -10940,11 +11005,24 @@ function doGet() {{
                 "markdown_report": f"=== ✏️ [E01] 文字を替える ===\n『{old_text}』は全ファイル（SERVER_JS・HTML）で 0 か所（見つかりませんでした）。",
             }
 
+        if len(hits) >= 2 and target_file:
+            tf_low = target_file.strip().lower()
+            file_filtered = [h for h in hits if h["file"].lower() == tf_low]
+            if file_filtered:
+                hits = file_filtered
+
+        if len(hits) >= 2 and target_func:
+            fn_filtered = [h for h in hits if h["function"] == target_func]
+            if fn_filtered:
+                hits = fn_filtered
+
         if len(hits) >= 2:
-            loc_lines = [
-                f"  - {h['file']} | 関数: {h['function']} | L{h['line']}: `{h['line_text']}`"
-                for h in hits
-            ]
+            loc_lines = []
+            for h in hits:
+                hints = [f"filename='{h['file']}'"]
+                if h["function"] not in ("(HTML)", "(トップレベル)"):
+                    hints.append(f"func_name='{h['function']}'")
+                loc_lines.append(f"  - {h['file']} | 関数: {h['function']} | L{h['line']}: `{h['line_text']}` （絞込: {', '.join(hints)}）")
             return {
                 "status": "ambiguous",
                 "shelf_id": "E01",
@@ -10963,7 +11041,14 @@ function doGet() {{
         hit = hits[0]
         target_file = hit["file_obj"]
         old_src = target_file.get("source", "")
-        new_src = old_src[:hit["start"]] + new_text + old_src[hit["end"]:]
+        end_pos = hit["end"]
+        # 空文字への削除で行全体が消える場合、直後の改行も除去して空行を残さない
+        if new_text == "" and (hit["start"] == 0 or old_src[hit["start"] - 1] == "\n"):
+            if old_src[end_pos:end_pos + 2] == "\r\n":
+                end_pos += 2
+            elif old_src[end_pos:end_pos + 1] == "\n":
+                end_pos += 1
+        new_src = old_src[:hit["start"]] + new_text + old_src[end_pos:]
         diff_text = "".join(difflib.unified_diff(
             old_src.splitlines(keepends=True),
             new_src.splitlines(keepends=True),
@@ -11010,20 +11095,16 @@ function doGet() {{
             "backup_file": str(backup_path),
             "syntax_check": syntax_status,
             "diff": diff_text,
-            "markdown_report": "\n".join([
-                f"=== ✏️ [E01] 文字を替える（反映完了） ===",
-                f"箇所: {target_file['name']} ({hit['function']} L{hit['line']})",
-                f"構文検査: {syntax_status}",
-                "```diff",
-                diff_text.rstrip(),
-                "```",
-            ]),
+            "markdown_report": f"[完了] {target_file['name']}({hit['function']} L{hit['line']}) 『{old_text}』→『{new_text}』",
         }
         if deploy:
-            ret["deployment"] = self.deploy(sid, description="E01 replace_text", fast=True)
+            dep_res = self.deploy(sid, description="E01 replace_text", fast=True)
+            ret["deployment"] = dep_res
+            if isinstance(dep_res, dict) and dep_res.get("versionNumber") is not None:
+                ret["markdown_report"] += f"\n[本番デプロイ] Version {dep_res['versionNumber']} 反映済み"
         return ret
 
-    def _gas_edit_const(self, sid: str, query: str, apply: bool = False, deploy: bool = False) -> dict:
+    def _gas_edit_const(self, sid: str, query: str, apply: bool = False, deploy: bool = False, target_func: str = "", target_file: str = "") -> dict:
         """E02: const/var/let 名前 = 値 の 1 行を探して値だけ替える（日本語名は候補一覧のみ）"""
         name, val_raw = self._parse_e02_query(query)
         if not name or not val_raw:
@@ -11123,6 +11204,17 @@ function doGet() {{
                 "markdown_report": f"=== 🔢 [E02] 値を替える ===\n定数/変数 `{name}` の宣言行が見つかりませんでした。",
             }
 
+        if len(hits) >= 2 and target_file:
+            tf_low = target_file.strip().lower()
+            ff = [c for c in hits if c["file"].lower() == tf_low]
+            if ff:
+                hits = ff
+
+        if len(hits) >= 2 and target_func:
+            fnf = [c for c in hits if c["function"] == target_func]
+            if fnf:
+                hits = fnf
+
         if len(hits) >= 2:
             loc_lines = [f"  - {c['file']} ({c['function']} L{c['line']}): `{c['orig_line'].strip()}`" for c in hits]
             return {
@@ -11218,25 +11310,21 @@ function doGet() {{
             "backup_file": str(backup_path),
             "syntax_check": syntax_status,
             "diff": diff_text,
-            "markdown_report": "\n".join([
-                f"=== 🔢 [E02] 値を替える（反映完了） ===",
-                f"箇所: {target_file['name']} ({hit['function']} L{hit['line']})",
-                f"構文検査: {syntax_status}",
-                "```diff",
-                diff_text.rstrip(),
-                "```",
-            ]),
+            "markdown_report": f"[完了] {target_file['name']}({hit['function']} L{hit['line']}) {name}: {orig_val}→{new_lit}",
         }
         if deploy:
-            ret["deployment"] = self.deploy(sid, description="E02 replace_const", fast=True)
+            dep_res = self.deploy(sid, description="E02 replace_const", fast=True)
+            ret["deployment"] = dep_res
+            if isinstance(dep_res, dict) and dep_res.get("versionNumber") is not None:
+                ret["markdown_report"] += f"\n[本番デプロイ] Version {dep_res['versionNumber']} 反映済み"
         return ret
 
-    def _gas_edit_shelf(self, sid: str, shelf_id: str, query: str = "", apply: bool = False, deploy: bool = False) -> dict:
+    def _gas_edit_shelf(self, sid: str, shelf_id: str, query: str = "", apply: bool = False, deploy: bool = False, func_name: str = "", filename: str = "") -> dict:
         """EDIT 棚（E01/E02）のディスパッチ"""
         if shelf_id.upper() == "E01":
-            return self._gas_edit_text(sid, query=query, apply=apply, deploy=deploy)
+            return self._gas_edit_text(sid, query=query, apply=apply, deploy=deploy, target_func=func_name, target_file=filename)
         if shelf_id.upper() == "E02":
-            return self._gas_edit_const(sid, query=query, apply=apply, deploy=deploy)
+            return self._gas_edit_const(sid, query=query, apply=apply, deploy=deploy, target_func=func_name, target_file=filename)
         raise ValueError(f"未対応の編集棚ID: {shelf_id}")
 
     def match_shelf(self, query: str) -> dict:
@@ -11383,7 +11471,7 @@ function doGet() {{
         }
 
     @_track_sid_op
-    def gas_shelf(self, script_id="", query="", shelf_id="", filename="Index", func_name="", apply=None, deploy=False, list_only=False, check_only=False) -> dict:
+    def gas_shelf(self, script_id="", query="", shelf_id="", filename="", func_name="", apply=None, deploy=False, list_only=False, check_only=False) -> dict:
         """GAS 先撃ち総合棚ルーター（全28棚直結・棚当て検査・自動ディスパッチ）"""
         if check_only:
             return self.check_shelves()
@@ -11444,13 +11532,14 @@ function doGet() {{
         # 省略時（None）は小さな直し棚（E01/E02）のみ 1 発で反映し、大規模変更棚は安全側（下見）にする
         effective_apply = (h_type == "edit") if apply is None else bool(apply)
 
+        target_fname = filename or "Index"
         if h_type == "recipe":
-            dispatch_res = self.gas_recipe(sid, filename=filename, func_name=func_name, recipe_id=target_shelf["id"], apply=effective_apply, deploy=deploy)
+            dispatch_res = self.gas_recipe(sid, filename=target_fname, func_name=func_name, recipe_id=target_shelf["id"], apply=effective_apply, deploy=deploy)
         elif h_type == "scaffold":
-            dispatch_res = self.gas_scaffold(sid, scaffold_id=target_shelf["id"], filename=filename, apply=effective_apply, deploy=deploy)
+            dispatch_res = self.gas_scaffold(sid, scaffold_id=target_shelf["id"], filename=target_fname, apply=effective_apply, deploy=deploy)
         elif h_type == "skin":
             if effective_apply:
-                dispatch_res = self.design_skin(sid, filename=filename, preset=target_shelf.get("preset", "linear"), deploy=deploy)
+                dispatch_res = self.design_skin(sid, filename=target_fname, preset=target_shelf.get("preset", "linear"), deploy=deploy)
             else:
                 dispatch_res = {
                     "success": True,
@@ -11459,23 +11548,28 @@ function doGet() {{
                     "markdown_report": f"=== 🎨 GAS デザイン着せ替えプレビュー: [{target_shelf.get('preset', 'linear')}] ===\n概要: {target_shelf['desc']}\n反映するには apply=True を指定してください。"
                 }
         elif h_type == "dock":
-            dispatch_res = self.gas_dock(sid, filename=filename)
+            dispatch_res = self.gas_dock(sid, filename=target_fname)
         elif h_type == "xray":
-            dispatch_res = self.xray(sid, filename=filename)
+            dispatch_res = self.xray(sid, filename=target_fname)
         elif h_type == "clean_dead":
             dispatch_res = self.clean_dead(sid, dry_run=not effective_apply, deploy=deploy)
         elif h_type == "rpc_contracts":
-            dispatch_res = self.check_rpc_contracts(sid, filename=filename)
+            dispatch_res = self.check_rpc_contracts(sid, filename=target_fname)
         elif h_type == "edit":
-            dispatch_res = self._gas_edit_shelf(sid, target_shelf["id"], query=query, apply=effective_apply, deploy=deploy)
+            dispatch_res = self._gas_edit_shelf(sid, target_shelf["id"], query=query, apply=effective_apply, deploy=deploy, func_name=func_name, filename=filename)
         else:
             raise ValueError(f"未対応のハンドラ種別: {h_type}")
+
+        md_report = dispatch_res.get("markdown_report", "") if isinstance(dispatch_res, dict) else str(dispatch_res)
+        dep_info = dispatch_res.get("deployment") if isinstance(dispatch_res, dict) else None
+        if isinstance(dep_info, dict) and dep_info.get("versionNumber") is not None and "[本番デプロイ]" not in md_report:
+            md_report += f"\n[本番デプロイ] Version {dep_info['versionNumber']} 反映済み"
 
         return {
             "status": "success",
             "matched_shelf": target_shelf,
             "result": dispatch_res,
-            "markdown_report": dispatch_res.get("markdown_report", "") if isinstance(dispatch_res, dict) else str(dispatch_res)
+            "markdown_report": md_report
         }
 
     # ==========================================

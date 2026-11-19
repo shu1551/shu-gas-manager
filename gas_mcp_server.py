@@ -27,13 +27,10 @@ from gas_client import GasClient
 import functools
 
 GAS_MANAGER_INSTRUCTIONS = (
-    "ガスマネージャー（gas-manager）。GAS のコードを直す頼みは、自分で探して直す前に、まず "
-    "gas_shelf(project=プロジェクト名, query=使う人の頼みの文をそのまま) を 1 回撃つ（先撃ち）。"
-    "「『送信』を『保存』に替えて／戻して」のような文字の替え（E01）や「上限を 100 に」のような値の替え（E02）は、"
-    "apply 省略でも場所探し・直し・構文検査・控えまで道具が 1 回で済ませ、すぐ返る（Google への送りは裏で続く）。"
-    "search_code や get_function で場所を探してから patch_* を撃つと往復が増えて遅いので、"
-    "gas_shelf が「当たりが複数」「当たらない」と返したときだけ、その返事の番地を使って patch_function を撃つ。"
-    "棚の返事が出たら、結果だけ 1〜2 行で短く報告して終える（読み直し・確かめの撃ち直しを足さない）。"
+    "GASコードを直す1手目は gas_shelf(project=プロジェクト名, query=頼み文そのまま) のみ"
+    "（E01は文字替え・『対象』削除対応、E01/E02はapply省略で即反映、Webアプリ画面修正はdeploy=Trueを付ける。search_code等で先に探さない）。"
+    "返事が[完了]なら読み直し・確かめをせず、1行20文字以内で即答して終える（例: コード doGet(L143) を変更しました。）。"
+    "構文検査・裏送り・デプロイ未実施の補足は書かない。「複数」時は filename/func_name で絞り、「無し」の時だけ patch_function（HTML関数外・トップレベルは func_name=''）へ。"
 )
 
 mcp = FastMCP("gas-manager", instructions=GAS_MANAGER_INSTRUCTIONS)
@@ -52,9 +49,7 @@ def safe_tool(func):
 @mcp.tool()
 @safe_tool
 def reload_tools() -> str:
-    """常駐MCPサーバーのツール定義および GasClient ロジックをメモリ上でホットリロードします。
-    サーバープロセスを再起動することなく、最新の Python コードを即座に反映します。
-    """
+    """MCPサーバーのコードとクライアントをメモリ上で再読込する。"""
     global _client, _ws
     _ws = None
     import importlib
@@ -198,13 +193,7 @@ def get_file(project: str, filename: str, start_line: int = 0, end_line: int = 0
 @mcp.tool()
 @safe_tool
 def get_function(project: str, filename: str, func_name: str) -> str:
-    """指定したファイルから特定の関数定義（function または const = (...) => ...）のコードブロックのみを抽出して取得します。
-
-    Args:
-        project: プロジェクト名またはスクリプトID
-        filename: ファイル名
-        func_name: 取得したい関数名 (例: doGet)
-    """
+    """指定ファイルから関数コードブロックを取得する。(project, filename, func_name)"""
     client = get_client()
     code = client.get_function(project, filename, func_name)
     header = f"// === [{project}] {filename} -> function {func_name} ({len(code)} 文字) ===\n"
@@ -449,14 +438,7 @@ def diff_backup(project: str, backup_file: str = "", filename: str = "") -> str:
 @mcp.tool()
 @safe_tool
 def deploy(project: str, description: str = "Auto deployed via MCP", deployment_id: str | None = None, refresh: bool = False) -> str:
-    """新バージョンを作成し、既存の Web アプリデプロイを更新（再デプロイ）します。
-
-    Args:
-        project: プロジェクト名またはスクリプトID
-        description: バージョンの説明文
-        deployment_id: 更新対象の特定デプロイID（省略時は最新デプロイを自動検出）
-        refresh: デプロイIDキャッシュを破棄して再取得するか (デフォルト: False)
-    """
+    """新バージョンを作成し Web アプリを更新デプロイする。(project, description, deployment_id, refresh)"""
     client = get_client()
     res = client.deploy(project, description=description, deployment_id=deployment_id, refresh=refresh)
     return (
@@ -517,24 +499,7 @@ if gas_local_extras and hasattr(gas_local_extras, "register_mcp"):
 @mcp.tool()
 @safe_tool
 def patch_function(project: str, filename: str, func_name: str, target: str = "", replacement: str = "", replace_all: bool = False, force: bool = False, dry_run: bool = False, patches: str = "", deploy: bool = False, fast: bool = False) -> str:
-    """指定ファイル内の特定関数スコープ内に限定してコード置換を行います（他関数にある同一コードの誤爆を物理的に防止）。
-    文字・値を替えるだけの頼みは、先に gas_shelf(query=頼みの文, apply=True) を 1 回（こちらは棚が当たらなかったときに使う）。
-    置換前の自動バックアップ、構文検査、diff 出力を完備しています。
-    patches 引数に JSON 文字列（例: '[{"target":"a","replacement":"b"}]'）を指定することで複数箇所の一括置換も可能です。
-    deploy=True を指定すると、反映直後に本番Webアプリの更新デプロイまで同時に実行します。
-
-    Args:
-        project: プロジェクト名またはスクリプトID
-        filename: ファイル名
-        func_name: 対象の関数名
-        target: 置換前の既存コード文字列
-        replacement: 置換後の新しいコード文字列
-        replace_all: 関数内の複数箇所置換を許可するか (デフォルト: False)
-        force: 構文エラーを無視して強制反映するか (デフォルト: False)
-        dry_run: クラウドへの反映を行わず差分のみ確認するか (デフォルト: False)
-        patches: 複数ペアの一括置換を行う場合の JSON 文字列 (デフォルト: "")
-        deploy: 反映完了後に本番Webアプリを自動デプロイするか (デフォルト: False)
-    """
+    """指定関数内のコードを構文検査付きで置換する。文字・値の変更は先に gas_shelf を使う。"""
     client = get_client()
     kwargs = dict(target=target, replacement=replacement, replace_all=replace_all, force=force, dry_run=dry_run, patches=patches if patches else None, deploy=deploy)
     if fast:
@@ -956,6 +921,14 @@ def clean_runner(project: str) -> str:
         return f"[SUCCESS] 実行ランナーを除去しました (プロジェクト: {res['script_id']})\n事前バックアップ: {res.get('backup_file', 'なし')}"
     return f"[INFO] 実行ランナーは設置されていません（クリーン状態です）"
 
+def _guard_unsafe_default_dir(local_dir: str) -> None:
+    """local_dir='.' 時にアプリ本体フォルダ等への誤 pull/push を防ぐ"""
+    if str(local_dir).strip() not in ("", "."):
+        return
+    cwd = Path(".").resolve()
+    if (cwd / "Antigravity.exe").exists() or ("antigravity" in cwd.name.lower() and (cwd / "resources").exists()):
+        raise ValueError(f"現在の作業フォルダ ({cwd}) はアプリ本体フォルダのため、local_dir='.' での pull/push は禁止されています。作業フォルダを明示指定してください。")
+
 @mcp.tool()
 @safe_tool
 def pull_project(project: str, local_dir: str = ".", clean: bool = False) -> str:
@@ -966,6 +939,7 @@ def pull_project(project: str, local_dir: str = ".", clean: bool = False) -> str
         local_dir: 保存先ローカルフォルダパス (デフォルト: カレント)
         clean: クラウド側に存在しないローカルファイルを自動削除するか (デフォルト: False)
     """
+    _guard_unsafe_default_dir(local_dir)
     client = get_client()
     res = client.pull(project, local_dir=local_dir, clean=clean)
     lines = [
@@ -990,6 +964,7 @@ def push_project(project: str = "", local_dir: str = ".", force: bool = False, d
         deploy: 反映完了後に本番Webアプリを自動デプロイするか (デフォルト: False)
         desc: デプロイ時の説明文 (デフォルト: Pushed via MCP)
     """
+    _guard_unsafe_default_dir(local_dir)
     client = get_client()
     dep_id_arg = deployment_id.strip() if deployment_id else None
     res = client.push(project, local_dir=local_dir, force=force, dry_run=dry_run, delete_missing=delete_missing, deploy=deploy, deploy_desc=desc, deployment_id=dep_id_arg)
@@ -1654,28 +1629,14 @@ def gas_shelf(
     project: str = "",
     query: str = "",
     shelf_id: str = "",
-    filename: str = "Index",
+    filename: str = "",
     func_name: str = "",
     apply: bool | None = None,
     deploy: bool = False,
     list_only: bool = False,
     check_only: bool = False
 ) -> str:
-    """GAS 先撃ち総合棚ルーター（全28棚直結・頼み文からの自動判定・棚当て検査・自動ディスパッチ）を実行します。
-    コードを直す頼みの 1 手目はこれ：query に使う人の頼みの文をそのまま渡す。文字の替え（E01）・値の替え（E02）は
-    apply 省略でも場所探しから直しまで 1 回で返る（search_code・get_function で先に探さない）。「当たりが複数／無し」のときだけ patch_function へ。
-
-    Args:
-        project: プロジェクト名またはスクリプトID
-        query: 日本語・自然言語の頼み文 (例: "『送信』を『保存』に替えて", "上限を100に", "GASドックで診断して")
-        shelf_id: 直接指定する棚ID ("R01"〜"R12", "S01"〜"S06", "K01"〜"K04", "D01"〜"D04", "E01"〜"E02")
-        filename: 対象HTMLファイル名 (デフォルト: Index)
-        func_name: 対象関数名 (レシピ適用時など)
-        apply: 反映するか (省略時: E01/E02 の小さな直しは即反映、大規模変更棚は下見。明示で True/False 指定可)
-        deploy: 反映後に本番Webアプリを自動デプロイするか (デフォルト: False)
-        list_only: 全28棚の一覧カタログのみ表示するか (デフォルト: False)
-        check_only: 全28棚のゴールデン頼み文検査 (--check) を実行するか (デフォルト: False)
-    """
+    """GAS 先撃ち総合棚ルーター（1手目は project と query に頼み文そのままを渡す。E01/E02 は apply 省略で即反映）。"""
     client = get_client()
     res = client.gas_shelf(
         script_id=project,
@@ -1856,43 +1817,27 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
 
     return f"不明な combo サブコマンドです: '{action}'。'combo help' を確認してください。"
 
+def _split_gas_command(command: str) -> list:
+    """Windows パスのバックスラッシュを失わずにコマンド文字列を分割する"""
+    if os.name == "nt":
+        raw_parts = shlex.split(command.strip(), posix=False)
+        cleaned = []
+        for p in raw_parts:
+            if len(p) >= 2 and ((p[0] == '"' and p[-1] == '"') or (p[0] == "'" and p[-1] == "'")):
+                cleaned.append(p[1:-1])
+            else:
+                cleaned.append(p)
+        return cleaned
+    return shlex.split(command.strip())
+
 @mcp.tool()
 @safe_tool
 def gas(command: str) -> str:
-    """ガスマネージャー (GAS Manager) 統合コマンド窓口。
-    CLI と同じコマンド形式（例: 'files MyProject', 'outline MyProject', 'patch-func MyProject main myFunc old new' 等）で
-    コマンドで GAS 操作を実行します。
-
-    利用可能コマンド:
-      - help
-      - setup [--open]
-      - list [limit]
-      - files <project>
-      - outline <project> [filename]  (または funcs)
-      - diagnose <project>  (または diag)
-      - grep <project> <pattern> [filename]
-      - get <project> <filename> [start_line] [end_line]
-      - func <project> <filename> <func_name>
-      - patch-func <project> <filename> <func_name> <target> <replacement>
-      - add-func <project> <filename> <code>
-      - del-func <project> <filename> <func_name>
-      - batch <project> <ops_json>
-      - backups <project> [limit]
-      - diff <project> [backup_file] [-f <file>]
-      - restore <project> <backup_file> [-f <file>]
-      - versions <project> [limit]
-      - diff-prod <project> [-v <version>] [-f <file>]  (または diff-version)
-      - restore-version <project> <version> [-f <file>] [--deploy]
-      - run <project> <func_name> [args_json] [--keep-runner]
-      - deploy <project> [description]
-      - deployments <project>  (または deps)
-      - webapp <url_or_project> [params] [--dev]
-      - combo <template|addon|connect|install|look|ask|ops|undo|watch> ...
-    """
+    """GAS 統合コマンド窓口（'files <p>', 'outline <p>', 'diagnose <p>', 'grep <p> <pat>', 'get <p> <f>', 'batch', 'push', 'pull', 'combo ...', 'help'）。"""
     if not command or not command.strip():
         return "コマンドを指定してください。'help' で一覧を表示します。"
 
-    parts = shlex.split(command.strip())
+    parts = _split_gas_command(command)
     sub = parts[0].lower()
 
     if sub == "help":
@@ -2830,18 +2775,13 @@ def ws_undo(to: str = "", list: bool = False, ok: bool = False) -> str:
 
 # 表を直すだけの人向けの起こし方: 環境変数 GAS_MCP_ONLY=ws で ws の 4 本だけを出す（AI が読む道具の説明が 59 本→4 本に減り、速く安くなる）
 WS_TOOLS = ("ws_do", "ws_look", "ws_find", "ws_undo")
-# 標準露出を厳選 15 本に絞る（Excel マネージャーの 12 本と同等規模。他機能は gas(command) 窓口から利用可能。GAS_MCP_ALL_TOOLS=1 で全 59 本を露出）
+# 標準露出を厳選 10 本に絞る（他機能は gas(command) 窓口から利用可能。GAS_MCP_ALL_TOOLS=1 で全 59 本を露出）
 CORE_MCP_TOOLS = (
     "gas_shelf",
     "gas",
-    "get_file",
     "get_function",
     "patch_function",
-    "replace_function",
-    "batch_patch",
     "deploy",
-    "push_project",
-    "pull_project",
     "reload_tools",
     "ws_look",
     "ws_find",

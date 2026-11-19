@@ -6777,6 +6777,16 @@ def test_171_stage2_edit_shelves_e01_and_e02(mock_client):
     assert r_omitted["result"]["status"] == "success"
     assert "<button>送信</button>" in files[1]["source"]
 
+    # E01: 空文字置換「」および 1 語＋削除指示（行末改行除去含む）
+    files[1]["source"] = "// 先頭コメント\n<button>送信</button><p>エラー</p>"
+    r_del_one = mock_client.gas_shelf(sid, query="「// 先頭コメント」を削除")
+    assert r_del_one["result"]["status"] == "success"
+    assert files[1]["source"] == "<button>送信</button><p>エラー</p>"
+
+    r_del_empty = mock_client.gas_shelf(sid, query="『<p>エラー</p>』を『』に文字替え")
+    assert r_del_empty["result"]["status"] == "success"
+    assert files[1]["source"] == "<button>送信</button>"
+
     # E02: 日本語表現 -> 候補一覧のみで変更しない（かつ URL 内の // が欠けないこと）
     r_jp = mock_client.gas_shelf(sid, query="上限を 100 に", apply=True)
     assert r_jp["result"]["status"] == "candidates"
@@ -6852,3 +6862,76 @@ def test_e02_no_false_positive_on_general_requests(mock_client):
     """一般の改修依頼が E02（値替え）に誤爆しないことを検証"""
     assert mock_client.match_shelf("新しい承認ワークフローを全部設計して")["shelf_id"] == ""
     assert mock_client.match_shelf("毎月1日に経理へメール通知する機能を追加して")["shelf_id"] == ""
+
+
+def test_ai_hesitation_reducers_alias_e01_func_patch_and_split(mock_client, tmp_path):
+    """迷い・往復削減の改善（表記揺れ解決、E01関数絞り込み、HTML関数外patch、Windowsパス分割）を検証"""
+    import copy
+    from unittest.mock import MagicMock
+    import gas_mcp_server
+
+    # 1. 表記揺れ正規化によるプロジェクト名解決（MQuick -> Mクイック）
+    mock_client.aliases_file = tmp_path / "empty_aliases.json"
+    mock_client.list_projects = MagicMock(return_value=[
+        {"name": "Mクイック", "id": "sid_mquick"},
+        {"name": "Qクイック NEXT", "id": "sid_qnext"},
+    ])
+    assert mock_client.resolve_script_id("MQuick") == "sid_mquick"
+    assert mock_client.resolve_script_id("qquick next") == "sid_qnext"
+
+    # 2. E01 複数ヒット時の func_name 絞り込み & 3. patch_function の func_name="" ファイル全体置換
+    sid = "sid_edit_reduce"
+    files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": (
+                "function alpha() {\n  return 'OK';\n}\n"
+                "function beta() {\n  return 'OK';\n}\n"
+            ),
+        },
+        {
+            "name": "Index",
+            "type": "HTML",
+            "source": "<!-- top -->\n<!DOCTYPE html>\n<html><body>Hi</body></html>",
+        },
+    ]
+    mock_client.resolve_script_id = MagicMock(return_value=sid)
+    mock_client._get_content_for_write_with_status = MagicMock(
+        side_effect=lambda s: ({"files": copy.deepcopy(files)}, False, None)
+    )
+    mock_client._validate_syntax = MagicMock(return_value="OK")
+    mock_client._verify_and_rollback_if_broken = MagicMock()
+    mock_client._put_content = MagicMock(
+        side_effect=lambda s, nf: (files.clear(), files.extend(copy.deepcopy(nf)), {"delivery": "送り中"})[2]
+    )
+
+    r_amb = mock_client.gas_shelf(sid, query="『OK』を『DONE』に替えて")
+    assert r_amb["result"]["status"] == "ambiguous"
+    assert "func_name='beta'" in r_amb["result"]["markdown_report"]
+
+    r_narrow = mock_client.gas_shelf(sid, query="『OK』を『DONE』に替えて", func_name="beta")
+    assert r_narrow["result"]["status"] == "success"
+    assert "function alpha() {\n  return 'OK';\n}" in files[0]["source"]
+    assert "function beta() {\n  return 'DONE';\n}" in files[0]["source"]
+
+    r_html_patch = mock_client.patch_function(sid, "Index", "", target="<!-- top -->\n", replacement="")
+    assert r_html_patch["status"] == "success"
+    assert files[1]["source"].startswith("<!DOCTYPE html>")
+
+    # 4. E01/E02 の filename 指定絞込（別ファイルに同名要素がある場合）
+    files[0]["source"] = "const LIMIT = 10;\nfunction alpha() { return 'SAVE'; }\n"
+    files[1]["source"] = "<!DOCTYPE html>\n<script>const LIMIT = 20;</script><button>SAVE</button>"
+    r_e01_file = mock_client.gas_shelf(sid, query="『SAVE』を『SEND』に替えて", filename="Index")
+    assert r_e01_file["result"]["status"] == "success"
+    assert "<button>SEND</button>" in files[1]["source"]
+    assert "return 'SAVE';" in files[0]["source"]
+
+    r_e02_file = mock_client.gas_shelf(sid, query="LIMIT を 99 に", filename="Code")
+    assert r_e02_file["result"]["status"] == "success"
+    assert "const LIMIT = 99;" in files[0]["source"]
+    assert "const LIMIT = 20;" in files[1]["source"]
+
+    # 5. Windows パスのバックスラッシュ保持
+    parts = gas_mcp_server._split_gas_command(r'push MyProj C:\Users\someone\work')
+    assert parts == ["push", "MyProj", r"C:\Users\someone\work"]
