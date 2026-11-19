@@ -38,7 +38,7 @@ GAS_MANAGER_INSTRUCTIONS = (
     "「GASコンボを入れて」「アドオンを使いたい」と言われたら、gas('setup --open') → ready になったら gas('combo addon') を 1 回撃つ。"
     "setup が needs_login なら『npm install -g @google/clasp』と『clasp login』は AI がターミナルで撃ち（手順に⓪ Node.js があればそれも先に撃つ）、ブラウザに出る許可だけ人に押してもらう。"
     "needs_api_enable なら開いた設定画面で「Google Apps Script API」をオンにしてもらう。"
-    "combo addon の後は、返事の install_guide を上から 1 段ずつ人に案内する（1 段言ったら押せたかを聞いて次へ・詰まったら if_stuck を言う・全部を一度に並べない）。入れ終わったら返事の chrome_extension.how（Chrome の拡張を入れる手順とフォルダ）もそのまま案内して終える。"
+    "combo addon の後は、返事の install_guide を上から 1 段ずつ人に案内する（1 段言ったら押せたかを聞いて次へ・詰まったら if_stuck を言う・全部を一度に並べない）。入れ終わったら、拡張を入れていない人には chrome_extension.install_guide を同じく 1 段ずつ手ほどきする（入れ済みなら要らない）。それで終える。"
 )
 
 mcp = FastMCP("gas-manager", instructions=GAS_MANAGER_INSTRUCTIONS)

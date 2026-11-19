@@ -37,7 +37,7 @@ Google Apps Script (GAS) のプロジェクト操作は、`gas-manager` の MCP 
    - `needs_api_enable`: 開いた設定画面で「Google Apps Script API」をオンにしてもらいます。
 2. `ready` になったら `gas('combo addon')` を 1 回撃ちます（本体のライブラリとアドオンを、その人の Drive に作ります）。
 3. 返事の `install_guide` を上から 1 段ずつ案内します（1 段言ったら押せたかを聞いて次へ。詰まったらその段の `if_stuck` を言う。全部を一度に並べない）。中身は、`editor` を開く →「デプロイ」→「デプロイをテスト」→「Google Workspace アドオン」の段の「インストール」→「完了」→ シートの右端の ⚡ → 初回の許可（「確認されていません」は「詳細」→「〜に移動」）です。
-4. 返事の `chrome_extension.how` をそのまま案内します（任意・おすすめ）。chrome://extensions で「デベロッパー モード」をオン →「パッケージ化されていない拡張機能を読み込む」→ 返事の `chrome_extension.folder`（`ws_browser_ext`）を選んでもらいます。入れてあるなら何もしなくてかまいません（ファイルが変わると、サイドパネルを開いたときに拡張が自分で入れ直します）。あとは拡張のアイコンか Alt+G で、Chrome の右のサイドパネルに GASコンボが開きます。
+4. 拡張をまだ入れていない人には、返事の `chrome_extension.install_guide` を同じく 1 段ずつ手ほどきします（任意・おすすめ）。chrome://extensions →「デベロッパー モード」をオン →「パッケージ化されていない拡張機能を読み込む」→ `chrome_extension.folder`（`ws_browser_ext`）→ パズルのアイコンでピン留め → シートで拡張のアイコンか Alt+G で右のサイドパネルに GASコンボが開きます。入れ済みなら要りません（ファイルが変わると、サイドパネルを開いたときに拡張が自分で入れ直します）。
 
 ## 3. GAS設計のベストプラクティス
 
