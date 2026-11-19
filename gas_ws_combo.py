@@ -1403,14 +1403,19 @@ class ComboPostboxWatcher:
         results = []
         for item in queue_items:
             payload = self.resolve_item(item)
-            deliv_resp = self.client.run_function(
+            deliv = _unwrap_run_result(self.client.run_function(
                 self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True
-            )
-            results.append({
-                "reqId": item.get("reqId"),
-                "payload": payload,
-                "deliver": _unwrap_run_result(deliv_resp, client=self.client, sid=self.sid),
-            })
+            ), client=self.client, sid=self.sid)
+            # 棚の引数が足りずに失敗したら、そのわけを添えて AI に 1 回だけ答え直させる
+            if isinstance(deliv, dict) and deliv.get("ok") is False and deliv.get("arg"):
+                retry_item = dict(item, ask=str(item.get("ask") or "") + "\n（前の答えは失敗しました: " + str(deliv.get("error") or "")
+                                  + "。棚の引数をそろえて答え直してください）")
+                payload = self.resolve_item(retry_item)
+                payload.update({k: item.get(k) for k in ("ssId", "sheet", "selection", "ok", "backup") if item.get(k) is not None})
+                deliv = _unwrap_run_result(self.client.run_function(
+                    self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True
+                ), client=self.client, sid=self.sid)
+            results.append({"reqId": item.get("reqId"), "payload": payload, "deliver": deliv})
         return results
 
     def watch(self, max_loops=None, idle_interval=60.0):
@@ -1418,6 +1423,10 @@ class ComboPostboxWatcher:
         起こされないときは idle_interval 秒ごとに 1 回だけ見る（GAS を叩き続けない）。同じ口に先客がいれば何もせず終わる。"""
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        # 窓なし（pythonw）で起きたときは標準出力が無い＝書き先を手元のログにする（無いと途中で黙って止まる）
+        if sys.stdout is None or sys.stderr is None:
+            _log = open(HERE / ".combo_watch.log", "a", encoding="utf-8", buffering=1)
+            sys.stdout = sys.stderr = _log
         kick = threading.Event()
 
         class _H(BaseHTTPRequestHandler):
