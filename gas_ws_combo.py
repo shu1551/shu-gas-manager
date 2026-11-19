@@ -1176,6 +1176,17 @@ def create_combo_template(
         "created": created_ss,
         "url": f"https://docs.google.com/spreadsheets/d/{tmpl_ss_id}/edit",
         "copy_url": f"https://docs.google.com/spreadsheets/d/{tmpl_ss_id}/copy",
+        # コピーして使う人への手ほどき（AI が 1 段ずつ読み上げ、押せたかを聞いてから次へ）
+        "install_guide": [
+            {"step": 1, "say": f"この番地を開いてください: https://docs.google.com/spreadsheets/d/{tmpl_ss_id}/copy"},
+            {"step": 2, "say": "「ドキュメントのコピーを作成」の画面が出るので、名前をお好みで変えて「コピーを作成」を押してください（コピーはご自分の Drive に入ります）"},
+            {"step": 3, "say": "開いたコピーのメニューの右端に「⚡ GASコンボ」が出ます。それを押して「操作窓（サイドバー）を開く」を押してください",
+             "if_stuck": "メニューに「⚡ GASコンボ」が無いときは、数秒待つか、シートを再読み込み（F5）"},
+            {"step": 4, "say": "初回だけ「承認が必要です」と出ます。「続行」→ ご自分のアカウントを選ぶ →「このアプリは Google で確認されていません」と出たら、"
+                               "ご自分のコピーに付いたスクリプトなので「詳細」→「〜（安全ではないページ）に移動」→「すべて選択」に印を付けて「続行」",
+             "if_stuck": "許可の後に何も開かなければ、もう一度「⚡ GASコンボ」→「操作窓（サイドバー）を開く」"},
+            {"step": 5, "say": "右にサイドバーが出たら使えます。頼みを書いて「実行」。このコピーの中だけで使えます（ほかのシートでも使いたいときはアドオン版）"},
+        ],
     }
 
 
