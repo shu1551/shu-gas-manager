@@ -39,7 +39,8 @@ window.addEventListener("message", async (ev) => {
   const d = ev && ev.data;
   if (!d || d.type !== "GAS_COMBO_GOTO" || !d.range) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab || !tab.id) return;
+  const reply = (ok, why) => { try { ev.source.postMessage({ type: "GAS_COMBO_GOTO_DONE", ok, why: why || "" }, "*"); } catch (_e) {} };
+  if (!tab || !tab.id) { reply(false, "シートのタブが見つかりません"); return; }
   // 拡張を再読み込みした後もシートのタブを開き直さずに効くよう、頼みのたびに差し込んで撃つ
   chrome.scripting.executeScript({
     target: { tabId: tab.id },
@@ -55,7 +56,10 @@ window.addEventListener("message", async (ev) => {
       }
       return true;
     },
-  }).catch(() => {});
+  }).then((r) => {
+    const ok = !!(r && r[0] && r[0].result);
+    reply(ok, ok ? "" : "シートの名前ボックスが見つかりません");
+  }).catch((e) => reply(false, String((e && e.message) || e)));
 });
 
 chrome.tabs.onActivated.addListener(refresh);

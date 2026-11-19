@@ -2723,8 +2723,19 @@
       var sh = a1.slice(0, bang).replace(/^'|'$/g, "");
       a1 = "'" + sh.replace(/'/g, "''") + "'!" + a1.slice(bang + 1);
     }
+    state.gotoWait = setTimeout(function() {
+      state.gotoWait = null;
+      flashBtn(els.btnGoChanged, "移れません", "直した所");
+      appendLog(els.traceLog, "is-err", "[直した所] " + a1, "拡張から返事がありません（Chrome 拡張のサイドパネルで開いているときだけ効きます。拡張を chrome://extensions で再読み込み）");
+    }, 1500);
     try { window.top.postMessage({ type: "GAS_COMBO_GOTO", range: a1 }, "*"); } catch (e) {}
-    flashBtn(els.btnGoChanged, "移りました", "直した所");
+  });
+  window.addEventListener("message", function(ev) {
+    var d = ev && ev.data;
+    if (!d || d.type !== "GAS_COMBO_GOTO_DONE") return;
+    if (state.gotoWait) { clearTimeout(state.gotoWait); state.gotoWait = null; }
+    flashBtn(els.btnGoChanged, d.ok ? "移りました" : "移れません", "直した所");
+    if (!d.ok) appendLog(els.traceLog, "is-err", "[直した所] 移れません", String(d.why || ""));
   });
 
   els.btnCopyLog.addEventListener("click", function() {
