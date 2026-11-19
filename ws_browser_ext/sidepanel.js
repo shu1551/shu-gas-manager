@@ -39,7 +39,23 @@ window.addEventListener("message", async (ev) => {
   const d = ev && ev.data;
   if (!d || d.type !== "GAS_COMBO_GOTO" || !d.range) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: "GAS_COMBO_GOTO", range: String(d.range) }, () => void chrome.runtime.lastError);
+  if (!tab || !tab.id) return;
+  // 拡張を再読み込みした後もシートのタブを開き直さずに効くよう、頼みのたびに差し込んで撃つ
+  chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    args: [String(d.range)],
+    func: (range) => {
+      const box = document.querySelector("#t-name-box") || document.querySelector("input.waffle-name-box");
+      if (!box) return false;
+      box.focus();
+      box.value = range;
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      for (const type of ["keydown", "keypress", "keyup"]) {
+        box.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      }
+      return true;
+    },
+  }).catch(() => {});
 });
 
 chrome.tabs.onActivated.addListener(refresh);

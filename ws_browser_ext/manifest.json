@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "GASコンボ ブラウザ連動",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "GASコンボ：拡張のアイコン（または Alt+G）で、ブラウザの右のサイドパネルに GASコンボを開く（今開いているスプレッドシートが相手）。選択セル範囲などを GASコンボの操作窓（Python）へも知らせる。",
   "permissions": [
     "activeTab",
+    "scripting",
     "sidePanel",
     "tabs"
   ],
