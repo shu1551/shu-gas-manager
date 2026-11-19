@@ -23,6 +23,7 @@ import difflib
 import collections
 import webbrowser
 import hashlib
+import gzip
 import importlib
 import unicodedata
 
@@ -532,6 +533,26 @@ GAS_UNIFIED_SHELVES = [
     }
 ]
 
+# 直す手（送りを返事の後ろに回し、続けて来たら前の送りを待たずにまとめて送る）
+_COALESCE_OPS = {"replace_function", "patch_function", "add_function", "delete_function", "batch_patch",
+                 "patch_code", "replace_file", "add_file", "delete_file",
+                 "gas_shelf", "gas_recipe", "gas_scaffold", "design_skin", "clean_dead"}
+
+
+def _dep_report_line(dep):
+    """棚の返事（markdown_report）に足すデプロイの 1 行。裏で進めているときは、待たずに見られる最新の番地も出す"""
+    if not isinstance(dep, dict):
+        return ""
+    if dep.get("status") == "queued":
+        s = "\n[本番デプロイ] 裏で進めています（7 秒ほどで本番に出ます。失敗したら次の返事で知らせます）"
+        if dep.get("devUrl"):
+            s += "\n今すぐ見るなら最新の番地（/dev・持ち主だけ）: " + re.sub(r"/exec$", "/dev", str(dep["devUrl"]))
+        return s
+    if dep.get("versionNumber") is not None:
+        return f"\n[本番デプロイ] Version {dep['versionNumber']} 反映済み"
+    return ""
+
+
 def _track_sid_op(fn):
     """script_id への読み書きで裏送り完了待ち・送り中・失敗通知を統一処理するデコレータ"""
     @functools.wraps(fn)
@@ -550,17 +571,27 @@ def _track_sid_op(fn):
 
         sid = ""
         prev_err = None
+        edit = is_outer and fn.__name__ in _COALESCE_OPS and self._can_async_put()
         if is_outer:
             tl.async_put_sids = set()
             if script_arg:
                 try:
                     sid = self.resolve_script_id(script_arg)
-                    self._wait_pending_put(sid)
+                    self._drop_orphan_unsent(sid)
+                    if not edit:      # 読む手・実行する手は、送りが届いてから
+                        self._wait_pending_put(sid)
+                        self._note_stuck_put(sid)
+                    else:             # 直す手は待たないが、前の送りが 30 秒以上止まっていたら知らせる
+                        self._note_stuck_put(sid, min_age=30.0)
                     prev_err = self._pop_put_error(sid)
                 except Exception:
                     sid = ""
 
-        deploy_sync = bool(kwargs.get("deploy", False))
+        # 直す手は送りもデプロイも返事の後ろで（前の送りの最中なら続けて送る）。それ以外の手の deploy=True は今までどおりその場で
+        deploy_sync = bool(kwargs.get("deploy", False)) and not edit
+        prev_co, prev_dd = getattr(tl, "coalesce", False), getattr(tl, "defer_deploy", False)
+        if is_outer:
+            tl.coalesce, tl.defer_deploy = edit, edit
         try:
             with self._sync_put_context(enabled=deploy_sync):
                 res = fn(self, *args, **kwargs)
@@ -571,6 +602,8 @@ def _track_sid_op(fn):
             raise
         finally:
             tl.depth = prev_depth
+            if is_outer:
+                tl.coalesce, tl.defer_deploy = prev_co, prev_dd
             async_sids = getattr(tl, "async_put_sids", set()) if is_outer else set()
             if is_outer:
                 tl.async_put_sids = set()
@@ -670,6 +703,12 @@ class GasClient:
             self._sync_put_tl = threading.local()
         if not hasattr(self, "_op_state_tl") or self._op_state_tl is None:
             self._op_state_tl = threading.local()
+        if not hasattr(self, "_put_queue") or self._put_queue is None:
+            self._put_queue = {}      # sid → 送り中に来た次の直し（最新の 1 つだけ。送りが終わったら続けて送る）
+        if not hasattr(self, "_put_base") or self._put_base is None:
+            self._put_base = {}       # sid → 送りが始まる前の写し（どこかで失敗したら、ここまで戻す）
+        if not hasattr(self, "_deploy_next") or self._deploy_next is None:
+            self._deploy_next = {}    # sid → 送りが終わったら裏でするデプロイ (説明, deployment_id)
         return lock
 
     @property
@@ -1118,9 +1157,12 @@ class GasClient:
             return False
         return True
 
-    def _wait_pending_put(self, script_id=None, timeout=30.0):
-        """指定 script_id（または全て）の裏送りスレッド完了を待つ（同一スレッド自身は待たない）"""
+    def _wait_pending_put(self, script_id=None, timeout=30.0, force=False):
+        """指定 script_id（または全て）の裏送りスレッド完了を待つ（同一スレッド自身は待たない）。
+        直す手の最中（coalesce）は待たない＝手元の写しの上に直しを重ね、送りは裏でまとめる。force=True は必ず待つ"""
         lock = self._ensure_sync_state()
+        if not force and getattr(self._op_state_tl, "coalesce", False):
+            return
         cur_th = threading.current_thread()
         deadline = time.time() + max(0.0, float(timeout))
         while True:
@@ -1146,6 +1188,42 @@ class GasClient:
                 break
             for t in alive:
                 t.join(timeout=max(0.0, deadline - time.time()))
+
+    def _note_stuck_put(self, sid, min_age=0.0):
+        """送りが 30 秒たっても終わらない → 返事で知らせる（黙って古い写しのまま進めない）"""
+        lock = self._ensure_sync_state()
+        with lock:
+            th = self._put_threads.get(sid)
+            if (th is not None and th is not threading.current_thread() and th.is_alive()
+                    and time.time() - getattr(th, "_gm_started", time.time()) >= min_age):
+                self._put_errors.setdefault(sid, "前の直しの送りが 30 秒たっても終わっていません（まだ Google に届いていません）。"
+                                                 "送る中身が大きすぎないか（files で大きさを見る）を確かめてください")
+
+    def _drop_orphan_unsent(self, sid):
+        """送っている途中で道具が止まった写し（印 unsent が残ったまま・この道具で送り中でもない）は信じない。
+        捨ててクラウドから読み直し、次の返事で知らせる"""
+        lock = self._ensure_sync_state()
+        with lock:
+            th = self._put_threads.get(sid)
+            if th is not None and th.is_alive():
+                return
+            disk = self._load_disk_content_cache()
+            ent = disk.get(sid)
+            if not (isinstance(ent, dict) and ent.get("unsent")):
+                return
+            # 別の道具（同じ写しを使う別のプロセス）が今送っている最中かもしれない → 5 分たつまでは信じて待つ
+            if ent.get("pid") not in (None, os.getpid()) and time.time() - float(ent.get("ts") or 0) < 300:
+                return
+            disk.pop(sid, None)
+            self._save_disk_content_cache(disk)
+            self._content_cache.pop(sid, None)
+            self._copy_remote_epochs.pop(sid, None)
+            self._remote_check_cache.pop(sid, None)
+            self._self_fresh_at.pop(sid, None)
+            self._write_gens[sid] = self._write_gens.get(sid, 0) + 1
+            self._put_errors.setdefault(sid, "前の直しを送っている途中で道具が止まっていました。届いたか分からないので、"
+                                             "手元の写しを捨ててクラウドの今の中身を読み直しました（前の直しが入っているか確かめてください）")
+        self._purge_sid_derived_caches(sid)
 
     def _pop_put_error(self, sid):
         """前回の裏送り失敗理由を取り出してクリアする"""
@@ -1185,6 +1263,8 @@ class GasClient:
     def _decorate_sid_op_result(self, res, sid, prev_err, async_sids):
         """最外側の読み書き返事に「送り中」または「前の直しが届いていません（理由）」を付与する"""
         used_async = sid in async_sids if sid else bool(async_sids)
+        # 理由がもう文になっている物（前の〜・デプロイが〜）はそのまま出す
+        warn_msg = (prev_err if str(prev_err).startswith(("前の", "デプロイ")) else f"前の直しが届いていません（{prev_err}）") if prev_err else ""
         if isinstance(res, dict):
             out = dict(res)
             if used_async:
@@ -1193,13 +1273,12 @@ class GasClient:
                 if isinstance(out.get("markdown_report"), str) and "送り中" not in out["markdown_report"]:
                     out["markdown_report"] = out["markdown_report"].rstrip() + "\n\n（送り中）"
             if prev_err:
-                warn_msg = f"前の直しが届いていません（{prev_err}）"
                 out = {"warning": warn_msg, **out}
                 if isinstance(out.get("markdown_report"), str):
                     out["markdown_report"] = f"{warn_msg}\n\n" + out["markdown_report"]
             return out
         if isinstance(res, str) and prev_err:
-            return f"前の直しが届いていません（{prev_err}）\n" + res
+            return warn_msg + "\n" + res
         if prev_err and sid:
             # リスト等を返す読み取りで消費できなかった場合は次の返事まで残す
             with self._ensure_sync_state():
@@ -3914,12 +3993,14 @@ class GasClient:
         self._purge_sid_derived_caches(sid)
 
     def _put_content(self, script_id, files_list):
-        """Google Apps Script API の content エンドポイントへファイルを PUT 更新（既定で裏送り）"""
+        """Google Apps Script API の content エンドポイントへファイルを PUT 更新（既定で裏送り）。
+        裏送りでは手元の写しを先に直して返事を返し、送りは裏の糸がする。送りの最中に次の直しが来たら待たせず、
+        終わった後に最新の中身を 1 回で送る（まとめて送る）。どこかで失敗したら、送りが始まる前の写しまで戻して次の返事で知らせる。
+        送っている間は手元の写しに印（unsent）を付け、道具が途中で止まったら次に読むとき捨てて読み直す"""
         if not files_list:
             raise ValueError("保護エラー: 反映対象ファイルが空です。プロジェクト全消去を未然に阻止しました。")
 
         sid = self.resolve_script_id(script_id)
-        self._wait_pending_put(sid)
         url = f"https://script.googleapis.com/v1/projects/{sid}/content"
 
         # API PUT 時に余計な読み取り専用フィールド（createTime, updateTime 等）をサニタイズ
@@ -3933,18 +4014,8 @@ class GasClient:
 
         payload = {"files": cleaned_files}
 
-        # 失敗時に手元の写しを戻せるよう、直前の状態を退避
-        lock = self._ensure_sync_state()
-        with lock:
-            prev_mem = copy.deepcopy(self._content_cache.get(sid))
-            prev_copy_ep = copy.deepcopy(self._copy_remote_epochs.get(sid))
-            prev_rem_chk = copy.deepcopy(self._remote_check_cache.get(sid))
-            prev_fresh = self._self_fresh_at.get(sid)
-            prev_synced = (sid in self._synced_sids)
-        disk_cache_before = self._load_disk_content_cache()
-        prev_disk = copy.deepcopy(disk_cache_before.get(sid))
-
         if not self._can_async_put():
+            self._wait_pending_put(sid, force=True)     # その場で送る道は、裏の送りが全部済んでから（追い越さない）
             res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
             if res.status_code != 200:
                 raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text}")
@@ -3952,10 +4023,20 @@ class GasClient:
             self._commit_put_success(sid, cleaned_files, res_json)
             return res_json
 
-        # 手元キャッシュを即座に更新し、実通信は裏スレッドで送る
-        now = time.time()
-        optimistic_dict = {"files": copy.deepcopy(cleaned_files)}
+        lock = self._ensure_sync_state()
+        disk_cache = self._load_disk_content_cache()
         with lock:
+            cur_th = self._put_threads.get(sid)
+            running = cur_th is not None and cur_th.is_alive() and cur_th is not threading.current_thread()
+            if not running:   # 送りが始まる前の写し（失敗したらここまで戻す）
+                self._put_base[sid] = (
+                    copy.deepcopy(self._content_cache.get(sid)), copy.deepcopy(self._copy_remote_epochs.get(sid)),
+                    copy.deepcopy(self._remote_check_cache.get(sid)), self._self_fresh_at.get(sid), (sid in self._synced_sids),
+                    copy.deepcopy(disk_cache.get(sid)),
+                )
+            # 手元の写しを先に直す（印 unsent つき）
+            now = time.time()
+            optimistic_dict = {"files": copy.deepcopy(cleaned_files)}
             while len(self._content_cache) >= 32:
                 self._content_cache.pop(next(iter(self._content_cache)), None)
             self._content_cache[sid] = (now, copy.deepcopy(optimistic_dict))
@@ -3964,38 +4045,116 @@ class GasClient:
             self._self_fresh_at[sid] = now
             self._copy_remote_epochs.pop(sid, None)
             self._remote_check_cache.pop(sid, None)
-        disk_cache = self._load_disk_content_cache()
-        disk_cache[sid] = {"ts": now, "content": copy.deepcopy(optimistic_dict)}
-        self._save_disk_content_cache(disk_cache)
-        with lock:
+            disk_cache[sid] = {"ts": now, "content": copy.deepcopy(optimistic_dict), "unsent": True, "pid": os.getpid()}
+            self._save_disk_content_cache(disk_cache)
             if sid in self._content_cache and self._disk_cache_mtime > now:
                 self._content_cache[sid] = (self._disk_cache_mtime, self._content_cache[sid][1])
+            if running:       # 送りの最中 → 最新の中身だけ覚えて、今の送りが終わったら続けて送る
+                self._put_queue[sid] = (payload, cleaned_files)
+            else:
+                th = threading.Thread(target=self._bg_put_worker, args=(sid, url, payload, cleaned_files),
+                                      name=f"gas-put-{sid[:8]}", daemon=False)
+                th._gm_started = time.time()
+                self._put_threads[sid] = th
         self._purge_sid_derived_caches(sid)
-
-        def _bg_put_worker():
-            try:
-                res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
-                if res.status_code != 200:
-                    raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text}")
-                res_json = res.json() if res.content else {}
-                self._commit_put_success(sid, cleaned_files, res_json)
-            except Exception as e:
-                reason = str(e).strip().splitlines()[0][:200] if str(e) else type(e).__name__
-                self._restore_put_rollback_state(
-                    sid, reason, prev_mem, prev_copy_ep, prev_rem_chk, prev_fresh, prev_synced, prev_disk
-                )
-            finally:
-                with lock:
-                    cur = self._put_threads.get(sid)
-                    if cur is threading.current_thread():
-                        self._put_threads.pop(sid, None)
-
-        th = threading.Thread(target=_bg_put_worker, name=f"gas-put-{sid[:8]}", daemon=False)
-        with lock:
-            self._put_threads[sid] = th
         self._mark_async_put_used(sid)
-        th.start()
-        return {"status": "sending", "delivery": "送り中", "files": cleaned_files}
+        if not running:
+            th.start()
+        return {"status": "sending", "delivery": "送り中", "files": cleaned_files, "queued": bool(running)}
+
+    def _send_content(self, url, payload):
+        """中身を縮めて（gzip）送る。Google が縮めた荷物を受けなければ、そのまま送り直す"""
+        if self._is_mock_obj(getattr(self, "_request_with_retry", None)):     # 単体試験の偽の通信は json= で中身を見る
+            return self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        h = self._headers()
+        h["Content-Type"] = "application/json; charset=utf-8"
+        if len(body) > 2048 and not getattr(self, "_no_gzip_put", False):
+            hz = dict(h)
+            hz["Content-Encoding"] = "gzip"
+            res = self._request_with_retry("PUT", url, headers=hz, data=gzip.compress(body, 6), timeout=60)
+            if res.status_code not in (400, 411, 413, 415):
+                return res
+            self._no_gzip_put = True
+        return self._request_with_retry("PUT", url, headers=h, data=body, timeout=60)
+
+    def _bg_put_worker(self, sid, url, payload, cleaned_files):
+        """裏の送り。送り終わったら、その間に来た直しを続けて送り、最後にたまっていたデプロイをする"""
+        lock = self._ensure_sync_state()
+        res_json = {}
+        try:
+            while True:
+                if payload is not None:
+                    try:
+                        res = self._send_content(url, payload)
+                        if res.status_code != 200:
+                            raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text[:300]}")
+                        res_json = res.json() if res.content else {}
+                    except Exception as e:
+                        reason = str(e).strip().splitlines()[0][:200] if str(e) else type(e).__name__
+                        with lock:
+                            base = self._put_base.pop(sid, None)
+                            self._put_queue.pop(sid, None)
+                            dropped = self._deploy_next.pop(sid, None)
+                        if base:
+                            self._restore_put_rollback_state(sid, reason + ("（デプロイもしていません）" if dropped else ""), *base)
+                        else:
+                            with lock:
+                                self._put_errors[sid] = reason
+                        return
+                with lock:
+                    nxt = self._put_queue.pop(sid, None)
+                    if nxt is not None:      # 送っている間に来た直し → 続けて送る（手元の写しは新しい方のまま）
+                        payload, cleaned_files = nxt
+                        continue
+                    if payload is not None:
+                        self._commit_put_success(sid, cleaned_files, res_json)
+                        self._put_base.pop(sid, None)
+                    dep = self._deploy_next.pop(sid, None)
+                    if dep is None:
+                        if self._put_threads.get(sid) is threading.current_thread():
+                            self._put_threads.pop(sid, None)
+                        return
+                payload = None
+                try:                         # 届いた中身でデプロイ（この糸の中ではその場で送る）
+                    with self._sync_put_context():
+                        out = self.deploy(sid, description=dep[0], deployment_id=dep[1], fast=True)
+                    with lock:
+                        if not hasattr(self, "_deploy_done") or self._deploy_done is None:
+                            self._deploy_done = {}
+                        self._deploy_done[sid] = out
+                    try:
+                        self.resolve_webapp_url(sid, dev=True)     # 次の返事で最新の番地（/dev）を出せるように覚える
+                    except Exception:
+                        pass
+                except Exception as e:
+                    reason = str(e).strip().splitlines()[0][:200] if str(e) else type(e).__name__
+                    with lock:
+                        self._put_errors[sid] = f"デプロイが通りませんでした（{reason}）。コードは届いています。deploy を撃ち直してください"
+        finally:
+            with lock:
+                if self._put_threads.get(sid) is threading.current_thread():
+                    self._put_threads.pop(sid, None)
+
+    def _defer_deploy(self, sid, description, deployment_id):
+        """直す手の deploy=True: 送りが終わった後に裏でデプロイする。返事は待たない"""
+        lock = self._ensure_sync_state()
+        with lock:
+            self._deploy_next[sid] = (description, deployment_id)
+            th = self._put_threads.get(sid)
+            start = th is None or not th.is_alive()
+            if start:
+                th = threading.Thread(target=self._bg_put_worker,
+                                      args=(sid, f"https://script.googleapis.com/v1/projects/{sid}/content", None, None),
+                                      name=f"gas-deploy-{sid[:8]}", daemon=False)
+                th._gm_started = time.time()
+                self._put_threads[sid] = th
+            dep = self._cache_data.get("deployments", {}).get(sid, {}) or {}
+        if start:
+            th.start()
+        return {"status": "queued", "delivery": "裏でデプロイ中",
+                "webAppUrl": dep.get("url", ""), "devUrl": dep.get("dev_url", ""),
+                "note": "本番へのデプロイは裏で進めています（7 秒ほど）。失敗したら次の返事で知らせます"}
 
     # ==========================================
     # ファイル書き込み / 置換 / 削除 / 復元
@@ -4420,7 +4579,7 @@ class GasClient:
     def create_version(self, script_id, description="Auto version via GasClient"):
         """プロジェクトの不変バージョンを作成"""
         sid = self.resolve_script_id(script_id)
-        self._wait_pending_put(sid)
+        self._wait_pending_put(sid, force=True)
         url = f"https://script.googleapis.com/v1/projects/{sid}/versions"
         payload = {"description": description}
         res = self._request_with_retry("POST", url, headers=self._headers(), json=payload, timeout=15)
@@ -4808,7 +4967,9 @@ class GasClient:
     def deploy(self, script_id, description="Auto deployed via GasClient", deployment_id=None, refresh=False, fast=False):
         """新バージョンを作成し、既存の Web アプリデプロイを更新（再デプロイ）"""
         sid = self.resolve_script_id(script_id)
-        self._wait_pending_put(sid)
+        if getattr(self._op_state_tl, "defer_deploy", False) and self._can_async_put():
+            return self._defer_deploy(sid, description, deployment_id)
+        self._wait_pending_put(sid, force=True)
 
         # 直前キャッシュ再利用判定（fast=True、または直前5秒以内に_content_cache更新がある場合）
         use_c = bool(fast) or (sid in self._content_cache and (time.time() - self._content_cache[sid][0] < 5.0))
@@ -11228,8 +11389,7 @@ function doGet() {{
         if deploy:
             dep_res = self.deploy(sid, description="E01 replace_text", fast=True)
             ret["deployment"] = dep_res
-            if isinstance(dep_res, dict) and dep_res.get("versionNumber") is not None:
-                ret["markdown_report"] += f"\n[本番デプロイ] Version {dep_res['versionNumber']} 反映済み"
+            ret["markdown_report"] += _dep_report_line(dep_res)
         return ret
 
     def _gas_edit_const(self, sid: str, query: str, apply: bool = False, deploy: bool = False, target_func: str = "", target_file: str = "") -> dict:
@@ -11443,8 +11603,7 @@ function doGet() {{
         if deploy:
             dep_res = self.deploy(sid, description="E02 replace_const", fast=True)
             ret["deployment"] = dep_res
-            if isinstance(dep_res, dict) and dep_res.get("versionNumber") is not None:
-                ret["markdown_report"] += f"\n[本番デプロイ] Version {dep_res['versionNumber']} 反映済み"
+            ret["markdown_report"] += _dep_report_line(dep_res)
         return ret
 
     def _gas_edit_shelf(self, sid: str, shelf_id: str, query: str = "", apply: bool = False, deploy: bool = False, func_name: str = "", filename: str = "") -> dict:
@@ -11690,8 +11849,8 @@ function doGet() {{
 
         md_report = dispatch_res.get("markdown_report", "") if isinstance(dispatch_res, dict) else str(dispatch_res)
         dep_info = dispatch_res.get("deployment") if isinstance(dispatch_res, dict) else None
-        if isinstance(dep_info, dict) and dep_info.get("versionNumber") is not None and "[本番デプロイ]" not in md_report:
-            md_report += f"\n[本番デプロイ] Version {dep_info['versionNumber']} 反映済み"
+        if "[本番デプロイ]" not in md_report:
+            md_report += _dep_report_line(dep_info)
 
         return {
             "status": "success",

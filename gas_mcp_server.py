@@ -42,6 +42,19 @@ GAS_MANAGER_INSTRUCTIONS = (
     "「GASコンボのテンプレートを作って」「シートをコピーするだけで使いたい」「人に配りたい」ときは gas('combo template') を 1 回撃ち、返事の install_guide（コピーを作成 → メニューの ⚡ GASコンボ → 初回の許可）を同じく 1 段ずつ手ほどきする。"
 )
 
+
+def _dep_line(dep):
+    """デプロイの 1 行。直す手の deploy=True は裏で進むので、待たずに見られる最新の番地（/dev）も出す"""
+    if isinstance(dep, dict) and dep.get("status") == "queued":
+        s = "本番デプロイ: 裏で進めています（7 秒ほどで本番に出ます。失敗したら次の返事で知らせます）"
+        if dep.get("devUrl"):
+            dev = re.sub(r"/exec$", "/dev", str(dep["devUrl"]))      # 最新の版（HEAD）の番地は /dev の形で見せる（どちらでも最新が開く）
+            s += f"\n今すぐ見るなら最新の番地（/dev・持ち主だけ）: {dev}"
+        if dep.get("webAppUrl"):
+            s += f"\n本番: {dep['webAppUrl']}"
+        return s
+    return f"本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+
 mcp = FastMCP("gas-manager", instructions=GAS_MANAGER_INSTRUCTIONS)
 _client = None
 
@@ -281,7 +294,7 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
     elif res.get("dev_mode"):
         dep_msg = f"\nHEAD即時反映 (dev): {res.get('dev_url', 'N/A')} (バージョン採番スキップ・高速完了)"
     verify_msg = ""
@@ -335,7 +348,7 @@ def replace_file(project: str, filename: str, new_source: str, force: bool = Fal
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
 
     if res.get("status") == "dry_run":
         return (
@@ -526,7 +539,7 @@ def patch_function(project: str, filename: str, func_name: str, target: str = ""
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
 
     if res.get("status") == "dry_run":
         return (
@@ -567,7 +580,7 @@ def add_function(project: str, filename: str, code: str, force: bool = False, dr
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
 
     if res.get("status") == "dry_run":
         return (
@@ -605,7 +618,7 @@ def delete_function(project: str, filename: str, func_name: str, force: bool = F
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
 
     if res.get("status") == "dry_run":
         return (
@@ -653,7 +666,7 @@ def batch_patch(project: str, operations: str, force: bool = False, dry_run: boo
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
 
     changed_str = ", ".join(res.get("changed_files", []))
     if res.get("status") == "dry_run":
@@ -696,7 +709,7 @@ def replace_function(project: str, filename: str, func_name: str, code: str, for
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
 
     if res.get("status") == "dry_run":
         return (
@@ -793,7 +806,7 @@ def restore_version(project: str, version_number: int, filename: str = "", deplo
     dep_msg = ""
     if res.get("deployment"):
         dep = res["deployment"]
-        dep_msg = f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})"
+        dep_msg = "\n" + _dep_line(dep)
 
     return (
         f"[SUCCESS] バージョン {res['target_version']} から復元完了 (範囲: {res['restored_scope']})\n"
@@ -998,7 +1011,7 @@ def push_project(project: str = "", local_dir: str = ".", force: bool = False, d
         lines.append(f"\n--- 差分 (Diff) ---\n{res['diff']}")
     if res.get("deployment"):
         dep = res["deployment"]
-        lines.append(f"\n本番デプロイ完了: Version {dep.get('versionNumber', 'N/A')} (URL: {dep.get('webAppUrl', 'N/A')})")
+        lines.append("\n" + _dep_line(dep))
     return "\n".join(lines)
 
 @mcp.tool()

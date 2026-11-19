@@ -1011,7 +1011,7 @@ const sandbox = {
     querySelector() { return null; },
     addEventListener() {}
   },
-  window: {},
+  window: { addEventListener() {} },
   localStorage: { getItem(){ return null; }, setItem(){} }
 };
 sandbox.globalThis = sandbox;
@@ -1250,7 +1250,7 @@ const sandbox = {
     createElement(tag){ return makeEl(tag); },
     querySelectorAll(){ return []; }, querySelector(){ return null; }, addEventListener(){}
   },
-  window: {}, localStorage: { getItem(){ return null; }, setItem(){} }
+  window: { addEventListener() {} }, localStorage: { getItem(){ return null; }, setItem(){} }
 };
 sandbox.globalThis = sandbox;
 for (const sc of input.scripts) vm.runInNewContext(sc, sandbox);
@@ -1374,7 +1374,7 @@ def test_addon_files_have_workspace_manifest_library_and_planner(tmp_path):
     assert set(by) == {"appsscript", "コード", "ComboPlanner"}
     man = json.loads(by["appsscript"]["source"])
     assert man["addOns"]["sheets"]["homepageTrigger"]["runFunction"] == "onHome"
-    assert man["dependencies"]["libraries"][0] == {"userSymbol": "shucomboengine", "libraryId": "LIB_X", "version": "7", "developmentMode": False}
+    assert man["dependencies"]["libraries"][0] == {"userSymbol": "shucomboengine", "libraryId": "LIB_X", "version": "7", "developmentMode": True}   # 大元を開発モードでつなぐ（combo push がすぐ届く・3ad4842）
     assert man["dependencies"]["enabledAdvancedServices"][0]["serviceId"] == "sheets"   # 操作窓の直結の道（Sheets API）に要る
     assert man["webapp"]["executeAs"] == "USER_ACCESSING"
     code = by["コード"]["source"]
