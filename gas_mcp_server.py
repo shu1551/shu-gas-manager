@@ -1836,7 +1836,7 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
 
     if action == "watch":
         if not once_flag:
-            return "MCP からは常駐ループを実行できません。1回処理は `--once` を付けるか、端末で `py gas.py combo watch <script_id>` を実行してください。"
+            return "MCP からは常駐ループを実行できません。`py gas.py combo watch <script_id> --autostart` を 1 回撃つと、ログオンのたびに窓を出さずに自分で起きます（combo addon でも入ります）。"
         watcher = gas_ws_combo.ComboPostboxWatcher(sid, client=client, model=model or None)
         res = watcher.poll_once()
         return json.dumps(res, ensure_ascii=False, indent=2)

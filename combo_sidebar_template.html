@@ -2179,6 +2179,7 @@
           var pText = res.text || "郵便受けに依頼を置きました。PC側の watch が処理するまで待機します。";
           appendLog(els.chatLog, "is-info", "[郵便受け待機] " + opts.label, pText + "\n(" + formatTiming(wallMs, res.gasMs) + ")");
           appendLog(els.traceLog, "is-info", "[… " + opts.label + "] " + formatTiming(wallMs, res.gasMs), "");
+          kickWatcher();
           schedulePoll(1200);
           return;
         }
@@ -2476,6 +2477,17 @@
         els.postboxStatusLabel.textContent = "郵便受けエラー: " + formatError(err);
       }
     );
+  }
+
+  // PC の郵便受けの受け手（py gas.py combo watch）を起こす。届かなければ動いていないと知らせる
+  function kickWatcher() {
+    try {
+      fetch("http://127.0.0.1:18766/kick", { mode: "no-cors", cache: "no-store" }).catch(function() {
+        els.postboxStatusLabel.textContent = "郵便受け: PC の受け手が動いていません（py gas.py combo watch <id> --autostart を 1 回）";
+        appendLog(els.chatLog, "is-err", "[郵便受け] PC の受け手が動いていません",
+          "PC で py gas.py combo watch <アドインのID> --autostart を 1 回撃つと、ログオンのたびに自分で起きます（combo addon でも入ります）。");
+      });
+    } catch (e) {}
   }
 
   function copyToClipboard(text) {

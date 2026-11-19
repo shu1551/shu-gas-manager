@@ -787,6 +787,11 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
         pass
     res = {"ok": True, "mode": "addon", "scriptId": sid, "engineLibId": lib_id, "engineVersion": ver, "window": webapp_url,
            "editor": f"https://script.google.com/home/projects/{sid}/edit"}
+    # 郵便受け（AI 連携の PC の受け手）を、ログオンのたびに自分で起きるようにして今も起こす（人が動かさなくてよい）
+    try:
+        res["postbox_watcher"] = install_watch_autostart(sid).get("text", "")
+    except Exception as e:
+        res["postbox_watcher"] = f"受け手を起こせませんでした: {e}"
     if created:
         res["next"] = ("初回だけ: 上の editor を開き「デプロイ」→「デプロイをテスト」→「インストール」。"
                        "あとはどのスプレッドシートでも右の枠の ⚡ から使えます（初回に権限の許可が 1 回出ます）")
@@ -1408,23 +1413,92 @@ class ComboPostboxWatcher:
             })
         return results
 
-    def watch(self, max_loops=None):
-        """継続監視ループを実行する。"""
+    def watch(self, max_loops=None, idle_interval=60.0):
+        """継続監視ループ。サイドパネルが頼みを置いたら 127.0.0.1 の口（/kick）で起こされて即座に取りに行く。
+        起こされないときは idle_interval 秒ごとに 1 回だけ見る（GAS を叩き続けない）。同じ口に先客がいれば何もせず終わる。"""
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        kick = threading.Event()
+
+        class _H(BaseHTTPRequestHandler):
+            def _reply(self, code=200):
+                self.send_response(code)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+            def do_OPTIONS(self):
+                self._reply()
+
+            def do_GET(self):
+                if self.path.startswith("/kick"):
+                    kick.set()
+                self._reply()
+
+            do_POST = do_GET
+
+            def log_message(self, *a):
+                pass
+
+        try:
+            class _Srv(ThreadingHTTPServer):
+                allow_reuse_address = False   # Windows では True だと同じ口に 2 つ目も入れてしまう＝受け手が 2 つ動く
+            srv = _Srv(("127.0.0.1", COMBO_WATCH_PORT), _H)
+        except OSError:
+            print(f"[postbox] 受け手はもう動いています（127.0.0.1:{COMBO_WATCH_PORT}）")
+            return
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
         loops = 0
         try:
             while max_loops is None or loops < max_loops:
                 loops += 1
-                handled = self.poll_once()
+                try:
+                    handled = self.poll_once()
+                except Exception as e:
+                    handled = []
+                    print(f"[postbox] 取りに行けませんでした: {e}")
                 for h in handled:
                     print(f"[postbox] {h['reqId']} -> {json.dumps(h['deliver'], ensure_ascii=False)}")
                 if max_loops is not None and loops >= max_loops:
                     break
-                time.sleep(self.poll_interval)
+                kick.wait(idle_interval)
+                if kick.is_set():
+                    kick.clear()
+                    time.sleep(0.3)
         except KeyboardInterrupt:
             pass
         finally:
+            srv.shutdown()
             if self._ai_runner is not None:
                 self._ai_runner.close()
+
+
+COMBO_WATCH_PORT = 18766
+
+
+def install_watch_autostart(script_id, start_now=True):
+    """郵便受けの受け手を、Windows にログオンしたら窓を出さずに自分で起きるようにする（スタートアップに 1 本置く）。
+    start_now なら今も起こす。受け手は 1 つだけ動く（2 つ目は口が埋まっていて自分で終わる）。"""
+    if os.name != "nt":
+        return {"ok": False, "text": "自動で起こすのは Windows だけです。端末で py gas.py combo watch <id> を撃ってください"}
+    pyw = Path(sys.executable).with_name("pythonw.exe")
+    exe = str(pyw if pyw.exists() else sys.executable)
+    gas_py = str(HERE / "gas.py")
+    startup = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    vbs = startup / "GASコンボ受け手.vbs"
+    cmd = f'"{exe}" "{gas_py}" combo watch {script_id}'
+    try:
+        startup.mkdir(parents=True, exist_ok=True)
+        vbs.write_text('CreateObject("WScript.Shell").Run "' + cmd.replace('"', '""') + '", 0, False\r\n', encoding="utf-16")
+    except Exception as e:
+        return {"ok": False, "text": f"スタートアップに置けませんでした: {e}"}
+    if start_now:
+        subprocess.Popen([exe, gas_py, "combo", "watch", script_id], cwd=str(HERE),
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(subprocess, "DETACHED_PROCESS", 0x8),
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    return {"ok": True, "startup": str(vbs), "text": "郵便受けの受け手を動かしました（ログオンのたびに自分で起きます）"}
 
 
 # ---------------------------------------------------------------- CLI 入口
@@ -1501,6 +1575,7 @@ def _run_cli(argv=None):
     p_watch.add_argument("--interval", type=float, default=2.0, help="ポーリング間隔（秒）")
     p_watch.add_argument("--model", default="", help="AI モデル名")
     p_watch.add_argument("--once", action="store_true", help="1回だけポーリングして終了")
+    p_watch.add_argument("--autostart", action="store_true", help="ログオンのたびに窓を出さずに自分で起きるようにして、今も起こす（Windows）")
 
     args = parser.parse_args(argv)
     from gas_client import GasClient
@@ -1608,6 +1683,9 @@ def _run_cli(argv=None):
         res = _unwrap_run_result(client.run_function(args.script_id, "comboUndo", [req]), client=client, sid=args.script_id)
         print(res.get("text") or json.dumps(res, ensure_ascii=False, indent=2))
         return 0 if (res or {}).get("ok") else 1
+    if args.cmd == "watch" and args.autostart:
+        print(json.dumps(install_watch_autostart(args.script_id), ensure_ascii=False, indent=2))
+        return 0
     if args.cmd == "watch":
         watcher = ComboPostboxWatcher(args.script_id, client=client, model=args.model or None, poll_interval=args.interval)
         if args.once:
