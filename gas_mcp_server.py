@@ -1681,6 +1681,7 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
     if not args_list or args_list[0].lower() in ("help", "-h", "--help"):
         return (
             "=== gas combo 使い方 ===\n"
+            "  combo template [--title <name>] [--new] [--force]  テンプレート版（コピーを作成だけで使える）\n"
             "  combo addon [--id <script_id>] [--force]   アドイン版（1 回入れれば全部のシートで使える）\n"
             "  combo connect <script_id> [--lib <lib_id>] [--ver <ver>]\n"
             "  combo install <script_id> [--ss <ss_id>] [--preserve]\n"
@@ -1692,6 +1693,25 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
         )
 
     action = args_list[0].lower()
+    if action == "template":
+        tmpl_title = ""
+        j = 1
+        while j < len(args_list):
+            if args_list[j] == "--title" and j + 1 < len(args_list):
+                tmpl_title = args_list[j + 1]
+                j += 2
+            else:
+                j += 1
+        return json.dumps(
+            gas_ws_combo.create_combo_template(
+                title=tmpl_title,
+                new="--new" in args_list,
+                force_engine_update="--force" in args_list,
+                client=client,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        )
     if action == "addon":
         aid = ""
         if len(args_list) >= 3 and args_list[1] == "--id":
@@ -1852,7 +1872,7 @@ def gas(command: str) -> str:
       - deploy <project> [description]
       - deployments <project>  (または deps)
       - webapp <url_or_project> [params] [--dev]
-      - combo <install|look|ask|ops|undo|watch> <script_id> ...
+      - combo <template|addon|connect|install|look|ask|ops|undo|watch> ...
     """
     if not command or not command.strip():
         return "コマンドを指定してください。'help' で一覧を表示します。"
@@ -1892,7 +1912,7 @@ def gas(command: str) -> str:
             "  inspect-ui <p_or_url> [f] [--all] - Webアプリ実機画面撮影＆コントラスト監査（screenshot）\n"
             "  dock <project> [filename]         - GASドック（総合診断・100点満点・処方箋）\n"
             "  recipe [p] [--id Rxx] [--ask 文]  - 高速化レシピ棚（全12レシピ検出・自動変換）\n"
-            "  combo <install|look|ask|ops|undo> - GASコンボ配備・実行・取り消し\n"
+            "  combo <template|addon|connect|install|...> - GASコンボ配備・実行・取り消し\n"
             "  sync <project> [--force]          - デスクトップ常駐型ハイブリッド同期\n"
             "  reload                            - 常駐MCPサーバーのホットリロード\n"
             "  py-outline <file>                 - Pythonコード内関数一覧取得\n"

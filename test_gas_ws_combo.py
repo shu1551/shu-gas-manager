@@ -1370,3 +1370,80 @@ def test_install_combo_addon_reuses_saved_project_and_records_it(tmp_path, monke
     assert "入れ直し" in res["next"]
     assert res["window"] == "https://script.google.com/macros/s/DEPEXEC/exec"     # サイドパネルの中に入れられる正式な番地
     assert c.dep == [None, "DEPEXEC"]                                              # 初回はデプロイを作り、番地を書いた版でもう一度上げる
+
+
+def test_create_combo_template_creates_and_reuses_template(tmp_path, monkeypatch):
+    """combo template 初回作成・2回目入れ直し・--new 作り直し・CLI 入口を検証。"""
+    st = tmp_path / ".combo_state.json"
+    monkeypatch.setattr(combo_mod, "ensure_combo_engine_project", lambda **kw: ("LIB_TMPL_1", "18", []))
+
+    created_sheets = []
+    created_projects = []
+    puts = []
+
+    class Resp:
+        def __init__(self, code, data):
+            self.status_code = code
+            self._data = data
+            self.text = json.dumps(data)
+        def json(self):
+            return self._data
+
+    class FakeClient:
+        def _headers(self):
+            return {"Authorization": "Bearer dummy"}
+        def resolve_script_id(self, x):
+            return x
+        def set_alias(self, name, sid):
+            pass
+        def _request_with_retry(self, method, url, **kw):
+            if method == "POST" and url.endswith("/drive/v3/files"):
+                idx = len(created_sheets) + 1
+                ss_id = f"TMPL_SS_{idx}"
+                name = kw["json"]["name"]
+                created_sheets.append((ss_id, name))
+                return Resp(200, {"id": ss_id, "name": name})
+            if method == "GET" and "/drive/v3/files/" in url:
+                fid = url.rsplit("/", 1)[-1].split("?")[0]
+                return Resp(200, {"id": fid, "name": "GASコンボ テンプレート"})
+            return Resp(404, {})
+        def create_project(self, title, parent_id=""):
+            idx = len(created_projects) + 1
+            sid = f"TMPL_SID_{idx}"
+            created_projects.append((title, parent_id, sid))
+            return {"scriptId": sid}
+        def _put_content(self, sid, files):
+            puts.append((sid, files))
+
+    client = FakeClient()
+
+    # 1. 初回: 新規シート作成 + つなぎ配置 + 3項目返却
+    res1 = combo_mod.create_combo_template(client=client, state_path=st)
+    assert res1["created"] is True
+    assert res1["url"] == "https://docs.google.com/spreadsheets/d/TMPL_SS_1/edit"
+    assert res1["copy_url"] == "https://docs.google.com/spreadsheets/d/TMPL_SS_1/copy"
+    assert res1["engineVersion"] == "18"
+    assert len(created_sheets) == 1 and created_sheets[0][1] == "GASコンボ テンプレート"
+    assert len(created_projects) == 1 and created_projects[0][1] == "TMPL_SS_1"
+    pushed_map = {f["name"]: f["source"] for f in puts[-1][1]}
+    manifest = json.loads(pushed_map["appsscript"])
+    assert manifest["dependencies"]["libraries"][0]["libraryId"] == "LIB_TMPL_1"
+    assert manifest["dependencies"]["enabledAdvancedServices"][0]["userSymbol"] == "Sheets"
+    assert "shucomboengine.comboRunAsk" in pushed_map["コード"]
+
+    # 2. 2回目: 新規作成せず、覚えたテンプレートに入れ直す
+    res2 = combo_mod.create_combo_template(client=client, state_path=st)
+    assert res2["created"] is False
+    assert res2["url"] == res1["url"]
+    assert res2["copy_url"] == res1["copy_url"]
+    assert len(created_sheets) == 1
+    assert len(created_projects) == 1
+    assert len(puts) == 2 and puts[-1][0] == "TMPL_SID_1"
+
+    # 3. --new CLI: 新しいテンプレートを作り直す
+    with patch("gas_client.GasClient", return_value=client), \
+         patch.object(combo_mod, "COMBO_ENGINE_STATE_PATH", st):
+        rc = combo_mod._run_cli(["template", "--new", "--title", "カスタムテンプレート"])
+        assert rc == 0
+    assert len(created_sheets) == 2 and created_sheets[1] == ("TMPL_SS_2", "カスタムテンプレート")
+    assert len(created_projects) == 2 and created_projects[1][1] == "TMPL_SS_2"

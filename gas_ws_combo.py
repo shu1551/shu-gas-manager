@@ -31,6 +31,7 @@ SERVER_TEMPLATE = HERE / "combo_server_template.gs"
 SIDEBAR_TEMPLATE = HERE / "combo_sidebar_template.html"
 ADDON_TEMPLATE = HERE / "combo_addon_template.gs"
 DEFAULT_ADDON_TITLE = "GASコンボ（アドイン）"
+DEFAULT_COMBO_TEMPLATE_TITLE = "GASコンボ テンプレート"
 
 COMBO_FILE_NAMES = ("appsscript", "Engine", "ComboPlanner", "ComboServer", "ComboSidebar")
 
@@ -650,6 +651,7 @@ def install_combo_connector(
     lib_symbol="",
     force_engine_update=False,
     client=None,
+    state_path=None,
 ):
     """スプレッドシート付属 GAS へ 30 行の繋ぎコード（コード.gs）とライブラリ設定を配置する。"""
     if client is None:
@@ -661,7 +663,7 @@ def install_combo_connector(
     ver = str(engine_version or "").strip()
 
     if not lib_id:
-        lib_id, ver_auto, _ = ensure_combo_engine_project(client=client, force_update=force_engine_update)
+        lib_id, ver_auto, _ = ensure_combo_engine_project(client=client, force_update=force_engine_update, state_path=state_path)
         if not ver:
             ver = ver_auto
         sym = str(lib_symbol or "shucomboengine").strip()
@@ -852,6 +854,8 @@ def connect_spreadsheet(
     title="GASコンボ",
     client=None,
     state_path=None,
+    enable_advanced_sheets=False,
+    force_engine_update=False,
 ):
     """スプレッドシートの URL または ID からコンテナバインド GAS を自動作成（既存記録があれば再利用）し、30行繋ぎコードを配置＆別名登録する。"""
     if client is None:
@@ -880,8 +884,11 @@ def connect_spreadsheet(
         sid,
         engine_lib_id=engine_lib_id,
         engine_version=engine_version,
+        enable_advanced_sheets=enable_advanced_sheets,
         lib_symbol=lib_symbol,
+        force_engine_update=force_engine_update,
         client=client,
+        state_path=state_path,
     )
 
     ss_name = _resolve_drive_file_name(ss_id, client)
@@ -901,6 +908,80 @@ def connect_spreadsheet(
     res["aliasName"] = alias_name
     res["createdProject"] = created_proj
     return res
+
+
+def _create_spreadsheet(title, client):
+    """Drive API で新しいスプレッドシートを作成する。"""
+    name = str(title or "").strip() or DEFAULT_COMBO_TEMPLATE_TITLE
+    url = "https://www.googleapis.com/drive/v3/files"
+    params = {"fields": "id,name", "supportsAllDrives": "true"}
+    payload = {"name": name, "mimeType": "application/vnd.google-apps.spreadsheet"}
+    res = client._request_with_retry("POST", url, headers=client._headers(), params=params, json=payload, timeout=15)
+    if getattr(res, "status_code", 0) not in (200, 201):
+        raise RuntimeError(f"テンプレート用スプレッドシートの作成に失敗しました ({getattr(res, 'status_code', '?')}): {getattr(res, 'text', '')}")
+    data = res.json() if hasattr(res, "json") else {}
+    ss_id = str((data or {}).get("id") or "").strip()
+    if not ss_id:
+        raise RuntimeError(f"作成したスプレッドシートの ID が取得できませんでした: {data!r}")
+    return ss_id, str((data or {}).get("name") or name).strip()
+
+
+def create_combo_template(
+    title="",
+    new=False,
+    force_engine_update=False,
+    client=None,
+    state_path=None,
+):
+    """「コピーを作成」だけで使える GASコンボ テンプレートスプレッドシートを作り・入れ直す。"""
+    if client is None:
+        from gas_client import GasClient
+        client = GasClient()
+
+    lib_id, ver, _ = ensure_combo_engine_project(
+        client=client,
+        force_update=force_engine_update,
+        state_path=state_path,
+    )
+    st, _ = _load_combo_state(state_path)
+    tmpl_ss_id = str(st.get("template_ss_id") or "").strip()
+    tmpl_title = str(title or "").strip() or DEFAULT_COMBO_TEMPLATE_TITLE
+
+    created_ss = False
+    resolved_name = ""
+    if new or not tmpl_ss_id:
+        tmpl_ss_id, resolved_name = _create_spreadsheet(tmpl_title, client)
+        created_ss = True
+
+    res = connect_spreadsheet(
+        tmpl_ss_id,
+        engine_lib_id=lib_id,
+        engine_version=ver,
+        title=tmpl_title,
+        client=client,
+        state_path=state_path,
+        enable_advanced_sheets=True,
+    )
+
+    st2, spath2 = _load_combo_state(state_path)
+    st2["template_ss_id"] = tmpl_ss_id
+    st2["template_sid"] = str(res.get("scriptId") or "").strip()
+    if resolved_name or res.get("spreadsheetName"):
+        st2["template_title"] = str(res.get("spreadsheetName") or resolved_name)
+    _save_combo_state(st2, spath2)
+
+    return {
+        "ok": True,
+        "mode": "template",
+        "spreadsheetId": tmpl_ss_id,
+        "spreadsheetName": res.get("spreadsheetName") or resolved_name or tmpl_title,
+        "scriptId": str(res.get("scriptId") or ""),
+        "engineLibId": lib_id,
+        "engineVersion": str(res.get("engineVersion") or ver),
+        "created": created_ss,
+        "url": f"https://docs.google.com/spreadsheets/d/{tmpl_ss_id}/edit",
+        "copy_url": f"https://docs.google.com/spreadsheets/d/{tmpl_ss_id}/copy",
+    }
 
 
 def _clear_runner_cache(client, sid):
@@ -1204,6 +1285,11 @@ def _run_cli(argv=None):
     p_inst.add_argument("--lib-id", default="", help="大元ライブラリのスクリプトID（--connector 用）")
     p_inst.add_argument("--lib-ver", default="", help="大元ライブラリのバージョン番号（--connector 用）")
 
+    p_tmpl = sub.add_parser("template", help="GASコンボのテンプレートシートを作る・入れ直す（コピーするだけで使える版）")
+    p_tmpl.add_argument("--title", default="", help=f"テンプレートのスプレッドシート名（既定: {DEFAULT_COMBO_TEMPLATE_TITLE}）")
+    p_tmpl.add_argument("--new", action="store_true", help="記録を無視してテンプレートを新しく作り直す")
+    p_tmpl.add_argument("--force", action="store_true", help="大元ライブラリの版を必ず上げる")
+
     p_addon = sub.add_parser("addon", help="GASコンボを Google Workspace アドインとして作る・入れ直す（シートごとのつなぎコード不要）")
     p_addon.add_argument("--id", default="", help="アドインのスクリプトID（省略時は前回作った物・無ければ新しく作る）")
     p_addon.add_argument("--force", action="store_true", help="大元ライブラリの版を必ず上げる")
@@ -1254,6 +1340,9 @@ def _run_cli(argv=None):
     from gas_client import GasClient
     client = GasClient()
 
+    if args.cmd == "template":
+        print(json.dumps(create_combo_template(title=args.title, new=args.new, force_engine_update=args.force, client=client), ensure_ascii=False, indent=2))
+        return 0
     if args.cmd == "addon":
         print(json.dumps(install_combo_addon(addon_id=args.id, force_engine_update=args.force, client=client), ensure_ascii=False, indent=2))
         return 0

@@ -456,7 +456,7 @@ def main():
     wse_p.add_argument("--model", default="sonnet", help="ヘッドレスの Claude Code のモデル（既定 sonnet）")
     wsc_p = subparsers.add_parser("ws-check", help="Workspace の棚の検査（札の形・引く試験・説明の量。通信なし）")
     wsc_p.add_argument("--no-write", action="store_true", help="ws_exam/answers.tsv を書き換えない")
-    combo_p = subparsers.add_parser("combo", help="GASコンボ (install / look / ask / ops / undo / watch)")
+    combo_p = subparsers.add_parser("combo", help="GASコンボ (template / addon / connect / install / look / ask / ops / undo / watch)")
     combo_p.add_argument("combo_args", nargs=argparse.REMAINDER, help="サブコマンドと引数")
 
     # reload
