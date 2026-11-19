@@ -435,7 +435,8 @@ def _publish_leak_check():
     pc = HERE / "publish_check.py"
     if not pc.exists():
         return True, ""
-    r = subprocess.run([sys.executable, str(pc)], cwd=str(HERE), capture_output=True, timeout=60)
+    # MCP の標準入力（会話の管）を子に渡すと待ちで止まるので、入力は空にする
+    r = subprocess.run([sys.executable, str(pc)], cwd=str(HERE), capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
     text = r.stdout.decode("utf-8", "replace").strip()
     return r.returncode == 0, (text.splitlines()[-1] if text else "")
 
