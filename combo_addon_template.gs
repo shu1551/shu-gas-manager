@@ -243,3 +243,6 @@ function comboGetConfig() { return {lib_symbol}.comboGetConfig(); }
 function comboGetLearned(req) { return {lib_symbol}.comboGetLearned(req); }
 function comboLearn(req) { return {lib_symbol}.comboLearn(req); }
 function comboSaveConfig(cfg) { return {lib_symbol}.comboSaveConfig(cfg); }
+// PC の郵便受けの受け手（py gas.py combo watch）が呼ぶ口
+function comboPostboxPoll() { return {lib_symbol}.comboPostboxPoll(); }
+function comboPostboxDeliver(res) { return {lib_symbol}.comboPostboxDeliver(res); }
