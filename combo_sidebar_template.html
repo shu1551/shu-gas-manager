@@ -563,6 +563,8 @@
           <div class="log-empty">実行結果がここに表示されます。</div>
         </div>
         <div class="pane-footer">
+          <button id="btnAgain" class="btn" type="button">もう一度</button>
+          <button id="btnGoChanged" class="btn" type="button">直した所</button>
           <button id="btnCopyLog" class="btn" type="button">会話をコピー</button>
           <button id="btnClearLog" class="btn" type="button">会話消去</button>
         </div>
@@ -729,6 +731,8 @@
     chatLog: document.getElementById("chatLog"),
     btnClearLog: document.getElementById("btnClearLog"),
     btnCopyLog: document.getElementById("btnCopyLog"),
+    btnAgain: document.getElementById("btnAgain"),
+    btnGoChanged: document.getElementById("btnGoChanged"),
     histList: document.getElementById("histList"),
     btnUseHist: document.getElementById("btnUseHist"),
     btnRerunHist: document.getElementById("btnRerunHist"),
@@ -1176,6 +1180,8 @@
     var cls = ok ? "is-ok" : "is-err";
     var body = (bodyText ? bodyText.replace(/\s+$/, "") + "\n" : "") + "(" + timing + ")";
     appendLog(els.chatLog, cls, "[" + prefix + "] " + label, body);
+    var mChg = ok && bodyText ? String(bodyText).match(/直した所:\s*(\S+)/) : null;
+    if (mChg) state.lastChanged = mChg[1].replace(/[／,、]+$/, "");
     appendLog(els.traceLog, cls, "[" + prefix + " " + label + "] " + timing, "");
     if (!ok || switchToChat) {
       switchTab("chat");
@@ -2698,6 +2704,28 @@
       }
     });
   }
+
+  function flashBtn(b, t, label) { b.textContent = t; setTimeout(function() { b.textContent = label; }, 1500); }
+
+  els.btnAgain.addEventListener("click", function() {
+    var last = state.history.length ? state.history[state.history.length - 1] : "";
+    if (!last) { flashBtn(els.btnAgain, "頼みがありません", "もう一度"); return; }
+    els.askInput.value = last;
+    onRunAsk();
+  });
+
+  // 直した所へ移る: シートの名前ボックスに番地を入れる（Chrome の拡張のサイドパネルで開いているとき）
+  els.btnGoChanged.addEventListener("click", function() {
+    var a1 = state.lastChanged || "";
+    if (!a1) { flashBtn(els.btnGoChanged, "まだありません", "直した所"); return; }
+    var bang = a1.lastIndexOf("!");
+    if (bang > 0) {
+      var sh = a1.slice(0, bang).replace(/^'|'$/g, "");
+      a1 = "'" + sh.replace(/'/g, "''") + "'!" + a1.slice(bang + 1);
+    }
+    try { window.top.postMessage({ type: "GAS_COMBO_GOTO", range: a1 }, "*"); } catch (e) {}
+    flashBtn(els.btnGoChanged, "移りました", "直した所");
+  });
 
   els.btnCopyLog.addEventListener("click", function() {
     var b = els.btnCopyLog, label = "会話をコピー";

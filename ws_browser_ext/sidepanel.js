@@ -34,6 +34,14 @@ async function refresh() {
   frame.style.display = "block";
 }
 
+// GASコンボの画面から「直した所」へ移る頼みが来たら、今のタブのシートへ渡す（名前ボックスに番地を入れる）
+window.addEventListener("message", async (ev) => {
+  const d = ev && ev.data;
+  if (!d || d.type !== "GAS_COMBO_GOTO" || !d.range) return;
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab && tab.id) chrome.tabs.sendMessage(tab.id, { type: "GAS_COMBO_GOTO", range: String(d.range) }, () => void chrome.runtime.lastError);
+});
+
 chrome.tabs.onActivated.addListener(refresh);
 chrome.tabs.onUpdated.addListener((_id, info) => { if (info.url || info.status === "complete") refresh(); });
 refresh();

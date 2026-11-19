@@ -89,6 +89,18 @@
     return "";
   }
 
+  // 名前ボックスに番地を入れて Enter（シートの名前つきなら、そのシートへ移って選ぶ）
+  function gotoRange(range) {
+    const box = document.querySelector("#t-name-box") || document.querySelector("input.waffle-name-box");
+    if (!box) return;
+    box.focus();
+    box.value = range;
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    for (const type of ["keydown", "keypress", "keyup"]) {
+      box.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+    }
+  }
+
   function collectState() {
     const meta = parseDocMeta();
     if (!meta) return null;
@@ -172,6 +184,9 @@
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg && msg.type === "GAS_COMBO_PING") {
         scheduleSync(10, true);
+      }
+      if (msg && msg.type === "GAS_COMBO_GOTO" && msg.range) {
+        gotoRange(String(msg.range));
       }
     });
   } catch (_e) {
