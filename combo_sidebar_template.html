@@ -859,7 +859,10 @@
   function loadLearned() {
     if (!Planner.setLearned) return;
     callGas("comboGetLearned", undefined, function(res) {
-      if (res && res.learned && typeof res.learned === "object") Planner.setLearned(res.learned);
+      if (res && res.learned && typeof res.learned === "object") {
+        Planner.setLearned(res.learned);
+        updatePreview();
+      }
     }, function() {});
   }
 
@@ -2746,6 +2749,7 @@
       silentSuccess: true,
       onSuccess: function(res) {
         if (res.postboxDone) handlePostboxDone(res.postboxDone);
+        loadLearned();
         if (!res.config) {
           callGas("comboGetConfig", undefined, function(cfg) { applyConfig(cfg); });
         }
