@@ -866,7 +866,7 @@
     }, function() {});
   }
 
-  function offerSuggest(txt, ops) {
+  function offerSuggest(txt, ops, onNo) {
     var entry = appendLog(els.chatLog, "is-info", "棚に当たりませんでした: " + txt,
       "近い候補: " + formatOpsShort(ops) + "\nこれを撃ちますか？（［はい］で撃って、この言い方を覚えます）");
     var bar = document.createElement("div");
@@ -877,14 +877,14 @@
     var no = document.createElement("button");
     no.type = "button";
     no.className = "btn";
-    no.textContent = "いいえ";
+    no.textContent = onNo ? "いいえ（AI に頼む）" : "いいえ";
     yes.onclick = function() {
       bar.remove();
       if (Planner.learn) Planner.learn(txt, ops);
       callGas("comboLearn", { ask: txt, ops: ops, key: Planner.learnKey ? Planner.learnKey(txt) : "" }, function() {}, function() {});
       onRunOps(ops, txt);
     };
-    no.onclick = function() { bar.remove(); };
+    no.onclick = function() { bar.remove(); if (onNo) onNo(); };
     bar.appendChild(yes);
     bar.appendChild(no);
     entry.appendChild(bar);
@@ -2247,10 +2247,8 @@
     els.askInput.value = "";
     updatePreview();
 
-    if (!fireOps && !aiAuto && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) {
-      offerSuggest(txt, planRes.suggest);
-      return;
-    }
+    // 近い候補があれば、AI自動でも先に［はい］を出す（郵便受けの受け手がいなくても止まらない。［いいえ］なら AI へ回す）
+    var suggestOps = (!fireOps && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) ? planRes.suggest : null;
 
     var statusText = (!fireOps && aiAuto) ? "AI解釈・実行中…" : "実行中…";
     var payload = {
@@ -2268,6 +2266,12 @@
     };
     if (!liveSelPrompt) {
       payload.selection = els.chkSync.checked ? (state.selection || "") : "";
+    }
+    if (suggestOps) {
+      offerSuggest(txt, suggestOps, aiAuto ? function() {
+        runServerAction({ fnName: "comboRunAsk", payload: payload, label: txt, statusText: statusText, switchToChat: true });
+      } : null);
+      return;
     }
     if (fireOps && !liveSelPrompt && !els.chkBackup.checked) {
       var handledDirect = tryDirectSheetsApi(fireOps, txt, true, function() {

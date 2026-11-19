@@ -270,7 +270,10 @@ def test_combo_planner_honest_color_and_find_ask():
         "  'タイトルのほんとの色を緑に変えて',\n"
         "  'タイトルの字の色を#FF0000にして',\n"
         "  'タイトルの文字を赤',\n"
-        "  'タイトルの文字を青色に'\n"
+        "  'タイトルの文字を青色に',\n"
+        "  'タイトルは青',\n"
+        "  'タイトルの色は青。',\n"
+        "  'タイトルを赤に'\n"
         "];\n"
         "const plans = prompts.map(a => ctx.ComboPlanner.plan(a, 'sheet', data.table, ['売上'], '売上', null));\n"
         "const asks = [\n"
@@ -282,7 +285,7 @@ def test_combo_planner_honest_color_and_find_ask():
         "process.stdout.write(JSON.stringify({ plans, asks }));\n"
     )
     out = _run_node_json(node_code, {"plannerJs": planner_js, "table": TITLE_TABLE})
-    expected_colors = ["赤", "青", "緑", "#FF0000", "赤", "青"]
+    expected_colors = ["赤", "青", "緑", "#FF0000", "赤", "青", "青", "青", "赤"]
     for p, col in zip(out["plans"], expected_colors):
         assert p["fire"] is True, p
         assert p["ops"] == [{"shelf": "format", "title": True, "color": col}], p
@@ -514,7 +517,7 @@ const rMiss = ctx.comboRunAsk({ ask: 'タイトルをどーんと赤に', backup
 const rLearn = ctx.comboLearn({ ask: 'タイトルをどーんと赤に', ops: rMiss.plan && rMiss.plan.suggest, key: ctx.ComboPlanner.learnKey('タイトルをどーんと赤に') });
 const rLearned = ctx.comboGetLearned({});
 const rHitLearned = ctx.comboRunAsk({ ask: 'タイトルをどーんと赤に。', backup: false, fastUndo: true });
-const bgAfterLearned = bgs[0][0];
+const bgAfterLearned = fcolors[0][0];
 ctx.comboUndo({});
 
 // 郵便受けフロー
@@ -558,7 +561,7 @@ process.stdout.write(JSON.stringify({
     assert res["rMiss"]["unfired"] is True and "近い候補" in res["rMiss"]["text"]
     assert res["rLearn"]["ok"] is True and len(res["rLearned"]["learned"]) == 1
     assert res["rHitLearned"]["ok"] is True and res["rHitLearned"]["source"] == "shelf"
-    assert res["bgAfterLearned"].lower() != "#ffffff"
+    assert res["bgAfterLearned"].lower() != "#0000ff"
 
     assert res["rPb"]["pendingPostbox"] is True
     assert res["rPoll"]["count"] == 1

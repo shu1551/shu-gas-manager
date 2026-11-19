@@ -126,6 +126,8 @@ var ComboPlanner = (function () {
     // 「色」を言わない言い方（「文字を赤」「タイトルを赤に」）も文字色として統一
     out = out.replace(_FG_NOCOLOR_RE_G, "$1色$2");
     out = out.replace(_TITLE_NOCOLOR_RE_G, "$1文字色$3");
+    // 「タイトルの色は青」「表題の色を赤に」＝タイトルの文字色
+    out = out.replace(/(タイトル|表題|題名)の色/g, "$1の文字色");
     return out.split("を").join("");
   }
 
@@ -941,7 +943,10 @@ var ComboPlanner = (function () {
                 break;
               }
             }
-            targetK = (hasFgWord && text.indexOf("背景") < 0) ? "color" : "bg";
+            // タイトルの色はたいてい文字の色（「背景」「塗り」と言ったときだけ背景）。見出しの行・範囲は今までどおり背景
+            var saysBg = /背景|塗/.test(text);
+            var isTitleAsk = /タイトル|表題|題名/.test(text) && !/見出し|ヘッダ/.test(text);
+            targetK = ((hasFgWord || isTitleAsk) && !saysBg) ? "color" : "bg";
           } else {
             targetK = (colorArgs.indexOf("bg") >= 0 && !_hasOwn(op, "bg")) ? "bg" : "color";
           }
