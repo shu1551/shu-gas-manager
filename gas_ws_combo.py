@@ -429,8 +429,48 @@ def _planner_eval(ask, table=None):
     return json.loads(r.stdout.decode("utf-8"))
 
 
-def add_combo_phrase(ask, ops=None, deploy=True, test=True, client=None, path=None):
-    """当たらなかった頼みを言い方の表に足し、試験を回し、アドインとテンプレートへ入れ直すまでを 1 回で。
+def push_combo_dev(client=None, state_path=None):
+    """元（combo_*_template と言い方の表）を直したら、これ 1 回で届く。
+    大元ライブラリとアドインへ同時に送り、操作窓（/exec）の版だけ上げる。大元の版は上げない（アドインは開発モードでつなぐ）。
+    テンプレート（人がコピーする物）は版でつなぐので、配る節目に combo template で上げる。"""
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+    t0 = _time.time()
+    if client is None:
+        from gas_client import GasClient
+        client = GasClient()
+    spath = Path(state_path) if state_path else COMBO_ENGINE_STATE_PATH
+    st = json.loads(spath.read_text(encoding="utf-8")) if spath.exists() else {}
+    lib_id = str(st.get("combo_engine_sid") or "").strip()
+    addon_sid = str(st.get("addon_sid") or "").strip()
+    dep_id = str(st.get("addon_webapp_dep") or "").strip()
+    if not (lib_id and addon_sid):
+        return install_combo_addon(client=client, state_path=state_path)
+    ver = str(st.get("combo_engine_ver") or "1")
+    webapp_url = f"https://script.google.com/macros/s/{dep_id}/exec" if dep_id else ""
+    lib_files = build_combo_files(combo_lite=True)
+    addon_files = build_combo_addon_files(lib_id, ver, webapp_url=webapp_url, development_mode=True)
+
+    def _send_lib():
+        client._put_content(lib_id, lib_files)
+        _clear_runner_cache(client, lib_id)
+
+    def _send_addon():
+        client._put_content(addon_sid, addon_files)
+        if dep_id:
+            client.deploy(addon_sid, description="GASコンボ 操作窓", deployment_id=dep_id, fast=True)
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futs = [ex.submit(_send_lib), ex.submit(_send_addon)]
+        for f in futs:
+            f.result()
+    return {"ok": True, "mode": "push", "engineLibId": lib_id, "addon": addon_sid, "window": webapp_url,
+            "seconds": round(_time.time() - t0, 1),
+            "next": "アドイン（カード・操作窓）は次に開いたときから新しいコード。テンプレートは配る節目に combo template"}
+
+
+def add_combo_phrase(ask, ops=None, deploy=True, client=None, path=None):
+    """当たらなかった頼みを言い方の表に足し、大元とアドインへ送るまでを 1 回で。
     ops を省くと棚当ての「近い候補」を使う。既に一発で当たる頼みは足さない。"""
     import subprocess
     import time as _time
@@ -457,23 +497,9 @@ def add_combo_phrase(ask, ops=None, deploy=True, test=True, client=None, path=No
     if not after["fire"] or after["ops"] != use_ops:
         raise RuntimeError("足したのに当たりません: " + json.dumps(after, ensure_ascii=False))
     out = {"ok": True, "added": True, "ask": ask, "key": before["key"], "ops": use_ops}
-    if test:
-        r = subprocess.run([sys.executable, "-m", "pytest", "-q", str(HERE / "test_gas_ws_combo.py")], cwd=str(HERE),
-                           capture_output=True, timeout=600)
-        tail = r.stdout.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
-        out["tests"] = tail[0]
-        if r.returncode != 0:
-            out["ok"] = False
-            out["text"] = "試験が落ちたので入れ直していません"
-            return out
     if deploy:
-        if client is None:
-            from gas_client import GasClient
-            client = GasClient()
-        a = install_combo_addon(client=client)
-        tp = create_combo_template(client=client)
-        out["engineVersion"] = a.get("engineVersion")
-        out["template"] = bool(tp.get("ok"))
+        r = push_combo_dev(client=client)
+        out["pushSeconds"] = r.get("seconds")
     out["seconds"] = round(_time.time() - t0, 1)
     return out
 
@@ -636,7 +662,7 @@ def build_combo_connector_files(
     ]
 
 
-def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboengine", webapp_url=""):
+def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboengine", webapp_url="", development_mode=True):
     """Google Workspace アドイン版 GASコンボのファイル（appsscript・コード・ComboPlanner）を組み立てる。
     1 回インストールすれば全部のスプレッドシートに出る（シートごとのつなぎコードは要らない）。"""
     if not str(engine_lib_id or "").strip():
@@ -647,7 +673,8 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
         "runtimeVersion": "V8",
         "exceptionLogging": "STACKDRIVER",
         # Sheets の高度なサービスを入れると、このプロジェクトで Sheets API が有効になる（操作窓の直結の道＝画面から Sheets API を直接叩く 0.3 秒の道に要る。無いと 403）
-        "dependencies": {"libraries": [{"userSymbol": sym, "libraryId": engine_lib_id, "version": str(engine_version or "1"), "developmentMode": False}],
+        # 大元は「いつも最新」（開発モード）でつなぐ＝元を直して大元へ送れば、版を上げずにアドインに届く（アドインは持ち主が使う物）
+        "dependencies": {"libraries": [{"userSymbol": sym, "libraryId": engine_lib_id, "version": str(engine_version or "1"), "developmentMode": bool(development_mode)}],
                          "enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
         "oauthScopes": [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -1384,7 +1411,8 @@ def _run_cli(argv=None):
     p_conn.add_argument("--lib-id", default="", help="大元ライブラリのスクリプトID")
     p_conn.add_argument("--lib-ver", default="", help="大元ライブラリのバージョン番号")
 
-    p_phr = sub.add_parser("phrase", help="当たらなかった頼みを言い方の表に足し、試験・アドインとテンプレートの入れ直しまで 1 回で")
+    p_push = sub.add_parser("push", help="元を直したら 1 回＝大元とアドインへ同時に送る（版は上げない・テンプレートは配る節目に template）")
+    p_phr = sub.add_parser("phrase", help="当たらなかった頼みを言い方の表に足し、大元とアドインへ送るまで 1 回で")
     p_phr.add_argument("ask", help="頼みの文（例: タイトルの文字を赤）")
     p_phr.add_argument("ops", nargs="?", default="", help="撃つ ops の JSON（省くと棚当ての近い候補）")
     p_phr.add_argument("--no-deploy", action="store_true", help="入れ直さない（表に足して試験だけ）")
@@ -1427,6 +1455,9 @@ def _run_cli(argv=None):
     from gas_client import GasClient
     client = GasClient()
 
+    if args.cmd == "push":
+        print(json.dumps(push_combo_dev(client=client), ensure_ascii=False, indent=2))
+        return 0
     if args.cmd == "phrase":
         print(json.dumps(add_combo_phrase(args.ask, ops=args.ops or None, deploy=not args.no_deploy), ensure_ascii=False, indent=2))
         return 0

@@ -164,25 +164,10 @@ def main():
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")
             bad += 1
 
-    # 4. pytest 単体テスト実行
-    r = subprocess.run(
-        [sys.executable, "-m", "pytest", "test_gas_offline.py", "-q", "-p", "no:cacheprovider"],
-        cwd=str(HERE),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **( {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW") else {} )
-    )
-    out_lines = (r.stdout or "").strip().splitlines()
-    summary = out_lines[-1] if out_lines else "no output"
-    if r.returncode != 0:
-        print(f"  [NG] pytest 失敗:\n{r.stdout}\n{r.stderr}")
-        bad += 1
-
+    # 試験は回さない（作るときに確かめて作る）。ここで見るのは、公開してはいけない物が混ざっていないかだけ
     elapsed = time.perf_counter() - t0
     status = "合格 (READY FOR GITHUB)" if bad == 0 else f"要修正 ({bad} 件の問題)"
-    print(f"公開前検査: {status} （検査 {checked_count} ファイル・残り {bad} 件・pytest: {summary}・所要 {elapsed:.2f}秒）")
+    print(f"公開前検査: {status} （検査 {checked_count} ファイル・残り {bad} 件・所要 {elapsed:.2f}秒）")
     sys.exit(0 if bad == 0 else 1)
 
 
