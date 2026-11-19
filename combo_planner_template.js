@@ -70,7 +70,7 @@ var ComboPlanner = (function () {
   var _EN_COLOR_RE_G = /(?<![A-Za-z])(lightred|lightgreen|lightyellow|lightgray|lightblue|orange|purple|yellow|green|black|white|brown|navy|pink|gray|grey|cyan|blue|red)(?![A-Za-z])/gi;
 
   // 文字色（前景）を表すキーワード群
-  var FG_COLOR_KEYS = ["文字", "フォント", "持ち色", "本当の色", "ほんとの色", "字の色"];
+  var FG_COLOR_KEYS = ["文字", "フォント", "持ち色", "本当の色", "ほんとの色", "字の色", "字を", "字は", "字が"];
   var BG_COLOR_KEYS = ["背景", "塗り", "セル"];
   var FG_AFTER_RE = /^(?:文字|フォント|持ち色|本当の色|ほんとの色|字の色)/;
   var BG_AFTER_RE = /^(?:い|の)?(?:背景|塗り)/;
@@ -1721,9 +1721,85 @@ var ComboPlanner = (function () {
     }
     p.ops = dd;
     p.fire = (!fatalErr) && (!p.missing.length) && (p.ops.length > 0);
+    if (!p.fire && !hasGuideBlock && !vagueM) {
+      p.suggest = _suggestOps(askText, kind, table, sheets, curSheet, p.cards);
+    }
     p.previewText = _buildPreviewText(p);
     return p;
   }
+
+  // ------------------------------------------------------------------ 覚えた言い方（使う人が［はい］で決めた頼み→ops）
+  var _learned = {};
+  var LEARN_MAX = 300;
+
+  function learnKey(askText) {
+    return norm(String(askText || "").trim(), _synonyms).replace(/[。．.!！?？]+$/g, "");
+  }
+
+  function setLearned(map) {
+    _learned = (map && typeof map === "object") ? map : {};
+  }
+
+  function getLearned() {
+    return _learned;
+  }
+
+  // 頼みと ops を覚えて、覚えの全体（保存用）を返す
+  function learn(askText, ops) {
+    _ensureInit();
+    var key = learnKey(askText);
+    if (!key || !Array.isArray(ops) || !ops.length) return _learned;
+    delete _learned[key];
+    _learned[key] = JSON.parse(JSON.stringify(ops));
+    var keys = Object.keys(_learned);
+    while (keys.length > LEARN_MAX) {
+      delete _learned[keys.shift()];
+    }
+    return _learned;
+  }
+
+  // 当たらなかった頼みに、引数まで決まる近い棚を 1 つ出す（消す・上書きの棚は出さない）
+  function _suggestOps(askText, kind, table, sheets, curSheet, cards) {
+    var cands = [];
+    var seen = {};
+    var add = function (sh) {
+      if (sh && !seen[sh.name] && sh.searchable !== false && sh.name !== "api" && !sh.danger) {
+        seen[sh.name] = true;
+        cands.push(sh);
+      }
+    };
+    (cards || []).forEach(add);
+    scoreAll(nfkc(askText), kind).slice(0, TOP_N).forEach(function (x) { add(x.shelf); });
+    // 点が足りなくても、色・太字などの書式は引数が決まれば候補にする（値を消さない棚）
+    if (kind !== "doc") add(_byName["format"]);
+    for (var i = 0; i < cands.length; i++) {
+      var b;
+      try {
+        b = buildOp(cands[i], nfkc(askText), table, sheets, curSheet);
+      } catch (e) {
+        continue;
+      }
+      if (b && b.op && !b.missing.length && _hasNonMetaKeys(b.op)) {
+        return [b.op];
+      }
+    }
+    return null;
+  }
+
+  var _planCore = plan;
+  plan = function (askText, kind, table, sheets, curSheet, lastScope) {
+    _ensureInit();
+    var key = learnKey(askText);
+    // 使う人が［はい］で覚えた言い方 → 配る言い方の表（combo_phrases.json・py gas.py combo phrase で足す）の順に見る
+    var phrases = (typeof COMBO_PHRASES !== "undefined" && COMBO_PHRASES) || {};
+    var hitOps = (key && _hasOwn(_learned, key)) ? _learned[key] : ((key && _hasOwn(phrases, key)) ? phrases[key] : null);
+    if (hitOps) {
+      var lp = { ops: JSON.parse(JSON.stringify(hitOps)), fire: true, learned: true, reasons: [], missing: [], cards: [], guide: [], previewText: "" };
+      lp.previewText = _buildPreviewText(lp);
+      return lp;
+    }
+    return _planCore(askText, kind, table, sheets, curSheet, lastScope);
+  };
 
   function renderUnfired(p) {
     _ensureInit();
@@ -1781,6 +1857,10 @@ var ComboPlanner = (function () {
     _applyScopeFallback: _applyScopeFallback,
     applyScopeFallback: _applyScopeFallback,
     plan: plan,
+    learn: learn,
+    learnKey: learnKey,
+    setLearned: setLearned,
+    getLearned: getLearned,
     formatOpsShort: formatOpsShort,
     renderUnfired: renderUnfired,
     card: card,

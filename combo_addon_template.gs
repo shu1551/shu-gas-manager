@@ -48,7 +48,7 @@ function comboAddonEsc_(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
 }
 
-function comboAddonCard_(e, msg) {
+function comboAddonCard_(e, msg, suggestBtn) {
   var tg = comboAddonTarget_(e);
   var sec = CardService.newCardSection();
   if (!tg.id) {
@@ -67,13 +67,48 @@ function comboAddonCard_(e, msg) {
     sec.addWidget(CardService.newTextButton().setText('直前を取り消す')
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonUndo')));
     if (msg) sec.addWidget(CardService.newTextParagraph().setText(comboAddonEsc_(msg)));
+    if (suggestBtn) {
+      sec.addWidget(CardService.newTextButton().setText('はい（撃って覚える）').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+        .setOnClickAction(CardService.newAction().setFunctionName('onAddonAcceptSuggest')));
+    }
   }
   return CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('GASコンボ')).addSection(sec).build();
 }
 
-function comboAddonReply_(e, msg) {
+function comboAddonReply_(e, msg, suggestBtn) {
   return CardService.newActionResponseBuilder()
-    .setNavigation(CardService.newNavigation().updateCard(comboAddonCard_(e, msg))).build();
+    .setNavigation(CardService.newNavigation().updateCard(comboAddonCard_(e, msg, suggestBtn))).build();
+}
+
+// 覚えた言い方（大元ライブラリに使う人ごとに置く。操作窓と同じ置き場）
+function comboAddonLoadLearned_() {
+  try {
+    var r = {lib_symbol}.comboGetLearned();
+    if (r && r.learned) ComboPlanner.setLearned(r.learned);
+  } catch (e) {}
+}
+var COMBO_ADDON_SUGGEST_KEY = 'addon_suggest';
+
+// 候補の［はい］: 出した候補を撃ち、その言い方を覚える
+function onAddonAcceptSuggest(e) {
+  var t0 = Date.now(), res, sg = null;
+  try { sg = JSON.parse(CacheService.getUserCache().get(COMBO_ADDON_SUGGEST_KEY) || 'null'); } catch (eC) {}
+  if (!sg || !sg.ops) return comboAddonReply_(e, '候補の期限が切れました。もう一度頼んでください。');
+  try {
+    var tg = comboAddonTarget_(e);
+    var init = comboAddonInit_(tg);
+    var curSheet = init.target && init.target.sheet;
+    res = {lib_symbol}.comboRunAsk({ ops: sg.ops, fastUndo: true, targetId: tg.id, sheet: curSheet, table: init.table, sheets: init.sheets });
+    if (res && res.ok !== false) {
+      {lib_symbol}.comboLearn({ ask: sg.ask, ops: sg.ops, key: ComboPlanner.learnKey(sg.ask) });
+      res.text = (res.text || '') + '\n覚えました（次から「' + sg.ask + '」は一発で撃ちます）';
+    }
+    try { CacheService.getUserCache().remove(COMBO_ADDON_SUGGEST_KEY); } catch (eR) {}
+    if (!sg.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); })) comboAddonForget_(tg, curSheet);
+  } catch (err) {
+    res = { ok: false, text: String(err && err.message || err) };
+  }
+  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0));
 }
 
 function comboAddonSecs_(t0) { return '（合計 ' + ((Date.now() - t0) / 1000).toFixed(2) + ' 秒）'; }
@@ -97,8 +132,14 @@ function onAddonRun(e) {
     var init = comboAddonInit_(tg);
     var tB = Date.now();
     var curSheet = init.target && init.target.sheet;
+    comboAddonLoadLearned_();
     var p = ComboPlanner.plan(ask, 'sheet', init.table, init.sheets, curSheet, null);
     var tC = Date.now();
+    if (!(p && p.fire) && p && p.suggest && p.suggest.length) {
+      try { CacheService.getUserCache().put(COMBO_ADDON_SUGGEST_KEY, JSON.stringify({ ask: ask, ops: p.suggest }), 600); } catch (eS) {}
+      return comboAddonReply_(e, '棚に当たりませんでした。近い候補: ' + ComboPlanner.formatOpsShort(p.suggest) +
+        '\nこれを撃ちますか？（［はい］で撃って、この言い方を覚えます）\n' + comboAddonSecs_(t0), true);
+    }
     if (p && p.fire && p.ops && p.ops.length) {
       res = {lib_symbol}.comboRunAsk({ ops: p.ops, fastUndo: true, targetId: tg.id, sheet: curSheet, table: init.table, sheets: init.sheets });
     } else {
@@ -199,4 +240,6 @@ function comboFind(req) { return {lib_symbol}.comboFind(comboAddonReq_(req)); }
 function comboUndo(req) { return {lib_symbol}.comboUndo(comboAddonReq_(req)); }
 function comboPollSelection(req) { return {lib_symbol}.comboPollSelection(comboAddonReq_(req)); }
 function comboGetConfig() { return {lib_symbol}.comboGetConfig(); }
+function comboGetLearned(req) { return {lib_symbol}.comboGetLearned(req); }
+function comboLearn(req) { return {lib_symbol}.comboLearn(req); }
 function comboSaveConfig(cfg) { return {lib_symbol}.comboSaveConfig(cfg); }

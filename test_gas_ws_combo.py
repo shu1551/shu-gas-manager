@@ -288,6 +288,26 @@ def test_combo_planner_honest_color_and_find_ask():
         assert p["ops"] == [{"shelf": "format", "title": True, "color": col}], p
 
     assert "分類:" in out["asks"][0] or "棚" in out["asks"][0]
+
+    # 当たらない頼みに近い候補（消す棚は出さない）→ 覚えたら一発で当たる
+    node_sg = (
+        "const vm = require('vm'), fs = require('fs');\n"
+        "const data = JSON.parse(fs.readFileSync(0, 'utf8'));\n"
+        "const ctx = vm.createContext({});\n"
+        "vm.runInContext(data.plannerJs, ctx);\n"
+        "const P = ctx.ComboPlanner;\n"
+        "const miss = P.plan('表題の字を赤くしといて', 'sheet', data.table, ['売上'], '売上', null);\n"
+        "const del = P.plan('いらない行を消して', 'sheet', data.table, ['売上'], '売上', null);\n"
+        "P.learn('表題の字を赤くしといて', miss.suggest);\n"
+        "const hit = P.plan('表題の字を赤くしといて。', 'sheet', data.table, ['売上'], '売上', null);\n"
+        "process.stdout.write(JSON.stringify({ miss, del, hit }));\n"
+    )
+    sg = _run_node_json(node_sg, {"plannerJs": planner_js, "table": TITLE_TABLE})
+    assert sg["miss"]["fire"] is False
+    assert sg["miss"]["suggest"] == [{"shelf": "format", "title": True, "color": "赤"}]
+    assert not sg["del"].get("suggest")
+    assert sg["hit"]["fire"] is True and sg["hit"]["learned"] is True
+    assert sg["hit"]["ops"] == sg["miss"]["suggest"]
     assert "validation.list" in out["asks"][1]
     assert "format" in out["asks"][2]
     assert "sort" in out["asks"][3]
@@ -448,6 +468,11 @@ const sandbox = {
       getProperty: (k) => (k in propsStore ? propsStore[k] : null),
       setProperty: (k, v) => { propsStore[k] = String(v); },
       deleteProperty: (k) => { delete propsStore[k]; }
+    }),
+    getUserProperties: () => ({
+      getProperty: (k) => (('u:' + k) in propsStore ? propsStore['u:' + k] : null),
+      setProperty: (k, v) => { propsStore['u:' + k] = String(v); },
+      deleteProperty: (k) => { delete propsStore['u:' + k]; }
     })
   },
   CacheService: {
@@ -484,6 +509,14 @@ const colorAfterHonest = fcolors[0][0];
 const rUndo2 = ctx.comboUndo({});
 const colorFinal = fcolors[0][0];
 
+// 当たらない頼み → 近い候補 →［はい］で覚える → 次は一発で撃つ
+const rMiss = ctx.comboRunAsk({ ask: 'タイトルをどーんと赤に', backup: false, fastUndo: true });
+const rLearn = ctx.comboLearn({ ask: 'タイトルをどーんと赤に', ops: rMiss.plan && rMiss.plan.suggest, key: ctx.ComboPlanner.learnKey('タイトルをどーんと赤に') });
+const rLearned = ctx.comboGetLearned({});
+const rHitLearned = ctx.comboRunAsk({ ask: 'タイトルをどーんと赤に。', backup: false, fastUndo: true });
+const bgAfterLearned = bgs[0][0];
+ctx.comboUndo({});
+
 // 郵便受けフロー
 const rPb = ctx.comboRunAsk({ ask: 'この表の傾向を日本語で説明して', aiAuto: true });
 const rPoll = ctx.comboPostboxPoll();
@@ -494,7 +527,7 @@ const rSidePoll = ctx.comboPollSelection({});
 process.stdout.write(JSON.stringify({
   rInit, rLook, rFind, rAskRed, colorAfterRed, rUndo, colorAfterUndo,
   rAskHonest, colorAfterHonest, rUndo2, colorFinal,
-  rPb, rPoll, rDeliv, rSidePoll
+  rPb, rPoll, rDeliv, rSidePoll, rMiss, rLearn, rLearned, rHitLearned, bgAfterLearned
 }));
 """
     res = _run_node_json(
@@ -521,6 +554,11 @@ process.stdout.write(JSON.stringify({
     assert res["colorAfterHonest"].lower() != "#0000ff"
     assert res["rUndo2"]["ok"] is True
     assert res["colorFinal"].lower() == "#0000ff"
+
+    assert res["rMiss"]["unfired"] is True and "近い候補" in res["rMiss"]["text"]
+    assert res["rLearn"]["ok"] is True and len(res["rLearned"]["learned"]) == 1
+    assert res["rHitLearned"]["ok"] is True and res["rHitLearned"]["source"] == "shelf"
+    assert res["bgAfterLearned"].lower() != "#ffffff"
 
     assert res["rPb"]["pendingPostbox"] is True
     assert res["rPoll"]["count"] == 1

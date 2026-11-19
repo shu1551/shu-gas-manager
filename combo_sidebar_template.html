@@ -852,6 +852,40 @@
 
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
+    return entry;
+  }
+
+  // 棚に当たらなかった頼みに近い候補を出し、［はい］で撃って言い方を覚える（次から同じ頼みは一発で当たる）
+  function loadLearned() {
+    if (!Planner.setLearned) return;
+    callGas("comboGetLearned", undefined, function(res) {
+      if (res && res.learned && typeof res.learned === "object") Planner.setLearned(res.learned);
+    }, function() {});
+  }
+
+  function offerSuggest(txt, ops) {
+    var entry = appendLog(els.chatLog, "is-info", "棚に当たりませんでした: " + txt,
+      "近い候補: " + formatOpsShort(ops) + "\nこれを撃ちますか？（［はい］で撃って、この言い方を覚えます）");
+    var bar = document.createElement("div");
+    var yes = document.createElement("button");
+    yes.type = "button";
+    yes.className = "btn";
+    yes.textContent = "はい（撃って覚える）";
+    var no = document.createElement("button");
+    no.type = "button";
+    no.className = "btn";
+    no.textContent = "いいえ";
+    yes.onclick = function() {
+      bar.remove();
+      if (Planner.learn) Planner.learn(txt, ops);
+      callGas("comboLearn", { ask: txt, ops: ops, key: Planner.learnKey ? Planner.learnKey(txt) : "" }, function() {}, function() {});
+      onRunOps(ops, txt);
+    };
+    no.onclick = function() { bar.remove(); };
+    bar.appendChild(yes);
+    bar.appendChild(no);
+    entry.appendChild(bar);
+    switchTab("chat");
   }
 
   function clearLogBox(container, placeholder) {
@@ -2169,6 +2203,7 @@
       silentSuccess: !!silent,
       onSuccess: function(res) {
         if (res.postboxDone) handlePostboxDone(res.postboxDone);
+        loadLearned();
       }
     });
   }
@@ -2208,6 +2243,11 @@
 
     els.askInput.value = "";
     updatePreview();
+
+    if (!fireOps && !aiAuto && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) {
+      offerSuggest(txt, planRes.suggest);
+      return;
+    }
 
     var statusText = (!fireOps && aiAuto) ? "AI解釈・実行中…" : "実行中…";
     var payload = {

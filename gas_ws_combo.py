@@ -27,6 +27,7 @@ import gas_ws_catalog
 import gas_ws_find
 
 PLANNER_TEMPLATE = HERE / "combo_planner_template.js"
+PHRASES_PATH = HERE / "combo_phrases.json"   # 言い方の表（頼み→ops。combo phrase で足す。全員に配る覚え）
 SERVER_TEMPLATE = HERE / "combo_server_template.gs"
 SIDEBAR_TEMPLATE = HERE / "combo_sidebar_template.html"
 ADDON_TEMPLATE = HERE / "combo_addon_template.gs"
@@ -276,6 +277,8 @@ def build_combo_files(
     cat_json = json.dumps(cat_for_html, ensure_ascii=False, separators=(",", ":"))
 
     planner_src = PLANNER_TEMPLATE.read_text(encoding="utf-8")
+    phrases_json = json.dumps(load_combo_phrases(), ensure_ascii=False, separators=(",", ":"))
+    planner_src = "var COMBO_PHRASES = " + phrases_json + ";\n" + planner_src
     server_src = SERVER_TEMPLATE.read_text(encoding="utf-8")
     sidebar_src = SIDEBAR_TEMPLATE.read_text(encoding="utf-8")
 
@@ -397,6 +400,84 @@ def build_combo_files(
     return out_files
 
 
+def load_combo_phrases(path=None):
+    """言い方の表（鍵＝棚当ての learnKey・値＝ops）を読む。無ければ空。"""
+    pth = Path(path) if path else PHRASES_PATH
+    if not pth.exists():
+        return {}
+    try:
+        data = json.loads(pth.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _planner_eval(ask, table=None):
+    """棚当て（JS）を node で 1 回動かし、learnKey・当たり・候補を返す。"""
+    import subprocess
+    planner = next(f["source"] for f in build_combo_files() if f["name"] == "ComboPlanner")
+    tbl = table or {"title_a1": "A1", "header_row": 3, "header": ["日付", "部門", "担当者", "商品名", "数量", "単価", "売上金額"],
+                    "first_row": 4, "last_row": 9, "total_row": 9, "range": "A3:G9"}
+    js = ("const vm=require('vm'),fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));"
+          "const ctx=vm.createContext({});vm.runInContext(d.pj,ctx);const P=ctx.ComboPlanner;"
+          "const p=P.plan(d.ask,'sheet',d.t,['表'],'表',null);"
+          "process.stdout.write(JSON.stringify({key:P.learnKey(d.ask),fire:!!p.fire,ops:p.ops,suggest:p.suggest||null,reasons:p.reasons}));")
+    r = subprocess.run(["node", "-e", js], input=json.dumps({"pj": planner, "ask": ask, "t": tbl}, ensure_ascii=False).encode("utf-8"),
+                       capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("棚当ての実行に失敗しました: " + r.stderr.decode("utf-8", "replace")[:400])
+    return json.loads(r.stdout.decode("utf-8"))
+
+
+def add_combo_phrase(ask, ops=None, deploy=True, test=True, client=None, path=None):
+    """当たらなかった頼みを言い方の表に足し、試験を回し、アドインとテンプレートへ入れ直すまでを 1 回で。
+    ops を省くと棚当ての「近い候補」を使う。既に一発で当たる頼みは足さない。"""
+    import subprocess
+    import time as _time
+    t0 = _time.time()
+    ask = str(ask or "").strip()
+    if not ask:
+        raise ValueError("頼みの文がありません")
+    before = _planner_eval(ask)
+    if before["fire"] and not ops:
+        return {"ok": True, "added": False, "text": "もう一発で当たります: " + json.dumps(before["ops"], ensure_ascii=False)}
+    if isinstance(ops, str):
+        ops = json.loads(ops)
+    if isinstance(ops, dict):
+        ops = [ops]
+    use_ops = ops or before.get("suggest")
+    if not use_ops:
+        return {"ok": False, "added": False, "text": "近い候補がありません。ops を渡してください（例: '{\"shelf\":\"format\",\"title\":true,\"color\":\"赤\"}'）",
+                "reasons": before.get("reasons")}
+    pth = Path(path) if path else PHRASES_PATH
+    table = load_combo_phrases(pth)
+    table[before["key"]] = use_ops
+    pth.write_text(json.dumps(table, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    after = _planner_eval(ask)
+    if not after["fire"] or after["ops"] != use_ops:
+        raise RuntimeError("足したのに当たりません: " + json.dumps(after, ensure_ascii=False))
+    out = {"ok": True, "added": True, "ask": ask, "key": before["key"], "ops": use_ops}
+    if test:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", str(HERE / "test_gas_ws_combo.py")], cwd=str(HERE),
+                           capture_output=True, timeout=600)
+        tail = r.stdout.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
+        out["tests"] = tail[0]
+        if r.returncode != 0:
+            out["ok"] = False
+            out["text"] = "試験が落ちたので入れ直していません"
+            return out
+    if deploy:
+        if client is None:
+            from gas_client import GasClient
+            client = GasClient()
+        a = install_combo_addon(client=client)
+        tp = create_combo_template(client=client)
+        out["engineVersion"] = a.get("engineVersion")
+        out["template"] = bool(tp.get("ok"))
+    out["seconds"] = round(_time.time() - t0, 1)
+    return out
+
+
 DEFAULT_ENGINE_LIB_ID = ""   # 決め打ちの大元は持たない（使う人ごとに ensure_combo_engine_project が自分の Drive に作る）
 DEFAULT_COMBO_ENGINE_TITLE = "shu-gas-combo-engine"
 COMBO_ENGINE_STATE_PATH = HERE / ".combo_engine_state.json"
@@ -433,6 +514,8 @@ function comboPollSelection(req) { return {lib_symbol}.comboPollSelection(req); 
 function comboSetTestTarget(ssId) { return {lib_symbol}.comboSetTestTarget(ssId); }
 function comboPostboxPoll() { return {lib_symbol}.comboPostboxPoll(); }
 function comboPostboxDeliver(p) { return {lib_symbol}.comboPostboxDeliver(p); }
+function comboGetLearned(req) { return {lib_symbol}.comboGetLearned(req); }
+function comboLearn(req) { return {lib_symbol}.comboLearn(req); }
 """
 CONNECTOR_CODE_GS = CONNECTOR_CODE_TEMPLATE.replace("{lib_symbol}", "shucomboengine")
 
@@ -1301,6 +1384,10 @@ def _run_cli(argv=None):
     p_conn.add_argument("--lib-id", default="", help="大元ライブラリのスクリプトID")
     p_conn.add_argument("--lib-ver", default="", help="大元ライブラリのバージョン番号")
 
+    p_phr = sub.add_parser("phrase", help="当たらなかった頼みを言い方の表に足し、試験・アドインとテンプレートの入れ直しまで 1 回で")
+    p_phr.add_argument("ask", help="頼みの文（例: タイトルの文字を赤）")
+    p_phr.add_argument("ops", nargs="?", default="", help="撃つ ops の JSON（省くと棚当ての近い候補）")
+    p_phr.add_argument("--no-deploy", action="store_true", help="入れ直さない（表に足して試験だけ）")
     p_look = sub.add_parser("look", help="対象スプレッドシートの状態を見る")
     p_look.add_argument("script_id", help="対象 GAS スクリプトID")
     p_look.add_argument("--ss", default="", help="スプレッドシートID")
@@ -1340,6 +1427,9 @@ def _run_cli(argv=None):
     from gas_client import GasClient
     client = GasClient()
 
+    if args.cmd == "phrase":
+        print(json.dumps(add_combo_phrase(args.ask, ops=args.ops or None, deploy=not args.no_deploy), ensure_ascii=False, indent=2))
+        return 0
     if args.cmd == "template":
         print(json.dumps(create_combo_template(title=args.title, new=args.new, force_engine_update=args.force, client=client), ensure_ascii=False, indent=2))
         return 0

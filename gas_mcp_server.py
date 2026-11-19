@@ -31,6 +31,7 @@ GAS_MANAGER_INSTRUCTIONS = (
     "（E01は文字替え・『対象』削除対応、E01/E02はapply省略で即反映、Webアプリ画面修正はdeploy=Trueを付ける。search_code等で先に探さない）。"
     "返事が[完了]なら読み直し・確かめをせず、1行20文字以内で即答して終える（例: コード doGet(L143) を変更しました。）。"
     "構文検査・裏送り・デプロイ未実施の補足は書かない。「複数」時は filename/func_name で絞り、「無し」の時だけ patch_function（HTML関数外・トップレベルは func_name=''）へ。"
+    "GASコンボで頼みが棚に当たらない（撃っていません）と言われたら、コードを探さず gas('combo phrase \"頼みの文\" [ops_json]') を 1 回（表に足す・試験・アドインとテンプレートの入れ直しまで約 25 秒）。"
 )
 
 mcp = FastMCP("gas-manager", instructions=GAS_MANAGER_INSTRUCTIONS)
@@ -1657,6 +1658,7 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
     if not args_list or args_list[0].lower() in ("help", "-h", "--help"):
         return (
             "=== gas combo 使い方 ===\n"
+            "  combo phrase <頼みの文> [ops_json] [--no-deploy]  当たらなかった言い方を表に足す→試験→アドインとテンプレートの入れ直しまで 1 回（約 25 秒）\n"
             "  combo template [--title <name>] [--new] [--force]  テンプレート版（コピーを作成だけで使える）\n"
             "  combo addon [--id <script_id>] [--force]   アドイン版（1 回入れれば全部のシートで使える）\n"
             "  combo connect <script_id> [--lib <lib_id>] [--ver <ver>]\n"
@@ -1669,6 +1671,14 @@ def _handle_combo_command(args_list: list, client: GasClient) -> str:
         )
 
     action = args_list[0].lower()
+    if action == "phrase":
+        rest = [a for a in args_list[1:] if a != "--no-deploy"]
+        if not rest:
+            return "使い方: combo phrase <頼みの文> [ops_json] [--no-deploy]"
+        return json.dumps(
+            gas_ws_combo.add_combo_phrase(rest[0], ops=(rest[1] if len(rest) > 1 else None),
+                                          deploy="--no-deploy" not in args_list, client=client),
+            ensure_ascii=False, indent=2)
     if action == "template":
         tmpl_title = ""
         j = 1

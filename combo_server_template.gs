@@ -1129,8 +1129,45 @@ function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets) {
   return parsed;
 }
 
+// ---------------------------------------------------------------- 覚えた言い方（［はい］で決めた頼み→ops。使う人ごと）
+var COMBO_PROP_LEARNED = 'COMBO_LEARNED';
+
+function comboGetLearned(req) {
+  var map = {};
+  try { map = JSON.parse(PropertiesService.getUserProperties().getProperty(COMBO_PROP_LEARNED) || '{}') || {}; } catch (e) { map = {}; }
+  return { ok: true, learned: map };
+}
+
+function comboLearn(req) {
+  req = req || {};
+  var ask = String(req.ask || '').trim();
+  var ops = req.ops;
+  if (!ask || !Array.isArray(ops) || !ops.length) return { ok: false, text: '覚える頼みと ops がありません' };
+  var map = comboGetLearned().learned;
+  if (req.key) {
+    // 呼び手（サイドバー・アドインのカード）の棚当てが作った鍵をそのまま使う（軽量版はここに棚当てが無い）
+    delete map[req.key];
+    map[String(req.key)] = ops;
+    var ks = Object.keys(map);
+    while (ks.length > 300) delete map[ks.shift()];
+  } else if (typeof ComboPlanner !== 'undefined' && typeof ComboPlanner.learn === 'function') {
+    ComboPlanner.setLearned(map);
+    map = ComboPlanner.learn(ask, ops);
+  } else {
+    var key = ask.normalize('NFKC').toLowerCase().replace(/\s+/g, '').replace(/[。．.!！?？]+$/g, '');
+    map[key] = ops;
+  }
+  try { PropertiesService.getUserProperties().setProperty(COMBO_PROP_LEARNED, JSON.stringify(map)); } catch (e) {
+    return { ok: false, text: '覚えを保存できませんでした: ' + String(e && e.message || e) };
+  }
+  return { ok: true, text: '覚えました: ' + ask };
+}
+
 function comboRenderUnfired_(plan) {
   var lines = ['撃っていません: ' + ((plan.reasons && plan.reasons.length) ? plan.reasons.join('／') : '引数が決まりません')];
+  if (plan.suggest && plan.suggest.length) {
+    lines.push('近い候補: ' + comboFormatOpsShort_(plan.suggest));
+  }
   if (plan.missing && plan.missing.length) {
     lines.push('足りない引数: ' + plan.missing.join('、'));
   }
@@ -1215,6 +1252,7 @@ function comboRunAsk(req) {
   }
 
   if (typeof ComboPlanner !== 'undefined' && typeof ComboPlanner.plan === 'function') {
+    if (typeof ComboPlanner.setLearned === 'function') ComboPlanner.setLearned(comboGetLearned().learned);
     var plan = ComboPlanner.plan(askText, 'sheet', table, sheets, curSheet, scope);
     if (plan && plan.fire && plan.ops && plan.ops.length) {
       var hitRes = comboRunOps({

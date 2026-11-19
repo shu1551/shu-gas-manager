@@ -81,6 +81,7 @@ PUBLIC_FILES = [
     "combo_server_template.gs",
     "combo_lite_server.gs",
     "combo_planner_template.js",
+    "combo_phrases.json",
     "combo_sidebar_template.html",
     "combo_addon_template.gs",
     "test_gas_ws_combo.py",
