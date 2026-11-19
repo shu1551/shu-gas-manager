@@ -63,7 +63,10 @@ var ComboPlanner = (function () {
     ["赤色", "赤"], ["青色", "青"], ["緑色", "緑"], ["黄色", "黄"], ["紫色", "紫"], ["黒色", "黒"], ["白色", "白"],
     ["赤", "赤"], ["青", "青"], ["緑", "緑"], ["黄", "黄"], ["紫", "紫"], ["黒", "黒"], ["白", "白"]
   ];
-  var _HEX_COLOR_RE_G = /(?<![0-9A-Za-z])#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9A-Za-z])/g;
+  var _COLOR_ALT = _COLORS.map(function (c) { return c[0]; }).join("|") + "|#[0-9a-f]{6}|#[0-9a-f]{3}";
+  var _FG_NOCOLOR_RE_G = new RegExp("(文字|フォント)(?:を|は)?(" + _COLOR_ALT + ")", "g");
+  var _TITLE_NOCOLOR_RE_G = new RegExp("(タイトル|見出し)(を|は)?(" + _COLOR_ALT + ")", "g");
+  var _HEX_COLOR_RE_G =/(?<![0-9A-Za-z])#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9A-Za-z])/g;
   var _EN_COLOR_RE_G = /(?<![A-Za-z])(lightred|lightgreen|lightyellow|lightgray|lightblue|orange|purple|yellow|green|black|white|brown|navy|pink|gray|grey|cyan|blue|red)(?![A-Za-z])/gi;
 
   // 文字色（前景）を表すキーワード群
@@ -120,6 +123,9 @@ var ComboPlanner = (function () {
     out = out.split("本当の色").join("文字色");
     out = out.split("ほんとの色").join("文字色");
     out = out.replace(/(^|[^文])字の色/g, "$1文字色");
+    // 「色」を言わない言い方（「文字を赤」「タイトルを赤に」）も文字色として統一
+    out = out.replace(_FG_NOCOLOR_RE_G, "$1色$2");
+    out = out.replace(_TITLE_NOCOLOR_RE_G, "$1文字色$3");
     return out.split("を").join("");
   }
 

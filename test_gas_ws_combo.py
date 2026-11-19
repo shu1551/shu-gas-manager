@@ -268,7 +268,9 @@ def test_combo_planner_honest_color_and_find_ask():
         "  'タイトルの本当の色を赤に変えてください。',\n"
         "  'タイトルの本当の色を青に変えてください。',\n"
         "  'タイトルのほんとの色を緑に変えて',\n"
-        "  'タイトルの字の色を#FF0000にして'\n"
+        "  'タイトルの字の色を#FF0000にして',\n"
+        "  'タイトルの文字を赤',\n"
+        "  'タイトルの文字を青色に'\n"
         "];\n"
         "const plans = prompts.map(a => ctx.ComboPlanner.plan(a, 'sheet', data.table, ['売上'], '売上', null));\n"
         "const asks = [\n"
@@ -280,7 +282,7 @@ def test_combo_planner_honest_color_and_find_ask():
         "process.stdout.write(JSON.stringify({ plans, asks }));\n"
     )
     out = _run_node_json(node_code, {"plannerJs": planner_js, "table": TITLE_TABLE})
-    expected_colors = ["赤", "青", "緑", "#FF0000"]
+    expected_colors = ["赤", "青", "緑", "#FF0000", "赤", "青"]
     for p, col in zip(out["plans"], expected_colors):
         assert p["fire"] is True, p
         assert p["ops"] == [{"shelf": "format", "title": True, "color": col}], p
