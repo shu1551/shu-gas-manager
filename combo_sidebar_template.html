@@ -563,7 +563,6 @@
           <div class="log-empty">実行結果がここに表示されます。</div>
         </div>
         <div class="pane-footer">
-          <button id="btnCopyAi" class="btn" type="button">チャットAIへコピー</button>
           <button id="btnClearLog" class="btn" type="button">会話消去</button>
         </div>
       </div>
@@ -727,7 +726,6 @@
     previewLabel: document.getElementById("previewLabel"),
     infoLabel: document.getElementById("infoLabel"),
     chatLog: document.getElementById("chatLog"),
-    btnCopyAi: document.getElementById("btnCopyAi"),
     btnClearLog: document.getElementById("btnClearLog"),
     histList: document.getElementById("histList"),
     btnUseHist: document.getElementById("btnUseHist"),
@@ -2699,7 +2697,6 @@
     });
   }
 
-  els.btnCopyAi.addEventListener("click", onCopyForAi);
   els.btnClearLog.addEventListener("click", function() {
     clearLogBox(els.chatLog, "実行結果がここに表示されます。");
   });
