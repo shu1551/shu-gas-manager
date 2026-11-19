@@ -16,7 +16,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP          # mcp 1.x
+except ImportError:
+    from mcp.server.mcpserver import MCPServer as FastMCP   # mcp 2.x（FastMCP が MCPServer に改名された）
 try:
     import gas_local_extras
 except ImportError:
