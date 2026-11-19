@@ -8852,6 +8852,36 @@ function doGet() {{
                     pass
 
 
+    @staticmethod
+    def install_skill_files(home=None):
+        """同梱の SKILL.md を、入っている AI のスキルの置き場へ道具が自分で置く（使う人にファイルを動かさせない）。
+        Claude Code は ~/.claude/skills/gas-manager/、Antigravity（Gemini）は ~/.gemini/config/skills/gas-manager/。
+        AI の置き場（~/.claude・~/.gemini）が無い人には何もしない。中身が同じなら触らない。違えば .bak に控えてから置き換える。"""
+        src = Path(__file__).resolve().parent / "SKILL.md"
+        home = Path(home or os.path.expanduser("~"))
+        lines = []
+        try:
+            body = src.read_bytes()
+        except Exception as e:
+            return [f"スキル: 同梱の SKILL.md が読めませんでした（{e}）"]
+        for label, root, sub in (("Claude Code", home / ".claude", ("skills",)),
+                                 ("Antigravity", home / ".gemini", ("config", "skills"))):
+            if not root.is_dir():
+                continue
+            dst = root.joinpath(*sub, "gas-manager", "SKILL.md")
+            try:
+                if dst.exists() and dst.read_bytes() == body:
+                    lines.append(f"スキル（{label}）: 最新のものが入っています")
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if dst.exists():
+                    dst.with_suffix(".md.bak").write_bytes(dst.read_bytes())
+                dst.write_bytes(body)
+                lines.append(f"スキル（{label}）: 置きました（{dst}）。AI のアプリを起動し直すと読み込まれます")
+            except Exception as e:
+                lines.append(f"スキル（{label}）: 置けませんでした（{e}）")
+        return lines
+
     @classmethod
     def check_setup(cls, clasprc_path=None, open_browser=False):
         """GAS Manager の動作環境および Google API 疎通状態を点検し、案内を返却する

@@ -1405,6 +1405,7 @@ def setup_check(open_browser: bool = False) -> str:
         lines.append("【状態 / 手順】")
         for st in res["steps"]:
             lines.append(f"  {st}")
+    lines += GasClient.install_skill_files()
     return "\n".join(lines)
 
 @mcp.tool()

@@ -483,6 +483,8 @@ def main():
             print("【状態 / 手順】")
             for st in res["steps"]:
                 print(f"  {st}")
+        for line in GasClient.install_skill_files():
+            print(line)
         return
 
     if args.command == "ws-find":
