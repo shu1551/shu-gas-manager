@@ -791,6 +791,13 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
                        "あとはどのスプレッドシートでも右の枠の ⚡ から使えます（初回に権限の許可が 1 回出ます）")
     else:
         res["next"] = "入れ直し済み（次に右の枠を開いたときから新しいコードで動きます）"
+    ext_dir = str(HERE / "ws_browser_ext")
+    res["chrome_extension"] = {
+        "folder": ext_dir,
+        "how": ("Chrome の右のサイドパネルで開く拡張（任意・おすすめ）: chrome://extensions を開き、右上の「デベロッパー モード」をオン →"
+                f"「パッケージ化されていない拡張機能を読み込む」→ {ext_dir} を選ぶ。入れてあるなら「再読み込み」を押す"
+                "（操作窓の番地を今書いたため）。あとは拡張のアイコンか Alt+G で、今開いているシートが相手の GASコンボが開きます"),
+    }
     return res
 
 
