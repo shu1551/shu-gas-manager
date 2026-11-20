@@ -1802,6 +1802,12 @@ var ComboPlanner = (function () {
     var hitOps = (key && _hasOwn(_learned, key)) ? _learned[key] : ((key && _hasOwn(phrases, key)) ? phrases[key] : null);
     if (hitOps) {
       var lp = { ops: JSON.parse(JSON.stringify(hitOps)), fire: true, learned: true, reasons: [], missing: [], cards: [], guide: [], previewText: "" };
+      // 覚えた手・表の手に場所（範囲・列・見出し等）が無ければ、ふつうの棚当てと同じく選んでいる所で埋める
+      // （埋めないと「range・col・header・title のどれかが要ります」で止まる）
+      for (var li2 = 0; li2 < lp.ops.length; li2++) {
+        var lsh = _byName[lp.ops[li2].shelf];
+        if (lsh) _applyScopeFallback(lp.ops[li2], [], lastScope, lsh, askText);
+      }
       lp.previewText = _buildPreviewText(lp);
       return lp;
     }

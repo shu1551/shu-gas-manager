@@ -2048,6 +2048,13 @@ class GasClient:
             self._save_cache()
             return p["id"]
         elif len(partial_matches) > 1:
+            # 「マイマクロ」→「GASクイック マイマクロ」のように、空白で区切った語として名前どおりに入っている物が 1 つならそれに当てる
+            word_matches = [p for p in partial_matches if target in re.split(r"[\s\u3000]+", p.get("name", ""))]
+            if len(word_matches) == 1:
+                p = word_matches[0]
+                self._cache_data.setdefault("projects", {})[target] = p["id"]
+                self._save_cache()
+                return p["id"]
             candidates = [f"- {p['name']} (ID: {p['id']})" for p in partial_matches]
             raise ValueError(f"プロジェクト名 '{target}' に部分一致する候補が複数あります ({len(partial_matches)}件):\n" + "\n".join(candidates) + "\n名前をより具体的に指定するか、スクリプトIDを直接指定してください。")
 
@@ -5690,9 +5697,9 @@ class GasClient:
                 self._cache_data.setdefault("deployments", {}).setdefault(sid, {})["runner_installed"] = True
                 self._save_cache()
 
+        data = None
         try:
             dev_url = self.resolve_webapp_url(sid, dev=True)
-            data = None
             for attempt in range(3):
                 call_res = self.call_webapp(
                     dev_url,
