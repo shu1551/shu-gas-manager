@@ -23,6 +23,7 @@ if str(HERE) not in sys.path:
 
 import gas_workspace
 import gas_ws_api  # LOCAL_HANDLERS / EXTRA_CHECKS の登録を保証
+import gas_ws_ask
 import gas_ws_catalog
 import gas_ws_find
 
@@ -57,6 +58,7 @@ def build_combo_catalog_data(shelf_dir=None):
         "guide": [[list(words), text] for words, text in guide],
         "categories": list(gas_ws_catalog.CATEGORIES),
         "localHandlers": sorted(gas_ws_catalog.LOCAL_HANDLERS.keys()),
+        "ask_rules": gas_ws_ask.load_ask_rules(),
     }
 
 

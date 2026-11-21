@@ -69,11 +69,41 @@ var ComboPlanner = (function () {
   var _HEX_COLOR_RE_G =/(?<![0-9A-Za-z])#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9A-Za-z])/g;
   var _EN_COLOR_RE_G = /(?<![A-Za-z])(lightred|lightgreen|lightyellow|lightgray|lightblue|orange|purple|yellow|green|black|white|brown|navy|pink|gray|grey|cyan|blue|red)(?![A-Za-z])/gi;
 
-  // 文字色（前景）を表すキーワード群
-  var FG_COLOR_KEYS = ["文字", "フォント", "持ち色", "本当の色", "ほんとの色", "字の色", "字を", "字は", "字が"];
+  // 文字色（前景）を表すキーワード群（ws_ask_rules.json が渡されたら init 時に共通定義で上書き）
+  var FG_COLOR_KEYS = ["文字", "フォント", "持ち色", "持ちの色", "本当の色", "ほんとの色", "字の色", "字を", "字は", "字が"];
   var BG_COLOR_KEYS = ["背景", "塗り", "セル"];
-  var FG_AFTER_RE = /^(?:文字|フォント|持ち色|本当の色|ほんとの色|字の色)/;
+  var FG_AFTER_RE = /^(?:文字|フォント|持ち色|持ちの色|本当の色|ほんとの色|字の色)/;
   var BG_AFTER_RE = /^(?:い|の)?(?:背景|塗り)/;
+  var PLACE_ONLY_RE = /^.{1,12}(?:のとこ|のところ|の所|の列に|の列は|の列で|の欄に|の欄は)(?:は|も)?$/;
+  var _CLAUSE_PROTECT_RES = [
+    /(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))/g,
+    /[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+/g,
+    /[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+/g,
+    /(?:(?:見出し|項目|列)[がは]\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで](?:[、,]\s*(?:と\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで])+(?=(?:の|で|という)(?:表|テーブル|名簿|一覧表))/g
+  ];
+
+  function _applyAskRules(rules) {
+    if (!rules || typeof rules !== "object") return;
+    if (typeof rules.margin === "number") MARGIN = rules.margin;
+    if (typeof rules.evidence_gap === "number") EVIDENCE_GAP = rules.evidence_gap;
+    if (typeof rules.what_min === "number") WHAT_MIN = rules.what_min;
+    if (typeof rules.vague_re === "string" && rules.vague_re) VAGUE_RE = new RegExp(rules.vague_re);
+    if (typeof rules.cur_sheet_re === "string" && rules.cur_sheet_re) CUR_SHEET_RE = new RegExp(rules.cur_sheet_re);
+    if (typeof rules.place_only_re === "string" && rules.place_only_re) PLACE_ONLY_RE = new RegExp(rules.place_only_re);
+    if (Array.isArray(rules.clause_protect_patterns) && rules.clause_protect_patterns.length) {
+      _CLAUSE_PROTECT_RES = rules.clause_protect_patterns.map(function (p) { return new RegExp(p, "g"); });
+    }
+    if (Array.isArray(rules.colors) && rules.colors.length) {
+      _COLORS = rules.colors.map(function (c) { return [String(c[0]), String(c[1])]; });
+      _COLOR_ALT = _COLORS.map(function (c) { return c[0]; }).join("|") + "|#[0-9a-f]{6}|#[0-9a-f]{3}";
+      _FG_NOCOLOR_RE_G = new RegExp("(文字|フォント)(?:を|は)?(" + _COLOR_ALT + ")", "g");
+      _TITLE_NOCOLOR_RE_G = new RegExp("(タイトル|見出し)(を|は)?(" + _COLOR_ALT + ")", "g");
+    }
+    if (Array.isArray(rules.fg_color_keys) && rules.fg_color_keys.length) FG_COLOR_KEYS = rules.fg_color_keys.slice();
+    if (Array.isArray(rules.bg_color_keys) && rules.bg_color_keys.length) BG_COLOR_KEYS = rules.bg_color_keys.slice();
+    if (typeof rules.fg_after_re === "string" && rules.fg_after_re) FG_AFTER_RE = new RegExp(rules.fg_after_re);
+    if (typeof rules.bg_after_re === "string" && rules.bg_after_re) BG_AFTER_RE = new RegExp(rules.bg_after_re);
+  }
 
   var _HERE_ROW_RE = /(?:この|選択(?:中の?)?|今の)行/;
   var _HERE_ROW_RE_G = /(?:この|選択(?:中の?)?|今の)行/g;
@@ -196,6 +226,10 @@ var ComboPlanner = (function () {
       _localHandlers = data.localHandlers;
     } else {
       _localHandlers = DEFAULT_LOCAL_HANDLERS;
+    }
+
+    if (data.ask_rules && typeof data.ask_rules === "object") {
+      _applyAskRules(data.ask_rules);
     }
 
     // 検索用インデックス構築
@@ -491,20 +525,18 @@ var ComboPlanner = (function () {
       });
     };
     // プルダウン候補や複数セルの「、」区切り、複数キー並べ替え、表作成の見出し列挙を節分割から守る
-    protect(/(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))/g);
-    protect(/[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+/g);
-    protect(/[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+/g);
-    protect(/(?:(?:見出し|項目|列)[がは]\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで](?:[、,]\s*(?:と\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで])+(?=(?:の|で|という)(?:表|テーブル|名簿|一覧表))/g);
+    for (var pi = 0; pi < _CLAUSE_PROTECT_RES.length; pi++) {
+      protect(_CLAUSE_PROTECT_RES[pi]);
+    }
     var parts = src.split(ASK_SPLIT);
     var out = [];
-    var placeOnly = /^.{1,12}(?:のとこ|のところ|の所|の列に|の列は|の列で|の欄に|の欄は)(?:は|も)?$/;   // 「日付のとこ」のような場所だけの節は、次の節につなげる
     for (var i = 0; i < parts.length; i++) {
       var restored = parts[i].replace(/\uE010(\d+)\uE011/g, function (_, idx) {
         return saved[parseInt(idx, 10)] || "";
       });
       var p = restored.trim();
       if (p.length < 2) continue;
-      if (out.length && placeOnly.test(out[out.length - 1])) out[out.length - 1] = out[out.length - 1] + " " + p;
+      if (out.length && PLACE_ONLY_RE.test(out[out.length - 1])) out[out.length - 1] = out[out.length - 1] + " " + p;
       else out.push(p);
     }
     return out;

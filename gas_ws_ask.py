@@ -13,16 +13,28 @@ ws_find の当て（gas_ws_find.Finder）で節ごとに棚を 1 本に決め、
 import json
 import re
 import unicodedata
+from pathlib import Path
 
 import gas_ws_catalog
 import gas_ws_find
 
-MARGIN = 3              # 1 位と 2 位の点の差がこれ未満なら「割れた」
-EVIDENCE_GAP = 8        # 札の正規表現が当たった棚を繰り上げる、1 位との点の差の上限
-WHAT_MIN = 3           # 「何をするか」の引数（真偽・色・数・文字・選択の任意の物）がこれ以上ある棚で、1 つも決まらなければ撃たない
+_RULES_PATH = Path(__file__).resolve().parent / "ws_ask_rules.json"
+
+
+def load_ask_rules(path=None):
+    """Python・JS 共通の棚当て定義（ws_ask_rules.json）を読み込む。"""
+    p = Path(path) if path else _RULES_PATH
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+_ASK_RULES = load_ask_rules()
+
+MARGIN = int(_ASK_RULES["margin"])                  # 1 位と 2 位の点の差がこれ未満なら「割れた」
+EVIDENCE_GAP = int(_ASK_RULES["evidence_gap"])      # 札の正規表現が当たった棚を繰り上げる、1 位との点の差の上限
+WHAT_MIN = int(_ASK_RULES["what_min"])              # 「何をするか」の引数（真偽・色・数・文字・選択の任意の物）がこれ以上ある棚で、1 つも決まらなければ撃たない
 # 何を指しているか人にしか分からない言い方（撃たずに聞く）
-VAGUE = re.compile(r"いらない|要らない|不要な?|余分なところ|余分な箇所|古い(?!順)|おかしい|この辺|どこか|適当に|いい感じ|ダブってる人|変な")
-CUR_SHEET = re.compile(r"今の|この|現在の|シート名")
+VAGUE = re.compile(_ASK_RULES["vague_re"])
+CUR_SHEET = re.compile(_ASK_RULES["cur_sheet_re"])
 _LOCATOR_TYPES = ("範囲", "列", "列[]", "行[]", "シート")
 SPLIT = re.compile(r"[。、，,\n]|(?<=[ぁ-ん]て)から|それから|ついでに|そのあと|その後")
 
@@ -38,18 +50,13 @@ ROW_RE = re.compile(r"(?<![0-9])([0-9]+)\s*行目")
 QUOTE_RE = re.compile(r"[「『\"“]([^」』\"”]+)[」』\"”]")
 NUM_RE = re.compile(r"(?<![A-Za-z0-9.])([0-9]+(?:\.[0-9]+)?)(?![0-9])")
 
-# 色の言い方 → エンジンの色の名前（rgb_ が読む物）。長い順に当てる
-_COLORS = [
-    ("薄い灰色", "薄灰"), ("薄い灰", "薄灰"), ("薄灰色", "薄灰"), ("薄いグレー", "薄灰"), ("薄グレー", "薄灰"),
-    ("薄い青色", "薄青"), ("薄い青", "薄青"), ("薄青色", "薄青"), ("薄青", "薄青"), ("水色", "水色"), ("シアン", "水色"),
-    ("薄い赤色", "薄赤"), ("薄い赤", "薄赤"), ("薄い緑色", "薄緑"), ("薄い緑", "薄緑"),
-    ("薄い黄色", "薄黄"), ("薄い黄", "薄黄"), ("薄いオレンジ色", "薄橙"), ("薄いオレンジ", "薄橙"),
-    ("薄い紫色", "薄紫"), ("薄い紫", "薄紫"),
-    ("灰色", "灰"), ("グレー", "灰"), ("オレンジ色", "橙"), ("オレンジ", "橙"), ("ピンク色", "桃"), ("ピンク", "桃"),
-    ("ネイビー", "紺"), ("紺色", "紺"), ("紺", "紺"), ("茶色", "茶"),
-    ("赤色", "赤"), ("青色", "青"), ("緑色", "緑"), ("黄色", "黄"), ("紫色", "紫"), ("黒色", "黒"), ("白色", "白"),
-    ("赤", "赤"), ("青", "青"), ("緑", "緑"), ("黄", "黄"), ("紫", "紫"), ("黒", "黒"), ("白", "白"),
-]
+# 色の言い方 → エンジンの色の名前（rgb_ が読む物）。長い順に当てる（ws_ask_rules.json から共通読込）
+_COLORS = [tuple(pair) for pair in _ASK_RULES["colors"]]
+_FG_COLOR_KEYS = tuple(_ASK_RULES["fg_color_keys"])
+_BG_COLOR_KEYS = tuple(_ASK_RULES["bg_color_keys"])
+_FG_AFTER_RE = re.compile(_ASK_RULES["fg_after_re"])
+_BG_AFTER_RE = re.compile(_ASK_RULES["bg_after_re"])
+_CLAUSE_PROTECT_PATTERNS = tuple(_ASK_RULES["clause_protect_patterns"])
 _HEX_COLOR_RE = re.compile(r"(?<![0-9A-Za-z])#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9A-Za-z])")
 _EN_COLOR_RE = re.compile(
     r"(?<![A-Za-z])(lightred|lightgreen|lightyellow|lightgray|lightblue|orange|purple|yellow|green|black|white|brown|navy|pink|gray|grey|cyan|blue|red)(?![A-Za-z])",
@@ -85,7 +92,7 @@ def nfkc(s):
     return unicodedata.normalize("NFKC", s or "")
 
 
-PLACE_ONLY = re.compile(r"^.{1,12}(?:のとこ|のところ|の所|の列に|の列は|の列で|の欄に|の欄は)(?:は|も)?$")   # 「日付のとこ」のような場所だけの節は、次の節につなげる
+PLACE_ONLY = re.compile(_ASK_RULES["place_only_re"])   # 「日付のとこ」のような場所だけの節は、次の節につなげる
 
 
 def clauses(ask):
@@ -103,10 +110,8 @@ def clauses(ask):
         src = re.sub(pat, _repl, src)
 
     # プルダウン候補や複数セルの「、」区切り、複数キー並べ替え、表作成の見出し列挙を節分割から守る
-    _prot(r"(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))")
-    _prot(r"[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+")
-    _prot(r"[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+")
-    _prot(r"(?:(?:見出し|項目|列)[がは]\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで](?:[、,]\s*(?:と\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで])+(?=(?:の|で|という)(?:表|テーブル|名簿|一覧表))")
+    for _pat in _CLAUSE_PROTECT_PATTERNS:
+        _prot(_pat)
     parts = [re.sub(r"\ue010(\d+)\ue011", lambda m: saved[int(m.group(1))], p).strip() for p in SPLIT.split(src)]
     parts = [p for p in parts if len(p) >= 2]
     out = []
@@ -388,18 +393,18 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 ctx = scan[prev_end:pos]
                 after = scan[end:end + 4]
                 prev_end = end
-                fg_i = max((ctx.rfind(k) for k in ("文字", "フォント", "持ち色")), default=-1)
-                bg_i = max((ctx.rfind(k) for k in ("背景", "塗り", "セル")), default=-1)
-                if re.match(r"^(?:文字|フォント|持ち色)", after):
+                fg_i = max((ctx.rfind(k) for k in _FG_COLOR_KEYS), default=-1)
+                bg_i = max((ctx.rfind(k) for k in _BG_COLOR_KEYS), default=-1)
+                if _FG_AFTER_RE.match(after):
                     target_k = "color"
-                elif re.match(r"^(?:い|の)?(?:背景|塗り)", after):
+                elif _BG_AFTER_RE.match(after):
                     target_k = "bg"
                 elif fg_i > bg_i:
                     target_k = "color"
                 elif bg_i > fg_i:
                     target_k = "bg"
                 elif len(color_hits) == 1:
-                    if any(k in text for k in ("文字", "フォント", "持ち色")) and "背景" not in text:
+                    if any(k in text for k in _FG_COLOR_KEYS) and "背景" not in text:
                         target_k = "color"
                     else:
                         target_k = "bg"
