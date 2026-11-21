@@ -57,10 +57,32 @@ async function refresh() {
   frame.style.display = "block";
 }
 
-// GASコンボの画面から「直した所」へ移る頼みが来たら、今のタブのシートへ渡す（名前ボックスに番地を入れる）
+// GASコンボの画面から「直した所」へ移る頼みや、今の選択範囲の問い合わせが来たら、今のタブのシートへ渡す
 window.addEventListener("message", async (ev) => {
   const d = ev && ev.data;
-  if (!d || d.type !== "GAS_COMBO_GOTO" || !d.range) return;
+  if (!d) return;
+  if (d.type === "GAS_COMBO_GET_SEL") {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const replySel = (ok, range, sheet) => {
+      try { ev.source.postMessage({ type: "GAS_COMBO_GET_SEL_DONE", ok: !!ok, range: range || "", sheet: sheet || "" }, "*"); } catch (_e) {}
+    };
+    if (!tab || !tab.id) { replySel(false, "", ""); return; }
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const box = document.querySelector("#t-name-box") || document.querySelector("input.waffle-name-box");
+        const range = box ? String(box.value || "").trim() : "";
+        const tabEl = document.querySelector(".docs-sheet-active-tab .docs-sheet-tab-name");
+        const sheet = tabEl ? String(tabEl.textContent || "").trim() : "";
+        return { range, sheet };
+      },
+    }).then((r) => {
+      const res = (r && r[0] && r[0].result) || {};
+      replySel(!!res.range, res.range || "", res.sheet || "");
+    }).catch(() => replySel(false, "", ""));
+    return;
+  }
+  if (d.type !== "GAS_COMBO_GOTO" || !d.range) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const reply = (ok, why) => { try { ev.source.postMessage({ type: "GAS_COMBO_GOTO_DONE", ok, why: why || "" }, "*"); } catch (_e) {} };
   if (!tab || !tab.id) { reply(false, "シートのタブが見つかりません"); return; }

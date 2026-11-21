@@ -2462,6 +2462,29 @@
     return /(ここ|このセル|選択範囲|選択セル|この行|この列|この範囲|今のセル)/.test(txt || "");
   }
 
+  function requestLiveSelection(done) {
+    if (typeof window === "undefined" || !window.top || window.top === window) {
+      done(null);
+      return;
+    }
+    var settled = false;
+    var finish = function(res) {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("message", onMsg);
+      clearTimeout(timer);
+      done(res);
+    };
+    var onMsg = function(ev) {
+      var d = ev && ev.data;
+      if (!d || d.type !== "GAS_COMBO_GET_SEL_DONE") return;
+      finish(d.ok && d.range ? { range: String(d.range).trim(), sheet: String(d.sheet || "").trim() } : null);
+    };
+    window.addEventListener("message", onMsg);
+    var timer = setTimeout(function() { finish(null); }, 250);
+    try { window.top.postMessage({ type: "GAS_COMBO_GET_SEL" }, "*"); } catch (e) { finish(null); }
+  }
+
   function onRunAsk() {
     var txt = (els.askInput.value || "").trim();
     if (!txt) return;
@@ -2499,34 +2522,54 @@
     if (!liveSelPrompt) {
       payload.selection = els.chkSync.checked ? (state.selection || "") : "";
     }
+    var runViaGasAsk = function() {
+      state.directUndoStack = [];
+      runServerAction({
+        fnName: "comboRunAsk",
+        payload: payload,
+        label: txt,
+        statusText: statusText,
+        switchToChat: true
+      });
+    };
     if (suggestOps) {
-      offerSuggest(txt, suggestOps, aiAuto ? function() {
-        runServerAction({ fnName: "comboRunAsk", payload: payload, label: txt, statusText: statusText, switchToChat: true });
-      } : null);
+      offerSuggest(txt, suggestOps, aiAuto ? runViaGasAsk : null);
+      return;
+    }
+    // 「ここ」「この列」など選択範囲の頼みも、Chrome 拡張から最新選択を即取得できれば直結 API（0.3 秒）で撃つ
+    if (liveSelPrompt && !els.chkBackup.checked) {
+      requestLiveSelection(function(live) {
+        if (live && live.range && (!live.sheet || live.sheet === state.curSheet || typeof state.sheetIdMap[live.sheet] === "number")) {
+          if (live.sheet && live.sheet !== state.curSheet) {
+            state.curSheet = live.sheet;
+            syncSheetSelects();
+          }
+          state.selection = live.range.toUpperCase();
+          state.scope = Planner.parseSelectionScope ? Planner.parseSelectionScope(state.selection) : {};
+          updateSelectionLabel();
+          var livePlan = Planner.plan ? Planner.plan(txt, {
+            table: state.table,
+            sheets: state.sheets,
+            curSheet: state.curSheet,
+            scope: getActiveScope(),
+            kind: "sheet",
+            learned: state.learned
+          }) : null;
+          var liveOps = (livePlan && livePlan.fire && Array.isArray(livePlan.ops) && livePlan.ops.length) ? livePlan.ops : null;
+          if (liveOps && tryDirectSheetsApi(liveOps, txt, true, runViaGasAsk)) {
+            return;
+          }
+        }
+        runViaGasAsk();
+      });
       return;
     }
     if (fireOps && !liveSelPrompt && !els.chkBackup.checked) {
-      var handledDirect = tryDirectSheetsApi(fireOps, txt, true, function() {
-        state.directUndoStack = [];
-        runServerAction({
-          fnName: "comboRunAsk",
-          payload: payload,
-          label: txt,
-          statusText: statusText,
-          switchToChat: true
-        });
-      });
+      var handledDirect = tryDirectSheetsApi(fireOps, txt, true, runViaGasAsk);
       if (handledDirect) return;
     }
 
-    state.directUndoStack = [];
-    runServerAction({
-      fnName: "comboRunAsk",
-      payload: payload,
-      label: txt,
-      statusText: statusText,
-      switchToChat: true
-    });
+    runViaGasAsk();
   }
 
   function onRunOps(ops, customLabel) {
