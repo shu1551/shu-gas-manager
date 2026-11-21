@@ -142,7 +142,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    width: 96px;
+    width: 66px;
     flex-shrink: 0;
   }
   .btn-run {
@@ -154,15 +154,11 @@
     display: flex;
     gap: 3px;
   }
-  .btn-clear {
-    flex: 1.45;
-    padding: 3px 2px;
-    font-size: 10.2px;
-  }
+  .btn-clear,
   .btn-ai {
     flex: 1;
     padding: 3px 2px;
-    font-size: 10.2px;
+    font-size: 10.7px;
   }
 
   /* ---- オプション行 ---- */
@@ -491,8 +487,8 @@
     <div class="top-btns">
       <button id="btnRun" class="btn btn-primary btn-run" type="button">実 行</button>
       <div class="top-sub-btns">
-        <button id="btnClear" class="btn btn-clear" type="button">クリア(×)</button>
-        <button id="btnCopyAi" class="btn btn-ai" type="button" title="対象URL・シート・選択範囲・入力文をAI用にコピー">AIへ</button>
+        <button id="btnClear" class="btn btn-clear" type="button" title="入力欄をクリア">✖</button>
+        <button id="btnCopyAi" class="btn btn-ai" type="button" title="対象URL・シート・選択範囲・入力文をAI用にコピー">AI</button>
       </div>
     </div>
   </div>
@@ -2815,7 +2811,7 @@
       appendLog(els.chatLog, "is-ok", "[AIへコピー完了]", msg);
       if (els.btnCopyAi) {
         els.btnCopyAi.textContent = "済";
-        setTimeout(function() { els.btnCopyAi.textContent = "AIへ"; }, 1200);
+        setTimeout(function() { els.btnCopyAi.textContent = "AI"; }, 1200);
       }
     }).catch(function(err) {
       appendLog(els.chatLog, "is-err", "[コピー失敗]", formatError(err));
