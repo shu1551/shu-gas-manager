@@ -102,10 +102,11 @@ def clauses(ask):
 
         src = re.sub(pat, _repl, src)
 
-    # プルダウン候補や複数セルの「、」区切り、複数キー並べ替えを節分割から守る
+    # プルダウン候補や複数セルの「、」区切り、複数キー並べ替え、表作成の見出し列挙を節分割から守る
     _prot(r"(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))")
     _prot(r"[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+")
     _prot(r"[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+")
+    _prot(r"(?:(?:見出し|項目|列)[がは]\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで](?:[、,]\s*(?:と\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで])+(?=(?:の|で|という)(?:表|テーブル|名簿|一覧表))")
     parts = [re.sub(r"\ue010(\d+)\ue011", lambda m: saved[int(m.group(1))], p).strip() for p in SPLIT.split(src)]
     parts = [p for p in parts if len(p) >= 2]
     out = []
@@ -547,8 +548,22 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 break
     if shelf["name"] == "sheet.rename" and "name" not in op and "to" in op and cur_sheet:
         op["name"] = cur_sheet
-    if shelf["name"] == "table.new" and isinstance(op.get("headers"), list) and len(op["headers"]) == 1 and "と" in op["headers"][0]:
-        op["headers"] = [h.strip() for h in op["headers"][0].split("と") if h.strip()]
+    if shelf["name"] == "table.new":
+        if not re.search(r"合計|総計|小計", text):
+            op.pop("total", None)
+        if not re.search(r"連番|通し番号", text):
+            op.pop("number", None)
+        if not op.get("headers"):
+            hdr_src = re.sub(r"^.*?(?:シート|タブ)[にへで]\s*", "", text.strip())
+            hdr_src = re.sub(r"^.*?(?:見出し|項目|列)[がはを]\s*", "", hdr_src)
+            m_hdr = re.search(
+                r"([^\s、,。・をに]{1,16}(?:\s*(?:[・、,]|と)\s*[^\s、,。・をに]{1,16})+)の(?:表|テーブル|名簿|一覧表)",
+                hdr_src,
+            )
+            if m_hdr:
+                op["headers"] = [h.strip() for h in re.split(r"[・、,／/]|と", m_hdr.group(1)) if h.strip()]
+        if isinstance(op.get("headers"), list) and any("と" in str(x) for x in op["headers"]):
+            op["headers"] = [h.strip() for x in op["headers"] for h in str(x).split("と") if h.strip()]
     if shelf["name"] == "replace":
         if "find" in op and isinstance(op["find"], str):
             clean_find = re.sub(r"^(?:全シート|すべてのシート|全てのシート|ブック全体)で\s*", "", op["find"]).strip()

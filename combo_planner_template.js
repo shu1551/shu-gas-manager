@@ -490,10 +490,11 @@ var ComboPlanner = (function () {
         return k;
       });
     };
-    // プルダウン候補や複数セルの「、」区切り、複数キー並べ替えを節分割から守る
+    // プルダウン候補や複数セルの「、」区切り、複数キー並べ替え、表作成の見出し列挙を節分割から守る
     protect(/(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))/g);
     protect(/[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+/g);
     protect(/[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+/g);
+    protect(/(?:(?:見出し|項目|列)[がは]\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで](?:[、,]\s*(?:と\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで])+(?=(?:の|で|という)(?:表|テーブル|名簿|一覧表))/g);
     var parts = src.split(ASK_SPLIT);
     var out = [];
     var placeOnly = /^.{1,12}(?:のとこ|のところ|の所|の列に|の列は|の列で|の欄に|の欄は)(?:は|も)?$/;   // 「日付のとこ」のような場所だけの節は、次の節につなげる
@@ -1222,8 +1223,27 @@ var ComboPlanner = (function () {
     if (shelf.name === "sheet.rename" && !_hasOwn(op, "name") && _hasOwn(op, "to") && curSheet) {
       op.name = curSheet;
     }
-    if (shelf.name === "table.new" && Array.isArray(op.headers) && op.headers.length === 1 && String(op.headers[0]).indexOf("と") >= 0) {
-      op.headers = String(op.headers[0]).split("と").map(function (h) { return h.trim(); }).filter(function (h) { return h; });
+    if (shelf.name === "table.new") {
+      if (!/合計|総計|小計/.test(text)) delete op.total;
+      if (!/連番|通し番号/.test(text)) delete op.number;
+      if (!op.headers || !op.headers.length) {
+        var hdrSrc = text.trim().replace(/^.*?(?:シート|タブ)[にへで]\s*/, "").replace(/^.*?(?:見出し|項目|列)[がはを]\s*/, "");
+        var mHdr = /([^\s、,。・をに]{1,16}(?:\s*(?:[・、,]|と)\s*[^\s、,。・をに]{1,16})+)の(?:表|テーブル|名簿|一覧表)/.exec(hdrSrc);
+        if (mHdr) {
+          op.headers = mHdr[1].split(/[・、,／/]|と/).map(function (h) { return h.trim(); }).filter(function (h) { return h; });
+        }
+      }
+      if (Array.isArray(op.headers) && op.headers.some(function (x) { return String(x).indexOf("と") >= 0; })) {
+        var flatHdr = [];
+        for (var hri = 0; hri < op.headers.length; hri++) {
+          var subH = String(op.headers[hri]).split("と");
+          for (var shri = 0; shri < subH.length; shri++) {
+            var th = subH[shri].trim();
+            if (th) flatHdr.push(th);
+          }
+        }
+        op.headers = flatHdr;
+      }
     }
     if (shelf.name === "replace") {
       if (_hasOwn(op, "find") && typeof op.find === "string") {

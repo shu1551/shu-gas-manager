@@ -1031,7 +1031,7 @@
     return p;
   }
 
-  function applyServerState(res) {
+  function applyServerState(res, forceRefreshSnap) {
     if (!res || typeof res !== "object") return;
     if (res.target && typeof res.target === "object") {
       state.target = {
@@ -1097,7 +1097,7 @@
     if (state.curSheet && state.oauthToken && state.target.id) {
       var curSnap = state.sheetSnapshot[state.curSheet];
       var needDim = getSnapshotDims(state.curSheet);
-      if (!curSnap || (curSnap.maxRows && curSnap.maxRows < needDim.maxRows) || (curSnap.maxCols && curSnap.maxCols < needDim.maxCols)) {
+      if (forceRefreshSnap || !curSnap || (curSnap.maxRows && curSnap.maxRows < needDim.maxRows) || (curSnap.maxCols && curSnap.maxCols < needDim.maxCols)) {
         prefetchSheetSnapshot(state.curSheet);
       }
     }
@@ -2002,6 +2002,10 @@
           snapshotMutators.push(function() {
             delete state.sheetIdMap[oName];
             state.sheetIdMap[nName] = sid;
+            if (state.sheetDimsMap[oName]) {
+              state.sheetDimsMap[nName] = state.sheetDimsMap[oName];
+              delete state.sheetDimsMap[oName];
+            }
             if (Array.isArray(state.sheets)) {
               for (var si = 0; si < state.sheets.length; si++) {
                 if (state.sheets[si] === oName) state.sheets[si] = nName;
@@ -2013,10 +2017,16 @@
               state.sheetSnapshot[nName] = state.sheetSnapshot[oName];
               delete state.sheetSnapshot[oName];
             }
+            syncSheetSelects();
+            updateInfoLabel();
           });
           undoSnapshotMutators.push(function() {
             delete state.sheetIdMap[nName];
             state.sheetIdMap[oName] = sid;
+            if (state.sheetDimsMap[nName]) {
+              state.sheetDimsMap[oName] = state.sheetDimsMap[nName];
+              delete state.sheetDimsMap[nName];
+            }
             if (Array.isArray(state.sheets)) {
               for (var si = 0; si < state.sheets.length; si++) {
                 if (state.sheets[si] === nName) state.sheets[si] = oName;
@@ -2028,6 +2038,8 @@
               state.sheetSnapshot[oName] = state.sheetSnapshot[nName];
               delete state.sheetSnapshot[nName];
             }
+            syncSheetSelects();
+            updateInfoLabel();
           });
         })(rnOld, rnNew, rnSid);
         changed.push(rnOld + " → " + rnNew + " シート名変更");
@@ -2261,7 +2273,13 @@
             requests: plan.undoRequests,
             restoreSnapshot: plan.restoreSnapshot
           });
+        } else {
+          // 戻しを持たない直結操作を挟んだら、過去の戻し履歴が誤爆しないよう空にする
+          state.directUndoStack = [];
         }
+        var needSnapReload = ops.some(function(o) {
+          return /^(clear\.|sort$)/.test(String((o && o.shelf) || ""));
+        });
         var lines = [];
         if (isFromAsk) {
           lines.push("[棚ヒット] " + formatOpsShort(ops));
@@ -2272,6 +2290,7 @@
         checkNewErrorsAfterDirect(sheetName, ops, function(news) {
           if (news.length) lines.push("⚠ 新しいエラー: " + news.slice(0, 5).join("・") + (news.length > 5 ? " ほか " + (news.length - 5) + " 件" : "") + "（直前を取り消すで戻せます）");
           recordExecution(true, label, lines.join("\n"), wallMs, 0, true, true);
+          if (needSnapReload) prefetchSheetSnapshot(state.curSheet || sheetName);
         });
       })
       .catch(function() {
@@ -2380,7 +2399,7 @@
         }
 
         if (opts.onSuccess) opts.onSuccess(res);
-        applyServerState(res);
+        applyServerState(res, true);
 
         if (res.pendingPostbox) {
           if (res.reqId) state.pendingPostboxIds[res.reqId] = true;
@@ -2488,6 +2507,7 @@
     }
     if (fireOps && !liveSelPrompt && !els.chkBackup.checked) {
       var handledDirect = tryDirectSheetsApi(fireOps, txt, true, function() {
+        state.directUndoStack = [];
         runServerAction({
           fnName: "comboRunAsk",
           payload: payload,

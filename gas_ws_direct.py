@@ -126,6 +126,27 @@ def grid(sid, r1, c1, r2, c2):
     return {"sheetId": sid, "startRowIndex": r1 - 1, "endRowIndex": r2, "startColumnIndex": c1 - 1, "endColumnIndex": c2}
 
 
+def infer_number_format_type(pattern):
+    """表示形式の文字列から Sheets API の numberFormat.type を判定する"""
+    p = str(pattern or "")
+    if "@" in p:
+        return "TEXT"
+    if "%" in p:
+        return "PERCENT"
+    if re.search(r"[¥$€£￥]", p):
+        return "CURRENCY"
+    stripped = re.sub(r'"[^"]*"|\\.', "", p)
+    has_date = bool(re.search(r"[ymd]", stripped, re.I))
+    has_time = bool(re.search(r"[hs]", stripped, re.I)) or ("AM/PM" in stripped)
+    if has_date and has_time:
+        return "DATE_TIME"
+    if has_date:
+        return "DATE"
+    if has_time:
+        return "TIME"
+    return "NUMBER"
+
+
 def clean_format(f):
     """読んだ書式を書き戻せる形にする（古い色の欄は *Style に寄せて外す）"""
     f = json.loads(json.dumps(f or {}))
@@ -299,8 +320,8 @@ class DirectRunner:
             if s in ("format", "bg.clear"):
                 pl = self._place(op, tb)
                 if pl == "title":
-                    if not tb:
-                        raise Skip("表が無い")
+                    if not tb or (tb.get("header_row") or 0) <= 1:
+                        raise Skip("タイトルの行が無い")
                     ranges.add(f"{q(sh)}!A1:{tb['last_col']}{tb['header_row'] - 1}")
                 else:
                     ranges.add(f"{q(sh)}!{a1(*pl)}")
@@ -416,7 +437,8 @@ class DirectRunner:
                     if op.get("font") is not None:
                         tf["fontFamily"] = str(op["font"]); fields.append("userEnteredFormat.textFormat.fontFamily"); did.append("font")
                     if op.get("number_format") is not None:
-                        cf["numberFormat"] = {"type": "NUMBER", "pattern": str(op["number_format"])}; fields.append("userEnteredFormat.numberFormat"); did.append("number_format")
+                        pat = str(op["number_format"])
+                        cf["numberFormat"] = {"type": infer_number_format_type(pat), "pattern": pat}; fields.append("userEnteredFormat.numberFormat"); did.append("number_format")
                     if op.get("align") is not None:
                         al = str(op["align"]).upper()
                         if title_band and al in ("CENTER", "MIDDLE", "RIGHT"):
@@ -719,6 +741,16 @@ class DirectRunner:
             st["direct_last_skip"] = f"{type(e).__name__}: {e}"[:200]
             return None
         # ここから先は書いた後。失敗してもエンジンの道へは回さない（二重に書かない）
+        renamed = {o.get("name") or sheet: str(o.get("to") or "").strip() for o in ops if o.get("shelf") == "sheet.rename" and o.get("to")}
+        if renamed:
+            def _map_range(rng):
+                for o_nm, n_nm in renamed.items():
+                    pref = f"{q(o_nm)}!"
+                    if rng.startswith(pref):
+                        return f"{q(n_nm)}!" + rng[len(pref):]
+                return rng
+            ranges = sorted({_map_range(r) for r in ranges})
+            touched = [(renamed.get(s, s), r1, c1, r2, c2) for s, r1, c1, r2, c2 in touched]
         notes = []
         led = st.setdefault("direct_ledger", [])
         n = (max([x["n"] for x in led], default=0) + 1)

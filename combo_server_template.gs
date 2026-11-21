@@ -793,7 +793,7 @@ function comboFastUndoRestore_(ss, optRaw) {
   }
   // 書式・色・固定・幅のみの部分復元では表構造が変わらないためキャッシュを温存する
   if (!snap.partial) {
-    comboCacheInvalidate_(snap.sheetName);
+    comboCacheInvalidate_(ssId, snap.sheetName);
   }
 
   var cachedUndo = comboCacheGet_(ssId, sh.getName());
@@ -814,6 +814,7 @@ function comboFastUndoRestore_(ss, optRaw) {
     undone: 'fast',
     what: snap.what,
     target: target,
+    oauthToken: comboGetOAuthToken_(),
     text: text,
     gasMs: Date.now() - t0
   };
@@ -911,6 +912,7 @@ function comboRunOps(req) {
   }
   var curSheet = selInfo.sheet;
   var backupOn = !!req.backup;
+  var effOk = !!req.ok || ops.some(function (o) { return !!(o && o.ok === true); });
 
   // フル控えモード（backup=true）：Engine の actDo_ に委譲
   if (backupOn) {
@@ -919,16 +921,17 @@ function comboRunOps(req) {
     var fullRes = actDo_({
       target: { id: ssId, kind: 'sheet', sheet: curSheet },
       ops: ops,
-      ok: !!req.ok,
+      ok: effOk,
       backup: true,
       want_table: true
     });
     if (fullRes.ok) {
-      comboCacheInvalidate_(curSheet);
+      comboCacheInvalidate_(ssId, curSheet);
       if (fullRes.table !== undefined) {
         comboCachePut_(ssId, (fullRes.target && fullRes.target.sheet) || curSheet, fullRes.table, fullRes.sheets, null, (fullRes.target && fullRes.target.name) || '');
       }
     }
+    fullRes.oauthToken = comboGetOAuthToken_();
     fullRes.text = comboFormatDoText_(fullRes, true);
     fullRes.gasMs = Date.now() - t0;
     return fullRes;
@@ -991,7 +994,7 @@ function comboRunOps(req) {
     doc: null,
     sheetName: curSheet,
     curSheet: curSheet,
-    ok: !!req.ok,
+    ok: effOk,
     changed: [],
     notes: [],
     remaining: [],
@@ -1020,10 +1023,11 @@ function comboRunOps(req) {
     }
 
     var finalSheet = ctx.curSheet || curSheet;
+    var sheetInfos = null;
     if (!keepsShape) {
       SpreadsheetApp.flush();
-      comboCacheInvalidate_(curSheet);
-      if (finalSheet !== curSheet) comboCacheInvalidate_(finalSheet);
+      comboCacheInvalidate_(ssId, curSheet);
+      if (finalSheet !== curSheet) comboCacheInvalidate_(ssId, finalSheet);
       try {
         var finalSh = ss.getSheetByName(finalSheet);
         if (finalSh) {
@@ -1031,12 +1035,20 @@ function comboRunOps(req) {
           table = tbNew ? tableOut_(tbNew) : null;
           var newTitleA1 = comboComputeTitleA1_(finalSh, tbNew);
           if (table && newTitleA1) table.title_a1 = newTitleA1;
-          sheets = ss.getSheets().map(function (s) { return s.getName(); });
+          var allSh = ss.getSheets();
+          sheets = allSh.map(function (s) { return s.getName(); });
+          sheetInfos = allSh.map(function (s) {
+            return { name: s.getName(), sheetId: s.getSheetId(), rows: s.getLastRow(), cols: s.getLastColumn() };
+          });
           comboCachePut_(ssId, finalSheet, table, sheets, tbNew, ssName, newTitleA1);
         }
       } catch (eTbl) {}
     } else if (!sheets) {
-      sheets = ss.getSheets().map(function (s) { return s.getName(); });
+      var allShKeep = ss.getSheets();
+      sheets = allShKeep.map(function (s) { return s.getName(); });
+      sheetInfos = allShKeep.map(function (s) {
+        return { name: s.getName(), sheetId: s.getSheetId(), rows: s.getLastRow(), cols: s.getLastColumn() };
+      });
     }
 
     var out = {
@@ -1055,8 +1067,10 @@ function comboRunOps(req) {
       fastUndo: fastSaved,
       selection: selInfo.selection || req.selection || '',
       table: table,
-      sheets: sheets
+      sheets: sheets,
+      oauthToken: comboGetOAuthToken_()
     };
+    if (sheetInfos) out.sheetInfos = sheetInfos;
     out.text = comboFormatDoText_(out, false);
     out.gasMs = Date.now() - t0;
     return out;
@@ -1505,7 +1519,7 @@ function comboUndo(req) {
     });
     var t = res.target || {};
     if (res.ok) {
-      comboCacheInvalidate_(t.sheet || '');
+      comboCacheInvalidate_(ss.getId(), t.sheet || '');
       res.text = [
         '対象: ' + (t.name || ss.getName()),
         '戻した: #' + res.undone + '（' + (res.what || '') + '）を取り消しました',
@@ -1514,6 +1528,7 @@ function comboUndo(req) {
     } else {
       res.text = (res.needs_ok ? '止めました: ' : '戻せませんでした: ') + (res.error || '');
     }
+    res.oauthToken = comboGetOAuthToken_();
     res.gasMs = Date.now() - t0;
     return res;
   } catch (err) {

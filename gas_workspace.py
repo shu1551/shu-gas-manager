@@ -585,6 +585,9 @@ class WorkspaceManager:
 
     def _do_res(self, ops, target, ok, tim, extra=None):
         ops = self.parse_ops(ops)
+        if any(isinstance(o, dict) and o.get("ok") is True for o in ops):
+            ok = True
+        ops = [{k: v for k, v in o.items() if k != "ok"} if isinstance(o, dict) and "ok" in o else o for o in ops]
         kind = self.validate_ops(ops)
         ops = [self.catalog.normalize_op(o) for o in ops]   # 列[]・行[] に 1 つだけ渡された値を配列にそろえる
         tim.lap("検査")
