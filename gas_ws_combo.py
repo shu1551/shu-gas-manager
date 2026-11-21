@@ -1438,14 +1438,14 @@ class ComboPostboxWatcher:
 
     def poll_once(self):
         """1 回ポーリングして保留中のリクエストをすべて処理する。"""
-        poll_resp = self.client.run_function(self.sid, "comboPostboxPoll", [], fast=True, keep_runner=True)
+        poll_resp = self.client.run_function(self.sid, "comboPostboxPoll", [], fast=True, keep_runner=True, force=True)
         data = _unwrap_run_result(poll_resp, client=self.client, sid=self.sid) or {}
         queue_items = data.get("queue") or []
         results = []
         for item in queue_items:
             payload = self.resolve_item(item)
             deliv = _unwrap_run_result(self.client.run_function(
-                self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True
+                self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True, force=True
             ), client=self.client, sid=self.sid)
             # 棚の引数が足りずに失敗したら、そのわけを添えて AI に 1 回だけ答え直させる
             if isinstance(deliv, dict) and deliv.get("ok") is False and deliv.get("arg"):
@@ -1454,7 +1454,7 @@ class ComboPostboxWatcher:
                 payload = self.resolve_item(retry_item)
                 payload.update({k: item.get(k) for k in ("ssId", "sheet", "selection", "ok", "backup") if item.get(k) is not None})
                 deliv = _unwrap_run_result(self.client.run_function(
-                    self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True
+                    self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True, force=True
                 ), client=self.client, sid=self.sid)
             results.append({"reqId": item.get("reqId"), "payload": payload, "deliver": deliv})
         return results
@@ -1742,7 +1742,7 @@ def _run_cli(argv=None):
             res = watcher.poll_once()
             print(json.dumps(res, ensure_ascii=False, indent=2))
         else:
-            watcher.watch()
+            watcher.watch(idle_interval=3.0)  # サイドパネルからの /kick は Chrome が 127.0.0.1 へ通さないことがある＝3 秒ごとに見る（1 回 約 25ms）
         return 0
     return 0
 

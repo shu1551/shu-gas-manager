@@ -2482,11 +2482,8 @@
   // PC の郵便受けの受け手（py gas.py combo watch）を起こす。届かなければ動いていないと知らせる
   function kickWatcher() {
     try {
-      fetch("http://127.0.0.1:18766/kick", { mode: "no-cors", cache: "no-store" }).catch(function() {
-        els.postboxStatusLabel.textContent = "郵便受け: PC の受け手が動いていません（py gas.py combo watch <id> --autostart を 1 回）";
-        appendLog(els.chatLog, "is-err", "[郵便受け] PC の受け手が動いていません",
-          "PC で py gas.py combo watch <アドオンのID> --autostart を 1 回撃つと、ログオンのたびに自分で起きます（combo addon でも入ります）。");
-      });
+      // 届かなくても受け手は 3 秒ごとに見に来る（Chrome は 127.0.0.1 への fetch を通さないことがある）＝ここでは知らせない
+      fetch("http://127.0.0.1:18766/kick", { mode: "no-cors", cache: "no-store" }).catch(function() {});
     } catch (e) {}
   }
 
