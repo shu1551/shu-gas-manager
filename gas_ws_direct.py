@@ -28,7 +28,9 @@ SHEETS = "https://sheets.googleapis.com/v4/spreadsheets/"
 TOKEN_LIFE = 45 * 60          # GAS の鍵はおよそ 1 時間。余裕を見て 45 分で取り直す
 LEDGER_KEEP = 30
 DIRECT_SHELVES = {"format", "bg.clear", "freeze", "unfreeze", "width", "write",
-                  "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "filter.on", "filter.off"}
+                  "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "sheet.gridlines",
+                  "filter.on", "filter.off", "rows.hide", "rows.show", "cols.hide", "cols.show",
+                  "note.set", "note.clear"}
 BORDER_COLOR = {"red": 0x9E / 255, "green": 0x9E / 255, "blue": 0x9E / 255}   # エンジンの STYLE.border（#9E9E9E）
 
 # エンジンの rgb_ と同じ色の名前（どちらの道でも同じ色になるように）
@@ -149,11 +151,11 @@ class Snapshot:
     """1 回の GET の読み（シートごとの性質・フィルタ・結合・読んだ範囲のセル）"""
 
     def __init__(self, data):
-        self.sheets = {}      # 名前 → {"props", "filter", "merges", "cells": {(r,c): cell}, "colpx": {c: px}, "rowpx": {r: px}}
+        self.sheets = {}      # 名前 → {"props", "filter", "merges", "cells": {(r,c): cell}, "colpx": {c: px}, "rowpx": {r: px}, "colhid": {c: bool}, "rowhid": {r: bool}}
         for sh in data.get("sheets") or []:
             p = sh.get("properties") or {}
             ent = self.sheets.setdefault(p.get("title"), {"props": p, "filter": sh.get("basicFilter"), "merges": sh.get("merges") or [],
-                                                          "cells": {}, "colpx": {}, "rowpx": {}})
+                                                          "cells": {}, "colpx": {}, "rowpx": {}, "colhid": {}, "rowhid": {}})
             for d in sh.get("data") or []:
                 r0, c0 = d.get("startRow", 0), d.get("startColumn", 0)
                 for i, row in enumerate(d.get("rowData") or []):
@@ -161,8 +163,10 @@ class Snapshot:
                         ent["cells"][(r0 + i + 1, c0 + j + 1)] = cell
                 for j, cm in enumerate(d.get("columnMetadata") or []):
                     ent["colpx"][c0 + j + 1] = cm.get("pixelSize")
+                    ent["colhid"][c0 + j + 1] = bool(cm.get("hiddenByUser"))
                 for i, rm in enumerate(d.get("rowMetadata") or []):
                     ent["rowpx"][r0 + i + 1] = rm.get("pixelSize")
+                    ent["rowhid"][r0 + i + 1] = bool(rm.get("hiddenByUser"))
 
     def sheet(self, name):
         ent = self.sheets.get(name)
@@ -220,9 +224,9 @@ class DirectRunner:
         raise DirectError("鍵が通らない")
 
     def _get(self, st, sid, ranges, extra_fields=""):
-        fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount)),"
-                  "basicFilter,merges,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,effectiveValue(errorValue))),"
-                  "columnMetadata(pixelSize),rowMetadata(pixelSize)))")
+        fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),"
+                  "basicFilter,merges,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,note,effectiveValue(errorValue))),"
+                  "columnMetadata(pixelSize,hiddenByUser),rowMetadata(pixelSize,hiddenByUser)))")
         params = [("ranges", r) for r in ranges] + [("fields", fields)]
         return Snapshot(self._call(st, "GET", SHEETS + sid, params=params))
 
@@ -264,19 +268,24 @@ class DirectRunner:
         raise Skip("場所が無い")
 
     @staticmethod
-    def _title_place(ent, tb):
-        """エンジンの titleRange_ と同じ: 見出しの上の行で、最初に中身のあるセル（結合していれば結合の範囲）"""
+    def _title_place(ent, tb, op=None):
+        """エンジンの titleRange_ と同じ: 見出しの上の行で、最初に中身のあるセル（結合していれば結合の範囲、未結合 1 セルなら表の横幅帯へ拡張）"""
         limit = (tb["header_row"] - 1) if tb else 0
         if limit < 1:
             raise Skip("タイトルの行が無い")
         width = col_num(tb["last_col"])
+        first_col = col_num(tb["first_col"])
         for r in range(1, limit + 1):
             for c in range(1, width + 1):
                 if Snapshot.value_text(ent["cells"].get((r, c))):
                     for m in ent["merges"]:
                         if m["startRowIndex"] + 1 <= r <= m["endRowIndex"] and m["startColumnIndex"] + 1 <= c <= m["endColumnIndex"]:
-                            return (m["startRowIndex"] + 1, m["startColumnIndex"] + 1, m["endRowIndex"], m["endColumnIndex"])
-                    return (r, c, r, c)
+                            return (m["startRowIndex"] + 1, m["startColumnIndex"] + 1, m["endRowIndex"], m["endColumnIndex"]), False
+                    if op and op.get("shelf") == "format" and op.get("merge") is None:
+                        filled = sum(1 for cc in range(min(c, first_col), width + 1) if Snapshot.value_text(ent["cells"].get((r, cc))))
+                        if filled <= 1 and width > min(c, first_col):
+                            return (r, min(c, first_col), r, width), True
+                    return (r, c, r, c), False
         raise Skip("タイトルが見つからない")
 
     # ------------------------------------------------------------ 命令を組む（撃つ命令と戻す命令）
@@ -296,6 +305,8 @@ class DirectRunner:
                 else:
                     ranges.add(f"{q(sh)}!{a1(*pl)}")
             elif s == "width":
+                if op.get("all_sheets") or op.get("auto_rows"):
+                    raise Skip("all_sheets / auto_rows はエンジンの道へ")
                 for k in list((op.get("cols") or {}).keys()) + ([op["col"]] if op.get("col") and op.get("width") else []) + list(op.get("auto") or []):
                     c = self._col_of(tb, k) if tb else col_num(k)
                     if not c:
@@ -303,6 +314,42 @@ class DirectRunner:
                     ranges.add(f"{q(sh)}!{col_letter(c)}1")
                 for k in (op.get("rows") or {}):
                     ranges.add(f"{q(sh)}!A{int(k)}")
+            elif s in ("rows.hide", "rows.show"):
+                r1, r2 = int(op.get("from") or op.get("row") or 0), int(op.get("to") or op.get("from") or op.get("row") or 0)
+                if r1 < 1 or r2 < r1:
+                    raise Skip("行番号が要る")
+                ranges.add(f"{q(sh)}!A{r1}:A{r2}")
+            elif s in ("cols.hide", "cols.show"):
+                raw = op.get("cols") if isinstance(op.get("cols"), list) else ([op["col"]] if op.get("col") is not None else [])
+                if not raw:
+                    raise Skip("列が要る")
+                for k in raw:
+                    c = self._col_of(tb, k) if tb else col_num(k)
+                    if not c:
+                        raise Skip("列が分からない")
+                    ranges.add(f"{q(sh)}!{col_letter(c)}1")
+            elif s == "note.set":
+                has = False
+                if isinstance(op.get("cells"), dict) and op["cells"]:
+                    for k in op["cells"]:
+                        parse_a1(k)
+                        ranges.add(f"{q(sh)}!{k}")
+                        has = True
+                if op.get("cell") and op.get("text") is not None:
+                    parse_a1(op["cell"])
+                    ranges.add(f"{q(sh)}!{op['cell']}")
+                    has = True
+                if not has:
+                    raise Skip("note.set の指定が無い")
+            elif s == "note.clear":
+                if op.get("range"):
+                    r1, c1, r2, c2 = parse_a1(op["range"])
+                elif tb:
+                    _, l = self._table_rows(tb)
+                    r1, c1, r2, c2 = 1, 1, max(tb.get("total_row") or l, l), col_num(tb["last_col"])
+                else:
+                    raise Skip("範囲が無い")
+                ranges.add(f"{q(sh)}!{a1(r1, c1, r2, c2)}")
             elif s == "write":
                 if op.get("tsv") is not None or not isinstance(op.get("cells"), dict) or not op["cells"]:
                     raise Skip("write は cells だけ")
@@ -321,7 +368,9 @@ class DirectRunner:
             elif s == "filter.on":
                 if op.get("range"):
                     ranges.add(f"{q(sh)}!{op['range']}")
-            elif s in ("freeze", "unfreeze", "filter.off"):
+            elif s in ("freeze", "unfreeze", "filter.off", "sheet.gridlines"):
+                if s == "sheet.gridlines" and op.get("all_sheets"):
+                    raise Skip("all_sheets はエンジンの道へ")
                 pass
             else:
                 raise Skip("直接の道に無い棚")
@@ -342,7 +391,10 @@ class DirectRunner:
             sid = ent["props"]["sheetId"]
             if s in ("format", "bg.clear"):
                 pl = self._place(op, tb)
-                r1, c1, r2, c2 = self._title_place(ent, tb) if pl == "title" else pl
+                if pl == "title":
+                    (r1, c1, r2, c2), title_band = self._title_place(ent, tb, op)
+                else:
+                    (r1, c1, r2, c2), title_band = pl, False
                 g = grid(sid, r1, c1, r2, c2)
                 cf, tf, fields, did = {}, {}, [], []
                 if s == "bg.clear" or (op.get("bg") is not None and rgb(op["bg"]) is None):
@@ -367,6 +419,8 @@ class DirectRunner:
                         cf["numberFormat"] = {"type": "NUMBER", "pattern": str(op["number_format"])}; fields.append("userEnteredFormat.numberFormat"); did.append("number_format")
                     if op.get("align") is not None:
                         al = str(op["align"]).upper()
+                        if title_band and al in ("CENTER", "MIDDLE", "RIGHT"):
+                            al = "LEFT"
                         cf["horizontalAlignment"] = "CENTER" if al == "MIDDLE" else al; fields.append("userEnteredFormat.horizontalAlignment"); did.append("align")
                     if op.get("valign") is not None:
                         va = str(op["valign"]).upper()
@@ -528,6 +582,67 @@ class DirectRunner:
                     changed.append(f"{shn}!フィルタを解除")
                 undo.insert(0, {"setBasicFilter": {"filter": prev}} if prev else {"clearBasicFilter": {"sheetId": sid}})
                 area(shn, 0, 0, 0, 0)
+            elif s == "sheet.gridlines":
+                gp = ent["props"].get("gridProperties") or {}
+                show = op.get("show") is not False
+                f = "gridProperties.hideGridlines"
+                req.append({"updateSheetProperties": {"properties": {"sheetId": sid, "gridProperties": {"hideGridlines": not show}}, "fields": f}})
+                undo.insert(0, {"updateSheetProperties": {"properties": {"sheetId": sid, "gridProperties": {"hideGridlines": bool(gp.get("hideGridlines", False))}}, "fields": f}})
+                area(shn, 0, 0, 0, 0)
+                changed.append(f"{shn}!枠線を{'表示' if show else '非表示'}")
+            elif s in ("rows.hide", "rows.show"):
+                r1, r2 = int(op.get("from") or op.get("row") or 0), int(op.get("to") or op.get("from") or op.get("row") or 0)
+                hide = (s == "rows.hide")
+                req.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "ROWS", "startIndex": r1 - 1, "endIndex": r2},
+                                                          "properties": {"hiddenByUser": hide}, "fields": "hiddenByUser"}})
+                for r in range(r1, r2 + 1):
+                    undo.insert(0, {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "ROWS", "startIndex": r - 1, "endIndex": r},
+                                                                  "properties": {"hiddenByUser": bool(ent["rowhid"].get(r, False))}, "fields": "hiddenByUser"}})
+                area(shn, 0, 0, 0, 0)
+                changed.append(f"{shn}!{r1}〜{r2}行を{'非表示' if hide else '再表示'}")
+            elif s in ("cols.hide", "cols.show"):
+                raw = op.get("cols") if isinstance(op.get("cols"), list) else ([op["col"]] if op.get("col") is not None else [])
+                hide = (s == "cols.hide")
+                done = []
+                for k in raw:
+                    c = self._col_of(tb, k) if tb else col_num(k)
+                    req.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": c - 1, "endIndex": c},
+                                                              "properties": {"hiddenByUser": hide}, "fields": "hiddenByUser"}})
+                    undo.insert(0, {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": c - 1, "endIndex": c},
+                                                                  "properties": {"hiddenByUser": bool(ent["colhid"].get(c, False))}, "fields": "hiddenByUser"}})
+                    done.append(f"{col_letter(c)}列")
+                area(shn, 0, 0, 0, 0)
+                changed.append(f"{shn}!{'・'.join(done)}を{'非表示' if hide else '再表示'}")
+            elif s == "note.set":
+                pairs = []
+                if isinstance(op.get("cells"), dict):
+                    pairs.extend(op["cells"].items())
+                if op.get("cell") and op.get("text") is not None:
+                    pairs.append((op["cell"], op["text"]))
+                done = []
+                for k, txt in pairs:
+                    r1, c1, r2, c2 = parse_a1(k)
+                    g = grid(sid, r1, c1, r2, c2)
+                    req.append({"repeatCell": {"range": g, "cell": {"note": "" if txt is None else str(txt)}, "fields": "note"}})
+                    rows = [{"values": [{"note": (ent["cells"].get((r, c)) or {}).get("note") or ""} for c in range(c1, c2 + 1)]} for r in range(r1, r2 + 1)]
+                    undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": "note"}})
+                    area(shn, r1, c1, r2, c2)
+                    done.append(k)
+                changed.append(f"{shn}!{'・'.join(done)} メモを設定")
+            elif s == "note.clear":
+                if op.get("range"):
+                    r1, c1, r2, c2 = parse_a1(op["range"])
+                    label = op["range"]
+                else:
+                    _, l = self._table_rows(tb)
+                    r1, c1, r2, c2 = 1, 1, max(tb.get("total_row") or l, l), col_num(tb["last_col"])
+                    label = "シート全体"
+                g = grid(sid, r1, c1, r2, c2)
+                req.append({"repeatCell": {"range": g, "cell": {"note": ""}, "fields": "note"}})
+                rows = [{"values": [{"note": (ent["cells"].get((r, c)) or {}).get("note") or ""} for c in range(c1, c2 + 1)]} for r in range(r1, r2 + 1)]
+                undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": "note"}})
+                area(shn, r1, c1, r2, c2)
+                changed.append(f"{shn}!{label} メモを消去")
         return req, undo, changed, touched
 
     # ------------------------------------------------------------ 指紋（撃った後の姿。戻す前に人の手直しを見つける）
@@ -539,10 +654,12 @@ class DirectRunner:
             p = ent.get("props") or {}
             if r1 == 0:
                 parts.append([shn, p.get("title"), p.get("hidden"), p.get("tabColorStyle"), p.get("gridProperties"), ent.get("filter"),
-                              sorted(ent.get("colpx", {}).items()), sorted(ent.get("rowpx", {}).items())])
+                              sorted(ent.get("colpx", {}).items()), sorted(ent.get("rowpx", {}).items()),
+                              sorted(ent.get("colhid", {}).items()), sorted(ent.get("rowhid", {}).items())])
             else:
                 parts.append([shn, [[(ent.get("cells") or {}).get((r, c), {}).get("userEnteredValue"),
-                                     clean_format((ent.get("cells") or {}).get((r, c), {}).get("userEnteredFormat"))]
+                                     clean_format((ent.get("cells") or {}).get((r, c), {}).get("userEnteredFormat")),
+                                     (ent.get("cells") or {}).get((r, c), {}).get("note") or ""]
                                     for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]])
         return hashlib.sha1(json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
 
@@ -635,9 +752,9 @@ class DirectRunner:
 
     # ------------------------------------------------------------ 裏の指紋
     def _fp_later(self, n, token, sid, ranges, touched):
-        fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount)),"
-                  "basicFilter,merges,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,effectiveValue(errorValue))),"
-                  "columnMetadata(pixelSize),rowMetadata(pixelSize)))")
+        fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),"
+                  "basicFilter,merges,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,note,effectiveValue(errorValue))),"
+                  "columnMetadata(pixelSize,hiddenByUser),rowMetadata(pixelSize,hiddenByUser)))")
 
         def run():
             try:

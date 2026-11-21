@@ -159,13 +159,34 @@ function comboGetSelectionInfo_(ss, req, skipLookup) {
 
 // ---------------------------------------------------------------- 表メタデータキャッシュ
 
-function comboTblCacheKey_(sheetName) {
-  return COMBO_TBL_CACHE_PREFIX + String(sheetName || '').slice(0, 200);
+function comboCache_() {
+  try {
+    if (typeof CacheService !== 'undefined' && typeof CacheService.getUserCache === 'function') {
+      var uc = CacheService.getUserCache();
+      if (uc) return uc;
+    }
+  } catch (eU) {}
+  try {
+    if (typeof CacheService !== 'undefined' && typeof CacheService.getScriptCache === 'function') {
+      return CacheService.getScriptCache();
+    }
+  } catch (eS) {}
+  return null;
+}
+
+function comboTblCacheKey_(ssId, sheetName) {
+  if (sheetName === undefined) {
+    sheetName = ssId;
+    ssId = '';
+  }
+  return COMBO_TBL_CACHE_PREFIX + (ssId ? String(ssId).slice(0, 44) + '_' : '') + String(sheetName || '').slice(0, 150);
 }
 
 function comboCacheGet_(ssId, sheetName) {
   try {
-    var raw = CacheService.getScriptCache().get(comboTblCacheKey_(sheetName));
+    var c = comboCache_();
+    if (!c) return null;
+    var raw = c.get(comboTblCacheKey_(ssId, sheetName)) || c.get(comboTblCacheKey_(sheetName));
     if (!raw) return null;
     var obj = JSON.parse(raw);
     if (obj && obj.ssId === ssId) return obj;
@@ -223,14 +244,22 @@ function comboCachePut_(ssId, sheetName, table, sheets, tb, ssName, titleA1) {
       }
     }
     if (s.length < 95000) {
-      CacheService.getScriptCache().put(comboTblCacheKey_(sheetName), s, COMBO_TBL_CACHE_TTL);
+      var c = comboCache_();
+      if (c) c.put(comboTblCacheKey_(ssId, sheetName), s, COMBO_TBL_CACHE_TTL);
     }
   } catch (e) {}
 }
 
-function comboCacheInvalidate_(sheetName) {
+function comboCacheInvalidate_(ssId, sheetName) {
   try {
-    CacheService.getScriptCache().remove(comboTblCacheKey_(sheetName));
+    var c = comboCache_();
+    if (!c) return;
+    if (sheetName === undefined) {
+      c.remove(comboTblCacheKey_(ssId));
+    } else {
+      c.remove(comboTblCacheKey_(ssId, sheetName));
+      c.remove(comboTblCacheKey_(sheetName));
+    }
   } catch (e) {}
 }
 
@@ -328,12 +357,38 @@ function comboPollSelection(req) {
       sheet: selInfo.sheet,
       selection: selInfo.selection,
       scope: comboParseScope_(selInfo.selection),
-      postboxDone: postboxDone,
-      gasMs: Date.now() - t0
+      oauthToken: comboGetOAuthToken_(),
+      postboxDone: postboxDone
     };
+    var prevSheet = String(req.prevSheet || '').trim();
+    if (prevSheet && selInfo.sheet && selInfo.sheet !== prevSheet) {
+      var sh = sheetOf_(ss, selInfo.sheet, '');
+      var sheetInfos = ss.getSheets().map(function (s) {
+        return {
+          name: s.getName(),
+          sheetId: typeof s.getSheetId === 'function' ? s.getSheetId() : 0,
+          rows: s.getLastRow(),
+          cols: s.getLastColumn()
+        };
+      });
+      var sheets = sheetInfos.map(function (s) { return s.name; });
+      var ssId = ss.getId();
+      var ssName = ss.getName();
+      var tb = findTable_(sh);
+      var table = tb ? tableOut_(tb) : null;
+      var titleA1 = comboComputeTitleA1_(sh, tb);
+      if (table && titleA1) table.title_a1 = titleA1;
+      comboCachePut_(ssId, sh.getName(), table, sheets, tb, ssName, titleA1);
+      out.sheetChanged = true;
+      out.sheetId = typeof sh.getSheetId === 'function' ? sh.getSheetId() : 0;
+      out.sheets = sheets;
+      out.sheetInfos = sheetInfos;
+      out.table = table;
+    }
     if (req.checkPostbox) {
       out.postboxPending = comboPostboxPoll().count;
     }
+    out.gasMs = Date.now() - t0;
     return out;
   } catch (err) {
     return {
@@ -459,10 +514,13 @@ function comboLook(req) {
 
 // ---------------------------------------------------------------- 高速アンドゥ（backup=false 用）
 
-var COMBO_STRUCTURAL_SHELVES_ = {
-  'sheet.add': 1, 'sheet.delete': 1, 'sheet.rename': 1,
-  'sheet.move': 1, 'sheet.copy': 1, 'sheet.hide': 1, 'sheet.show': 1
-};
+  var COMBO_FAST_UNDO_SAFE_SHELVES_ = {
+    'format': 1, 'bg.clear': 1, 'freeze': 1, 'unfreeze': 1, 'width': 1,
+    'write': 1, 'clear.values': 1, 'clear.format': 1, 'clear.all': 1,
+    'renumber': 1, 'formula.guard': 1, 'formula.tovalue': 1, 'round': 1,
+    'text.case': 1, 'text.affix': 1, 'date.fix': 1, 'number.fix': 1, 'fill.series': 1, 'fill.date': 1,
+    'fill.down': 1, 'fill.blank': 1, 'replace': 1, 'copy': 1, 'copy.values': 1, 'copy.format': 1
+  };
 
 function comboEncodeCellVal_(v, formula) {
   if (formula && String(formula).charAt(0) === '=') return formula;
@@ -480,13 +538,16 @@ function comboDecodeCellVal_(v) {
  * format のみの場合は実際に変更する属性（color / bg / bold 等）だけを取得し、API 往復を最小化する。
  */
 function comboFastUndoSave_(sh, ops, table, optSsId) {
-  var cache = CacheService.getScriptCache();
+  var cache = comboCache_();
   try {
     var ssId = optSsId || (typeof sh.getParent === 'function' ? sh.getParent().getId() : '');
-    // シート構成そのものを変える操作は高速スナップショット対象外
+    // 安全に戻せる棚のホワイトリスト外が含まれる場合は控えを作らず、既存控えも消す
     for (var i = 0; i < ops.length; i++) {
-      if (COMBO_STRUCTURAL_SHELVES_[ops[i].shelf]) {
-        cache.remove(COMBO_PROP_FAST_UNDO);
+      var op0 = ops[i];
+      if (!op0 || !COMBO_FAST_UNDO_SAFE_SHELVES_[op0.shelf] ||
+          (op0.shelf === 'format' && (op0.borders !== undefined || op0.merge !== undefined)) ||
+          (op0.shelf === 'write' && op0.tsv !== undefined) || op0.all_sheets) {
+        if (cache) cache.remove(COMBO_PROP_FAST_UNDO);
         return false;
       }
     }
@@ -510,9 +571,10 @@ function comboFastUndoSave_(sh, ops, table, optSsId) {
     var fmtFlags = {};
     for (var j = 0; j < ops.length; j++) {
       var op = ops[j];
-      if (op.shelf !== 'format' || op.merge !== undefined || op.borders !== undefined) formatOnly = false;
+      if ((op.shelf !== 'format' && op.shelf !== 'bg.clear') || op.merge !== undefined || op.borders !== undefined) formatOnly = false;
       if (op.shelf !== 'freeze' && op.shelf !== 'unfreeze') freezeOnly = false;
       if (op.shelf !== 'width') widthOnly = false;
+      if (op.shelf === 'bg.clear') fmtFlags.bgs = true;
       if (op.shelf === 'format') {
         if (op.color !== undefined) fmtFlags.colors = true;
         if (op.bg !== undefined) fmtFlags.bgs = true;
@@ -667,8 +729,8 @@ function comboFastUndoSave_(sh, ops, table, optSsId) {
  */
 function comboFastUndoRestore_(ss, optRaw) {
   var t0 = Date.now();
-  var cache = CacheService.getScriptCache();
-  var raw = optRaw || cache.get(COMBO_PROP_FAST_UNDO);
+  var cache = comboCache_();
+  var raw = optRaw || (cache ? cache.get(COMBO_PROP_FAST_UNDO) : null);
   var fromProp = false;
   if (!raw) {
     try {
@@ -892,11 +954,21 @@ function comboRunOps(req) {
     if (op.title === true && titleA1) {
       // 1 つのセルのタイトルは表の幅いっぱいの帯で（棚が帯に塗る＝控えも帯ごと取る）
       var bandA1 = titleA1;
-      if (titleA1.indexOf(':') < 0 && table && table.last_col) {
+      if (op.merge === undefined && titleA1.indexOf(':') < 0 && table && table.last_col) {
         var tm = /^([A-Z]+)(\d+)$/.exec(titleA1);
-        if (tm && colNum_(table.last_col) > colNum_(tm[1])) bandA1 = (colNum_(table.first_col || tm[1]) < colNum_(tm[1]) ? table.first_col : tm[1]) + tm[2] + ':' + table.last_col + tm[2];
+        if (tm && colNum_(table.last_col) > colNum_(tm[1])) {
+          var c0 = Math.min(colNum_(table.first_col || tm[1]), colNum_(tm[1]));
+          var c1 = colNum_(table.last_col);
+          var rIdx = parseInt(tm[2], 10) - 1;
+          var rawRow = (cached && cached.rawTable && cached.rawTable.vals && cached.rawTable.vals[rIdx]) ? cached.rawTable.vals[rIdx].slice(c0 - 1, c1) : null;
+          if (!rawRow || rawRow.filter(function (v) { return !isBlank_(v); }).length <= 1) {
+            bandA1 = (colNum_(table.first_col || tm[1]) < colNum_(tm[1]) ? table.first_col : tm[1]) + tm[2] + ':' + table.last_col + tm[2];
+          }
+        }
       }
-      return Object.assign({}, op, { range: bandA1, title: false, _title: true, _titleA1: titleA1 });
+      var nextOp = Object.assign({}, op, { range: bandA1, title: false });
+      if (bandA1 !== titleA1 && (op.align === 'center' || op.align === 'right')) nextOp.align = 'left';
+      return nextOp;
     }
     if (op.header === true && table && table.header_row && table.first_col && table.last_col) {
       var hdrA1 = table.first_col + table.header_row + ':' + table.last_col + table.header_row;
@@ -1413,7 +1485,8 @@ function comboUndo(req) {
   try {
     var ss = comboOpenSs_(req);
     if (!req.to) {
-      var fastRaw = CacheService.getScriptCache().get(COMBO_PROP_FAST_UNDO);
+      var cUndo = comboCache_();
+      var fastRaw = cUndo ? cUndo.get(COMBO_PROP_FAST_UNDO) : null;
       if (!fastRaw) {
         try { fastRaw = PropertiesService.getScriptProperties().getProperty(COMBO_PROP_FAST_UNDO); } catch (eP) {}
       }

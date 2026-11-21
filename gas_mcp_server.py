@@ -90,7 +90,7 @@ def reload_tools() -> str:
     if "gas_local_extras" in sys.modules:
         import gas_local_extras
         importlib.reload(gas_local_extras)
-    for _mod_name in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_workspace", "gas_ws_combo"):
+    for _mod_name in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_ws_direct", "gas_workspace", "gas_ws_combo"):
         if _mod_name in sys.modules:
             importlib.reload(sys.modules[_mod_name])
 

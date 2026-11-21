@@ -22,6 +22,7 @@ SHELF['calc.col'] = function (ctx, op) {
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
     sh.insertColumnsBefore(atCol, 1);
+    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh); // テーブル再取得
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -74,6 +75,7 @@ SHELF['calc.percent'] = function (ctx, op) {
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
     sh.insertColumnsBefore(atCol, 1);
+    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -178,6 +180,7 @@ SHELF['lookup.add'] = function (ctx, op) {
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
     sh.insertColumnsBefore(atCol, 1);
+    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -218,7 +221,7 @@ SHELF['calc.diff'] = function (ctx, op) {
   need_(op, ['col_a', 'col_b']);
   var ca = colIndexOf_(t, op.col_a), cb = colIndexOf_(t, op.col_b);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var isRate = !!op.rate;
   var name = op.name || (isRate ? '増減率' : '差額');
@@ -254,7 +257,7 @@ SHELF['calc.running'] = function (ctx, op) {
   need_(op, ['col']);
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '累計';
   sh.getRange(t.headerRow, atCol).setValue(name);
@@ -286,7 +289,7 @@ SHELF['calc.rank'] = function (ctx, op) {
   need_(op, ['col']);
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '順位';
   sh.getRange(t.headerRow, atCol).setValue(name);
@@ -494,7 +497,7 @@ SHELF['date.parts'] = function (ctx, op) {
   need_(op, ['col', 'part']);
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var part = String(op.part).toLowerCase();
   var nameMap = { year: '年', month: '月', day: '日', weekday: '曜日', quarter: '四半期' };
@@ -534,7 +537,7 @@ SHELF['text.join'] = function (ctx, op) {
   need_(op, ['cols']);
   var colList = (Array.isArray(op.cols) ? op.cols : [op.cols]).map(function (c) { return colIndexOf_(t, c); });
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '結合';
   sh.getRange(t.headerRow, atCol).setValue(name);

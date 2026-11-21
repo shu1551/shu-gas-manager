@@ -707,13 +707,15 @@ SHELF['link.clear'] = function (ctx, op) {
     rg = sh.getDataRange();
   }
   var rich = rg.getRichTextValues(), forms = rg.getFormulas();
-  var r0 = rg.getRow(), c0 = rg.getColumn(), cleared = 0;
+  var disp = null, r0 = rg.getRow(), c0 = rg.getColumn(), cleared = 0;
+  var hasFormulaLink = false, hasRichLink = false;
   for (var r = 0; r < rich.length; r++) {
     for (var c = 0; c < rich[r].length; c++) {
       var f = forms[r][c];
       if (f && /^=HYPERLINK\(/i.test(f)) {
-        var disp = sh.getRange(r0 + r, c0 + c).getDisplayValue();
-        sh.getRange(r0 + r, c0 + c).setValue(disp);
+        if (!disp) disp = rg.getDisplayValues();
+        sh.getRange(r0 + r, c0 + c).setValue(disp[r][c]);
+        hasFormulaLink = true;
         cleared++;
         continue;
       }
@@ -724,8 +726,8 @@ SHELF['link.clear'] = function (ctx, op) {
         hasLink = rtv.getRuns().some(function (run) { return !!run.getLinkUrl(); });
       }
       if (hasLink) {
-        var plain = SpreadsheetApp.newRichTextValue().setText(rtv.getText()).build();
-        sh.getRange(r0 + r, c0 + c).setRichTextValue(plain);
+        rich[r][c] = SpreadsheetApp.newRichTextValue().setText(rtv.getText()).build();
+        hasRichLink = true;
         cleared++;
       }
     }
@@ -733,6 +735,17 @@ SHELF['link.clear'] = function (ctx, op) {
   if (!cleared) {
     note_(ctx, 'ハイパーリンクは見つかりませんでした（変更なし）');
     return;
+  }
+  if (hasRichLink && !hasFormulaLink && typeof rg.setRichTextValues === 'function') {
+    rg.setRichTextValues(rich);
+  } else if (hasRichLink) {
+    for (var r2 = 0; r2 < rich.length; r2++) {
+      for (var c2 = 0; c2 < rich[r2].length; c2++) {
+        if (!(forms[r2][c2] && /^=HYPERLINK\(/i.test(forms[r2][c2])) && rich[r2][c2]) {
+          sh.getRange(r0 + r2, c0 + c2).setRichTextValue(rich[r2][c2]);
+        }
+      }
+    }
   }
   chg_(ctx, sh, rg.getA1Notation(), 'ハイパーリンクを解除（' + cleared + ' 件）');
 };

@@ -24,7 +24,7 @@ function onFileScopeGranted(e) { return comboAddonCard_(e, ''); }
 
 // 表の形（見出し・列・合計行）とシートの一覧を覚えておき、2 回目からは読み直さない（読むと 0.9 秒かかる）。
 // 表の形を変えない手（書式・幅・色・縞・条件付き書式・固定・絞り込み・並べ替え）のときだけ覚えを残す
-var COMBO_ADDON_KEEPS_SHAPE = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|filter\.|sort|tidy)/;
+var COMBO_ADDON_KEEPS_SHAPE = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|filter\.(?:on|off|where)|sort|tidy|sheet\.(?:gridlines|color|move)|book\.finish|audit\.check|protect\.|name\.|note\.(?:set|clear)|link\.(?:set|clear)|validation\.|print\.setup|chart\.)/;
 function comboAddonKey_(tg, sheetName) { return 'addon_tbl:' + tg.id + ':' + sheetName; }
 function comboAddonInit_(tg) {
   var sheetName = '';

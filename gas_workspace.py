@@ -560,13 +560,17 @@ class WorkspaceManager:
         if res.get("replayed"):
             tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
         errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った"))]
+        rest = [x for x in (res.get("notes") or []) if x not in errs]
         tail = errs + tail
         tail.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
-        return "\n".join([
+        out_lines = [
             self._title(tgt_out),
             f"直した所: {ch_text}（撃った棚: {shown}）",
-            " ／ ".join(tail),
-        ])
+        ]
+        if rest:
+            out_lines.append("メモ: " + " ／ ".join(rest[:3]))
+        out_lines.append(" ／ ".join(tail))
+        return "\n".join(out_lines)
 
     def _keeps_shape(self, op):
         """表の形を変えない棚か（触る に 値・シート構成 が無い。触る が引数で変わる api は変えるものとして扱う）"""

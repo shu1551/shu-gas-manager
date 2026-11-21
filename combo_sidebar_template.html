@@ -704,6 +704,7 @@
     pendingPostboxIds: {},
     oauthToken: "",
     sheetIdMap: {},
+    sheetDimsMap: {},
     sheetSnapshot: {},
     directUndoStack: []
   };
@@ -1078,8 +1079,9 @@
     if (Array.isArray(res.sheetInfos)) {
       for (var si = 0; si < res.sheetInfos.length; si++) {
         var sInfo = res.sheetInfos[si];
-        if (sInfo && sInfo.name && typeof sInfo.sheetId === "number") {
-          state.sheetIdMap[sInfo.name] = sInfo.sheetId;
+        if (sInfo && sInfo.name) {
+          if (typeof sInfo.sheetId === "number") state.sheetIdMap[sInfo.name] = sInfo.sheetId;
+          state.sheetDimsMap[sInfo.name] = { rows: Number(sInfo.rows || 0), cols: Number(sInfo.cols || 0) };
         }
       }
     }
@@ -1092,8 +1094,12 @@
     updateSelectionLabel();
     updateInfoLabel();
     updatePreview();
-    if (state.curSheet && state.oauthToken && state.target.id && !state.sheetSnapshot[state.curSheet]) {
-      prefetchSheetSnapshot(state.curSheet);
+    if (state.curSheet && state.oauthToken && state.target.id) {
+      var curSnap = state.sheetSnapshot[state.curSheet];
+      var needDim = getSnapshotDims(state.curSheet);
+      if (!curSnap || (curSnap.maxRows && curSnap.maxRows < needDim.maxRows) || (curSnap.maxCols && curSnap.maxCols < needDim.maxCols)) {
+        prefetchSheetSnapshot(state.curSheet);
+      }
     }
   }
 
@@ -1205,10 +1211,15 @@
     "lightred": "#FCE4D6", "lightgreen": "#E2EFDA", "lightyellow": "#FFF2CC", "lightgray": "#F2F2F2"
   };
 
+  function isClearColor(val) {
+    var s = String(val === undefined || val === null ? "" : val).trim();
+    return s === "なし" || /^(none|transparent|clear)$/i.test(s);
+  }
+
   function parseColorToRgbObj(val) {
     if (val === undefined || val === null || val === "") return null;
     var s = String(val).trim();
-    if (s === "なし" || /^(none|transparent|clear)$/i.test(s)) {
+    if (isClearColor(s)) {
       return { red: 1, green: 1, blue: 1 };
     }
     var hex = DIRECT_COLOR_MAP[s] || DIRECT_COLOR_MAP[s.toLowerCase()];
@@ -1287,9 +1298,34 @@
     return "";
   }
 
+  function getSnapshotDims(sheetName) {
+    var maxR = 30, maxC = 26;
+    var dims = state.sheetDimsMap && state.sheetDimsMap[sheetName];
+    if (dims) {
+      if (dims.rows > maxR) maxR = dims.rows;
+      if (dims.cols > maxC) maxC = dims.cols;
+    }
+    var tb = state.table;
+    if (tb && (!state.curSheet || state.curSheet === sheetName)) {
+      if (tb.total_row && Number(tb.total_row) > maxR) maxR = Number(tb.total_row);
+      if (tb.data) {
+        var dm = String(tb.data).match(/-([0-9]+)$/);
+        if (dm && parseInt(dm[1], 10) > maxR) maxR = parseInt(dm[1], 10);
+      }
+      if (tb.last_col) {
+        var lcN = colToNum0(tb.last_col) + 1;
+        if (lcN > maxC) maxC = lcN;
+      }
+    }
+    maxR = Math.min(200, Math.max(30, maxR));
+    maxC = Math.min(40, Math.max(26, maxC));
+    return { maxRows: maxR, maxCols: maxC, rangeA1: "A1:" + num0ToCol(maxC - 1) + maxR };
+  }
+
   function prefetchSheetSnapshot(sheetName) {
     if (!state.oauthToken || !state.target.id || !sheetName || typeof fetch !== "function") return;
-    var qName = "'" + String(sheetName).replace(/'/g, "''") + "'!A1:Z30";
+    var dim = getSnapshotDims(sheetName);
+    var qName = "'" + String(sheetName).replace(/'/g, "''") + "'!" + dim.rangeA1;
     var url = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(state.target.id) +
       "?ranges=" + encodeURIComponent(qName) +
       "&fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),bandedRanges(bandedRangeId),data(rowData(values(userEnteredFormat,userEnteredValue,effectiveValue(errorValue)))))";
@@ -1308,10 +1344,10 @@
         var gp = props.gridProperties || {};
         var rowData = (shObj.data && shObj.data[0] && shObj.data[0].rowData) || [];
         var cells = [];
-        for (var r = 0; r < 30; r++) {
+        for (var r = 0; r < dim.maxRows; r++) {
           var rowVals = (rowData[r] && rowData[r].values) || [];
           var rowArr = [];
-          for (var c = 0; c < 26; c++) {
+          for (var c = 0; c < dim.maxCols; c++) {
             rowArr.push((rowVals[c] && rowVals[c].userEnteredFormat) ? JSON.parse(JSON.stringify(rowVals[c].userEnteredFormat)) : {});
           }
           cells.push(rowArr);
@@ -1325,8 +1361,11 @@
           }
         }
         state.sheetSnapshot[sheetName] = {
-          errs: errsOfRowData(rowData),
-          vals: valsOfRowData(rowData),
+          maxRows: dim.maxRows,
+          maxCols: dim.maxCols,
+          rangeA1: dim.rangeA1,
+          errs: errsOfRowData(rowData, dim.maxRows, dim.maxCols),
+          vals: valsOfRowData(rowData, dim.maxRows, dim.maxCols),
           frozenRows: gp.frozenRowCount || 0,
           frozenCols: gp.frozenColumnCount || 0,
           hideGridlines: !!gp.hideGridlines,
@@ -1338,25 +1377,29 @@
       .catch(function(err) { state.prefetchError = String((err && err.message) || err || "写しを取れません"); });
   }
 
-  // 写しの範囲（A1:Z30）の中のエラーのセル { "A1": "#REF!" }
+  // 写しの範囲の中のエラーのセル { "A1": "#REF!" }
   var ERR_LABEL = { ERROR: "#ERROR!", NULL_VALUE: "#NULL!", DIVIDE_BY_ZERO: "#DIV/0!", VALUE: "#VALUE!", REF: "#REF!", NAME: "#NAME?", NUM: "#NUM!", N_A: "#N/A", LOADING: "" };
   // 写しの範囲の「書く前の値」 { "A1": userEnteredValue }（空のセルは入れない）
-  function valsOfRowData(rowData) {
+  function valsOfRowData(rowData, maxRows, maxCols) {
     var out = {};
-    for (var r = 0; r < Math.min(rowData.length, 30); r++) {
+    var limR = Math.min(rowData.length, maxRows || 30);
+    var limC = maxCols || 26;
+    for (var r = 0; r < limR; r++) {
       var vs = (rowData[r] && rowData[r].values) || [];
-      for (var c = 0; c < Math.min(vs.length, 26); c++) {
+      for (var c = 0; c < Math.min(vs.length, limC); c++) {
         if (vs[c] && vs[c].userEnteredValue) out[num0ToCol(c) + (r + 1)] = vs[c].userEnteredValue;
       }
     }
     return out;
   }
 
-  function errsOfRowData(rowData) {
+  function errsOfRowData(rowData, maxRows, maxCols) {
     var out = {};
-    for (var r = 0; r < Math.min(rowData.length, 30); r++) {
+    var limR = Math.min(rowData.length, maxRows || 30);
+    var limC = maxCols || 26;
+    for (var r = 0; r < limR; r++) {
       var vs = (rowData[r] && rowData[r].values) || [];
-      for (var c = 0; c < Math.min(vs.length, 26); c++) {
+      for (var c = 0; c < Math.min(vs.length, limC); c++) {
         var ev = vs[c] && vs[c].effectiveValue && vs[c].effectiveValue.errorValue;
         if (ev && ERR_LABEL[ev.type] !== "") out[num0ToCol(c) + (r + 1)] = ERR_LABEL[ev.type] || ("#" + ev.type);
       }
@@ -1369,14 +1412,15 @@
     var writes = ops.some(function(o) { return /^(write|clear\.)/.test(String(o.shelf || "")); });
     var snap = state.sheetSnapshot[sheetName];
     if (!writes || !snap || !snap.errs || typeof fetch !== "function") { done([]); return; }
-    var qName = "'" + String(sheetName).replace(/'/g, "''") + "'!A1:Z30";
+    var rngA1 = snap.rangeA1 || "A1:Z30";
+    var qName = "'" + String(sheetName).replace(/'/g, "''") + "'!" + rngA1;
     var url = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(state.target.id) +
       "?ranges=" + encodeURIComponent(qName) + "&fields=sheets(data(rowData(values(effectiveValue(errorValue)))))";
     fetch(url, { method: "GET", headers: { "Authorization": "Bearer " + state.oauthToken } })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
         var rowData = (data && data.sheets && data.sheets[0] && data.sheets[0].data && data.sheets[0].data[0] && data.sheets[0].data[0].rowData) || [];
-        var now = errsOfRowData(rowData), news = [];
+        var now = errsOfRowData(rowData, snap.maxRows, snap.maxCols), news = [];
         Object.keys(now).forEach(function(k) { if (!(k in snap.errs)) news.push(k + " " + now[k]); });
         snap.errs = now;
         done(news);
@@ -1415,6 +1459,20 @@
     orange: { header: "#EF6C00", first: "#FFFFFF", second: "#FFF3E0" }
   };
 
+  function inferNumberFormatType(pattern) {
+    var p = String(pattern || "");
+    if (p === "@" || p.indexOf("@") >= 0) return "TEXT";
+    if (p.indexOf("%") >= 0) return "PERCENT";
+    if (/[¥$€£￥]/.test(p)) return "CURRENCY";
+    var stripped = p.replace(/"[^"]*"/g, "").replace(/\\./g, "");
+    var hasDate = /[ymd]/i.test(stripped);
+    var hasTime = /[hs]/i.test(stripped) || stripped.indexOf("AM/PM") >= 0;
+    if (hasDate && hasTime) return "DATE_TIME";
+    if (hasDate) return "DATE";
+    if (hasTime) return "TIME";
+    return "NUMBER";
+  }
+
   function buildDirectBatchUpdate(ops, sheetName) {
     if (!Array.isArray(ops) || !ops.length) return null;
     if (!state.oauthToken || !state.target.id || state.target.kind !== "sheet" || !sheetName) return null;
@@ -1422,6 +1480,9 @@
     if (typeof state.sheetIdMap[sheetName] !== "number") return null;
 
     var sheetId = state.sheetIdMap[sheetName];
+    var snapCur = state.sheetSnapshot[sheetName] || null;
+    var maxRow0 = (snapCur && snapCur.maxRows) ? (snapCur.maxRows - 1) : 29;
+    var maxCol0 = (snapCur && snapCur.maxCols) ? (snapCur.maxCols - 1) : 25;
     var requests = [];
     var undoRequests = [];
     var snapshotMutators = [];
@@ -1433,14 +1494,39 @@
       var op = ops[i];
       if (!op || !op.shelf) return null;
       if (op.sheet && op.sheet !== sheetName) return null;
-      // 背景色を消す棚は、書式の道で「背景色の欄を空で送る」＝塗りつぶしなしに戻す
-      var bgClear = op.shelf === "bg.clear";
-      if (bgClear) op = Object.assign({}, op, { shelf: "format" });
+      // 背景色を消す棚／bg="なし" は書式の道で「背景色の欄を空で送る」＝塗りつぶしなしに戻す
+      var bgClear = op.shelf === "bg.clear" || (op.shelf === "format" && op.bg !== undefined && isClearColor(op.bg));
+      if (op.shelf === "bg.clear") op = Object.assign({}, op, { shelf: "format" });
 
       if (op.shelf === "format") {
         var targetA1 = "";
         if (op.title) {
           targetA1 = (state.table && state.table.title_a1) || "A1";
+          if (op.merge === undefined && targetA1.indexOf(":") < 0 && state.table && state.table.last_col) {
+            var tmT = /^([A-Z]+)(\d+)$/.exec(targetA1);
+            var fcT = state.table.first_col || (tmT && tmT[1]);
+            var lcT = state.table.last_col;
+            if (tmT && colToNum0(lcT) > colToNum0(tmT[1])) {
+              var startColL = colToNum0(fcT) < colToNum0(tmT[1]) ? fcT : tmT[1];
+              var bandClear = !!(snapCur && snapCur.vals);
+              if (bandClear) {
+                var rKey = tmT[2];
+                var cLo = colToNum0(startColL), cHi = colToNum0(lcT), cOrig = colToNum0(tmT[1]);
+                for (var bc = cLo; bc <= cHi; bc++) {
+                  if (bc !== cOrig && snapCur.vals[num0ToCol(bc) + rKey]) {
+                    bandClear = false;
+                    break;
+                  }
+                }
+              }
+              if (bandClear) {
+                targetA1 = startColL + tmT[2] + ":" + lcT + tmT[2];
+                if (op.align === "center" || op.align === "right") {
+                  op = Object.assign({}, op, { align: "left" });
+                }
+              }
+            }
+          }
         } else if (op.header) {
           if (!state.table || !state.table.header_row || !state.table.first_col || !state.table.last_col) return null;
           targetA1 = state.table.first_col + state.table.header_row + ":" + state.table.last_col + state.table.header_row;
@@ -1510,7 +1596,8 @@
           did.push("font");
         }
         if (op.number_format !== undefined) {
-          cellFmt.numberFormat = { type: "NUMBER", pattern: String(op.number_format) };
+          var nfPat = String(op.number_format);
+          cellFmt.numberFormat = { type: inferNumberFormatType(nfPat), pattern: nfPat };
           fields.push("userEnteredFormat.numberFormat");
           did.push("number_format");
         }
@@ -1548,7 +1635,7 @@
           // 取り消し：書く前のセルの書式を、セルごとにそのまま書き戻す（範囲の左上 1 セルで全体を塗り戻さない）。
           // 書く前の写し（A1:Z30）が無い・範囲がその外なら、直結の道は使わず GAS の道に任せる（黒・白で戻してしまうため）
           var snapU = state.sheetSnapshot[sheetName];
-          if (!snapU || !snapU.cells || !snapU.cells.length || parsedRg.r2 > 29 || parsedRg.c2 > 25) return null;
+          if (!snapU || !snapU.cells || !snapU.cells.length || parsedRg.r2 > maxRow0 || parsedRg.c2 > maxCol0) return null;
           var prevCells = [], undoRows = [];
           for (var ur = parsedRg.r1; ur <= parsedRg.r2; ur++) {
             var pRow = [], uVals = [];
@@ -1575,8 +1662,8 @@
             snapshotMutators.push(function() {
               var snap = state.sheetSnapshot[sheetName];
               if (!snap || !snap.cells) return;
-              for (var r = rgInfo.r1; r <= Math.min(rgInfo.r2, 29); r++) {
-                for (var c = rgInfo.c1; c <= Math.min(rgInfo.c2, 25); c++) {
+              for (var r = rgInfo.r1; r <= Math.min(rgInfo.r2, maxRow0); r++) {
+                for (var c = rgInfo.c1; c <= Math.min(rgInfo.c2, maxCol0); c++) {
                   var cur = snap.cells[r][c] || {};
                   if (cFmt.backgroundColorStyle) cur.backgroundColorStyle = cFmt.backgroundColorStyle;
                   else if (clearBg) { delete cur.backgroundColorStyle; delete cur.backgroundColor; }
@@ -1594,8 +1681,8 @@
             undoSnapshotMutators.push(function() {
               var snap = state.sheetSnapshot[sheetName];
               if (!snap || !snap.cells) return;
-              for (var r = rgInfo.r1; r <= Math.min(rgInfo.r2, 29); r++) {
-                for (var c = rgInfo.c1; c <= Math.min(rgInfo.c2, 25); c++) {
+              for (var r = rgInfo.r1; r <= Math.min(rgInfo.r2, maxRow0); r++) {
+                for (var c = rgInfo.c1; c <= Math.min(rgInfo.c2, maxCol0); c++) {
                   snap.cells[r][c] = JSON.parse(JSON.stringify(prev[r - rgInfo.r1][c - rgInfo.c1]));
                 }
               }
@@ -1617,9 +1704,9 @@
             bReq.top = bSolid; bReq.bottom = bSolid; bReq.left = bSolid; bReq.right = bSolid;
             bReq.innerHorizontal = bSolid; bReq.innerVertical = bSolid;
           }
-          // 取り消しは、書く前のセルの罫線をセルごとに書き戻す（写しが無い・A1:Z30 の外なら GAS の道に任せる）
+          // 取り消しは、書く前のセルの罫線をセルごとに書き戻す（写しが無い・範囲の外なら GAS の道に任せる）
           var snapB = state.sheetSnapshot[sheetName];
-          if (!snapB || !snapB.cells || !snapB.cells.length || parsedRg.r2 > 29 || parsedRg.c2 > 25) return null;
+          if (!snapB || !snapB.cells || !snapB.cells.length || parsedRg.r2 > maxRow0 || parsedRg.c2 > maxCol0) return null;
           var bRows = [];
           for (var brr = parsedRg.r1; brr <= parsedRg.r2; brr++) {
             var bVals = [];
@@ -1772,7 +1859,7 @@
         for (var wi = 0; wi < wKeys.length; wi++) {
           var cellRg = parseSimpleA1Range(wKeys[wi], sheetId);
           if (!cellRg || cellRg.r1 !== cellRg.r2 || cellRg.c1 !== cellRg.c2) return null;
-          if (cellRg.r1 > 29 || cellRg.c1 > 25) return null;
+          if (cellRg.r1 > maxRow0 || cellRg.c1 > maxCol0) return null;
           var wPrev = wSnap.vals[cellRg.a1];
           if (wPrev && !(els.chkOk && els.chkOk.checked)) return null;
           undoRequests.unshift({
