@@ -78,7 +78,26 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonAcceptSuggest')));
     }
   }
-  return CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle(tg.title || 'GASコンボ')).addSection(sec).build();
+  var builder = CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle(tg.title || 'GASコンボ')).addSection(sec);
+  if (tg.id) {
+    var qBtn = function (label, act) {
+      return CardService.newTextButton().setText(label)
+        .setOnClickAction(CardService.newAction().setFunctionName('onAddonQuick').setParameters({ action: act }));
+    };
+    var qSec = CardService.newCardSection()
+      .addWidget(qBtn('【一発整形】データ整理 ＋ 表を整える', 'seiri'))
+      .addWidget(CardService.newButtonSet()
+        .addButton(qBtn('合計行', 'total'))
+        .addButton(qBtn('列幅自動', 'autoWidth'))
+        .addButton(qBtn('重複削除', 'dedupe'))
+        .addButton(qBtn('罫線', 'borders'))
+        .addButton(qBtn('見出し固定', 'freezeHeader'))
+        .addButton(qBtn('固定解除', 'unfreeze'))
+        .addButton(qBtn('交互の色', 'bandingAdd'))
+        .addButton(qBtn('交互解除', 'bandingRemove')));
+    builder.addSection(qSec);
+  }
+  return builder.build();
 }
 
 function comboAddonReply_(e, msg, suggestBtn, optTg) {
@@ -210,6 +229,73 @@ function onAddonUndo(e) {
   }
   catch (err) { res = { ok: false, error: String(err && err.message || err) }; }
   return comboAddonReply_(e, comboAddonShortMsg_(res, t0), false, tgU);
+}
+
+function onAddonQuick(e) {
+  var t0 = Date.now(), res, tg = null;
+  var act = (e && e.commonEventObject && e.commonEventObject.parameters && e.commonEventObject.parameters.action) || '';
+  if (!act) return comboAddonReply_(e, '');
+  try {
+    tg = comboAddonTarget_(e);
+    var ss = tg._ss || SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getActiveSheet();
+    var curSheet = sh.getName();
+    var cache = null;
+    try { cache = CacheService.getUserCache(); } catch (eC) {}
+    var init = comboAddonInit_(tg, cache, undefined, curSheet);
+    var tb = init.table || null;
+    var ops = null;
+    if (act === 'seiri') {
+      ops = [{ shelf: 'seiri' }];
+    } else if (act === 'total') {
+      ops = [{ shelf: 'total' }];
+    } else if (act === 'dedupe') {
+      ops = [{ shelf: 'dedupe' }];
+    } else if (act === 'freezeHeader') {
+      ops = [{ shelf: 'freeze', rows: (tb && tb.header_row) ? tb.header_row : 1 }];
+    } else if (act === 'unfreeze') {
+      ops = [{ shelf: 'unfreeze' }];
+    } else if (act === 'bandingAdd') {
+      ops = [{ shelf: 'banding.add', theme: 'blue' }];
+    } else if (act === 'bandingRemove') {
+      ops = [{ shelf: 'banding.remove' }];
+    } else if (act === 'autoWidth') {
+      var cols = (tb && Array.isArray(tb.columns) && tb.columns.length)
+        ? tb.columns.map(function (c) { return c.col; })
+        : null;
+      if (!cols) {
+        var lc = Math.max(1, sh.getLastColumn());
+        cols = [];
+        for (var ci = 1; ci <= lc; ci++) {
+          var n = ci, s = '';
+          while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+          cols.push(s);
+        }
+      }
+      ops = [{ shelf: 'width', auto: cols }];
+    } else if (act === 'borders') {
+      var selRg = null, bRange = '';
+      try { selRg = sh.getActiveRange(); } catch (eSel) {}
+      if (selRg && (selRg.getNumRows() > 1 || selRg.getNumColumns() > 1)) {
+        bRange = selRg.getA1Notation();
+      } else if (tb && tb.first_col && tb.last_col && tb.header_row) {
+        var dm = String(tb.data || '').match(/^(\d+)-(\d+)$/);
+        var endR = tb.total_row ? Number(tb.total_row) : (dm ? Number(dm[2]) : Number(tb.last_row || tb.header_row));
+        bRange = tb.first_col + tb.header_row + ':' + tb.last_col + endR;
+      } else if (selRg) {
+        bRange = selRg.getA1Notation();
+      }
+      if (!bRange) return comboAddonReply_(e, '✗ 罫線を引く範囲が見つかりません\n' + comboAddonSecs_(t0), false, tg);
+      ops = [{ shelf: 'format', range: bRange, borders: true }];
+    }
+    if (!ops) return comboAddonReply_(e, '✗ 未対応のボタンです\n' + comboAddonSecs_(t0), false, tg);
+    res = {lib_symbol}.comboRunAsk({ ops: ops, fastUndo: true, targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: tb, sheets: init.sheets });
+    var keepsShape = ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); });
+    if (!keepsShape) comboAddonForget_(tg, curSheet);
+  } catch (err) {
+    res = { ok: false, error: String(err && err.message || err) };
+  }
+  return comboAddonReply_(e, comboAddonShortMsg_(res, t0), false, tg);
 }
 
 // ---------------------------------------------------------------- 操作窓（前のサイドバーと同じ HTML の画面を別の窓で開く）
