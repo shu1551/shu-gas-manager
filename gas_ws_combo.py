@@ -1465,7 +1465,7 @@ class ComboPostboxWatcher:
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         # 窓なし（pythonw）で起きたときは標準出力が無い＝書き先を手元のログにする（無いと途中で黙って止まる）
-        if sys.stdout is None or sys.stderr is None:
+        if sys.stdout is None or sys.stderr is None or Path(sys.executable).name.lower() == "pythonw.exe":
             _log = open(HERE / ".combo_watch.log", "a", encoding="utf-8", buffering=1)
             sys.stdout = sys.stderr = _log
         kick = threading.Event()
@@ -1508,7 +1508,15 @@ class ComboPostboxWatcher:
                     handled = self.poll_once()
                 except Exception as e:
                     handled = []
-                    print(f"[postbox] 取りに行けませんでした: {e}")
+                    print(f"[postbox] 取りに行けませんでした: {str(e)[:200]}")
+                    # combo push 等でアドオンが書き換わると、手元に覚えた実行口が古くなり HTML のエラーが返り続ける
+                    # ＝起動し直したのと同じく、覚えを捨てて作り直す（次の回から通る）
+                    try:
+                        from gas_client import GasClient
+                        self.client = GasClient()
+                        self.client._cache_data.get("deployments", {}).get(self.sid, {}).pop("runner_installed", None)
+                    except Exception as e2:
+                        print(f"[postbox] 作り直しに失敗: {e2}")
                 for h in handled:
                     print(f"[postbox] {h['reqId']} -> {json.dumps(h['deliver'], ensure_ascii=False)}")
                 if max_loops is not None and loops >= max_loops:

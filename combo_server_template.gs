@@ -890,7 +890,13 @@ function comboRunOps(req) {
   var resolvedOps = ops.map(function (op) {
     if (!op || op.shelf !== 'format') return op;
     if (op.title === true && titleA1) {
-      return Object.assign({}, op, { range: titleA1, title: false });
+      // 1 つのセルのタイトルは表の幅いっぱいの帯で（棚が帯に塗る＝控えも帯ごと取る）
+      var bandA1 = titleA1;
+      if (titleA1.indexOf(':') < 0 && table && table.last_col) {
+        var tm = /^([A-Z]+)(\d+)$/.exec(titleA1);
+        if (tm && colNum_(table.last_col) > colNum_(tm[1])) bandA1 = (colNum_(table.first_col || tm[1]) < colNum_(tm[1]) ? table.first_col : tm[1]) + tm[2] + ':' + table.last_col + tm[2];
+      }
+      return Object.assign({}, op, { range: bandA1, title: false, _title: true, _titleA1: titleA1 });
     }
     if (op.header === true && table && table.header_row && table.first_col && table.last_col) {
       var hdrA1 = table.first_col + table.header_row + ':' + table.last_col + table.header_row;

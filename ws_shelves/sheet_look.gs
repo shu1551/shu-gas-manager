@@ -18,8 +18,19 @@ SHELF['format'] = function (ctx, op) {
   else if (op.col) { t = needTable_(sh); var ci = colIndexOf_(t, op.col); rg = sh.getRange(t.firstData, ci, (t.totalRow || t.lastData) - t.firstData + 1, 1); }
   else if (op.range) rg = sh.getRange(op.range);
   else throw new ArgError('棚「format」に range・col・header・title のどれかが要ります');
+  // タイトルが 1 つのセル（結合なし）なら、表の幅いっぱいの帯に塗る。帯の中で中央・右に寄せると A 列の中で切れて読めない＝寄せは左のまま
+  var titleBand = false;
+  if ((op.title || op._title) && op.merge === undefined && rg.getNumRows() === 1 && !(typeof rg.isPartOfMerge === 'function' && rg.isPartOfMerge())) {
+    var tt = findTable_(sh);
+    if (tt && tt.lastCol > rg.getColumn()) {
+      var band = sh.getRange(rg.getRow(), Math.min(rg.getColumn(), tt.firstCol), 1, tt.lastCol - Math.min(rg.getColumn(), tt.firstCol) + 1);
+      if (band.getValues()[0].filter(function (v) { return !isBlank_(v); }).length <= 1) { rg = band; titleBand = true; }
+    }
+    if (!titleBand && op._titleA1) rg = sh.getRange(op._titleA1);   // 帯に他の値があればタイトルのセルだけ
+  }
   var did = [];
   var set = function (key, fn) { if (op[key] !== undefined) { fn(op[key]); did.push(key); } };
+  if (titleBand && (op.align === 'center' || op.align === 'right')) op = Object.assign({}, op, { align: 'left' });
   set('bold', function (v) { rg.setFontWeight(v ? 'bold' : 'normal'); });
   set('italic', function (v) { rg.setFontStyle(v ? 'italic' : 'normal'); });
   set('color', function (v) { rg.setFontColor(rgb_(v)); });
