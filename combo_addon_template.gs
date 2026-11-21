@@ -63,11 +63,11 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
     // 1 行の入力欄。Enter（音声入力の終わりの Enter も）で確定したら、そのまま実行する
     sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle('頼み（例: タイトルの文字の色を赤に）').setMultiline(false)
       .setOnChangeAction(CardService.newAction().setFunctionName('onAddonRun')));
-    // 実行・戻す・操作窓を3文字幅で横 1 行に揃える
+    // 実行・戻す・操作窓を横 1 行にまとめる
     var btnRow = CardService.newButtonSet()
-      .addButton(CardService.newTextButton().setText('実　行').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .addButton(CardService.newTextButton().setText('実行').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonRun')))
-      .addButton(CardService.newTextButton().setText('戻　す')
+      .addButton(CardService.newTextButton().setText('戻す')
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonUndo')))
       .addButton(CardService.newTextButton().setText('操作窓')
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonOpenWindow')));
@@ -87,12 +87,9 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
     var qSec = CardService.newCardSection()
       .addWidget(qBtn('【一発整形】データ整理＋表整形', 'seiri'))
       .addWidget(CardService.newButtonSet()
-        .addButton(qBtn('合計行', 'total'))
         .addButton(qBtn('幅自動', 'autoWidth'))
         .addButton(qBtn('重複消', 'dedupe'))
-        .addButton(qBtn('罫　線', 'borders'))
-        .addButton(qBtn('行固定', 'freezeToggle'))
-        .addButton(qBtn('縞模様', 'bandingToggle')));
+        .addButton(qBtn('罫線', 'borders')));
     builder.addSection(qSec);
   }
   return builder.build();
