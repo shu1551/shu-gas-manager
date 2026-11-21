@@ -63,11 +63,11 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
     // 1 行の入力欄。Enter（音声入力の終わりの Enter も）で確定したら、そのまま実行する
     sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle('頼み（例: タイトルの文字の色を赤に）').setMultiline(false)
       .setOnChangeAction(CardService.newAction().setFunctionName('onAddonRun')));
-    // 実行・戻す・操作窓を横 1 行にまとめて縦スペースを圧縮
+    // 実行・戻す・操作窓を3文字幅で横 1 行に揃える
     var btnRow = CardService.newButtonSet()
-      .addButton(CardService.newTextButton().setText('実行').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+      .addButton(CardService.newTextButton().setText('実　行').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonRun')))
-      .addButton(CardService.newTextButton().setText('戻す')
+      .addButton(CardService.newTextButton().setText('戻　す')
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonUndo')))
       .addButton(CardService.newTextButton().setText('操作窓')
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonOpenWindow')));
@@ -85,16 +85,14 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonQuick').setParameters({ action: act }));
     };
     var qSec = CardService.newCardSection()
-      .addWidget(qBtn('【一発整形】データ整理 ＋ 表を整える', 'seiri'))
+      .addWidget(qBtn('【一発整形】データ整理＋表整形', 'seiri'))
       .addWidget(CardService.newButtonSet()
         .addButton(qBtn('合計行', 'total'))
-        .addButton(qBtn('列幅自動', 'autoWidth'))
-        .addButton(qBtn('重複削除', 'dedupe'))
-        .addButton(qBtn('罫線', 'borders'))
-        .addButton(qBtn('見出し固定', 'freezeHeader'))
-        .addButton(qBtn('固定解除', 'unfreeze'))
-        .addButton(qBtn('交互の色', 'bandingAdd'))
-        .addButton(qBtn('交互解除', 'bandingRemove')));
+        .addButton(qBtn('幅自動', 'autoWidth'))
+        .addButton(qBtn('重複消', 'dedupe'))
+        .addButton(qBtn('罫　線', 'borders'))
+        .addButton(qBtn('行固定', 'freezeToggle'))
+        .addButton(qBtn('縞模様', 'bandingToggle')));
     builder.addSection(qSec);
   }
   return builder.build();
@@ -251,6 +249,18 @@ function onAddonQuick(e) {
       ops = [{ shelf: 'total' }];
     } else if (act === 'dedupe') {
       ops = [{ shelf: 'dedupe' }];
+    } else if (act === 'freezeToggle') {
+      var curFrozen = 0;
+      try { curFrozen = sh.getFrozenRows(); } catch (eFr) {}
+      ops = curFrozen > 0
+        ? [{ shelf: 'unfreeze' }]
+        : [{ shelf: 'freeze', rows: (tb && tb.header_row) ? tb.header_row : 1 }];
+    } else if (act === 'bandingToggle') {
+      var hasBand = false;
+      try { hasBand = (sh.getBandings() || []).length > 0; } catch (eBd) {}
+      ops = hasBand
+        ? [{ shelf: 'banding.remove' }]
+        : [{ shelf: 'banding.add', theme: 'blue' }];
     } else if (act === 'freezeHeader') {
       ops = [{ shelf: 'freeze', rows: (tb && tb.header_row) ? tb.header_row : 1 }];
     } else if (act === 'unfreeze') {
