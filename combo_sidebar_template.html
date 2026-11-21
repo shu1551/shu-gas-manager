@@ -142,7 +142,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    width: 66px;
+    width: 96px;
     flex-shrink: 0;
   }
   .btn-run {
@@ -150,9 +150,19 @@
     font-size: 12.2px;
     padding: 4px 2px;
   }
+  .top-sub-btns {
+    display: flex;
+    gap: 3px;
+  }
   .btn-clear {
+    flex: 1.45;
     padding: 3px 2px;
-    font-size: 10.7px;
+    font-size: 10.2px;
+  }
+  .btn-ai {
+    flex: 1;
+    padding: 3px 2px;
+    font-size: 10.2px;
   }
 
   /* ---- オプション行 ---- */
@@ -480,7 +490,10 @@
     <textarea id="askInput" class="ask-textarea" rows="3" placeholder="指示を入力（例: タイトルの色を赤に / 売上合計）"></textarea>
     <div class="top-btns">
       <button id="btnRun" class="btn btn-primary btn-run" type="button">実 行</button>
-      <button id="btnClear" class="btn btn-clear" type="button">クリア(×)</button>
+      <div class="top-sub-btns">
+        <button id="btnClear" class="btn btn-clear" type="button">クリア(×)</button>
+        <button id="btnCopyAi" class="btn btn-ai" type="button" title="対象URL・シート・選択範囲・入力文をAI用にコピー">AIへ</button>
+      </div>
     </div>
   </div>
 
@@ -713,6 +726,7 @@
     askInput: document.getElementById("askInput"),
     btnRun: document.getElementById("btnRun"),
     btnClear: document.getElementById("btnClear"),
+    btnCopyAi: document.getElementById("btnCopyAi"),
     chkOk: document.getElementById("chkOk"),
     chkBackup: document.getElementById("chkBackup"),
     chkAiAuto: document.getElementById("chkAiAuto"),
@@ -2799,6 +2813,10 @@
     }
     copyToClipboard(msg).then(function() {
       appendLog(els.chatLog, "is-ok", "[AIへコピー完了]", msg);
+      if (els.btnCopyAi) {
+        els.btnCopyAi.textContent = "済";
+        setTimeout(function() { els.btnCopyAi.textContent = "AIへ"; }, 1200);
+      }
     }).catch(function(err) {
       appendLog(els.chatLog, "is-err", "[コピー失敗]", formatError(err));
     });
@@ -2925,6 +2943,9 @@
     updatePreview();
     els.askInput.focus();
   });
+  if (els.btnCopyAi) {
+    els.btnCopyAi.addEventListener("click", onCopyForAi);
+  }
 
   els.chkAiAuto.addEventListener("change", updatePreview);
   els.chkSync.addEventListener("change", function() {
