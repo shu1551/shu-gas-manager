@@ -26,6 +26,168 @@ import hashlib
 import gzip
 import importlib
 import unicodedata
+import atexit
+
+# _tokenize_js 用のプリコンパイル正規表現・定数
+_RE_JS_CODE = re.compile(r"""[/'\"`{}]""")
+_RE_JS_SQ = re.compile(r"['\n]")
+_RE_JS_DQ = re.compile(r'["\n]')
+_RE_JS_REGEX = re.compile(r'[\[\]/\n]')
+_RE_JS_TMPL = re.compile(r'`|\$\{')
+_RE_JS_LAST_WORD = re.compile(r'([A-Za-z0-9_$]+)$')
+_JS_REGEX_PREFIX_CHARS = frozenset('=([,:;!&|?{}~^+*%-')
+_JS_REGEX_PREFIX_WORDS = frozenset({'return', 'typeof', 'instanceof', 'delete', 'void', 'throw', 'case', 'yield', 'await'})
+
+
+def _js_is_escaped(s: str, pos: int) -> bool:
+    """文字列 s の位置 pos の直前に奇数個のバックスラッシュがあるか判定"""
+    if pos == 0 or s[pos - 1] != '\\':
+        return False
+    bs = 1
+    k = pos - 2
+    while k >= 0 and s[k] == '\\':
+        bs += 1
+        k -= 1
+    return (bs & 1) == 1
+
+
+def _tokens_pos_is_code(tokens, token_starts, pos: int) -> bool:
+    """二分探索でオフセット pos が CODE トークン内かどうかを O(log N) 判定"""
+    idx = bisect.bisect_right(token_starts, pos) - 1
+    if 0 <= idx < len(tokens):
+        s, e, mode = tokens[idx]
+        return s <= pos < e and mode == 'CODE'
+    return False
+
+
+class _PersistentSyntaxWorker:
+    """Node.js vm.Script 構文検査を常駐 1 プロセスで使い回す高速ワーカー（Windows の起動コスト 40〜200ms を 1〜3ms に削減）"""
+
+    _NODE_LOOP_SCRIPT = (
+        "const rl=require('readline').createInterface({input:process.stdin,crlfDelay:Infinity});"
+        "const vm=require('vm');"
+        "rl.on('line',line=>{"
+        "  if(!line)return;"
+        "  try{"
+        "    const items=JSON.parse(line);"
+        "    const out=[];"
+        "    for(const it of items){"
+        "      try{"
+        "        new vm.Script(it.js,{filename:it.filename});"
+        "        out.push({valid:true});"
+        "      }catch(e){"
+        "        const msg=(e&&e.stack)?e.stack.split('\\n')[0].trim():String(e);"
+        "        out.push({valid:false,error:msg});"
+        "      }"
+        "    }"
+        "    process.stdout.write(JSON.stringify(out)+'\\n');"
+        "  }catch(e){"
+        "    process.stdout.write(JSON.stringify([{valid:false,error:String(e)}])+'\\n');"
+        "  }"
+        "});"
+    )
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._proc = None
+        self._unavailable = False
+
+    def _start_locked(self):
+        if self._proc is not None and self._proc.poll() is None:
+            return True
+        self._stop_locked()
+        kwargs = {}
+        if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            self._proc = subprocess.Popen(
+                ["node", "-e", self._NODE_LOOP_SCRIPT],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+                **kwargs,
+            )
+            return True
+        except FileNotFoundError:
+            self._unavailable = True
+            return False
+        except Exception:
+            self._proc = None
+            return False
+
+    def _stop_locked(self):
+        p = self._proc
+        self._proc = None
+        if p is not None:
+            try:
+                if p.stdin:
+                    p.stdin.close()
+            except Exception:
+                pass
+            try:
+                p.terminate()
+                p.wait(timeout=1.0)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+
+    def close(self):
+        with self._lock:
+            self._stop_locked()
+
+    def check(self, items, timeout=10.0):
+        """items: [{'filename': str, 'js': str}, ...] -> list of {'valid': bool, 'error'?: str} or None (fallback)"""
+        if self._unavailable:
+            return None
+        with self._lock:
+            for attempt in range(2):
+                if not self._start_locked():
+                    return None
+                p = self._proc
+                try:
+                    payload = json.dumps(items, ensure_ascii=False) + "\n"
+                    p.stdin.write(payload)
+                    p.stdin.flush()
+                    # タイムアウト付きで 1 行読み取り
+                    result_box = [None]
+                    def _read_line():
+                        try:
+                            result_box[0] = p.stdout.readline()
+                        except Exception:
+                            result_box[0] = ""
+                    rt = threading.Thread(target=_read_line, daemon=True)
+                    rt.start()
+                    rt.join(timeout=timeout)
+                    if rt.is_alive():
+                        self._stop_locked()
+                        return "TIMEOUT"
+                    line = result_box[0]
+                    if not line:
+                        self._stop_locked()
+                        if attempt == 0:
+                            continue
+                        return None
+                    parsed = json.loads(line)
+                    if isinstance(parsed, list) and len(parsed) == len(items):
+                        return parsed
+                    self._stop_locked()
+                    return None
+                except Exception:
+                    self._stop_locked()
+                    if attempt == 0:
+                        continue
+                    return None
+            return None
+
+
+_SYNTAX_WORKER = _PersistentSyntaxWorker()
+atexit.register(_SYNTAX_WORKER.close)
+_ORIG_SUBPROCESS_RUN = subprocess.run
 
 # ホットリロード時のみ Workspace 道具・キャッシュをフラッシュ（初回 import 時の二重ロードを防ぐ）
 if globals().get("_GAS_CLIENT_LOADED"):
@@ -144,6 +306,13 @@ GAS_SPEEDUP_RECIPES = [
         "desc": "バッチ処理の LockService 排他制御ラップ＆5分経過チャンク分割継続",
         "auto_apply": True,
         "keywords": ["lock", "lockservice", "排他", "多重起動", "6分制限", "タイムアウト"]
+    }),
+    RecipeItem({
+        "id": "R13",
+        "name": "retry_backoff",
+        "desc": "外部API・Googleサービス一時エラーの指数バックオフ自動リトライ包装",
+        "auto_apply": True,
+        "keywords": ["リトライ", "再試行", "バックオフ", "429", "503", "レート制限", "一時エラー", "retry"]
     })
 ]
 
@@ -378,6 +547,111 @@ function getSetting_(key, fallback) {
   const v = cache[sk];
   return v === "" || v === null || v === undefined ? fallback : v;
 }"""
+    },
+    {
+        "id": "S07",
+        "name": "log_and_alert",
+        "title": "実行ログ記録＆エラー自動通知基盤（ログシート＋メール/Webhook）",
+        "target_type": "SERVER_JS",
+        "marker": "/* @gas-scaffold:S07 */",
+        "desc": "「ログ」シートへの日時・関数名・エラー内容の自動記録と、ScriptProperties（ALERT_EMAIL / ALERT_WEBHOOK_URL）連携による障害通知基盤",
+        "keywords": ["ログ", "エラー通知", "障害通知", "ログシート", "alert", "webhook", "log_and_alert"],
+        "code": """/* @gas-scaffold:S07 */
+function writeAppLog_(level, funcName, message, detail) {
+  const lv = String(level || "INFO").toUpperCase();
+  const fn = String(funcName || "(unknown)");
+  const msg = String(message || "");
+  const det = detail ? (typeof detail === "string" ? detail : JSON.stringify(detail)).slice(0, 1500) : "";
+  const now = new Date();
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) {
+      let sh = ss.getSheetByName("ログ");
+      if (!sh) {
+        sh = ss.insertSheet("ログ");
+        sh.appendRow(["日時", "レベル", "関数名", "メッセージ", "詳細"]);
+        sh.setFrozenRows(1);
+      }
+      sh.appendRow([now, lv, fn, msg, det]);
+    }
+  } catch (e) {
+    console.error("[writeAppLog_] sheet write failed:", e);
+  }
+  if (lv === "ERROR") {
+    const props = PropertiesService.getScriptProperties().getProperties();
+    const text = `[GAS ERROR] ${fn}\\n${msg}${det ? "\\n" + det : ""}`;
+    if (props.ALERT_EMAIL) {
+      try { MailApp.sendEmail(props.ALERT_EMAIL, `[GAS ERROR] ${fn}`, text); } catch (_) {}
+    }
+    if (props.ALERT_WEBHOOK_URL) {
+      try {
+        UrlFetchApp.fetch(props.ALERT_WEBHOOK_URL, {
+          method: "post",
+          contentType: "application/json",
+          payload: JSON.stringify({ text: text }),
+          muteHttpExceptions: true
+        });
+      } catch (_) {}
+    }
+  }
+}
+
+function runWithLog_(funcName, fn) {
+  try {
+    const res = fn();
+    writeAppLog_("INFO", funcName, "完了", "");
+    return res;
+  } catch (err) {
+    writeAppLog_("ERROR", funcName, err && err.message ? err.message : String(err), err && err.stack ? err.stack : "");
+    throw err;
+  }
+}"""
+    },
+    {
+        "id": "S08",
+        "name": "trigger_manager",
+        "title": "トリガー安全管理基盤（重複防止・再構築・一覧確認）",
+        "target_type": "SERVER_JS",
+        "marker": "/* @gas-scaffold:S08 */",
+        "desc": "時間主導トリガー等の重複登録を防ぎつつ安全に再作成・削除・一覧取得する共通管理基盤",
+        "keywords": ["トリガー", "trigger", "定期実行", "重複防止", "スケジュール管理", "trigger_manager"],
+        "code": """/* @gas-scaffold:S08 */
+function deleteTriggersByHandler_(handlerName) {
+  let deleted = 0;
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === handlerName) {
+      ScriptApp.deleteTrigger(triggers[i]);
+      deleted++;
+    }
+  }
+  return deleted;
+}
+
+function ensureTimeTrigger_(handlerName, opts) {
+  const o = opts || {};
+  deleteTriggersByHandler_(handlerName);
+  const builder = ScriptApp.newTrigger(handlerName).timeBased();
+  if (o.everyMinutes) {
+    builder.everyMinutes(Number(o.everyMinutes));
+  } else if (o.everyHours) {
+    builder.everyHours(Number(o.everyHours));
+  } else {
+    builder.everyDays(Number(o.everyDays || 1)).atHour(Number(o.atHour != null ? o.atHour : 9));
+  }
+  return builder.create();
+}
+
+function listProjectTriggers_() {
+  return ScriptApp.getProjectTriggers().map(function(t) {
+    return {
+      handler: t.getHandlerFunction(),
+      eventType: String(t.getEventType()),
+      source: String(t.getTriggerSource()),
+      id: t.getUniqueId()
+    };
+  });
+}"""
     }
 ]
 
@@ -443,8 +717,13 @@ GAS_UNIFIED_SHELVES = [
         "desc": "バッチ処理の LockService 排他制御ラップ＆チャンク分割継続",
         "keywords": ["lockservice", "排他ロック", "6分制限", "タイムアウト", "多重起動防止", "チャンク分割", "排他"]
     },
+    {
+        "id": "R13", "category": "SPEEDUP", "name": "retry_backoff", "handler_type": "recipe",
+        "desc": "外部API・Googleサービス一時エラーの指数バックオフ自動リトライ包装",
+        "keywords": ["自動リトライ", "バックオフ", "再試行", "レート制限", "429", "503", "retry_backoff"]
+    },
 
-    # 2. 上級アーキテクチャ骨格棚 (6棚: S01〜S06)
+    # 2. 上級アーキテクチャ骨格棚 (8棚: S01〜S08)
     {
         "id": "S01", "category": "SCAFFOLD", "name": "promise_rpc", "handler_type": "scaffold",
         "desc": "Promise化RPCクライアント＋自動リトライ＋エラートースト基盤",
@@ -475,6 +754,16 @@ GAS_UNIFIED_SHELVES = [
         "desc": "表示文字・上限・シート名などの定数を「設定」シートへ外出し",
         "keywords": ["設定を外に出", "設定シートに出", "定数を外に出", "設定を外", "定数を設定シート", "settings_externalize"]
     },
+    {
+        "id": "S07", "category": "SCAFFOLD", "name": "log_and_alert", "handler_type": "scaffold",
+        "desc": "「ログ」シート自動記録＆エラー時メール/Webhook通知基盤",
+        "keywords": ["ログシート", "エラー通知", "障害通知", "ログ基盤", "log_and_alert", "実行ログ"]
+    },
+    {
+        "id": "S08", "category": "SCAFFOLD", "name": "trigger_manager", "handler_type": "scaffold",
+        "desc": "時間主導トリガーの重複登録防止・安全再構築・一覧管理基盤",
+        "keywords": ["トリガー管理", "トリガー重複", "定期実行管理", "trigger_manager", "トリガー安全"]
+    },
 
     # 3. デザイン着せ替え棚 (4棚: K01〜K04)
     {
@@ -498,7 +787,7 @@ GAS_UNIFIED_SHELVES = [
         "keywords": ["エメラルド", "緑テーマ", "emerald", "エメラルドグリーン", "フィンテック風"]
     },
 
-    # 4. 診断・整理棚 (4棚: D01〜D04)
+    # 4. 診断・整理棚 (6棚: D01〜D06)
     {
         "id": "D01", "category": "DIAG", "name": "dock", "handler_type": "dock",
         "desc": "GASドック総合健康診断",
@@ -518,6 +807,16 @@ GAS_UNIFIED_SHELVES = [
         "id": "D04", "category": "DIAG", "name": "rpc_contracts", "handler_type": "rpc_contracts",
         "desc": "RPC戻り値プロパティ整合＆エラー防御検査",
         "keywords": ["戻り値のズレ", "プロパティ不一致", "データ契約", "withfailurehandler漏れ", "契約検査", "rpc戻り値"]
+    },
+    {
+        "id": "D05", "category": "DIAG", "name": "security_audit", "handler_type": "security_audit",
+        "desc": "APIキー露出・過剰OAuthスコープ・公開設定・XSSのセキュリティ監査",
+        "keywords": ["セキュリティ監査", "セキュリティ", "apiキー", "秘密鍵", "スコープ検査", "xss", "権限監査", "security_audit"]
+    },
+    {
+        "id": "D06", "category": "DIAG", "name": "schema_check", "handler_type": "schema_check",
+        "desc": "シートの固定列番号アクセス（row[3] / getRange列直書き）のズレ危険箇所検査",
+        "keywords": ["列番号ズレ", "列ズレ", "固定列番号", "列インデックス", "見出しベース", "schema_check"]
     },
 
     # 5. 小さな直しの棚 (2棚: E01〜E02)
@@ -657,6 +956,7 @@ class GasClient:
         self._dock_cache = {}
         self._diag_cache = {}
         self._xray_cache = {}
+        self._breakages_cache = {}
         self._synced_sids = set()
         self._disk_cache_mem = None
         self._disk_cache_mtime = 0.0
@@ -666,7 +966,9 @@ class GasClient:
         self._write_gens = {}
         self._prefetch_threads = {}
         self._self_fresh_at = {}
-        self._bound_sids = set()
+        self._bound_sids = set(self._cache_data.get("bound_sids", []))
+        self._thread_sessions = threading.local()
+        self._main_thread_id = threading.get_ident()
         self._in_write_lookup = threading.local()
         self._put_threads = {}
         self._put_errors = {}
@@ -692,7 +994,13 @@ class GasClient:
         if not hasattr(self, "_self_fresh_at") or self._self_fresh_at is None:
             self._self_fresh_at = {}
         if not hasattr(self, "_bound_sids") or self._bound_sids is None:
-            self._bound_sids = set()
+            self._bound_sids = set(getattr(self, "_cache_data", {}).get("bound_sids", []))
+        if not hasattr(self, "_breakages_cache") or self._breakages_cache is None:
+            self._breakages_cache = {}
+        if not hasattr(self, "_thread_sessions") or self._thread_sessions is None:
+            self._thread_sessions = threading.local()
+        if not hasattr(self, "_main_thread_id"):
+            self._main_thread_id = threading.get_ident()
         if not hasattr(self, "_in_write_lookup") or self._in_write_lookup is None:
             self._in_write_lookup = threading.local()
         if not hasattr(self, "_put_threads") or self._put_threads is None:
@@ -720,6 +1028,7 @@ class GasClient:
         self._cache_file = Path(value)
         self._cache_data = self._load_cache()
         self._syntax_cache = set(self._cache_data.get("syntax_hashes", []))
+        self._bound_sids = set(self._cache_data.get("bound_sids", []))
         self._disk_cache_mem = None
         self._disk_cache_mtime = 0.0
 
@@ -744,7 +1053,7 @@ class GasClient:
                 if indent is not None:
                     json.dump(data, f, ensure_ascii=False, indent=indent, default=str)
                 else:
-                    json.dump(data, f, ensure_ascii=False, default=str)
+                    json.dump(data, f, ensure_ascii=False, separators=(",", ":"), default=str)
             for replace_attempt in range(5):
                 try:
                     os.replace(tmp_path, target)
@@ -794,23 +1103,58 @@ class GasClient:
     def _disk_content_cache_file(self):
         return self.cache_file.parent / ".content_cache.json"
 
+    def _get_disk_content_cache_ref(self):
+        """ディスクキャッシュ辞書への内部参照を返す（mtime 一致時は全量 deepcopy なしで O(1) 返却）"""
+        p = self._disk_content_cache_file
+        try:
+            if p.exists():
+                mtime = p.stat().st_mtime
+                if self._disk_cache_mem is not None and abs(mtime - self._disk_cache_mtime) < 1e-6:
+                    return self._disk_cache_mem
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._disk_cache_mem = data
+                    self._disk_cache_mtime = mtime
+                    return self._disk_cache_mem
+        except Exception:
+            pass
+        if self._disk_cache_mem is None:
+            self._disk_cache_mem = {}
+        return self._disk_cache_mem
+
+    def _get_disk_content_entry(self, sid, deepcopy_entry=False):
+        """指定 sid の 1 エントリのみをディスクキャッシュから高速取得（他プロジェクトを deepcopy しない）"""
+        with self._ensure_sync_state():
+            ref = self._get_disk_content_cache_ref()
+            ent = ref.get(sid)
+            if ent is None:
+                return None
+            return copy.deepcopy(ent) if deepcopy_entry else ent
+
+    def _update_disk_content_entry(self, sid, entry=None, delete=False):
+        """指定 sid の 1 エントリのみをディスクキャッシュへ反映して保存（全量 deepcopy 回避）"""
+        with self._ensure_sync_state():
+            try:
+                ref = self._get_disk_content_cache_ref()
+                if delete:
+                    if sid not in ref:
+                        return
+                    ref.pop(sid, None)
+                else:
+                    ref[sid] = copy.deepcopy(entry)
+                p = self._disk_content_cache_file
+                self._atomic_json_dump(p, ref)
+                self._disk_cache_mtime = p.stat().st_mtime
+            except Exception:
+                pass
+
     def _load_disk_content_cache(self):
         with self._ensure_sync_state():
             try:
-                p = self._disk_content_cache_file
-                if p.exists():
-                    mtime = p.stat().st_mtime
-                    if self._disk_cache_mem is not None and abs(mtime - self._disk_cache_mtime) < 1e-6:
-                        return copy.deepcopy(self._disk_cache_mem)
-                    with open(p, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if isinstance(data, dict):
-                        self._disk_cache_mem = copy.deepcopy(data)
-                        self._disk_cache_mtime = mtime
-                        return data
+                return copy.deepcopy(self._get_disk_content_cache_ref())
             except Exception:
-                pass
-            return {}
+                return {}
 
     def _save_disk_content_cache(self, data):
         with self._ensure_sync_state():
@@ -910,6 +1254,19 @@ class GasClient:
             self._save_cache()
             return self._access_token
 
+    def _get_session(self):
+        """スレッド安全な requests.Session を返す（テストで self.session がモックされている場合はそのまま使用）"""
+        if self._is_mock_obj(getattr(self, "session", None)) or not isinstance(getattr(self, "session", None), requests.Session):
+            return self.session
+        if threading.get_ident() == getattr(self, "_main_thread_id", None):
+            return self.session
+        self._ensure_sync_state()
+        sess = getattr(self._thread_sessions, "session", None)
+        if sess is None:
+            sess = requests.Session()
+            self._thread_sessions.session = sess
+        return sess
+
     def _request_with_retry(self, method, url, max_retries=3, retry_5xx=True, retry_timeout=True, **kwargs):
         """429 (Too Many Requests), 403 (レートリミット超過), 500番台エラー、および 401 (失効トークン) 時に自動再試行
 
@@ -920,9 +1277,10 @@ class GasClient:
         backoff = 1.0
         refreshed = False
         attempt = 0
+        sess = self._get_session()
         while True:
             try:
-                res = self.session.request(method, url, **kwargs)
+                res = sess.request(method, url, **kwargs)
                 # 401 (Unauthorized) 時はトークンが失効した可能性があるため、1回だけリフレッシュして再試行（回数に数えない）
                 if res.status_code == 401 and not refreshed:
                     refreshed = True
@@ -1015,7 +1373,7 @@ class GasClient:
         """裏確認で得た更新時刻メタを既存のディスクキャッシュへ反映する（既存エントリがある場合のみ）"""
         try:
             with self._ensure_sync_state():
-                disk_cache = self._load_disk_content_cache()
+                disk_cache = self._get_disk_content_cache_ref()
                 entry = disk_cache.get(sid)
                 if not isinstance(entry, dict):
                     return
@@ -1032,7 +1390,9 @@ class GasClient:
                         entry["copy_tentative"] = bool(copy_tentative)
                         changed = True
                 if changed:
-                    self._save_disk_content_cache(disk_cache)
+                    p = self._disk_content_cache_file
+                    self._atomic_json_dump(p, disk_cache)
+                    self._disk_cache_mtime = p.stat().st_mtime
         except Exception:
             pass
 
@@ -1207,15 +1567,13 @@ class GasClient:
             th = self._put_threads.get(sid)
             if th is not None and th.is_alive():
                 return
-            disk = self._load_disk_content_cache()
-            ent = disk.get(sid)
+            ent = self._get_disk_content_entry(sid, deepcopy_entry=False)
             if not (isinstance(ent, dict) and ent.get("unsent")):
                 return
             # 別の道具（同じ写しを使う別のプロセス）が今送っている最中かもしれない → 5 分たつまでは信じて待つ
             if ent.get("pid") not in (None, os.getpid()) and time.time() - float(ent.get("ts") or 0) < 300:
                 return
-            disk.pop(sid, None)
-            self._save_disk_content_cache(disk)
+            self._update_disk_content_entry(sid, delete=True)
             self._content_cache.pop(sid, None)
             self._copy_remote_epochs.pop(sid, None)
             self._remote_check_cache.pop(sid, None)
@@ -1304,8 +1662,14 @@ class GasClient:
                     if ts is not None:
                         return ts
                 elif res.status_code == 404:
+                    save_bound = False
                     with lock:
-                        self._bound_sids.add(sid)
+                        if sid not in self._bound_sids:
+                            self._bound_sids.add(sid)
+                            self._cache_data["bound_sids"] = sorted(self._bound_sids)[-200:]
+                            save_bound = True
+                    if save_bound:
+                        self._save_cache()
             except Exception:
                 pass
         try:
@@ -1324,7 +1688,7 @@ class GasClient:
         self._wait_pending_put(sid)
         lock = self._ensure_sync_state()
         with lock:
-            had_copy = sid in self._content_cache or sid in self._load_disk_content_cache()
+            had_copy = sid in self._content_cache or (self._get_disk_content_entry(sid, deepcopy_entry=False) is not None)
         if not had_copy:
             return self.get_content(sid, use_cache=False), None, False
 
@@ -2115,9 +2479,8 @@ class GasClient:
                     return copy.deepcopy(cached_data)
 
             # 2. ディスクキャッシュ (TTL 86400秒)
-            disk_cache = self._load_disk_content_cache()
-            if sid in disk_cache:
-                entry = disk_cache[sid]
+            entry = self._get_disk_content_entry(sid, deepcopy_entry=False)
+            if isinstance(entry, dict):
                 ts = entry.get("ts", 0)
                 if now - ts < 86400 and "content" in entry:
                     c_data = entry["content"]
@@ -2146,10 +2509,7 @@ class GasClient:
         res = self._request_with_retry("GET", url, headers=self._headers(), timeout=15)
         if res.status_code == 404:
             self._content_cache.pop(sid, None)
-            disk_cache = self._load_disk_content_cache()
-            if sid in disk_cache:
-                disk_cache.pop(sid, None)
-                self._save_disk_content_cache(disk_cache)
+            self._update_disk_content_entry(sid, delete=True)
             self._projects_list_cache = None
             self._projects_list_fetched_limit = 0
             self._cache_data.pop("projects_list", None)
@@ -2186,9 +2546,7 @@ class GasClient:
             else:
                 self._copy_remote_epochs.pop(sid, None)
                 self._remote_check_cache.pop(sid, None)
-        disk_cache = self._load_disk_content_cache()
-        disk_cache[sid] = disk_entry
-        self._save_disk_content_cache(disk_cache)
+        self._update_disk_content_entry(sid, disk_entry)
         if not getattr(self._in_write_lookup, "active", False):
             self._schedule_remote_check(sid, set_copy_epoch=True, force=True, min_copy_epoch=file_ut)
         return copy.deepcopy(data)
@@ -2347,7 +2705,7 @@ class GasClient:
         return True
 
     def _tokenize_js(self, source):
-        """JavaScript ソースの字句解析を行い (tokens, masked_source) を返却"""
+        """JavaScript ソースの字句解析を行い (tokens, masked_source) を返却（正規表現スキャン高速版）"""
         if not source:
             return [], ""
 
@@ -2365,141 +2723,200 @@ class GasClient:
         seg_start = 0
         last_sig_char = None
         last_word = ''
-        regex_prefix_chars = set('=([,:;!&|?{}~^+*%-')
-        regex_prefix_words = {'return', 'typeof', 'instanceof', 'delete', 'void', 'throw', 'case', 'yield', 'await'}
+
+        def _update_last_sig(chunk):
+            nonlocal last_sig_char, last_word
+            s = chunk.rstrip()
+            if not s:
+                return
+            last_sig_char = s[-1]
+            if last_sig_char.isalnum() or last_sig_char in '_$':
+                wm = _RE_JS_LAST_WORD.search(s)
+                if wm:
+                    w = wm.group(1)
+                    if wm.start() == 0 and last_word:
+                        last_word += w
+                    else:
+                        last_word = w
+                else:
+                    last_word = ''
+            else:
+                last_word = ''
 
         while idx < n:
-            c = source[idx]
-            nxt = source[idx+1] if idx + 1 < n else ''
-            bs_count = 0
-            k = idx - 1
-            while k >= 0 and source[k] == '\\':
-                bs_count += 1
-                k -= 1
-            is_esc = (bs_count % 2 == 1)
-
-            if mode == 'LINE_COMMENT':
-                if c == '\n':
-                    tokens.append((seg_start, idx, mode))
-                    mode = 'CODE'
-                    seg_start = idx
-            elif mode == 'BLOCK_COMMENT':
-                if c == '*' and nxt == '/':
-                    idx += 1
-                    tokens.append((seg_start, idx + 1, mode))
-                    mode = 'CODE'
-                    seg_start = idx + 1
-            elif mode == 'SINGLE_QUOTE':
-                if c == "'" and not is_esc:
-                    tokens.append((seg_start, idx + 1, mode))
-                    mode = 'CODE'
-                    seg_start = idx + 1
-                elif c == '\n':
-                    tokens.append((seg_start, idx, mode))
-                    mode = 'CODE'
-                    seg_start = idx
-            elif mode == 'DOUBLE_QUOTE':
-                if c == '"' and not is_esc:
-                    tokens.append((seg_start, idx + 1, mode))
-                    mode = 'CODE'
-                    seg_start = idx + 1
-                elif c == '\n':
-                    tokens.append((seg_start, idx, mode))
-                    mode = 'CODE'
-                    seg_start = idx
-            elif mode == 'REGEX':
-                if c == '[' and not is_esc:
-                    in_class = True
-                elif c == ']' and not is_esc:
-                    in_class = False
-                elif c == '/' and not is_esc and not in_class:
-                    tokens.append((seg_start, idx + 1, mode))
-                    mode = 'CODE'
-                    seg_start = idx + 1
-                elif c == '\n':
-                    tokens.append((seg_start, idx, mode))
-                    mode = 'CODE'
-                    seg_start = idx
-                    in_class = False
-            elif mode == 'TEMPLATE':
-                if c == '`' and not is_esc:
-                    tokens.append((seg_start, idx + 1, mode))
-                    mode = 'CODE'
-                    seg_start = idx + 1
-                elif c == '$' and nxt == '{':
-                    idx += 1
-                    tokens.append((seg_start, idx + 1, mode))
-                    mode = 'CODE'
-                    seg_start = idx + 1
-                    template_stack.append(1)
-            elif mode == 'CODE':
+            if mode == 'CODE':
+                m = _RE_JS_CODE.search(source, idx)
+                if not m:
+                    break
+                pos = m.start()
+                c = m.group(0)
+                nxt = source[pos + 1] if pos + 1 < n else ''
                 if c == '/' and nxt == '/':
-                    if seg_start < idx:
-                        tokens.append((seg_start, idx, 'CODE'))
+                    if seg_start < pos:
+                        tokens.append((seg_start, pos, 'CODE'))
+                    _update_last_sig(source[idx:pos])
                     mode = 'LINE_COMMENT'
-                    seg_start = idx
-                    idx += 1
+                    seg_start = pos
+                    idx = pos + 2
                 elif c == '/' and nxt == '*':
-                    if seg_start < idx:
-                        tokens.append((seg_start, idx, 'CODE'))
+                    if seg_start < pos:
+                        tokens.append((seg_start, pos, 'CODE'))
+                    _update_last_sig(source[idx:pos])
                     mode = 'BLOCK_COMMENT'
-                    seg_start = idx
-                    idx += 1
+                    seg_start = pos
+                    idx = pos + 2
                 elif c == "'":
-                    if seg_start < idx:
-                        tokens.append((seg_start, idx, 'CODE'))
+                    if seg_start < pos:
+                        tokens.append((seg_start, pos, 'CODE'))
+                    _update_last_sig(source[idx:pos])
                     mode = 'SINGLE_QUOTE'
-                    seg_start = idx
+                    seg_start = pos
+                    idx = pos + 1
                 elif c == '"':
-                    if seg_start < idx:
-                        tokens.append((seg_start, idx, 'CODE'))
+                    if seg_start < pos:
+                        tokens.append((seg_start, pos, 'CODE'))
+                    _update_last_sig(source[idx:pos])
                     mode = 'DOUBLE_QUOTE'
-                    seg_start = idx
+                    seg_start = pos
+                    idx = pos + 1
                 elif c == '`':
-                    if seg_start < idx:
-                        tokens.append((seg_start, idx, 'CODE'))
+                    if seg_start < pos:
+                        tokens.append((seg_start, pos, 'CODE'))
+                    _update_last_sig(source[idx:pos])
                     mode = 'TEMPLATE'
-                    seg_start = idx
+                    seg_start = pos
+                    idx = pos + 1
                 elif c == '/':
-                    if last_sig_char in regex_prefix_chars or last_word in regex_prefix_words or last_sig_char is None:
-                        if seg_start < idx:
-                            tokens.append((seg_start, idx, 'CODE'))
+                    _update_last_sig(source[idx:pos])
+                    if last_sig_char in _JS_REGEX_PREFIX_CHARS or last_word in _JS_REGEX_PREFIX_WORDS or last_sig_char is None:
+                        if seg_start < pos:
+                            tokens.append((seg_start, pos, 'CODE'))
                         mode = 'REGEX'
-                        seg_start = idx
+                        seg_start = pos
                         in_class = False
+                    else:
+                        last_sig_char = '/'
+                        last_word = ''
+                    idx = pos + 1
                 elif c == '}':
                     if template_stack:
+                        _update_last_sig(source[idx:pos])
                         template_stack[-1] -= 1
                         if template_stack[-1] == 0:
                             template_stack.pop()
-                            if seg_start < idx:
-                                tokens.append((seg_start, idx, 'CODE'))
+                            if seg_start < pos:
+                                tokens.append((seg_start, pos, 'CODE'))
                             mode = 'TEMPLATE'
-                            seg_start = idx
+                            seg_start = pos
+                        else:
+                            last_sig_char = '}'
+                            last_word = ''
+                    else:
+                        last_sig_char = '}'
+                        last_word = ''
+                    idx = pos + 1
                 elif c == '{':
                     if template_stack:
                         template_stack[-1] += 1
-
-                if mode == 'CODE':
-                    if not c.isspace():
-                        last_sig_char = c
-                        if c.isalnum() or c in '_$':
-                            last_word += c
-                        else:
-                            last_word = ''
-            idx += 1
+                    last_sig_char = '{'
+                    last_word = ''
+                    idx = pos + 1
+            elif mode == 'LINE_COMMENT':
+                nl = source.find('\n', idx)
+                if nl == -1:
+                    break
+                tokens.append((seg_start, nl, mode))
+                mode = 'CODE'
+                seg_start = nl
+                idx = nl + 1
+            elif mode == 'BLOCK_COMMENT':
+                end = source.find('*/', idx)
+                if end == -1:
+                    break
+                tokens.append((seg_start, end + 2, mode))
+                mode = 'CODE'
+                seg_start = end + 2
+                idx = end + 2
+            elif mode == 'SINGLE_QUOTE':
+                m = _RE_JS_SQ.search(source, idx)
+                if not m:
+                    break
+                pos = m.start()
+                if m.group(0) == "'":
+                    if not _js_is_escaped(source, pos):
+                        tokens.append((seg_start, pos + 1, mode))
+                        mode = 'CODE'
+                        seg_start = pos + 1
+                    idx = pos + 1
+                else:
+                    tokens.append((seg_start, pos, mode))
+                    mode = 'CODE'
+                    seg_start = pos
+                    idx = pos + 1
+            elif mode == 'DOUBLE_QUOTE':
+                m = _RE_JS_DQ.search(source, idx)
+                if not m:
+                    break
+                pos = m.start()
+                if m.group(0) == '"':
+                    if not _js_is_escaped(source, pos):
+                        tokens.append((seg_start, pos + 1, mode))
+                        mode = 'CODE'
+                        seg_start = pos + 1
+                    idx = pos + 1
+                else:
+                    tokens.append((seg_start, pos, mode))
+                    mode = 'CODE'
+                    seg_start = pos
+                    idx = pos + 1
+            elif mode == 'REGEX':
+                m = _RE_JS_REGEX.search(source, idx)
+                if not m:
+                    break
+                pos = m.start()
+                c = m.group(0)
+                if c == '\n':
+                    tokens.append((seg_start, pos, mode))
+                    mode = 'CODE'
+                    seg_start = pos
+                    in_class = False
+                    idx = pos + 1
+                elif c == '[' and not _js_is_escaped(source, pos):
+                    in_class = True
+                    idx = pos + 1
+                elif c == ']' and not _js_is_escaped(source, pos):
+                    in_class = False
+                    idx = pos + 1
+                elif c == '/' and not _js_is_escaped(source, pos) and not in_class:
+                    tokens.append((seg_start, pos + 1, mode))
+                    mode = 'CODE'
+                    seg_start = pos + 1
+                    idx = pos + 1
+                else:
+                    idx = pos + 1
+            elif mode == 'TEMPLATE':
+                m = _RE_JS_TMPL.search(source, idx)
+                if not m:
+                    break
+                pos = m.start()
+                if m.group(0) == '`':
+                    if not _js_is_escaped(source, pos):
+                        tokens.append((seg_start, pos + 1, mode))
+                        mode = 'CODE'
+                        seg_start = pos + 1
+                    idx = pos + 1
+                else:
+                    tokens.append((seg_start, pos + 2, mode))
+                    mode = 'CODE'
+                    seg_start = pos + 2
+                    template_stack.append(1)
+                    idx = pos + 2
 
         if seg_start < n:
             tokens.append((seg_start, n, mode))
 
-        masked_chars = []
-        for s, e, m in tokens:
-            if m == 'CODE':
-                masked_chars.append(source[s:e])
-            else:
-                masked_chars.append(' ' * (e - s))
-        masked_source = "".join(masked_chars)
-        while len(self._tokenize_cache) >= 64:
+        masked_source = "".join(source[s:e] if m == 'CODE' else ' ' * (e - s) for s, e, m in tokens)
+        while len(self._tokenize_cache) >= 512:
             self._tokenize_cache.pop(next(iter(self._tokenize_cache)), None)
         self._tokenize_cache[cache_key] = (source, list(tokens), masked_source)
         return tokens, masked_source
@@ -2725,6 +3142,7 @@ class GasClient:
         return results
 
     @_track_sid_op
+    @_track_sid_op
     def replace_function(self, script_id, filename, func_name, code, force=False, dry_run=False, deploy=False, deploy_desc="Auto deployed via GasClient", fast=False):
         """指定ファイル内の特定関数定義ブロックを丸ごと置換（Excel の replace_procedure 相当）"""
         sid = self.resolve_script_id(script_id)
@@ -2760,6 +3178,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
+            matched_file["source"] = new_source
             self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
@@ -2849,6 +3268,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
+            matched_file["source"] = new_source
             self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
@@ -2913,6 +3333,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
+            matched_file["source"] = new_source
             self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
@@ -2973,11 +3394,13 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
+            matched_file["source"] = new_source
             self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
                 "file": matched_file["name"],
                 "function": func_name,
+                "deleted_function": func_name,
                 "diff": diff_text,
                 "syntax_check": syntax_status
             }
@@ -3333,10 +3756,11 @@ class GasClient:
                     if b_start != -1 and "return" in fn_src:
                         fn_body = fn_src[b_start + 1:]
                         tokens, _ = self._tokenize_js(fn_body)
+                        token_starts = [t[0] for t in tokens]
                         returns = []
                         for m in re.finditer(r"\breturn\b", fn_body):
                             m_pos = m.start()
-                            if any(s <= m_pos < e and mode == 'CODE' for s, e, mode in tokens):
+                            if _tokens_pos_is_code(tokens, token_starts, m_pos):
                                 returns.append(m.end())
 
                         can_track_keys = True
@@ -3439,11 +3863,12 @@ class GasClient:
                 script_raw = sm.group(2)
                 script_start_offset = sm.start(2)
                 tokens, _ = self._tokenize_js(script_raw)
+                token_starts = [t[0] for t in tokens]
 
                 run_pat = re.compile(r"google\s*\.\s*script\s*\.\s*run\b")
                 for rm in run_pat.finditer(script_raw):
                     start_pos = rm.start()
-                    if not any(s <= start_pos < e and mode == 'CODE' for s, e, mode in tokens):
+                    if not _tokens_pos_is_code(tokens, token_starts, start_pos):
                         continue
 
                     line_no = source.count('\n', 0, script_start_offset + start_pos) + 1
@@ -3541,10 +3966,11 @@ class GasClient:
 
                             if param_name and cb_body:
                                 cb_tokens, _ = self._tokenize_js(cb_body)
+                                cb_token_starts = [t[0] for t in cb_tokens]
                                 prop_pat = re.compile(rf"\b{re.escape(param_name)}\s*\.\s*([A-Za-z0-9_$]+)")
                                 for pm in prop_pat.finditer(cb_body):
                                     p_pos = pm.start()
-                                    if any(s <= p_pos < e and mode != 'CODE' for s, e, mode in cb_tokens):
+                                    if not _tokens_pos_is_code(cb_tokens, cb_token_starts, p_pos):
                                         continue
                                     prop = pm.group(1)
                                     if prop in EXCLUDE_PROPS:
@@ -3586,7 +4012,17 @@ class GasClient:
         }
 
     def _collect_critical_breakages(self, files) -> dict:
-        """外部プロセスを一切起動せず、メモリ上の解析のみで3種類の致命的破壊セットを収集"""
+        """外部プロセスを一切起動せず、メモリ上の解析のみで致命的破壊セットを収集（内容ハッシュキャッシュ付き）"""
+        if not hasattr(self, "_breakages_cache") or self._breakages_cache is None:
+            self._breakages_cache = {}
+        sig = tuple(
+            (f.get("name", ""), f.get("type", ""), len(f.get("source", "")), hash(f.get("source", "")))
+            for f in files
+        )
+        cached = self._breakages_cache.get(sig)
+        if cached is not None:
+            return cached
+
         top_level_map = collections.defaultdict(list)
         for f in files:
             if f.get("type") != "SERVER_JS":
@@ -3697,10 +4133,10 @@ class GasClient:
             if "HtmlService" not in source:
                 continue
             tokens, _ = self._tokenize_js(source)
+            token_starts = [t[0] for t in tokens]
             for tm in tpl_pat.finditer(source):
                 match_start = tm.start()
-                is_code = any(s <= match_start < e and mode == 'CODE' for s, e, mode in tokens)
-                if not is_code:
+                if not _tokens_pos_is_code(tokens, token_starts, match_start):
                     continue
                 tpl_name = tm.group(2).strip()
                 tpl_base = os.path.splitext(tpl_name)[0]
@@ -3713,12 +4149,16 @@ class GasClient:
         else:
             rpc_property_mismatches = set()
 
-        return {
+        result = {
             "duplicate_functions": duplicate_functions,
             "broken_rpcs": broken_rpcs,
             "broken_templates": broken_templates,
             "rpc_property_mismatches": rpc_property_mismatches
         }
+        while len(self._breakages_cache) >= 64:
+            self._breakages_cache.pop(next(iter(self._breakages_cache)), None)
+        self._breakages_cache[sig] = result
+        return result
 
     def _check_broken_transition(self, orig_files, new_files) -> list:
         """変更前後の破壊的不整合の増分を比較し、新しく発生した不整合の理由リストを返却"""
@@ -3785,6 +4225,23 @@ class GasClient:
 
         ext = "html" if file_type == "HTML" else "gs"
         try:
+            # 単体テストで subprocess.run がモック／モンキーパッチされていない場合は常駐 Node.js ワーカーで 1〜3ms 高速検査
+            if subprocess.run is _ORIG_SUBPROCESS_RUN:
+                w_res = _SYNTAX_WORKER.check([{"filename": f"{filename}.{ext}", "js": js_code}], timeout=10.0)
+                if w_res == "TIMEOUT":
+                    return "skipped (timeout)"
+                if isinstance(w_res, list) and w_res:
+                    item = w_res[0]
+                    if not item.get("valid"):
+                        err_line = item.get("error", "Syntax error")
+                        raise ValueError(f"構文エラーが検出されました [{filename}.{ext}]: {err_line}")
+                    self._syntax_cache.add(tuple_key)
+                    self._syntax_cache.add(str_key)
+                    str_hashes = [k for k in self._syntax_cache if isinstance(k, str)][-200:]
+                    self._cache_data["syntax_hashes"] = str_hashes
+                    self._save_cache()
+                    return "valid"
+
             fn_arg = json.dumps(f"{filename}.{ext}")
             node_code = f"new (require('vm').Script)(require('fs').readFileSync(0,'utf8'),{{filename:{fn_arg}}});"
             cmd = ["node", "-e", node_code]
@@ -3837,11 +4294,28 @@ class GasClient:
             "console.log(JSON.stringify(res));"
         )
         try:
-            cmd = ["node", "-e", node_script]
-            p = subprocess.run(cmd, input=json.dumps(batch_input), text=True, encoding="utf-8", capture_output=True, timeout=15, **self._win_no_window_kwargs())
-            if p.returncode != 0:
-                return []
-            results = json.loads(p.stdout.strip())
+            results = None
+            if subprocess.run is _ORIG_SUBPROCESS_RUN:
+                w_items = [{"filename": bi["filename"], "js": bi["js"]} for bi in batch_input]
+                w_res = _SYNTAX_WORKER.check(w_items, timeout=15.0)
+                if w_res == "TIMEOUT":
+                    return []
+                if isinstance(w_res, list) and len(w_res) == len(batch_input):
+                    results = [
+                        {
+                            "file": bi["file"],
+                            "type": bi["type"],
+                            "valid": bool(wr.get("valid")),
+                            "error": wr.get("error", ""),
+                        }
+                        for bi, wr in zip(batch_input, w_res)
+                    ]
+            if results is None:
+                cmd = ["node", "-e", node_script]
+                p = subprocess.run(cmd, input=json.dumps(batch_input), text=True, encoding="utf-8", capture_output=True, timeout=15, **self._win_no_window_kwargs())
+                if p.returncode != 0:
+                    return []
+                results = json.loads(p.stdout.strip())
             syntax_errors = []
             new_cached = False
             for r in results:
@@ -3941,9 +4415,7 @@ class GasClient:
             else:
                 self._copy_remote_epochs.pop(sid, None)
                 self._remote_check_cache.pop(sid, None)
-        disk_cache = self._load_disk_content_cache()
-        disk_cache[sid] = disk_entry
-        self._save_disk_content_cache(disk_cache)
+        self._update_disk_content_entry(sid, disk_entry)
         with lock:
             if sid in self._content_cache and self._disk_cache_mtime > now:
                 self._content_cache[sid] = (self._disk_cache_mtime, self._content_cache[sid][1])
@@ -3991,12 +4463,10 @@ class GasClient:
             else:
                 self._synced_sids.discard(sid)
             self._write_gens[sid] = self._write_gens.get(sid, 0) + 1
-        disk_cache = self._load_disk_content_cache()
         if prev_disk is not None:
-            disk_cache[sid] = copy.deepcopy(prev_disk)
+            self._update_disk_content_entry(sid, prev_disk)
         else:
-            disk_cache.pop(sid, None)
-        self._save_disk_content_cache(disk_cache)
+            self._update_disk_content_entry(sid, delete=True)
         self._purge_sid_derived_caches(sid)
 
     def _put_content(self, script_id, files_list):
@@ -4023,7 +4493,7 @@ class GasClient:
 
         if not self._can_async_put():
             self._wait_pending_put(sid, force=True)     # その場で送る道は、裏の送りが全部済んでから（追い越さない）
-            res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
+            res = self._send_content(url, payload)
             if res.status_code != 200:
                 raise RuntimeError(f"コンテンツの更新に失敗しました ({res.status_code}): {res.text}")
             res_json = res.json() if res.content else {}
@@ -4031,15 +4501,15 @@ class GasClient:
             return res_json
 
         lock = self._ensure_sync_state()
-        disk_cache = self._load_disk_content_cache()
         with lock:
             cur_th = self._put_threads.get(sid)
             running = cur_th is not None and cur_th.is_alive() and cur_th is not threading.current_thread()
             if not running:   # 送りが始まる前の写し（失敗したらここまで戻す）
+                prev_disk_entry = self._get_disk_content_entry(sid, deepcopy_entry=True)
                 self._put_base[sid] = (
                     copy.deepcopy(self._content_cache.get(sid)), copy.deepcopy(self._copy_remote_epochs.get(sid)),
                     copy.deepcopy(self._remote_check_cache.get(sid)), self._self_fresh_at.get(sid), (sid in self._synced_sids),
-                    copy.deepcopy(disk_cache.get(sid)),
+                    prev_disk_entry,
                 )
             # 手元の写しを先に直す（印 unsent つき）
             now = time.time()
@@ -4052,8 +4522,7 @@ class GasClient:
             self._self_fresh_at[sid] = now
             self._copy_remote_epochs.pop(sid, None)
             self._remote_check_cache.pop(sid, None)
-            disk_cache[sid] = {"ts": now, "content": copy.deepcopy(optimistic_dict), "unsent": True, "pid": os.getpid()}
-            self._save_disk_content_cache(disk_cache)
+            self._update_disk_content_entry(sid, {"ts": now, "content": optimistic_dict, "unsent": True, "pid": os.getpid()})
             if sid in self._content_cache and self._disk_cache_mtime > now:
                 self._content_cache[sid] = (self._disk_cache_mtime, self._content_cache[sid][1])
             if running:       # 送りの最中 → 最新の中身だけ覚えて、今の送りが終わったら続けて送る
@@ -4071,7 +4540,8 @@ class GasClient:
 
     def _send_content(self, url, payload):
         """中身を縮めて（gzip）送る。Google が縮めた荷物を受けなければ、そのまま送り直す"""
-        if self._is_mock_obj(getattr(self, "_request_with_retry", None)):     # 単体試験の偽の通信は json= で中身を見る
+        req_fn = getattr(self, "_request_with_retry", None)
+        if self._is_mock_obj(req_fn) or getattr(req_fn, "__func__", None) is not GasClient._request_with_retry:     # 単体試験の偽の通信は json= で中身を見る
             return self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=20)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         h = self._headers()
@@ -4226,6 +4696,7 @@ class GasClient:
             syntax_status = self._validate_syntax(matched_file["name"], new_source, file_type=ftype)
 
         if dry_run:
+            matched_file["source"] = new_source
             self._verify_and_rollback_if_broken(sid, orig_files, files, force=force, dry_run=True, fast=fast)
             return {
                 "status": "dry_run",
@@ -4950,10 +5421,10 @@ class GasClient:
                     for ep in d.get("entryPoints", []):
                         web_url = ep.get("webApp", {}).get("url")
                         if web_url:
-                            self._cache_data.setdefault("deployments", {})[sid] = {
+                            self._cache_data.setdefault("deployments", {}).setdefault(sid, {}).update({
                                 "id": d.get("deploymentId", ""),
                                 "url": web_url
-                            }
+                            })
                             self._save_cache()
                             return web_url
 
@@ -4962,10 +5433,10 @@ class GasClient:
                 web_url = ep.get("webApp", {}).get("url")
                 if web_url:
                     if not dev:
-                        self._cache_data.setdefault("deployments", {})[sid] = {
+                        self._cache_data.setdefault("deployments", {}).setdefault(sid, {}).update({
                             "id": d.get("deploymentId", ""),
                             "url": web_url
-                        }
+                        })
                         self._save_cache()
                     return web_url
 
@@ -5018,7 +5489,7 @@ class GasClient:
                         if ep.get("webApp", {}).get("url"):
                             web_url = ep["webApp"]["url"]
                             break
-                    self._cache_data.setdefault("deployments", {})[sid] = {"id": dep_id, "url": web_url}
+                    self._cache_data.setdefault("deployments", {}).setdefault(sid, {}).update({"id": dep_id, "url": web_url})
                     self._save_cache()
 
         # 1. バージョン作成
@@ -5042,7 +5513,7 @@ class GasClient:
                 if ep.get("webApp", {}).get("url"):
                     new_web_url = ep["webApp"]["url"]
                     break
-            self._cache_data.setdefault("deployments", {})[sid] = {"id": new_dep_id, "url": new_web_url}
+            self._cache_data.setdefault("deployments", {}).setdefault(sid, {}).update({"id": new_dep_id, "url": new_web_url})
             self._save_cache()
             return {
                 "status": "success",
@@ -5077,7 +5548,7 @@ class GasClient:
                     if ep.get("webApp", {}).get("url"):
                         web_url = ep["webApp"]["url"]
                         break
-                self._cache_data.setdefault("deployments", {})[sid] = {"id": dep_id, "url": web_url}
+                self._cache_data.setdefault("deployments", {}).setdefault(sid, {}).update({"id": dep_id, "url": web_url})
                 self._save_cache()
                 url = f"https://script.googleapis.com/v1/projects/{sid}/deployments/{dep_id}"
                 res = self._request_with_retry("PUT", url, headers=self._headers(), json=payload, timeout=15)
@@ -5091,7 +5562,7 @@ class GasClient:
                 web_url = ep["webApp"]["url"]
                 break
 
-        self._cache_data.setdefault("deployments", {})[sid] = {"id": dep_id, "url": web_url}
+        self._cache_data.setdefault("deployments", {}).setdefault(sid, {}).update({"id": dep_id, "url": web_url})
         self._save_cache()
 
         return {
@@ -10665,6 +11136,48 @@ function doGet() {{
                                     "diff": res.get("diff")
                                 })
 
+                # R13: 指数バックオフ付き自動リトライ包装
+                if not recipe_id or recipe_id == "R13":
+                    has_external = bool(re.search(r"\b(?:UrlFetchApp\.(?:fetch|fetchAll)|GmailApp\.|MailApp\.|DriveApp\.)\b", fn_source))
+                    has_retry = bool(re.search(r"Utilities\.sleep|retry|backoff", fn_source, re.IGNORECASE))
+                    if (recipe_id == "R13" or has_external) and not has_retry:
+                        body_start = fn_source.find('{')
+                        body_end = fn_source.rfind('}')
+                        if body_start != -1 and body_end != -1 and body_end > body_start:
+                            inner_body = fn_source[body_start + 1:body_end]
+                            retry_header = (
+                                "\n  const __maxAttempts = 3;\n"
+                                "  for (let __attempt = 1; __attempt <= __maxAttempts; __attempt++) {\n"
+                                "    try {"
+                            )
+                            retry_footer = (
+                                "\n    } catch (__err) {\n"
+                                "      if (__attempt >= __maxAttempts) throw __err;\n"
+                                "      Utilities.sleep(Math.pow(2, __attempt) * 500 + Math.floor(Math.random() * 250));\n"
+                                "    }\n"
+                                "  }\n"
+                            )
+                            transformed_code = fn_source[:body_start + 1] + retry_header + inner_body + retry_footer + fn_source[body_end:]
+                            line_no = source.count('\n', 0, abs_start) + 1
+                            detections.append({
+                                "recipe_id": "R13",
+                                "recipe_name": "retry_backoff",
+                                "file": fname,
+                                "function": curr_fn_name,
+                                "line": line_no,
+                                "reason": f"関数 '{curr_fn_name}' で外部通信・サービス呼出にリトライ機構がありません。指数バックオフ再試行で 429/503 や一時エラーへの耐性を高められます。",
+                                "transformed_code": transformed_code
+                            })
+                            if apply and (recipe_id == "R13" or func_name):
+                                res = self.replace_function(sid, fname, curr_fn_name, transformed_code, deploy=deploy)
+                                applied_results.append({
+                                    "recipe_id": "R13",
+                                    "file": fname,
+                                    "function": curr_fn_name,
+                                    "status": res.get("status"),
+                                    "diff": res.get("diff")
+                                })
+
         # HTML ファイルの走査 (R11)
         if not recipe_id or recipe_id == "R11":
             html_files = [f for f in files if f.get("type") == "HTML"]
@@ -10734,7 +11247,7 @@ function doGet() {{
         """上級GASアーキテクチャ骨格・部品棚（プレビュー・安全注入・二重防止）"""
         if list_only or not scaffold_id:
             lines = [
-                "=== 🏗️ 上級GASアーキテクチャ骨格棚カタログ (全6種) ===",
+                f"=== 🏗️ 上級GASアーキテクチャ骨格棚カタログ (全{len(GAS_SCAFFOLD_CATALOG)}種) ===",
                 "| ID | 部品名 | 対象 | 概要 | キーワード |",
                 "| --- | --- | --- | --- | --- |"
             ]
@@ -10754,7 +11267,7 @@ function doGet() {{
                 matched = s
                 break
         if not matched:
-            raise ValueError(f"指定された骨格棚ID '{scaffold_id}' が見つかりません。S01〜S06 または部品名を指定してください。")
+            raise ValueError(f"指定された骨格棚ID '{scaffold_id}' が見つかりません。S01〜S{len(GAS_SCAFFOLD_CATALOG):02d} または部品名を指定してください。")
 
         if matched["id"] == "S06":
             return self._gas_scaffold_s06(script_id, apply=apply, deploy=deploy)
@@ -10810,6 +11323,10 @@ function doGet() {{
         elif matched["id"] == "S05":
             to_inject_html.extend(GAS_SCAFFOLD_CATALOG[:3])
             to_inject_server.append(GAS_SCAFFOLD_CATALOG[3])
+        elif matched.get("target_type") == "SERVER_JS":
+            to_inject_server.append(matched)
+        elif matched.get("target_type") == "HTML":
+            to_inject_html.append(matched)
 
         ops = []
         applied_parts = []
@@ -11849,6 +12366,10 @@ function doGet() {{
             dispatch_res = self.clean_dead(sid, dry_run=not effective_apply, deploy=deploy)
         elif h_type == "rpc_contracts":
             dispatch_res = self.check_rpc_contracts(sid, filename=target_fname)
+        elif h_type == "security_audit":
+            dispatch_res = self.security_audit(sid)
+        elif h_type == "schema_check":
+            dispatch_res = self.schema_check(sid)
         elif h_type == "edit":
             dispatch_res = self._gas_edit_shelf(sid, target_shelf["id"], query=query, apply=effective_apply, deploy=deploy, func_name=func_name, filename=filename)
         else:
@@ -11864,6 +12385,189 @@ function doGet() {{
             "matched_shelf": target_shelf,
             "result": dispatch_res,
             "markdown_report": md_report
+        }
+
+    def security_audit(self, script_id: str) -> dict:
+        """D05: セキュリティ・権限監査（APIキー露出・過剰スコープ・公開リスク・XSS静的検査）"""
+        sid = self.resolve_script_id(script_id)
+        content = self.get_content(sid, use_cache=False)
+        files = content.get("files", [])
+        findings = []
+
+        secret_patterns = [
+            ("CRITICAL", "Google APIキー直書き", r"\bAIza[0-9A-Za-z\-_]{20,}\b"),
+            ("CRITICAL", "OpenAI/シークレットキー直書き", r"\bsk-[0-9A-Za-z\-_]{16,}\b"),
+            ("CRITICAL", "GitHub/Slackトークン直書き", r"\b(?:ghp_[0-9A-Za-z]{20,}|xox[baprs]-[0-9A-Za-z\-]{10,})\b"),
+            ("HIGH", "Slack/Chat Webhook URL直書き", r"https://(?:hooks\.slack\.com/services/|chat\.googleapis\.com/v1/spaces/)[^\s'\"`]+"),
+            ("HIGH", "認証ヘッダ/秘密値の直書き疑い", r"(?:api[_-]?key|secret|password|token)\s*[:=]\s*['\"][^'\"\s]{8,}['\"]"),
+        ]
+        broad_scopes = {
+            "https://www.googleapis.com/auth/drive": "Drive全体へのフルアクセス権限（drive.file 等への縮小を検討）",
+            "https://mail.google.com/": "Gmail全体へのフルアクセス権限（gmail.send / gmail.readonly 等への縮小を検討）",
+            "https://www.googleapis.com/auth/spreadsheets": "全スプレッドシートへのフルアクセス（可能なら spreadsheets.currentonly を検討）",
+        }
+
+        for f in files:
+            fname = f.get("name", "")
+            ftype = f.get("type", "")
+            source = f.get("source", "") or ""
+
+            # 1. マニフェスト（appsscript.json）の権限・公開設定チェック
+            if fname == "appsscript" or ftype == "JSON":
+                try:
+                    manifest = json.loads(source)
+                except Exception:
+                    manifest = {}
+                if isinstance(manifest, dict):
+                    webapp = manifest.get("webapp") or {}
+                    if webapp.get("access") == "ANYONE_ANONYMOUS" and webapp.get("executeAs") == "USER_DEPLOYING":
+                        findings.append({
+                            "severity": "HIGH",
+                            "file": fname,
+                            "line": 1,
+                            "rule": "Webアプリ無認証公開",
+                            "detail": "webapp.access が ANYONE_ANONYMOUS かつ executeAs が USER_DEPLOYING です。意図しない公開でないか確認してください。"
+                        })
+                    for sc in manifest.get("oauthScopes") or []:
+                        if sc in broad_scopes:
+                            findings.append({
+                                "severity": "MEDIUM",
+                                "file": fname,
+                                "line": 1,
+                                "rule": "過剰なOAuthスコープ",
+                                "detail": f"{sc}: {broad_scopes[sc]}"
+                            })
+                continue
+
+            # 2. シークレット直書きチェック
+            for sev, label, pat in secret_patterns:
+                for m in re.finditer(pat, source, re.IGNORECASE):
+                    line_no = source.count("\n", 0, m.start()) + 1
+                    findings.append({
+                        "severity": sev,
+                        "file": fname,
+                        "line": line_no,
+                        "rule": label,
+                        "detail": "PropertiesService.getScriptProperties() へ退避することを推奨します。"
+                    })
+
+            # 3. HTML XSS / eval チェック
+            if ftype == "HTML":
+                for pat, label in [
+                    (r"\.innerHTML\s*=", "innerHTML 代入（XSSリスク）"),
+                    (r"\bdocument\.write\s*\(", "document.write 使用（XSSリスク）"),
+                    (r"\beval\s*\(", "eval() 使用"),
+                ]:
+                    for m in re.finditer(pat, source):
+                        line_no = source.count("\n", 0, m.start()) + 1
+                        findings.append({
+                            "severity": "MEDIUM",
+                            "file": fname,
+                            "line": line_no,
+                            "rule": label,
+                            "detail": "textContent への置き換えやサニタイズを検討してください。"
+                        })
+            elif ftype == "SERVER_JS":
+                for pat, label in [
+                    (r"\beval\s*\(", "サーバー側 eval() 使用"),
+                    (r"\bnew\s+Function\s*\(", "new Function() 使用"),
+                ]:
+                    for m in re.finditer(pat, source):
+                        line_no = source.count("\n", 0, m.start()) + 1
+                        findings.append({
+                            "severity": "HIGH",
+                            "file": fname,
+                            "line": line_no,
+                            "rule": label,
+                            "detail": "動的コード実行はインジェクション原因になるため避けてください。"
+                        })
+
+        sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "INFO": 3}
+        findings.sort(key=lambda x: (sev_order.get(x["severity"], 9), x["file"], x["line"]))
+        penalty = sum(25 if x["severity"] == "CRITICAL" else (15 if x["severity"] == "HIGH" else 5) for x in findings)
+        score = max(0, 100 - penalty)
+
+        lines = [
+            f"=== 🛡️ GAS セキュリティ・権限監査 (D05): [{script_id}] ===",
+            f"安全スコア: {score}/100（検出: {len(findings)} 件）",
+            ""
+        ]
+        if not findings:
+            lines.append("✅ 重大なセキュリティリスクは検出されませんでした。")
+        else:
+            lines.append("| 重要度 | ファイル | 行 | 項目 | 対策 |")
+            lines.append("| --- | --- | ---: | --- | --- |")
+            for item in findings:
+                lines.append(f"| {item['severity']} | {item['file']} | {item['line']} | {item['rule']} | {item['detail']} |")
+        return {
+            "status": "success",
+            "score": score,
+            "count": len(findings),
+            "findings": findings,
+            "markdown_report": "\n".join(lines)
+        }
+
+    def schema_check(self, script_id: str) -> dict:
+        """D06: シートの固定列番号アクセス（row[3] / getRange列直書き）のズレ危険箇所検査"""
+        sid = self.resolve_script_id(script_id)
+        content = self.get_content(sid, use_cache=False)
+        files = content.get("files", [])
+        findings = []
+
+        idx_pat = re.compile(r"\b(?:row|rows|values|data|rec|record|line|item)\s*(?:\[[^\]]+\])?\[\s*(\d+)\s*\]")
+        range_pat = re.compile(r"\.getRange\s*\(\s*[^,\n]+,\s*(\d+)\b")
+
+        for f in files:
+            if f.get("type") != "SERVER_JS":
+                continue
+            fname = f.get("name", "")
+            source = f.get("source", "") or ""
+            for m in idx_pat.finditer(source):
+                line_no = source.count("\n", 0, m.start()) + 1
+                fn_name = self._find_line_func_name("SERVER_JS", source, line_no)
+                findings.append({
+                    "file": fname,
+                    "function": fn_name,
+                    "line": line_no,
+                    "kind": "配列固定インデックス",
+                    "snippet": m.group(0).strip(),
+                    "col_index": int(m.group(1))
+                })
+            for m in range_pat.finditer(source):
+                line_no = source.count("\n", 0, m.start()) + 1
+                fn_name = self._find_line_func_name("SERVER_JS", source, line_no)
+                findings.append({
+                    "file": fname,
+                    "function": fn_name,
+                    "line": line_no,
+                    "kind": "getRange固定列番号",
+                    "snippet": m.group(0).strip(),
+                    "col_index": int(m.group(1))
+                })
+
+        lines = [
+            f"=== 📐 GAS 列番号ズレ検査 (D06): [{script_id}] ===",
+            f"検出件数: {len(findings)} 件",
+            ""
+        ]
+        if not findings:
+            lines.append("✅ 固定列番号による危険なアクセスは検出されませんでした。")
+        else:
+            lines.append("| ファイル | 関数 | 行 | 種別 | 箇所 |")
+            lines.append("| --- | --- | ---: | --- | --- |")
+            for item in findings[:50]:
+                lines.append(f"| {item['file']} | {item['function']} | {item['line']} | {item['kind']} | `{item['snippet']}` |")
+            if len(findings) > 50:
+                lines.append(f"...ほか {len(findings) - 50} 件")
+            lines.extend([
+                "",
+                "💡 推奨対策: 1行目の見出しから `const col = Object.fromEntries(headers.map((h, i) => [String(h).trim(), i]));` のように見出し名ベースで参照すると、列挿入・並べ替えで壊れなくなります。"
+            ])
+        return {
+            "status": "success",
+            "count": len(findings),
+            "findings": findings,
+            "markdown_report": "\n".join(lines)
         }
 
     # ==========================================

@@ -45,6 +45,13 @@ GAS_MANAGER_INSTRUCTIONS = (
 )
 
 
+def _warn_prefix(res) -> str:
+    """裏送り失敗などの警告が res['warning'] にあれば先頭に付与する"""
+    if isinstance(res, dict) and res.get("warning"):
+        return f"[WARNING] {res['warning']}\n"
+    return ""
+
+
 def _dep_line(dep):
     """デプロイの 1 行。直す手の deploy=True は裏で進むので、待たずに見られる最新の番地（/dev）も出す"""
     if isinstance(dep, dict) and dep.get("status") == "queued":
@@ -97,6 +104,11 @@ def reload_tools() -> str:
 
     if _client is not None:
         old_client = _client
+        try:
+            if hasattr(old_client, "_wait_pending_put"):
+                old_client._wait_pending_put(timeout=15.0, force=True)
+        except Exception:
+            pass
         new_client = gas_client.GasClient(
             clasprc_path=str(old_client.clasprc_path),
             backup_dir=str(old_client.backup_dir)
@@ -105,6 +117,9 @@ def reload_tools() -> str:
         new_client._cache_data = getattr(old_client, "_cache_data", {})
         new_client._content_cache = getattr(old_client, "_content_cache", {})
         new_client._synced_sids = getattr(old_client, "_synced_sids", set())
+        new_client._bound_sids = getattr(old_client, "_bound_sids", set())
+        new_client._copy_remote_epochs = getattr(old_client, "_copy_remote_epochs", {})
+        new_client._remote_check_cache = getattr(old_client, "_remote_check_cache", {})
         new_client._dock_cache = getattr(old_client, "_dock_cache", {})
         new_client._diag_cache = getattr(old_client, "_diag_cache", {})
         new_client._xray_cache = getattr(old_client, "_xray_cache", {})
@@ -309,14 +324,14 @@ def patch_code(project: str, filename: str, target: str = "", replacement: str =
 
     if res.get("status") == "dry_run":
         return (
-            f"[DRY-RUN] 差分プレビュー（クラウドへの書き込み・バックアップは行われていません）\n"
+            f"{_warn_prefix(res)}[DRY-RUN] 差分プレビュー（クラウドへの書き込み・バックアップは行われていません）\n"
             f"ファイル: {res['file']}\n"
             f"置換箇所: {res['replaced_occurrences']}箇所\n"
             f"構文検査: {res.get('syntax_check', 'N/A')}"
             f"{diff_out}"
         )
     return (
-        f"[SUCCESS] 差分置換完了\n"
+        f"{_warn_prefix(res)}[SUCCESS] 差分置換完了\n"
         f"ファイル: {res['file']}\n"
         f"置換箇所: {res['replaced_occurrences']}箇所\n"
         f"構文検査: {res.get('syntax_check', 'N/A')}\n"
@@ -545,14 +560,14 @@ def patch_function(project: str, filename: str, func_name: str, target: str = ""
 
     if res.get("status") == "dry_run":
         return (
-            f"[DRY-RUN] 関数内置換プレビュー\n"
+            f"{_warn_prefix(res)}[DRY-RUN] 関数内置換プレビュー\n"
             f"ファイル: {res['file']} -> function {res['function']}\n"
             f"置換箇所: {res['replaced_occurrences']}箇所\n"
             f"構文検査: {res.get('syntax_check', 'N/A')}"
             f"{diff_out}"
         )
     return (
-        f"[SUCCESS] 関数内置換完了\n"
+        f"{_warn_prefix(res)}[SUCCESS] 関数内置換完了\n"
         f"ファイル: {res['file']} -> function {res['function']}\n"
         f"置換箇所: {res['replaced_occurrences']}箇所\n"
         f"構文検査: {res.get('syntax_check', 'N/A')}\n"
@@ -586,13 +601,13 @@ def add_function(project: str, filename: str, code: str, force: bool = False, dr
 
     if res.get("status") == "dry_run":
         return (
-            f"[DRY-RUN] 関数追加プレビュー\n"
+            f"{_warn_prefix(res)}[DRY-RUN] 関数追加プレビュー\n"
             f"ファイル: {res['file']} -> function {res['function']}\n"
             f"構文検査: {res.get('syntax_check', 'N/A')}"
             f"{diff_out}"
         )
     return (
-        f"[SUCCESS] 関数追加完了\n"
+        f"{_warn_prefix(res)}[SUCCESS] 関数追加完了\n"
         f"ファイル: {res['file']} -> function {res['function']}\n"
         f"構文検査: {res.get('syntax_check', 'N/A')}\n"
         f"事前バックアップ: {res['backup_file']}"
@@ -624,13 +639,13 @@ def delete_function(project: str, filename: str, func_name: str, force: bool = F
 
     if res.get("status") == "dry_run":
         return (
-            f"[DRY-RUN] 関数削除プレビュー\n"
+            f"{_warn_prefix(res)}[DRY-RUN] 関数削除プレビュー\n"
             f"ファイル: {res['file']} -> function {res['deleted_function']}\n"
             f"構文検査: {res.get('syntax_check', 'N/A')}"
             f"{diff_out}"
         )
     return (
-        f"[SUCCESS] 関数削除完了\n"
+        f"{_warn_prefix(res)}[SUCCESS] 関数削除完了\n"
         f"ファイル: {res['file']} -> function {res['deleted_function']}\n"
         f"構文検査: {res.get('syntax_check', 'N/A')}\n"
         f"事前バックアップ: {res['backup_file']}"
@@ -673,14 +688,14 @@ def batch_patch(project: str, operations: str, force: bool = False, dry_run: boo
     changed_str = ", ".join(res.get("changed_files", []))
     if res.get("status") == "dry_run":
         return (
-            f"[DRY-RUN] アトミック一括反映プレビュー\n"
+            f"{_warn_prefix(res)}[DRY-RUN] アトミック一括反映プレビュー\n"
             f"適用操作数: {len(res.get('applied_operations', []))}操作\n"
             f"変更対象ファイル: {changed_str}\n"
             f"構文検査: {res.get('syntax_check', 'N/A')}"
             f"{diff_out}"
         )
     return (
-        f"[SUCCESS] アトミック一括反映完了\n"
+        f"{_warn_prefix(res)}[SUCCESS] アトミック一括反映完了\n"
         f"適用操作数: {len(res.get('applied_operations', []))}操作\n"
         f"変更対象ファイル: {changed_str}\n"
         f"構文検査: {res.get('syntax_check', 'N/A')}\n"
@@ -715,13 +730,13 @@ def replace_function(project: str, filename: str, func_name: str, code: str, for
 
     if res.get("status") == "dry_run":
         return (
-            f"[DRY-RUN] 関数置換プレビュー\n"
+            f"{_warn_prefix(res)}[DRY-RUN] 関数置換プレビュー\n"
             f"ファイル: {res['file']} -> function {res['function']}\n"
             f"構文検査: {res.get('syntax_check', 'N/A')}"
             f"{diff_out}"
         )
     return (
-        f"[SUCCESS] 関数置換完了\n"
+        f"{_warn_prefix(res)}[SUCCESS] 関数置換完了\n"
         f"ファイル: {res['file']} -> function {res['function']}\n"
         f"構文検査: {res.get('syntax_check', 'N/A')}\n"
         f"事前バックアップ: {res['backup_file']}"

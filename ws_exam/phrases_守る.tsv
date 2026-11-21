@@ -47,3 +47,15 @@ drive.trash	「古い下書き.pdf」をゴミ箱に入れて
 drive.trash	「一時作業」フォルダを削除して
 ?drive.trash	ドライブの不要ファイルを消して整理したい
 ?drive.trash	ゴミ箱 ごみ箱 削除 不要ファイル
+print.setup	A4横・幅1ページに収める印刷設定にして
+print.setup	A4縦で枠線なしの印刷設定を保存して
+?print.setup	印刷の向きや用紙サイズを設定したい
+?print.setup	印刷設定 A4横 1ページ 余白
+export.pdf	このシートをA4横のPDFにして保存して
+export.pdf	売上シートをPDF出力して保存して
+?export.pdf	シートをPDFファイルに書き出したい
+?export.pdf	PDF出力 PDF化 印刷用PDF 保存
+drive.share	閲覧専用の共有リンクを作って
+drive.share	yamada@example.comに編集権限を付けて共有して
+?drive.share	リンクを知っている全員に閲覧権限を付けたい
+?drive.share	共有リンク 閲覧リンク 権限 付与

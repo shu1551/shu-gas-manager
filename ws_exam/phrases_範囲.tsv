@@ -51,3 +51,15 @@ date.fix	日付の列に文字で入っている日付を、ちゃんとした�
 date.fix	B2:B30の日付が文字になっているので日付に直して
 ?date.fix	文字の日付を日付として扱えるようにしたい
 ?date.fix	日付 文字 変換 日付型
+note.set	B5に「確認済み」とメモを付けて
+note.set	C3のセルに「要再確認」とメモを入れて
+?note.set	セルにメモや注釈を付けたい
+?note.set	メモ 付ける 注釈 セル
+note.clear	B5のメモを消して
+note.clear	このシートのメモを全部消して
+?note.clear	付いているメモをクリアしたい
+?note.clear	メモ 消す 削除 クリア
+link.set	A2に公式サイトへのハイパーリンクを貼って
+link.set	会社名列にURL列のリンクを一括で貼って
+?link.set	セルにクリックで飛べるリンクを設定したい
+?link.set	リンク 貼る ハイパーリンク URL

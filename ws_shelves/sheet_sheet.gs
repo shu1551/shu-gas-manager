@@ -169,3 +169,109 @@ SHELF['sheet.color'] = function (ctx, op) {
   s.setTabColor(hex);
   chg_(ctx, s, '', 'タブの色を「' + op.color + '」に変更');
 };
+
+// 棚: sheet.merge
+// 題: 複数シートの表を1つのシートに縦結合する
+// 分類: シート
+// 語: シートを結合|シートをまとめ|シートを統合|複数シートを1枚|縦に結合|縦にまとめ|シートを合体|全シートをまとめ
+// 違い: 項目ごとに集計するなら summary、シートを分割するなら sheet.split
+// 引数: sheets=配列, into=文字=統合, skip_header=真偽=true
+// 頼み: into~[『「]([^』」]+)[』」](?:シート)?に(?:まとめ|統合|結合)
+// 例: 「全シートの表を統合シートに縦にまとめて」 → {"shelf":"sheet.merge","into":"統合"}
+// 例: 「4月と5月のシートを上半期シートに結合して」 → {"shelf":"sheet.merge","sheets":["4月","5月"],"into":"上半期"}
+// 触る: シート構成 値
+// 控え: 名前,全部
+SHELF['sheet.merge'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var intoName = String(op.into || '統合').trim();
+  var skipHeader = op.skip_header !== false;
+  var srcSheets = [];
+  if (op.sheets && op.sheets.length) {
+    op.sheets.forEach(function (nm) {
+      var s = sheetOf_(ss, nm, '');
+      if (s.getName() !== intoName) srcSheets.push(s);
+    });
+  } else {
+    ss.getSheets().forEach(function (s) {
+      if (s.getName() !== intoName && !s.isSheetHidden()) srcSheets.push(s);
+    });
+  }
+  if (!srcSheets.length) throw new ArgError('結合する元シートが見つかりません');
+
+  var merged = [];
+  var maxCols = 0;
+  var usedCount = 0;
+  srcSheets.forEach(function (s) {
+    var lr = s.getLastRow(), lc = s.getLastColumn();
+    if (lr < 1 || lc < 1) return;
+    var vals = s.getRange(1, 1, lr, lc).getValues();
+    var startIdx = (usedCount > 0 && skipHeader && vals.length > 1) ? 1 : 0;
+    for (var r = startIdx; r < vals.length; r++) {
+      merged.push(vals[r]);
+      if (vals[r].length > maxCols) maxCols = vals[r].length;
+    }
+    usedCount++;
+  });
+  if (!merged.length || !maxCols) throw new ArgError('結合できるデータがありません');
+
+  var normalized = merged.map(function (row) {
+    var out = row.slice();
+    while (out.length < maxCols) out.push('');
+    return out;
+  });
+  var dest = ss.getSheetByName(intoName);
+  if (!dest) {
+    dest = ss.insertSheet(intoName, ss.getSheets().length);
+    ctx.createdSheets.push(intoName);
+  } else {
+    dest.clearContents();
+  }
+  dest.getRange(1, 1, normalized.length, maxCols).setValues(normalized);
+  ctx.curSheet = intoName;
+  chg_(ctx, dest, a1_(1, 1, normalized.length, maxCols), usedCount + ' シートを縦結合（計 ' + normalized.length + ' 行）');
+};
+
+// 棚: sheet.split
+// 題: 列の値ごとにシートを自動分割する
+// 分類: シート
+// 語: シートを分割|シートに分け|ごとにシート|別シートに分け|部署ごとにシート|項目ごとにシート|シートを分け
+// 違い: 複数シートをまとめるなら sheet.merge、列を分けるなら split.col
+// 引数: col*=列, prefix=文字
+// 頼み: col~([^\sの]+)ごとに(?:別)?シート
+// 例: 「部署ごとにシートを分けて作って」 → {"shelf":"sheet.split","col":"部署"}
+// 触る: シート構成 値
+// 控え: 名前,全部
+SHELF['sheet.split'] = function (ctx, op) {
+  need_(op, ['col']);
+  var ss = ctx.ss, sh = sheetCtx_(ctx, op), t = needTable_(sh);
+  var ci = colIndexOf_(t, op.col);
+  var nc = t.lastCol - t.firstCol + 1;
+  var header = t.vals[t.headerRow - 1].slice(t.firstCol - 1, t.lastCol);
+  var groups = {}, order = [];
+  for (var r = t.firstData; r <= t.lastData; r++) {
+    var row = t.vals[r - 1].slice(t.firstCol - 1, t.lastCol);
+    if (row.every(isBlank_)) continue;
+    var rawKey = t.vals[r - 1][ci - 1];
+    var key = isBlank_(rawKey) ? '未分類' : String(rawKey).trim();
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(row);
+  }
+  if (!order.length) throw new ArgError('分割できるデータ行がありません');
+
+  var prefix = op.prefix ? String(op.prefix) : '';
+  var createdNames = [];
+  order.forEach(function (k) {
+    var safeName = (prefix + k).replace(/[\\\/\?\*\[\]:]/g, '_').slice(0, 31) || '分割';
+    var dst = ss.getSheetByName(safeName);
+    if (!dst) {
+      dst = ss.insertSheet(safeName, ss.getSheets().length);
+      ctx.createdSheets.push(safeName);
+    } else {
+      dst.clearContents();
+    }
+    var out = [header].concat(groups[k]);
+    dst.getRange(1, 1, out.length, nc).setValues(out);
+    createdNames.push(safeName + '(' + groups[k].length + '件)');
+  });
+  chg_(ctx, sh, '', op.col + ' ごとに ' + order.length + ' シートへ分割: ' + createdNames.slice(0, 8).join('・') + (createdNames.length > 8 ? ' ほか' : ''));
+};

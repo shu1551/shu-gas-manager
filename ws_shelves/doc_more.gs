@@ -654,3 +654,27 @@ SHELF['doc.copy'] = docKind_(function (ctx, op) {
   note_(ctx, '複製した文書: ' + title + ' (ID: ' + newDoc.getId() + ')');
   chg_(ctx, null, title, '文書を複製（ID: ' + newDoc.getId() + '）');
 });
+
+// 棚: doc.export.pdf
+// 題: 文書をPDFにして保存する
+// 分類: 文書
+// 語: 文書をPDF|ドキュメントをPDF|PDFに書き出|PDF化して|PDF保存|PDFを作成
+// 違い: スプレッドシートのPDF化は export.pdf。文書の複製は doc.copy
+// 引数: name=文字, folder=文字
+// 頼み: folder~[「『"“]([^」』"”]+)[」』"”]フォルダ
+// 例: 「この文書をPDFにして保存して」 → {"shelf":"doc.export.pdf"}
+// 例: 「この見積書を「見積書_山田様.pdf」としてPDF書き出しして」 → {"shelf":"doc.export.pdf","name":"見積書_山田様.pdf"}
+// 触る: なし
+SHELF['doc.export.pdf'] = docKind_(function (ctx, op) {
+  var doc = ctx.doc;
+  var docId = doc.getId();
+  var docName = doc.getName();
+  doc.saveAndClose();
+  var fileName = String(op.name || (docName + '.pdf')).trim();
+  if (!/\.pdf$/i.test(fileName)) fileName += '.pdf';
+  var blob = DriveApp.getFileById(docId).getAs('application/pdf').setName(fileName);
+  var destFolder = op.folder ? resolveFolder_(op.folder, true).folder : null;
+  var pdfFile = destFolder ? destFolder.createFile(blob) : DriveApp.createFile(blob);
+  note_(ctx, 'PDF保存完了: ' + pdfFile.getName() + '\nID: ' + pdfFile.getId() + '\nURL: ' + pdfFile.getUrl());
+  chg_(ctx, null, fileName, '文書をPDF保存（ID: ' + pdfFile.getId() + '）');
+});

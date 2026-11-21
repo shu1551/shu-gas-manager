@@ -31,3 +31,11 @@ sheet.color	売上シートのタブを赤色に変えて
 sheet.color	「集計」のシート見出しの色を青にして
 ?sheet.color	タブの色を緑っぽくしたい
 ?sheet.color	シート タブ 色 変更
+sheet.merge	全シートの表を「統合」シートに縦にまとめて
+sheet.merge	複数シートを1枚のシートに縦結合して
+?sheet.merge	複数のシートを縦に合体させたい
+?sheet.merge	シート 結合 統合 縦にまとめ
+sheet.split	部署ごとにシートを分けて作って
+sheet.split	項目ごとに別シートに分割して
+?sheet.split	列の値ごとにシートを自動分割したい
+?sheet.split	シート 分割 別シート 分ける

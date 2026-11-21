@@ -99,3 +99,7 @@ doc.copy	この文書のコピーを作って
 doc.copy	文書を複製して別の名前で保存して
 ?doc.copy	文書 複製 コピー 作成
 ?doc.copy	ドキュメント 複製 別名
+doc.export.pdf	この文書をPDFにして保存して
+doc.export.pdf	このドキュメントをPDFに書き出して
+?doc.export.pdf	GoogleドキュメントをPDF化したい
+?doc.export.pdf	文書 PDF 書き出し 保存

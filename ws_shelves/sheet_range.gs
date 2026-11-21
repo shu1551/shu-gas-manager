@@ -392,3 +392,86 @@ SHELF['fill.down'] = function (ctx, op) {
   }
   chg_(ctx, sh, dest.getA1Notation(), '上のセルを下へ複写');
 };
+
+// 棚: note.set
+// 題: セルにメモを付ける
+// 分類: 範囲
+// 語: メモを付|メモをつ|メモを入|メモを書|メモを追加|コメントを付|注釈を付|セルにメモ
+// 違い: メモを消すなら note.clear
+// 引数: range*=範囲, text*=文字
+// 頼み: text~[『「]([^』」]+)[』」](?:と|って)?メモ ; text~メモ[をに][『「]([^』」]+)[』」]
+// 例: 「B5に「確認済み」とメモを付けて」 → {"shelf":"note.set","range":"B5","text":"確認済み"}
+// 触る: 書式
+// 控え: 今
+SHELF['note.set'] = function (ctx, op) {
+  need_(op, ['range', 'text']);
+  var sh = sheetCtx_(ctx, op);
+  var rg = sh.getRange(op.range);
+  rg.setNote(String(op.text));
+  chg_(ctx, sh, rg.getA1Notation(), 'メモを設定: 「' + String(op.text).slice(0, 40) + '」');
+};
+
+// 棚: note.clear
+// 題: セルのメモを消す
+// 分類: 範囲
+// 語: メモを消|メモを削除|メモをクリア|メモを外|メモを取|全メモを消
+// 違い: メモを付けるなら note.set
+// 引数: range=範囲
+// 例: 「B5のメモを消して」 → {"shelf":"note.clear","range":"B5"}
+// 例: 「このシートのメモを全部消して」 → {"shelf":"note.clear"}
+// 触る: 書式
+// 控え: 今
+SHELF['note.clear'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var rg = op.range ? sh.getRange(op.range) : sh.getDataRange();
+  rg.clearNote();
+  chg_(ctx, sh, rg.getA1Notation(), 'メモを消去');
+};
+
+// 棚: link.set
+// 題: セルや列にリンクを付ける
+// 分類: 範囲
+// 語: リンクを貼|リンクを付|リンクを設定|ハイパーリンク|URLをリンク|クリックで飛べる|リンクにして
+// 違い: 文書中の言葉にリンクを付けるなら doc.link
+// 引数: range=範囲, url=文字, text=文字, col=列, url_col=列
+// どれか: range col
+// 例: 「A2に公式サイトへのリンクを貼って」 → {"shelf":"link.set","range":"A2","url":"https://example.com","text":"公式サイト"}
+// 例: 「会社名列にURL列のリンクを一括で貼って」 → {"shelf":"link.set","col":"会社名","url_col":"URL"}
+// 触る: 値 書式
+// 控え: 今
+SHELF['link.set'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  if (op.col) {
+    need_(op, ['url_col']);
+    var t = needTable_(sh);
+    var ci = colIndexOf_(t, op.col);
+    var uci = colIndexOf_(t, op.url_col);
+    var nr = t.lastData - t.firstData + 1;
+    if (nr < 1) throw new ArgError('リンクを設定するデータ行がありません');
+    var labelVals = sh.getRange(t.firstData, ci, nr, 1).getDisplayValues();
+    var urlVals = sh.getRange(t.firstData, uci, nr, 1).getDisplayValues();
+    var richRows = [];
+    var linked = 0;
+    for (var i = 0; i < nr; i++) {
+      var lbl = String(labelVals[i][0] || '');
+      var u = String(urlVals[i][0] || '').trim();
+      var b = SpreadsheetApp.newRichTextValue().setText(lbl || u);
+      if (u && /^https?:\/\//i.test(u)) {
+        b.setLinkUrl(u);
+        linked++;
+      }
+      richRows.push([b.build()]);
+    }
+    var rgCol = sh.getRange(t.firstData, ci, nr, 1);
+    rgCol.setRichTextValues(richRows);
+    chg_(ctx, sh, rgCol.getA1Notation(), op.col + '列にハイパーリンクを設定（' + linked + ' 件）');
+    return;
+  }
+  need_(op, ['range', 'url']);
+  var rg = sh.getRange(op.range);
+  var url = String(op.url).trim();
+  var label = op.text !== undefined && op.text !== '' ? String(op.text) : (rg.getDisplayValue() || url);
+  var rtv = SpreadsheetApp.newRichTextValue().setText(label).setLinkUrl(url).build();
+  rg.setRichTextValue(rtv);
+  chg_(ctx, sh, rg.getA1Notation(), 'ハイパーリンクを設定（' + url + '）');
+};

@@ -436,3 +436,117 @@ SHELF['drive.trash'] = function (ctx, op) {
   target.obj.setTrashed(true);
   chg_(ctx, null, '', (target.isFolder ? 'フォルダ' : mimeLabel_(target.mime)) + '「' + target.name + '」をゴミ箱に入れました');
 };
+
+// 棚: print.setup
+// 題: シートの印刷設定を保存する
+// 分類: 守る
+// 語: 印刷設定|A4横|A4縦|1ページに収め|余白を狭く|グリッド線|印刷の向き|用紙サイズ|ページ設定
+// 違い: 実際にPDFファイルを作るなら export.pdf
+// 引数: paper=選択(a4/a3/b4/b5/letter)=a4, landscape=真偽=true, fit_width=真偽=true, gridlines=真偽=false, margins=選択(narrow/normal/wide)=narrow
+// 頼み: paper=a3<A3 ; paper=b4<B4 ; paper=b5<B5 ; paper=a4<A4 ; landscape=false<縦向き|A4縦|縦に印刷 ; landscape=true<横向き|A4横|横に印刷 ; fit_width=true<1ページに収|幅を1ページ|横1ページ ; gridlines=true<枠線あり|グリッド線あり ; gridlines=false<枠線なし|グリッド線なし
+// 例: 「A4横・幅1ページに収める印刷設定にして」 → {"shelf":"print.setup","paper":"a4","landscape":true,"fit_width":true}
+// 触る: 書式
+// 控え: 今
+SHELF['print.setup'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var cfg = {
+    paper: String(op.paper || 'A4').toUpperCase(),
+    landscape: op.landscape !== false,
+    fit_width: op.fit_width !== false,
+    gridlines: op.gridlines === true,
+    margins: String(op.margins || 'narrow').toLowerCase()
+  };
+  var key = 'ws_print_cfg_' + sh.getSheetId();
+  PropertiesService.getDocumentProperties().setProperty(key, JSON.stringify(cfg));
+  chg_(ctx, sh, '', '印刷設定を保存（' + cfg.paper + '・' + (cfg.landscape ? '横' : '縦') + '・幅1ページ:' + (cfg.fit_width ? 'ON' : 'OFF') + '・枠線:' + (cfg.gridlines ? 'ON' : 'OFF') + '・余白:' + cfg.margins + '）');
+};
+
+// 棚: export.pdf
+// 題: シートをPDFにして保存する
+// 分類: 守る
+// 語: PDF出力|PDFに書き出|PDFにして|PDF保存|PDFを作成|PDF化|印刷用PDF|シートをPDF
+// 違い: 印刷設定だけ保存するなら print.setup。GoogleドキュメントのPDF化は doc.export.pdf
+// 引数: name=文字, folder=文字, paper=選択(a4/a3/b4/b5/letter), landscape=真偽, fit_width=真偽, gridlines=真偽
+// 頼み: landscape=false<縦向き|A4縦 ; landscape=true<横向き|A4横 ; paper=a3<A3 ; paper=a4<A4 ; folder~[「『"“]([^」』"”]+)[」』"”]フォルダ
+// 例: 「このシートをA4横のPDFにして保存して」 → {"shelf":"export.pdf","paper":"a4","landscape":true}
+// 例: 「売上シートを「請求書_5月.pdf」としてPDF出力して」 → {"shelf":"export.pdf","sheet":"売上","name":"請求書_5月.pdf"}
+// 触る: なし
+// 控え: なし
+SHELF['export.pdf'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var sh = op.sheet ? sheetOf_(ss, op.sheet, '') : sheetCtx_(ctx, op);
+  var saved = {};
+  try {
+    var raw = PropertiesService.getDocumentProperties().getProperty('ws_print_cfg_' + sh.getSheetId());
+    if (raw) saved = JSON.parse(raw);
+  } catch (e) {}
+  var paper = String(op.paper || saved.paper || 'A4').toUpperCase();
+  var landscape = op.landscape !== undefined ? !!op.landscape : (saved.landscape !== undefined ? !!saved.landscape : true);
+  var fitWidth = op.fit_width !== undefined ? !!op.fit_width : (saved.fit_width !== undefined ? !!saved.fit_width : true);
+  var gridlines = op.gridlines !== undefined ? !!op.gridlines : (saved.gridlines === true);
+  var margins = String(saved.margins || 'narrow').toLowerCase();
+  var mg = margins === 'wide' ? '0.75' : (margins === 'normal' ? '0.5' : '0.25');
+
+  SpreadsheetApp.flush();
+  var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf'
+    + '&gid=' + sh.getSheetId()
+    + '&size=' + encodeURIComponent(paper)
+    + '&portrait=' + (landscape ? 'false' : 'true')
+    + '&fitw=' + (fitWidth ? 'true' : 'false')
+    + '&gridlines=' + (gridlines ? 'true' : 'false')
+    + '&sheetnames=false&printtitle=false&pagenumbers=false&fzr=true'
+    + '&top_margin=' + mg + '&bottom_margin=' + mg + '&left_margin=' + mg + '&right_margin=' + mg;
+
+  var resp = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) {
+    throw new ArgError('PDF出力に失敗しました（HTTP ' + resp.getResponseCode() + '）');
+  }
+  var fileName = String(op.name || (ss.getName() + '_' + sh.getName() + '.pdf')).trim();
+  if (!/\.pdf$/i.test(fileName)) fileName += '.pdf';
+  var blob = resp.getBlob().setName(fileName);
+  var destFolder = op.folder ? resolveFolder_(op.folder, true).folder : null;
+  var pdfFile = destFolder ? destFolder.createFile(blob) : DriveApp.createFile(blob);
+  note_(ctx, 'PDF保存完了: ' + pdfFile.getName() + '\nID: ' + pdfFile.getId() + '\nURL: ' + pdfFile.getUrl());
+  chg_(ctx, sh, '', 'PDFを作成: 「' + pdfFile.getName() + '」（' + paper + '・' + (landscape ? '横' : '縦') + '）');
+};
+
+// 棚: drive.share
+// 題: ファイルやフォルダを共有・リンク取得する
+// 対象: 両方
+// 分類: 守る
+// 語: 共有リンク|閲覧リンク|共有設定|リンクを知っている全員|権限を付与|編集権限を|閲覧権限を|共有して
+// 引数: item=文字, email=文字, role=選択(viewer/editor/commenter)=viewer, anyone=真偽=false
+// 頼み: anyone=true<全員|リンクを知っている|閲覧リンク|共有リンク ; role=editor<編集権限|編集できる ; role=commenter<コメント権限|コメントできる ; role=viewer<閲覧権限|閲覧専用|見るだけ ; email~([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})
+// 例: 「閲覧専用の共有リンクを作って」 → {"shelf":"drive.share","anyone":true,"role":"viewer"}
+// 例: 「yamada@example.com に編集権限を付けて共有して」 → {"shelf":"drive.share","email":"yamada@example.com","role":"editor"}
+// 触る: なし
+// 控え: なし
+SHELF['drive.share'] = function (ctx, op) {
+  var target = op.item
+    ? resolveDriveItem_(op.item)
+    : (ctx.file ? wrapDriveObj_(DriveApp.getFileById(ctx.file.getId()), false) : null);
+  if (!target) throw new ArgError('共有する対象（item または target）を指定してください');
+  var role = String(op.role || 'viewer').toLowerCase();
+  var actions = [];
+  if (op.anyone) {
+    var perm = role === 'editor' ? DriveApp.Permission.EDIT : (role === 'commenter' ? DriveApp.Permission.COMMENT : DriveApp.Permission.VIEW);
+    target.obj.setSharing(DriveApp.Access.ANYONE_WITH_LINK, perm);
+    actions.push('リンクを知っている全員に ' + role + ' 権限を付与');
+  }
+  if (op.email) {
+    var em = String(op.email).trim();
+    if (role === 'editor') target.obj.addEditor(em);
+    else if (role === 'commenter' && typeof target.obj.addCommenter === 'function') target.obj.addCommenter(em);
+    else target.obj.addViewer(em);
+    actions.push(em + ' に ' + role + ' 権限を付与');
+  }
+  if (!actions.length) {
+    note_(ctx, '共有URL: ' + target.obj.getUrl());
+    return;
+  }
+  note_(ctx, '共有URL: ' + target.obj.getUrl());
+  chg_(ctx, null, '', '「' + target.name + '」を共有（' + actions.join(' / ') + '）');
+};

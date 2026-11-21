@@ -269,8 +269,20 @@ SHELF['sort'] = function (ctx, op) {
     if (op.where) {
       need_(op.where, ['col']);
       var ci = colIndexOf_(t, op.where.col) - t.firstCol + 1;
-      var crit = op.where.equals !== undefined ? SpreadsheetApp.newFilterCriteria().whenTextEqualTo(String(op.where.equals)).build()
-        : SpreadsheetApp.newFilterCriteria().whenCellNotEmpty().build();
+      var fb = SpreadsheetApp.newFilterCriteria();
+      var wh = op.where.when ? String(op.where.when).toLowerCase() : '';
+      var wv = op.where.value !== undefined ? op.where.value : op.where.equals;
+      var crit;
+      if (wh === 'blank') crit = fb.whenCellEmpty().build();
+      else if (wh === 'notblank') crit = fb.whenCellNotEmpty().build();
+      else if (wh === 'contains') crit = fb.whenTextContains(String(wv !== undefined ? wv : '')).build();
+      else if (wh === 'ne') crit = fb.whenTextDoesNotContain(String(wv !== undefined ? wv : '')).build();
+      else if (wh === 'gt') crit = fb.whenNumberGreaterThan(Number(wv)).build();
+      else if (wh === 'ge') crit = fb.whenNumberGreaterThanOrEqualTo(Number(wv)).build();
+      else if (wh === 'lt') crit = fb.whenNumberLessThan(Number(wv)).build();
+      else if (wh === 'le') crit = fb.whenNumberLessThanOrEqualTo(Number(wv)).build();
+      else if (wh === 'eq' || op.where.equals !== undefined) crit = fb.whenTextEqualTo(String(wv)).build();
+      else crit = fb.whenCellNotEmpty().build();
       f.setColumnFilterCriteria(ci, crit);
     }
     chg_(ctx, sh, full.getA1Notation(), 'フィルタを設定');
@@ -281,14 +293,15 @@ SHELF['sort'] = function (ctx, op) {
 // 棚: filter.where
 // 題: 条件に合う行だけ表示
 // 分類: 絞る
-// 語: だけ表示|だけ見せ|だけに絞|行だけ残|絞り込んで|のみ表示|フィルタをかけ|行だけ絞り込|だけ絞り込
+// 語: だけ表示|だけ見せ|だけに絞|行だけ残|絞り込んで|のみ表示|フィルタをかけ|行だけ絞り込|だけ絞り込|以上の行|以下の行|を含む行|空白の行
 // 違い: 並べ替えは sort
-// 引数: col*=列, equals=文字
-// 頼み: equals~(?:が|は)[『「]?([^』」]+?)[』」]?の(?:行|人|もの|データ)だけ ; equals~([^\s]+)の行だけ ; col~([^\s]+)(?:が|は)[^\s]+の(?:行|人|もの|データ)だけ
+// 引数: col*=列, equals=文字, when=選択(eq/ne/contains/gt/ge/lt/le/blank/notblank), value=文字
+// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え ; when=lt<未満|より小 ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外|入力済み ; equals~(?:が|は)[『「]?([^』」]+?)[』」]?の(?:行|人|もの|データ)だけ ; equals~([^\s]+)の行だけ ; col~([^\s]+)(?:が|は)[^\s]+の(?:行|人|もの|データ)だけ
 // 例: 「部署が営業の行だけ見せて」 → {"shelf":"filter.where","col":"部署","equals":"営業"}
+// 例: 「金額が10000以上の行だけ絞り込んで」 → {"shelf":"filter.where","col":"金額","when":"ge","value":"10000"}
 // 触る: 値 フィルタ
 SHELF['filter.where'] = function (ctx, op) {
-  SHELF['sort'](ctx, { shelf: 'sort', where: { col: op.col, equals: op.equals }, sheet: op.sheet });
+  SHELF['sort'](ctx, { shelf: 'sort', where: { col: op.col, equals: op.equals, when: op.when, value: op.value }, sheet: op.sheet });
 };
 
 // 棚: filter.on

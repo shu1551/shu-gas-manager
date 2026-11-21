@@ -3769,10 +3769,10 @@ def test_005_gas_recipe_detect_and_apply_cache_wrap(mock_client):
 
 def test_006_recipe_catalog_12_items_and_natural_language_match(mock_client):
     res = mock_client.list_recipes()
-    assert res["count"] == 12
-    assert len(res["recipes"]) == 12
+    assert res["count"] == 13
+    assert len(res["recipes"]) == 13
     ids = [r["id"] for r in res["recipes"]]
-    for i in range(1, 13):
+    for i in range(1, 14):
         assert f"R{i:02d}" in ids
 
     m1 = mock_client.match_recipe_by_text("メールのスレッド取得が遅い")
@@ -3991,9 +3991,9 @@ def test_009_gas_scaffold_catalog_and_apply_full_architecture(mock_client):
     import copy
     # 1. カタログ取得
     res_list = mock_client.gas_scaffold(list_only=True)
-    assert res_list["count"] == 6
+    assert res_list["count"] == 8
     ids = [s["id"] for s in res_list["scaffolds"]]
-    assert ids == ["S01", "S02", "S03", "S04", "S05", "S06"]
+    assert ids == ["S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"]
 
     # 2. S05 (full_architecture) の注入
     files = [
@@ -4037,13 +4037,13 @@ def test_010_unified_shelf_25_catalog_and_golden_check(mock_client):
     import copy
     from gas_client import GAS_UNIFIED_SHELVES
 
-    # 1. 全28棚（R:12 + S:6 + K:4 + D:4 + E:2 = 28棚）の検証
-    assert len(GAS_UNIFIED_SHELVES) == 28
+    # 1. 全33棚（R:13 + S:8 + K:4 + D:6 + E:2 = 33棚）の検証
+    assert len(GAS_UNIFIED_SHELVES) == 33
     categories = [s["category"] for s in GAS_UNIFIED_SHELVES]
-    assert categories.count("SPEEDUP") == 12
-    assert categories.count("SCAFFOLD") == 6
+    assert categories.count("SPEEDUP") == 13
+    assert categories.count("SCAFFOLD") == 8
     assert categories.count("DESIGN") == 4
-    assert categories.count("DIAG") == 4
+    assert categories.count("DIAG") == 6
     assert categories.count("EDIT") == 2
 
     # 2. check_shelves によるゴールデン頼み文全問一致検証
@@ -6935,3 +6935,84 @@ def test_ai_hesitation_reducers_alias_e01_func_patch_and_split(mock_client, tmp_
     # 5. Windows パスのバックスラッシュ保持
     parts = gas_mcp_server._split_gas_command(r'push MyProj C:\Users\someone\work')
     assert parts == ["push", "MyProj", r"C:\Users\someone\work"]
+
+
+def test_172_new_gas_shelves_r13_s07_s08_d05_d06(mock_client):
+    """新規追加5棚 (R13, S07, S08, D05, D06) の検出・注入・診断を検証"""
+    import copy
+
+    sid = "dummy_new_shelves"
+    files = [
+        {
+            "name": "Code",
+            "type": "SERVER_JS",
+            "source": (
+                "const API_KEY = '" + "AIza" + "SyDummyKeyForTest1234567890abcd';\n"
+                "function fetchData() {\n"
+                "  const res = UrlFetchApp.fetch('https://example.com/api');\n"
+                "  const sh = SpreadsheetApp.getActiveSheet();\n"
+                "  const rows = sh.getDataRange().getValues();\n"
+                "  const v = rows[0][3];\n"
+                "  sh.getRange(2, 5).setValue(v);\n"
+                "  return res.getContentText();\n"
+                "}\n"
+            ),
+        },
+        {
+            "name": "Index",
+            "type": "HTML",
+            "source": "<html><body><script>el.innerHTML = userInput;</script></body></html>",
+        },
+        {
+            "name": "appsscript",
+            "type": "JSON",
+            "source": json.dumps({
+                "timeZone": "Asia/Tokyo",
+                "webapp": {"access": "ANYONE_ANONYMOUS", "executeAs": "USER_DEPLOYING"},
+                "oauthScopes": ["https://www.googleapis.com/auth/drive"],
+            }),
+        },
+    ]
+
+    mock_client.resolve_script_id = MagicMock(return_value=sid)
+    mock_client.get_content = MagicMock(side_effect=lambda s, use_cache=False: {"files": copy.deepcopy(files)})
+
+    def fake_put(s, new_files):
+        files.clear()
+        files.extend(copy.deepcopy(new_files))
+
+    mock_client._put_content = MagicMock(side_effect=fake_put)
+
+    # D05: セキュリティ監査
+    r_d05 = mock_client.gas_shelf(sid, shelf_id="D05")
+    assert r_d05["status"] == "success"
+    assert r_d05["result"]["count"] >= 4
+    assert r_d05["result"]["score"] < 100
+    assert "Google APIキー直書き" in r_d05["markdown_report"]
+    assert "Webアプリ無認証公開" in r_d05["markdown_report"]
+    assert "innerHTML" in r_d05["markdown_report"]
+
+    # D06: 列番号ズレ検査
+    r_d06 = mock_client.gas_shelf(sid, shelf_id="D06")
+    assert r_d06["status"] == "success"
+    assert r_d06["result"]["count"] >= 2
+    assert "rows[0][3]" in r_d06["markdown_report"]
+
+    # R13: 自動リトライ包装（適用）
+    r_r13 = mock_client.gas_shelf(sid, shelf_id="R13", filename="Code", func_name="fetchData", apply=True)
+    assert r_r13["status"] == "success"
+    assert "Utilities.sleep" in files[0]["source"]
+
+    # S07: ログ＆エラー通知骨格（適用＋二重防止）
+    r_s07 = mock_client.gas_shelf(sid, shelf_id="S07", apply=True)
+    assert r_s07["result"]["applied"] is True
+    assert "writeAppLog_" in files[0]["source"]
+    assert "/* @gas-scaffold:S07 */" in files[0]["source"]
+    r_s07_dup = mock_client.gas_shelf(sid, shelf_id="S07", apply=True)
+    assert r_s07_dup["result"]["applied"] is False
+
+    # S08: トリガー安全管理骨格（適用）
+    r_s08 = mock_client.gas_shelf(sid, shelf_id="S08", apply=True)
+    assert r_s08["result"]["applied"] is True
+    assert "ensureTimeTrigger_" in files[0]["source"]
+    assert "/* @gas-scaffold:S08 */" in files[0]["source"]

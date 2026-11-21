@@ -26,7 +26,7 @@ LEGACY_NAMES = [
     "doc.outline", "doc.insert", "doc.table.cell",
     "doc.find", "doc.heading", "doc.list", "doc.delete", "doc.move", "doc.table.row",
     "doc.font", "doc.align", "doc.table.style", "doc.pagebreak", "doc.header", "doc.toc",
-    "doc.link", "doc.from.sheet", "doc.template", "doc.copy",
+    "doc.link", "doc.from.sheet", "doc.template", "doc.copy", "doc.export.pdf",
 ]
 
 # 段 1 で足した束ねた棚の別名 9 本

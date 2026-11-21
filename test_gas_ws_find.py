@@ -75,7 +75,7 @@ def test_find_special_asks(mgr):
     one = mgr.find("棚:sort")
     assert one.startswith("1. sort｜表を並べ替える") and "引数: " in one
     assert "はありません" in mgr.find("棚:nothing")
-    assert "作る: 1 本" in mgr.find("") and "文書: 25 本" in mgr.find("")
+    assert "作る: 1 本" in mgr.find("") and "文書: 26 本" in mgr.find("")
 
 
 def test_find_kind_filter(mgr):
