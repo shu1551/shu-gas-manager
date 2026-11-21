@@ -48,9 +48,10 @@ SHELF['sheet.rename'] = function (ctx, op) {
 // 棚: sheet.move
 // 題: シートの並び順を変える
 // 分類: シート
-// 語: シートを移動|シートの順番|シートの並び|シートを並べ替|順番を入れ替|先頭に動か|左へ動か
+// 語: シートを移動|シートの順番|シートの並び|順番を入れ替|先頭に動か|左へ動か
 // 違い: 追加は sheet.add、改名は sheet.rename
 // 引数: name*=シート, index*=数
+// 頼み: index=1<先頭|一番左|最初 ; index=999<末尾|一番右|最後 ; index~([0-9]+)番目
 // 例: 「集計を先頭に動かして」 → {"shelf":"sheet.move","name":"集計","index":1}
 // 触る: シート構成
 // 控え: 名前,全部
@@ -64,7 +65,7 @@ SHELF['sheet.move'] = function (ctx, op) {
 // 語: シートを削除|シートを消|シートごと消|いらないシート|シートはいらない|シートを捨て|タブを消|シートごと削除|シート丸ごと削除|シート丸ごと消
 // 違い: 改名は sheet.rename、追加は sheet.add
 // 引数: name*=シート
-// 例: 「古い集計シートを消して」 → {"shelf":"sheet.delete","name":"古い集計"}
+// 例: 「集計シートを消して」 → {"shelf":"sheet.delete","name":"集計"}
 // 危ない: 消す
 // 触る: シート構成
 // 控え: 名前,全部
@@ -113,7 +114,7 @@ SHELF['sheet.copy'] = function (ctx, op) {
 // 語: シートを隠|シートを非表示|シートを見えなく|シートを隠して|シート非表示
 // 違い: シートを再表示するなら sheet.show。シートごと消すなら sheet.delete
 // 引数: name*=シート
-// 例: 「古い集計シートを隠して」 → {"shelf":"sheet.hide","name":"古い集計"}
+// 例: 「集計シートを隠して」 → {"shelf":"sheet.hide","name":"集計"}
 // 触る: 隠し
 // 控え: 名前,全部
 SHELF['sheet.hide'] = function (ctx, op) {
@@ -176,7 +177,7 @@ SHELF['sheet.color'] = function (ctx, op) {
 // 語: シートを結合|シートをまとめ|シートを統合|複数シートを1枚|縦に結合|縦にまとめ|シートを合体|全シートをまとめ
 // 違い: 項目ごとに集計するなら summary、シートを分割するなら sheet.split
 // 引数: sheets=配列, into=文字=統合, skip_header=真偽=true
-// 頼み: into~[『「]([^』」]+)[』」](?:シート)?に(?:まとめ|統合|結合)
+// 頼み: into~[『「]([^』」]+)[』」](?:シート)?に(?:まとめ|統合|結合) ; into~(?:表を|を)?\s*([^\sにへを「『]+?)シートに(?:縦に)?(?:まとめ|統合|結合)
 // 例: 「全シートの表を統合シートに縦にまとめて」 → {"shelf":"sheet.merge","into":"統合"}
 // 例: 「4月と5月のシートを上半期シートに結合して」 → {"shelf":"sheet.merge","sheets":["4月","5月"],"into":"上半期"}
 // 触る: シート構成 値
@@ -275,4 +276,192 @@ SHELF['sheet.split'] = function (ctx, op) {
     createdNames.push(safeName + '(' + groups[k].length + '件)');
   });
   chg_(ctx, sh, '', op.col + ' ごとに ' + order.length + ' シートへ分割: ' + createdNames.slice(0, 8).join('・') + (createdNames.length > 8 ? ' ほか' : ''));
+};
+
+// 棚: sheet.diff
+// 題: 2つのシートの差分を比較する
+// 分類: シート
+// 語: シートを比較|シートの差分|2つのシートを比較|差分を比較|違いを比較|シート間の差分|シートの違い|変更点を比較
+// 違い: 同じシート内の2列の引き算列を足すなら calc.diff
+// 引数: from*=シート, to*=シート, into=文字=差分
+// 頼み: from~[「『]?([^「『」』\sと]+?)[」』]?と[「『]?[^「『」』\s]+?[」』]?(?:の)?(?:シート)?(?:の)?(?:差分|違い|比較) ; to~[「『]?[^「『」』\sと]+?[」』]?と[「『]?([^「『」』\s]+?)[」』]?(?:の)?(?:シート)?(?:の)?(?:差分|違い|比較)
+// 例: 「4月と5月のシートの差分を比較して」 → {"shelf":"sheet.diff","from":"4月","to":"5月"}
+// 触る: シート構成 値
+// 控え: 先
+SHELF['sheet.diff'] = function (ctx, op) {
+  need_(op, ['from', 'to']);
+  var ss = ctx.ss;
+  var s1 = sheetOf_(ss, op.from, '');
+  var s2 = sheetOf_(ss, op.to, '');
+  var lr1 = s1.getLastRow(), lc1 = s1.getLastColumn();
+  var lr2 = s2.getLastRow(), lc2 = s2.getLastColumn();
+  var maxR = Math.max(lr1, lr2), maxC = Math.max(lc1, lc2);
+  var v1 = (lr1 > 0 && lc1 > 0) ? s1.getRange(1, 1, lr1, lc1).getDisplayValues() : [];
+  var v2 = (lr2 > 0 && lc2 > 0) ? s2.getRange(1, 1, lr2, lc2).getDisplayValues() : [];
+  var diffs = [], totalDiffs = 0, CAP = 5000;
+  for (var r = 0; r < maxR; r++) {
+    for (var c = 0; c < maxC; c++) {
+      var a = (v1[r] && v1[r][c] !== undefined) ? String(v1[r][c]) : '';
+      var b = (v2[r] && v2[r][c] !== undefined) ? String(v2[r][c]) : '';
+      if (a !== b) {
+        totalDiffs++;
+        if (diffs.length < CAP) diffs.push([a1_(r + 1, c + 1), a, b]);
+      }
+    }
+  }
+  if (!totalDiffs) {
+    note_(ctx, '「' + op.from + '」と「' + op.to + '」に差分はありませんでした');
+    return;
+  }
+  var intoName = String(op.into || '差分').trim();
+  var dst = ss.getSheetByName(intoName);
+  if (!dst) {
+    dst = ss.insertSheet(intoName, ss.getSheets().length);
+    ctx.createdSheets.push(intoName);
+  } else {
+    dst.clearContents();
+  }
+  var out = [['セル', op.from + 'の値', op.to + 'の値']].concat(diffs);
+  dst.getRange(1, 1, out.length, 3).setValues(out);
+  dst.getRange(1, 1, 1, 3).setBackground(STYLE.headBg).setFontColor(STYLE.headFg).setFontWeight('bold');
+  ctx.curSheet = intoName;
+  if (totalDiffs > CAP) note_(ctx, '差分が ' + totalDiffs + ' 件あったため先頭 ' + CAP + ' 件のみ出力しました');
+  chg_(ctx, dst, a1_(1, 1, out.length, 3), '「' + op.from + '」と「' + op.to + '」の差分 ' + totalDiffs + ' 件を出力');
+};
+
+// 棚: sheet.toc
+// 題: 全シートの目次シートを作る
+// 分類: シート
+// 語: 目次シート|目次を作|シート一覧を作|シートの目次|インデックスシート|リンク付き目次|全シートの目次
+// 違い: 文書の目次なら doc.toc、シートの追加だけなら sheet.add
+// 引数: into=文字=目次
+// 頼み: into~[『「]([^』」]+)[』」](?:シート)?(?:に|として)?(?:目次|一覧)
+// 例: 「全シートの目次シートを作って」 → {"shelf":"sheet.toc"}
+// 触る: シート構成 値 書式
+// 控え: 先
+SHELF['sheet.toc'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var intoName = String(op.into || '目次').trim();
+  var targets = ss.getSheets().filter(function (s) {
+    var nm = s.getName();
+    return nm !== intoName && nm !== '_GASクイックの控え';
+  });
+  if (!targets.length) throw new ArgError('目次に載せるシートがありません');
+  var dst = ss.getSheetByName(intoName);
+  if (!dst) {
+    dst = ss.insertSheet(intoName, 0);
+    ctx.createdSheets.push(intoName);
+  } else {
+    dst.clearContents();
+  }
+  var rows = [['No', 'シート名', '行数', '列数', '状態']];
+  var linkRich = [];
+  targets.forEach(function (s, idx) {
+    var nm = s.getName();
+    rows.push([idx + 1, nm, s.getLastRow(), s.getLastColumn(), s.isSheetHidden() ? '非表示' : '表示']);
+    var rtv = SpreadsheetApp.newRichTextValue().setText(nm).setLinkUrl('#gid=' + s.getSheetId()).build();
+    linkRich.push([rtv]);
+  });
+  dst.getRange(1, 1, rows.length, 5).setValues(rows);
+  dst.getRange(2, 2, linkRich.length, 1).setRichTextValues(linkRich);
+  dst.getRange(1, 1, 1, 5).setBackground(STYLE.headBg).setFontColor(STYLE.headFg).setFontWeight('bold').setHorizontalAlignment('center');
+  dst.setColumnWidth(1, 50);
+  dst.setColumnWidth(2, 220);
+  ctx.curSheet = intoName;
+  chg_(ctx, dst, a1_(1, 1, rows.length, 5), targets.length + ' シートのリンク付き目次を作成');
+};
+
+// 棚: book.finish
+// 題: 全シートをA1に揃え提出前仕上げ
+// 分類: シート
+// 語: 提出前仕上げ|提出前の仕上げ|全シートをA1|全シートA1|カーソルをA1|A1に揃え|納品前仕上げ|提出用に整え
+// 違い: 表の書式や列幅を整えるなら tidy、枠線の表示切替だけなら sheet.gridlines
+// 引数: gridlines=真偽
+// 頼み: gridlines=false<枠線を消|枠線なし|枠線を非表示|グリッド線を消|グリッド線なし|グリッド線を非表示 ; gridlines=true<枠線を表示|枠線あり|グリッド線を表示|グリッド線あり
+// 例: 「全シートをA1に揃えて提出前仕上げをして」 → {"shelf":"book.finish"}
+// 触る: 書式
+// 控え: なし
+SHELF['book.finish'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var targets = ss.getSheets().filter(function (s) {
+    return s.getName() !== '_GASクイックの控え' && !s.isSheetHidden();
+  });
+  if (!targets.length) throw new ArgError('仕上げ対象の可視シートがありません');
+  targets.forEach(function (s) {
+    s.activate();
+    s.getRange('A1').activate();
+    if (op.gridlines !== undefined && typeof s.setHiddenGridlines === 'function') {
+      s.setHiddenGridlines(!op.gridlines);
+    }
+  });
+  targets[0].activate();
+  targets[0].getRange('A1').activate();
+  ctx.curSheet = targets[0].getName();
+  chg_(ctx, null, 'A1', '可視 ' + targets.length + ' シートを A1 選択に統一' + (op.gridlines !== undefined ? ('（枠線:' + (op.gridlines ? '表示' : '非表示') + '）') : ''));
+};
+
+// 棚: sheet.sort
+// 題: シートを名前順に並べ替える
+// 分類: シート
+// 語: シートを名前順|シートを昇順|シートを降順|シートを並べ替|タブを名前順|タブを並べ替|シート名で並べ替|全シートを並べ替
+// 違い: 特定の1シートを動かすなら sheet.move、表の行を並べ替えるなら sort
+// 引数: desc=真偽=false
+// 頼み: desc=true<降順|逆順|Zから|大きい順 ; desc=false<昇順|名前順|あいうえお順|五十音順|Aから
+// 例: 「シートを名前順に並べ替えて」 → {"shelf":"sheet.sort"}
+// 触る: シート構成
+// 控え: 全部
+SHELF['sheet.sort'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var list = ss.getSheets().filter(function (s) { return s.getName() !== '_GASクイックの控え'; });
+  if (list.length <= 1) {
+    note_(ctx, '並べ替えるシートが 1 枚以下です（変更なし）');
+    return;
+  }
+  var sorted = list.slice().sort(function (a, b) {
+    var cmp = a.getName().localeCompare(b.getName(), 'ja');
+    return op.desc ? -cmp : cmp;
+  });
+  sorted.forEach(function (s, idx) {
+    ss.setActiveSheet(s);
+    ss.moveActiveSheet(idx + 1);
+  });
+  chg_(ctx, null, '', 'シート ' + sorted.length + ' 枚を名前' + (op.desc ? '降順' : '昇順') + 'に並べ替え');
+};
+
+// 棚: sheet.snapshot
+// 題: 日付つきでシートの控えを複製保存
+// 分類: シート
+// 語: スナップショット|日付つきで複製|日付付きで複製|日付入りで複製|控えを複製|バックアップシートを作|今日の控えを作|日付付き控え
+// 違い: 任意の名前で複製するなら sheet.copy
+// 引数: name=シート, suffix=文字
+// 頼み: suffix~[『「]([^』」]+)[』」]を付け
+// 例: 「売上シートを日付つきで複製保存して」 → {"shelf":"sheet.snapshot","name":"売上"}
+// 触る: シート構成
+// 控え: なし
+SHELF['sheet.snapshot'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var s = op.name ? sheetOf_(ss, op.name, '') : sheetCtx_(ctx, op);
+  var suf = op.suffix ? String(op.suffix).trim() : '';
+  if (!suf) {
+    if (typeof Utilities !== 'undefined' && typeof Utilities.formatDate === 'function') {
+      var tz = (typeof Session !== 'undefined' && Session.getScriptTimeZone) ? (Session.getScriptTimeZone() || 'Asia/Tokyo') : 'Asia/Tokyo';
+      suf = Utilities.formatDate(new Date(), tz, 'yyyyMMdd');
+    } else {
+      var d = new Date();
+      var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+      suf = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
+    }
+  }
+  var base = s.getName() + '_' + suf;
+  var targetName = base;
+  var seq = 2;
+  while (ss.getSheetByName(targetName)) {
+    targetName = base + '_' + seq;
+    seq++;
+  }
+  var c = s.copyTo(ss);
+  c.setName(targetName);
+  ctx.createdSheets.push(targetName);
+  ctx.curSheet = targetName;
+  chg_(ctx, c, '', 'シート「' + s.getName() + '」の控え「' + targetName + '」を保存');
 };

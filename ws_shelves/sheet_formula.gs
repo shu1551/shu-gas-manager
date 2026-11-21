@@ -206,11 +206,12 @@ SHELF['lookup.add'] = function (ctx, op) {
 // 棚: calc.diff
 // 題: 差や増減率の列を足す
 // 分類: 集計
-// 語: 差の列|前月との差|伸び率の列|増減率|差分を計算|伸び率|差を出して|前年比|前月比
+// 語: 差の列|の差の列|差の列を足|前月との差|差と伸び率|伸び率の列|増減率|差分を計算|伸び率|差を出して|前年比|前月比
 // 違い: 構成比なら calc.percent。汎用計算なら calc.col
 // 引数: col_a*=列, col_b*=列, rate=真偽, name=文字, at=列
-// 頼み: rate=true<伸び率|増減率 ; col_a~([^\sと]+)と([^\s]+)の差 ; col_b~[^\sと]+と([^\s]+)の差
-// 例: 「前月との差と伸び率の列を足して」 → {"shelf":"calc.diff","col_a":"今月","col_b":"前月","rate":true}
+// 頼み: rate=true<伸び率|増減率 ; col_a~([^\sと]+)と([^\sのにの]+)の差 ; col_b~[^\sと]+と([^\sのにの]+)の差
+// 例: 「売上と原価の差の列を足して」 → {"shelf":"calc.diff","col_a":"売上","col_b":"原価"}
+// 例: 「今月と前月の差と伸び率の列を足して」 → {"shelf":"calc.diff","col_a":"今月","col_b":"前月","rate":true}
 // 触る: 値 書式
 SHELF['calc.diff'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
@@ -307,10 +308,11 @@ SHELF['calc.rank'] = function (ctx, op) {
 // 棚: count.if
 // 題: 条件に合う数を数える・合計する式を入れる
 // 分類: 集計
-// 語: 条件で数えて|人数を数えて|件数を数えて|COUNTIF|SUMIF|条件付き合計|カウントして|件数をカウント
+// 語: 条件で数えて|条件付き件数|COUNTIF|SUMIF|条件付き合計|カウントして|件数をカウント|件数を数えて
 // 違い: 集計表を作るなら summary。表全体なら total
 // 引数: range*=範囲, criteria*=文字, sum_range=範囲, into=範囲
-// 頼み: criteria~[『「]([^』」]+)[』」]の人数 ; criteria~[『「]([^』」]+)[』」]の件数
+// 頼み: criteria~[『「]([^』」]+)[』」]の?(?:人数|件数) ; criteria~[『「]([^』」]+)[』」]
+// 例: 「B2:B10で「営業」の件数を数えて」 → {"shelf":"count.if","range":"B2:B10","criteria":"営業"}
 // 例: 「部署ごとの人数を数えて」 → {"shelf":"count.if","range":"C4:C20","criteria":"営業部"}
 // 触る: 値
 SHELF['count.if'] = function (ctx, op) {
@@ -592,4 +594,55 @@ SHELF['text.case'] = function (ctx, op) {
   for (var r2 = 0; r2 < tmp.length; r2++) for (var c2 = 0; c2 < tmp[r2].length; c2++) if (isText[r2][c2]) tmp[r2][c2] = String(got[r2][c2]);
   rg.setValues(tmp);
   chg_(ctx, sh, rg.getA1Notation(), fnName + ' でそろえた');
+};
+
+// 棚: text.affix
+// 題: 文字の先頭・末尾に文字を付ける
+// 分類: 整える
+// 語: 先頭に文字|末尾に文字|先頭に付け|末尾に付け|後ろに付け|前に付け|接頭辞|接尾辞|末尾に様|先頭にID
+// 違い: 複数列をつなぐなら text.join、文字の置換は replace
+// 引数: col=列, range=範囲, prefix=文字, suffix=文字, remove=真偽=false
+// 頼み: remove=true<外し|削|取り除|消 ; prefix~(?:先頭|頭|前)に[『「]([^』」]+)[』」] ; suffix~(?:末尾|後ろ|最後)に[『「]([^』」]+)[』」] ; prefix~先頭の[『「]([^』」]+)[』」] ; suffix~末尾の[『「]([^』」]+)[』」]
+// どれか: prefix suffix
+// 例: 「顧客名列の末尾に「様」を付けて」 → {"shelf":"text.affix","col":"顧客名","suffix":"様"}
+// 例: 「品番列の先頭に「ID-」を付けて」 → {"shelf":"text.affix","col":"品番","prefix":"ID-"}
+// 触る: 値
+// 控え: 今
+SHELF['text.affix'] = function (ctx, op) {
+  var pref = op.prefix !== undefined ? String(op.prefix) : '';
+  var suff = op.suffix !== undefined ? String(op.suffix) : '';
+  if (!pref && !suff) throw new ArgError('棚「text.affix」に prefix か suffix のどちらかが要ります');
+  var sh = sheetCtx_(ctx, op), rg;
+  if (op.col) {
+    var t = needTable_(sh), ci = colIndexOf_(t, op.col);
+    rg = sh.getRange(t.firstData, ci, Math.max(1, t.lastData - t.firstData + 1), 1);
+  } else if (op.range) {
+    rg = sh.getRange(op.range);
+  } else {
+    var t2 = needTable_(sh);
+    rg = dataRange_(t2);
+  }
+  var vals = rg.getValues(), forms = rg.getFormulas(), changed = 0;
+  for (var r = 0; r < vals.length; r++) {
+    for (var c = 0; c < vals[r].length; c++) {
+      var f = forms[r][c], v = vals[r][c];
+      if (f) { vals[r][c] = f; continue; }
+      if (isBlank_(v)) continue;
+      var s = String(v), ns = s;
+      if (op.remove) {
+        if (pref && ns.indexOf(pref) === 0) ns = ns.slice(pref.length);
+        if (suff && ns.length >= suff.length && ns.slice(-suff.length) === suff) ns = ns.slice(0, ns.length - suff.length);
+      } else {
+        if (pref && ns.indexOf(pref) !== 0) ns = pref + ns;
+        if (suff && !(ns.length >= suff.length && ns.slice(-suff.length) === suff)) ns = ns + suff;
+      }
+      if (ns !== s) { vals[r][c] = ns; changed++; }
+    }
+  }
+  if (!changed) {
+    note_(ctx, '変更対象のセルはありませんでした（' + rg.getA1Notation() + '）');
+    return;
+  }
+  rg.setValues(vals);
+  chg_(ctx, sh, rg.getA1Notation(), '先頭/末尾の文字を' + (op.remove ? '削除' : '付与') + '（' + changed + ' 件）');
 };

@@ -15,3 +15,11 @@ filter.off	表のフィルタを解除して
 filter.off	絞り込みを解除して全部表示に戻して
 ?filter.off	絞り込みを解除したい
 ?filter.off	フィルタ 解除 外す
+filter.delete	ステータスが完了の行を一括削除して
+filter.delete	金額が0以下の行を削除して
+filter.delete	状態が不要に一致する行を消して
+?filter.delete	条件に合う行を一括削除したい
+filter.extract	部署が営業の行を別シートに抽出して
+filter.extract	金額が10000以上の行を別シートへ抽出して
+filter.extract	条件に合う行を「抽出」シートに抽出して
+?filter.extract	条件に合う行を別シートに抽出したい

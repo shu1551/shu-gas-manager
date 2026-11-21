@@ -39,3 +39,23 @@ sheet.split	部署ごとにシートを分けて作って
 sheet.split	項目ごとに別シートに分割して
 ?sheet.split	列の値ごとにシートを自動分割したい
 ?sheet.split	シート 分割 別シート 分ける
+sheet.diff	4月と5月のシートの差分を比較して
+sheet.diff	2つのシートの違いを比較して変更点を出して
+sheet.diff	集計シートと売上シートを比較して差分シートに出して
+?sheet.diff	シート比較 差分 違い 変更点
+sheet.toc	全シートの目次シートを作って
+sheet.toc	リンク付きのシート一覧目次を作成して
+sheet.toc	ブック内のインデックスシートを作って
+?sheet.toc	目次シート シート一覧 リンク付き目次
+book.finish	全シートをA1に揃えて提出前仕上げをして
+book.finish	全シートのカーソルをA1に揃えて納品前仕上げをして
+book.finish	全シートA1選択で提出用に整えて
+?book.finish	提出前仕上げ 納品前仕上げ 全シートA1
+sheet.sort	シートを名前順に並べ替えて
+sheet.sort	全シートのタブを名前順で昇順に並べ替えて
+sheet.sort	シート名で降順に並べ替えて
+?sheet.sort	シート並べ替え 名前順 タブ昇順
+sheet.snapshot	売上シートを日付つきで複製保存して
+sheet.snapshot	集計シートの日付入りスナップショットを作って
+sheet.snapshot	今日の控えを作ってバックアップシートを複製保存して
+?sheet.snapshot	スナップショット 日付付き控え 複製保存

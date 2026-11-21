@@ -3,10 +3,10 @@
 // 棚: format
 // 題: 範囲の書式を変える
 // 分類: 見た目
-// 語: 書式を|太字に|斜体に|太字を|斜体を|太字を外|斜体を外|太字を解除|斜体を解除|折り返しを解除|折り返さ|はみ出|色を付け|色を変え|色に変え|色にして|背景色|背景を|文字の色|文字色|フォントの色|フォント色|フォントを|文字サイズ|フォントサイズ|表示に|中央揃え|右揃え|左揃え|中央寄せ|右寄せ|左寄せ|桁区切り|桁区切りに|カンマ区切り|罫線を引|罫線を消|罫線をつけ|罫線を付け|外枠|外枠だけ|外枠を|結合解除|結合を解除|マージ|折り返し|赤く|青く|黄色く|緑に|赤にして|青にして|黄色にして|緑にして|黒にして|白にして|水色にして|紺にして|見出しの行|見出しを|黄色の背景|青い背景|薄い青色|色も付けて|を結合して|セルを結合|セルの結合|に罫線を引|表に罫線|曜日も出|曜日を出|曜日付き|曜日つき|表示形式|日付の表示|日付の見せ方
+// 語: 書式を|太字に|斜体に|太字を|斜体を|太字を外|斜体を外|太字を解除|斜体を解除|折り返しを解除|折り返さ|はみ出|色を付け|色を変え|色に変え|色にして|背景色|背景を|文字の色|文字色|フォントの色|フォント色|フォントを|文字サイズ|フォントサイズ|表示に|中央揃え|右揃え|左揃え|中央寄せ|右寄せ|左寄せ|桁区切り|桁区切りに|カンマ区切り|罫線を引|罫線を消|罫線をつけ|罫線を付け|外枠|外枠だけ|外枠を|結合解除|結合を解除|マージ|折り返し|赤く|青く|黄色く|緑に|赤にして|青にして|黄色にして|緑にして|黒にして|白にして|水色にして|紺にして|見出しの行|見出しを|黄色の背景|青い背景|薄い青色|色も付けて|を結合して|セルを結合|セルの結合|に罫線を引|表に罫線|曜日も出|曜日を出|曜日付き|曜日つき|表示形式|日付の表示|日付の見せ方|時刻の表示|時刻を|hh:mm|yyyy/mm/dd|yyyy-mm-dd|桁区切|カンマ|パーセント|通貨形式|数値形式|数値標準|標準形式|標準に戻
 // 違い: 「〜の列」は範囲を切らず col:"列名" で渡す。条件付きは cf.add、1行おきは banding.add
 // 引数: range=範囲, col=列, header=真偽, title=真偽, bold=真偽, italic=真偽, color=色, bg=色, size=数, font=文字, number_format=文字, align=文字, valign=文字, wrap=真偽, borders=文字, merge=真偽
-// 頼み: bold=false<太字を解除|太字解除|太字を外|太字をやめ|太字をなく|太字じゃなく|太字でなく|太字を戻 ; bold=true<太字|太く ; italic=false<斜体を解除|斜体解除|斜体を外|斜体をやめ|斜体をなく|イタリックを解除|イタリックを外 ; italic=true<斜体|イタリック ; header=true<見出し|ヘッダ ; title=true<タイトル|表題 ; number_format=¥#,##0<円マーク|¥|円表示 ; number_format=#,##0<カンマ|桁区切り ; wrap=false<折り返しを解除|折り返し解除|折り返しをやめ|折り返さな|折り返しを外|折り返しなし|折り返しを消|はみ出 ; wrap=true<折り返 ; align=center<中央寄せ|中央揃え ; align=left<左寄せ|左揃え ; align=right<右寄せ|右揃え ; borders=false<罫線なし|罫線を消|罫線を削除|罫線解除|枠線なし|枠線を消|枠線解除 ; borders=outer<外枠|外罫線 ; borders=true<罫線を引|罫線をつけ|罫線を付け|罫線で囲|枠線を引|枠線をつけ|枠線を付け ; merge=false<結合解除|結合を解除|結合を外|結合を消|マージ解除 ; merge=true<結合|マージ ; number_format=m"月"d"日"(ddd)<曜日も|曜日を出|曜日付き|曜日つき ; size~([0-9]+)\s*(?:pt|ポイント)
+// 頼み: bold=false<太字を解除|太字解除|太字を外|太字をやめ|太字をなく|太字じゃなく|太字でなく|太字を戻 ; bold=true<太字|太く ; italic=false<斜体を解除|斜体解除|斜体を外|斜体をやめ|斜体をなく|イタリックを解除|イタリックを外 ; italic=true<斜体|イタリック ; header=true<見出し|ヘッダ ; title=true<タイトル|表題 ; number_format=yyyy/mm/dd(ddd)<年月日と曜日|年付きの曜日 ; number_format=m"月"d"日"(ddd)<曜日も|曜日を出|曜日付き|曜日つき|曜日入り ; number_format=hh:mm<HH:mm|09:00|2桁の時刻|時刻を2桁|時刻形式|時分 ; number_format=yyyy-mm-dd<yyyy-mm-dd ; number_format=yyyy/mm/dd<yyyy/MM/dd|2026/11/04|スラッシュの日付|年/月/日 ; number_format=0.0%<パーセント|%表示 ; number_format=General<数値(標準)|標準形式|表示形式を標準|標準に戻 ; number_format=¥#,##0<円マーク|¥|円表示|通貨形式 ; number_format=#,##0<カンマ|桁区切り|3桁 ; wrap=false<折り返しを解除|折り返し解除|折り返しをやめ|折り返さな|折り返しを外|折り返しなし|折り返しを消|はみ出 ; wrap=true<折り返 ; align=center<中央寄せ|中央揃え ; align=left<左寄せ|左揃え ; align=right<右寄せ|右揃え ; borders=false<罫線なし|罫線を消|罫線を削除|罫線解除|枠線なし|枠線を消|枠線解除 ; borders=outer<外枠|外罫線 ; borders=true<罫線を引|罫線をつけ|罫線を付け|罫線で囲|枠線を引|枠線をつけ|枠線を付け ; merge=false<結合解除|結合を解除|結合を外|結合を消|マージ解除 ; merge=true<結合|マージ ; size~([0-9]+)\s*(?:pt|ポイント)
 // どれか: range col header title
 // 例: 「見出しを太字で青い背景に」 → {"shelf":"format","header":true,"bold":true,"bg":"#1F4E79","color":"#FFFFFF"}
 // 例: 「金額の列を桁区切りに」 → {"shelf":"format","col":"金額","number_format":"#,##0"}
@@ -73,9 +73,9 @@ SHELF['bg.clear'] = function (ctx, op) {
 // 題: 列の幅・行の高さを変える
 // 分類: 見た目
 // 語: 列幅を|列の幅|幅を広げ|幅を狭め|行の高さ|幅を自動|自動調整|中身に合わせ|広げて
-// 引数: cols=対応, col=列, width=数, rows=対応, auto=列[]
-// 頼み: width~(?:幅を?|横幅を?)\s*([0-9]+)
-// どれか: cols col rows auto
+// 引数: cols=対応, col=列, width=数, rows=対応, auto=列[], all_sheets=真偽=false, auto_rows=真偽=false
+// 頼み: width~(?:幅を?|横幅を?)\s*([0-9]+) ; all_sheets=true<全シート|すべてのシート|全てのシート|ブック全体 ; auto_rows=true<行の高さを自動|行の高さも自動|行高を自動|行の高さ自動|行の高さを中身|行も自動
+// どれか: cols col rows auto all_sheets auto_rows
 // 例: 「A列を幅200にして」 → {"shelf":"width","col":"A","width":200}
 // 例: 「B列とC列の幅を中身に合わせて」 → {"shelf":"width","auto":["B","C"]}
 // 触る: 幅
@@ -90,17 +90,53 @@ SHELF['width'] = function (ctx, op) {
     if (lr > 0) sh.getRange(1, ci, lr, 1).getDisplayValues().forEach(function (x) { mx = Math.max(mx, wlen_(x[0])); });
     sh.setColumnWidth(ci, Math.max(STYLE.colMin, Math.min(STYLE.colMax, mx * STYLE.px + STYLE.pad))); did.push(k + '列(自動)');
   });
-  if (!did.length) throw new ArgError('棚「width」に cols・rows・auto のどれかが要ります');
+  if (op.auto_rows && !op.all_sheets) {
+    var lr0 = sh.getLastRow();
+    if (lr0 > 0 && typeof sh.autoResizeRows === 'function') {
+      sh.autoResizeRows(1, lr0);
+      did.push('全行の高さ(自動)');
+    }
+  }
+  if (op.all_sheets) {
+    var sCnt = 0;
+    ctx.ss.getSheets().forEach(function (s) {
+      if (s.getName() === '_GASクイックの控え' || s.isSheetHidden()) return;
+      var lrA = s.getLastRow(), lcA = s.getLastColumn();
+      if (lrA > 0 && lcA > 0) {
+        var dA = s.getRange(1, 1, lrA, lcA).getDisplayValues();
+        for (var cA = 0; cA < lcA; cA++) {
+          var mxA = 0;
+          for (var rA = 0; rA < lrA; rA++) mxA = Math.max(mxA, wlen_(dA[rA][cA]));
+          s.setColumnWidth(cA + 1, Math.max(STYLE.colMin, Math.min(STYLE.colMax, mxA * STYLE.px + STYLE.pad)));
+        }
+        if (op.auto_rows && typeof s.autoResizeRows === 'function') s.autoResizeRows(1, lrA);
+      }
+      sCnt++;
+    });
+    did.push('全' + sCnt + 'シート列幅' + (op.auto_rows ? '・行高' : '') + '(自動)');
+    chg_(ctx, null, did.join('・'), '幅・高さを変更');
+    return;
+  }
+  if (!did.length) throw new ArgError('棚「width」に cols・rows・auto・all_sheets・auto_rows のどれかが要ります');
   chg_(ctx, sh, did.join('・'), '幅・高さを変更');
+};
+DYNAMIC['width'] = {
+  touch: function () { return ['幅']; },
+  sheets: function (ctx, op) {
+    if (op.all_sheets) {
+      return ctx.ss.getSheets().filter(function (s) { return s.getName() !== '_GASクイックの控え' && !s.isSheetHidden(); }).map(function (s) { return s.getName(); });
+    }
+    return [op.sheet || ctx.sheetName || ctx.ss.getSheets()[0].getName()];
+  }
 };
 
 // 棚: cf.add
 // 題: 条件付き書式を付ける
 // 分類: 見た目
-// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色|未満は黄色|未満なら|以上は|以下は|より大きい|より小さい
+// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色|未満は黄色|未満なら|以上は|以下は|より大きい|より小さい|行全体|の行を赤|の行を黄|の行を青|の行に色|の行を目立
 // 違い: いつも同じ色なら format
 // 引数: range*=範囲, when*=選択(gt/ge/lt/le/eq/ne/contains/blank/notblank/formula), value=文字, bg=色, color=色, bold=真偽
-// 頼み: when=ge<以上 ; when=le<以下 ; when=lt<未満|より小さい|より少ない ; when=gt<より大きい|を超え|超える|より多い ; when=contains<が入っている|を含む|が含まれ ; when=blank<空欄のセル|空白のセル ; value~([0-9][0-9,]*)(?:円|個|件|人)?(?:以上|以下|未満|より|を超|超) ; value~[『「]([^』」]+)[』」]
+// 頼み: when=ge<以上 ; when=le<以下 ; when=lt<未満|より小さい|より少ない|マイナス ; when=gt<より大きい|を超え|超える|より多い ; when=contains<が入っている|を含む|が含まれ ; when=blank<空欄のセル|空白のセル ; value~([0-9][0-9,]*[万億]?)(?:円|個|件|人|時間|点|%)?(?:以上|以下|未満|より|を超|超) ; value~[『「]([^』」]+)[』」]
 // 例: 「売上が100万以上のセルを赤く」 → {"shelf":"cf.add","range":"F2:F100","when":"ge","value":"1000000","bg":"赤"}
 // 例: 「売上が100万以上の行を目立たせて」 → {"shelf":"cf.add","range":"A2:F100","when":"formula","value":"=$F2>=1000000","bg":"薄赤"}
 // 触る: 条件付き
@@ -192,7 +228,7 @@ SHELF['cf.scale'] = function (ctx, op) {
 // 棚: cf.clear
 // 題: 条件付き書式を外す
 // 分類: 見た目
-// 語: 条件付き書式を消|条件付き書式を外|条件付き書式を削除|自動の色を消
+// 語: 条件付き書式を消|条件付き書式を全部消|条件付き書式を外|条件付き書式を削除|自動の色を消|条件付き書式をクリア
 // 引数: range=範囲
 // 例: 「条件付き書式を全部消して」 → {"shelf":"cf.clear"}
 // 触る: 条件付き
@@ -224,7 +260,7 @@ SHELF['cf.clear'] = function (ctx, op) {
 // 棚: cf.list
 // 題: 条件付き書式を一覧にする
 // 分類: 見た目
-// 語: 条件付き書式を一覧|条件付き書式を調べ|条件付き書式はどこ|条件付き書式を確認
+// 語: 条件付き書式を一覧|条件付き書式を調べ|条件付き書式はどこ|条件付き書式を確認|条件付き書式を教え|設定されている条件付き書式
 // 引数: なし
 // 例: 「設定されている条件付き書式を教えて」 → {"shelf":"cf.list"}
 // 触る: なし
@@ -283,7 +319,7 @@ SHELF['banding.add'] = function (ctx, op) {
 // 棚: banding.remove
 // 題: 交互の色を外す
 // 分類: 見た目
-// 語: 交互の背景色を消して|交互の背景色を消|交互の背景色を解除|交互の背景を消|交互の色を外|交互の色を消|しましまを消|縞模様を消|ストライプを解除|縞模様を解除|ストライプを消|1行おきの色を消|1行おきのしましまを消
+// 語: 交互の背景色を消して|交互の背景色を消|交互の背景色を解除|交互の背景を消|交互の色を外|交互の色を消|しましまを消|縞模様を消|ストライプを解除|縞模様を解除|ストライプを消|1行おきの色を消|1行おきのしましまを消|1行おきについてる色|ついてる色を外
 // 引数: range=範囲
 // 例: 「1行おきについてる色を外して」 → {"shelf":"banding.remove"}
 // 触る: 交互の色
@@ -301,4 +337,38 @@ SHELF['banding.remove'] = function (ctx, op) {
   }
   bandings.forEach(function (b) { b.remove(); });
   chg_(ctx, sh, rg.getA1Notation(), '交互の背景色を解除');
+};
+
+// 棚: sheet.gridlines
+// 題: 枠線（グリッド線）を表示・非表示
+// 分類: 見た目
+// 語: 枠線を非表示|枠線を表示|グリッド線を消|グリッド線を非表示|グリッド線を表示|グリッド線を出|目盛り線を消|目盛り線を表示|目盛り線を非表示|シートの枠線を消
+// 違い: セル範囲の罫線なら format（borders）、印刷時の枠線設定は print.setup
+// 引数: show=真偽, all_sheets=真偽=false
+// 頼み: show=false<非表示|消して|消す|隠|オフ|OFF|なし|無く ; show=true<表示|出して|出す|オン|ON|戻 ; all_sheets=true<全シート|すべてのシート|全てのシート|ブック全体
+// 例: 「グリッド線を非表示にして」 → {"shelf":"sheet.gridlines","show":false}
+// 例: 「全シートの枠線を非表示にして」 → {"shelf":"sheet.gridlines","show":false,"all_sheets":true}
+// 触る: 書式
+// 控え: 今
+SHELF['sheet.gridlines'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var targets = op.all_sheets
+    ? ss.getSheets().filter(function (s) { return s.getName() !== '_GASクイックの控え'; })
+    : [sheetCtx_(ctx, op)];
+  var labels = [];
+  targets.forEach(function (s) {
+    var nextShow = op.show === undefined ? s.isGridlinesHidden() : !!op.show;
+    s.setHiddenGridlines(!nextShow);
+    labels.push(s.getName() + ':' + (nextShow ? '表示' : '非表示'));
+  });
+  chg_(ctx, op.all_sheets ? null : targets[0], '', '枠線（グリッド線）を切り替え（' + labels.slice(0, 4).join('・') + (labels.length > 4 ? ' ほか' : '') + '）');
+};
+DYNAMIC['sheet.gridlines'] = {
+  touch: function () { return ['書式']; },
+  sheets: function (ctx, op) {
+    if (op.all_sheets) {
+      return ctx.ss.getSheets().filter(function (s) { return s.getName() !== '_GASクイックの控え'; }).map(function (s) { return s.getName(); });
+    }
+    return [op.sheet || ctx.sheetName || ctx.ss.getSheets()[0].getName()];
+  }
 };

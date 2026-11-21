@@ -19,3 +19,23 @@ split.col	名前の列を姓と名に分割して
 split.col	C列をカンマで区切って別の列に分けて
 split.col	D列の名前をスペースで姓と名に分けといて
 ?split.col	列 分割 区切り テキスト分流
+audit.check	この表のエラーや重複や空欄を診断して
+audit.check	データの品質チェックをして異常をチェックして
+audit.check	表を点検して問題点を診断して
+?audit.check	表の診断 エラーチェック 空欄 重複
+merge.unmerge	結合セルを解除して値を埋めて
+merge.unmerge	結合を解除して同じ値で埋めて
+merge.unmerge	結合セルをほどいて値を分解して入れて
+?merge.unmerge	結合解除 値埋め セル結合をほどく
+fill.blank	空白セルを上の値で穴埋めして
+fill.blank	A列の空欄を上の値で埋めて
+fill.blank	表のブランクを埋めて穴埋めして
+?fill.blank	穴埋め 空白セル 上の値で埋める
+number.fix	金額列の文字の数字を本物の数値に直して
+number.fix	文字列の数字を数値に変換して
+number.fix	文字になってる数字を本物の数値にして
+?number.fix	文字の数字 数値変換 本物の数値
+text.affix	顧客名列の末尾に「様」を付けて
+text.affix	品番列の先頭に「ID-」を付けて
+text.affix	先頭に文字や末尾に文字を付けて
+?text.affix	先頭 末尾 文字 付ける 接頭辞 接尾辞

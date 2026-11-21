@@ -63,3 +63,19 @@ link.set	A2に公式サイトへのハイパーリンクを貼って
 link.set	会社名列にURL列のリンクを一括で貼って
 ?link.set	セルにクリックで飛べるリンクを設定したい
 ?link.set	リンク 貼る ハイパーリンク URL
+transpose	A1:D5の行と列を入れ替えてF1に貼って
+transpose	この表を転置して別シートに出して
+transpose	縦横を入れ替えて行列を逆にして
+?transpose	転置 行と列を入れ替える 縦横逆転
+link.clear	A列のハイパーリンクを外して
+link.clear	表の中のリンクを解除して消して
+link.clear	セルに貼られたリンクだけ外して
+?link.clear	ハイパーリンク 外す 解除 消す
+link.extract	会社名列の埋め込みリンクのURLを隣列へ抽出して
+link.extract	A列のリンクのURLを取り出してURL列を作って
+link.extract	セルの埋め込みリンク先を隣列に抽出して
+?link.extract	埋め込みリンク URL抽出 URL列
+note.list	シート内のメモ一覧を別シートに出して
+note.list	全シートのメモを一覧にしてまとめて
+note.list	セルのコメント一覧シートに書き出して
+?note.list	メモ一覧 コメント一覧 注釈 書き出し

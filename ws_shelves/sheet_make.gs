@@ -5,6 +5,7 @@
 // 分類: 作る
 // 語: 表を作|表を新規|一覧表を|テーブルを作|見出しと行|名簿を作|表にして
 // 引数: headers*=配列, title=文字, rows=表, number=列, total=列[], label=文字, tidy=真偽
+// 頼み: headers~見出し[がは]\s*([^\s、。]+?(?:(?:[・、,]|と)[^\s、。]+?)+)の(?:表|テーブル|名簿)
 // 例: 「見出しが名前と金額の表を作って」 → {"shelf":"table.new","headers":["名前","金額"],"rows":[["田中",1000]],"total":["金額"]}
 // 触る: 値 書式 シート構成 固定
 // 控え: 今
@@ -155,8 +156,9 @@ SHELF['summary'] = function (ctx, op) {
 // 語: ピボット|クロス集計|縦と横で集計|ドラッグで集計|ピボットテーブル
 // 違い: 式の集計表（元を直すと追従）なら summary。表の下に合計行なら total
 // 引数: rows*=列[], values*=列[], cols=列[], func=選択(sum/count/avg)=sum, into=文字
+// 頼み: func=avg<平均 ; func=count<件数|人数 ; rows~([^\s・、]+?)別(?:・|に|で) ; cols~別・([^\s別の]+?)別 ; values~(?:別に|別の|・|で)\s*([^\sの、]+?)の?ピボット
+// 例: 「部署別に金額のピボットテーブルを作って」 → {"shelf":"pivot.new","rows":["部署"],"values":["金額"]}
 // 例: 「部署別・月別の売上ピボットテーブルを作って」 → {"shelf":"pivot.new","rows":["部署"],"cols":["月"],"values":["売上"]}
-// 例: 「商品ごとの数量ピボットを作って」 → {"shelf":"pivot.new","rows":["商品"],"values":["数量"]}
 // 触る: シート構成 値
 // 控え: 先
 SHELF['pivot.new'] = function (ctx, op) {
@@ -304,8 +306,9 @@ SHELF['chart.new'] = function (ctx, op) {
 // 語: グラフを消|グラフを削除|グラフをなく|グラフはいらない|グラフ削除
 // 違い: タイトルや種類を変えるときは消さずに chart.new（edit:true）を使う。ピボットテーブルを消すなら sheet.delete。表の消去なら range.clear
 // 引数: title=文字
-// 例: 「グラフを消して」 → {"shelf":"chart.delete"}
+// 頼み: title~([^\s、。を]+?)グラフを(?:消|削除)
 // 例: 「売上推移グラフを削除して」 → {"shelf":"chart.delete","title":"売上推移"}
+// 例: 「このシートのグラフを消して」 → {"shelf":"chart.delete"}
 // 危ない: 消す
 // 触る: グラフ
 // 控え: 今

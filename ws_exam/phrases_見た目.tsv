@@ -40,3 +40,7 @@ bg.clear	見出しの背景色をなしにして
 bg.clear	B2:E5の塗りつぶしを消して
 ?bg.clear	セルの背景を塗りなしに戻したい
 ?bg.clear	背景色 消す 塗りつぶし なし
+sheet.gridlines	グリッド線を非表示にして
+sheet.gridlines	全シートの枠線を非表示にして
+sheet.gridlines	目盛り線を表示に戻して
+?sheet.gridlines	グリッド線 枠線 目盛り線 表示 非表示

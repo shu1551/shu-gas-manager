@@ -481,11 +481,27 @@ var ComboPlanner = (function () {
 
   // ------------------------------------------------------------------ 読み取りヘルパー
   function _clauses(askText) {
-    var parts = nfkc(askText).split(ASK_SPLIT);
+    var src = nfkc(askText);
+    var saved = [];
+    var protect = function (re) {
+      src = src.replace(re, function (m) {
+        var k = "\uE010" + saved.length + "\uE011";
+        saved.push(m);
+        return k;
+      });
+    };
+    // プルダウン候補や複数セルの「、」区切り、複数キー並べ替えを節分割から守る
+    protect(/(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))/g);
+    protect(/[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+/g);
+    protect(/[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+/g);
+    var parts = src.split(ASK_SPLIT);
     var out = [];
     var placeOnly = /^.{1,12}(?:のとこ|のところ|の所|の列に|の列は|の列で|の欄に|の欄は)(?:は|も)?$/;   // 「日付のとこ」のような場所だけの節は、次の節につなげる
     for (var i = 0; i < parts.length; i++) {
-      var p = parts[i].trim();
+      var restored = parts[i].replace(/\uE010(\d+)\uE011/g, function (_, idx) {
+        return saved[parseInt(idx, 10)] || "";
+      });
+      var p = restored.trim();
       if (p.length < 2) continue;
       if (out.length && placeOnly.test(out[out.length - 1])) out[out.length - 1] = out[out.length - 1] + " " + p;
       else out.push(p);
@@ -620,6 +636,34 @@ var ComboPlanner = (function () {
     m = CELL_RE.exec(text);
     if (m) return m[1];
     return null;
+  }
+
+  function _allExplicitRanges(text) {
+    var spans = [];
+    var m;
+    COLROWS_RE.lastIndex = 0;
+    if ((m = COLROWS_RE.exec(text)) !== null) {
+      spans.push({ start: m.index, end: m.index + m[0].length, val: m[1] + m[2] + ":" + m[1] + m[3] });
+    }
+    RANGE_RE_G.lastIndex = 0;
+    while ((m = RANGE_RE_G.exec(text)) !== null) {
+      spans.push({ start: m.index, end: m.index + m[0].length, val: m[1] + ":" + m[2] });
+    }
+    CELL_RE_G.lastIndex = 0;
+    while ((m = CELL_RE_G.exec(text)) !== null) {
+      var overlap = false;
+      for (var si = 0; si < spans.length; si++) {
+        if (m.index >= spans[si].start && m.index < spans[si].end) {
+          overlap = true;
+          break;
+        }
+      }
+      if (!overlap) spans.push({ start: m.index, end: m.index + m[0].length, val: m[1] });
+    }
+    spans.sort(function (a, b) { return a.start - b.start; });
+    var out = [];
+    for (var i = 0; i < spans.length; i++) out.push(spans[i].val);
+    return out;
   }
 
   function _dataSpan(table) {
@@ -792,8 +836,28 @@ var ComboPlanner = (function () {
     for (var ri = 0; ri < rules.length; ri++) {
       var r = rules[ri];
       var a = argsMap[r.arg];
-      if (!a || _hasOwn(op, r.arg)) continue;
+      if (!a || (_hasOwn(op, r.arg) && r.arg !== "cells")) continue;
       if (_hasOwn(r, "re")) {
+        if (r.arg === "cells" && a.type === "対応") {
+          var rgCells = new RegExp(r.re, "g");
+          var gm;
+          while ((gm = rgCells.exec(text)) !== null) {
+            if (gm.length >= 3) {
+              var objC = op.cells || {};
+              var valStrC = gm[2].trim();
+              objC[gm[1].trim()] = /^-?[0-9]+$/.test(valStrC) ? parseInt(valStrC, 10) : valStrC;
+              op.cells = objC;
+              for (var giC = 1; giC < gm.length; giC++) {
+                if (gm[giC]) {
+                  var gsC = gm[giC].trim();
+                  var qIdxC = quotes.indexOf(gsC);
+                  if (qIdxC >= 0) quotes.splice(qIdxC, 1);
+                }
+              }
+            }
+          }
+          continue;
+        }
         var rx = _rx(r.re);
         var m = rx.exec(text);
         if (m) {
@@ -857,7 +921,10 @@ var ComboPlanner = (function () {
 
     var names = _colNames(scan, table);
     var letters = _colLetters(scan);
-    var explicitRange = _rangeOf(scan);
+    var explicitRanges = _allExplicitRanges(scan);
+    var explicitRange = explicitRanges.length ? explicitRanges[0] : null;
+    var remRanges = explicitRanges.slice();
+    var hasFromToRanges = !!(argsMap.from && argsMap.from.type === "範囲" && argsMap.to && argsMap.to.type === "範囲");
     var rows = _rowsOf(scan);
     var nums = _numbers(scan);
     var named = !!(
@@ -992,7 +1059,9 @@ var ComboPlanner = (function () {
       var wanted = !!needMap[k];
       var av = null;
       if (t === "範囲") {
-        if (rangeGiven || (!wanted && hasAnyFilled())) {
+        if (hasFromToRanges && (k === "from" || k === "to") && remRanges.length) {
+          av = remRanges.shift();
+        } else if (rangeGiven || (!wanted && hasAnyFilled())) {
           // 既に範囲または「どれか」が埋まっている場合はスキップ
         } else if (explicitRange) {
           av = explicitRange;
@@ -1058,8 +1127,174 @@ var ComboPlanner = (function () {
       var fmtLastR = table.total_row || (table.data ? String(table.data).split("-").slice(-1)[0] : fmtFirstR);
       op.range = table.first_col + fmtFirstR + ":" + table.last_col + fmtLastR;
     }
+    if (shelf.name === "format") {
+      // 連続する複数列が列挙された書式設定（例: 予算額・実績額・差異に3桁カンマ）を範囲へ統合
+      if (_hasOwn(op, "col") && colPool.length && !_hasOwn(op, "range") && table) {
+        var firstL = _letterOf(table, op.col) || (/^[A-Z]{1,3}$/.test(op.col) ? op.col : "");
+        var seqLs = firstL ? [firstL] : [];
+        for (var fci = 0; fci < colPool.length; fci++) {
+          var fl = _letterOf(table, colPool[fci]) || (/^[A-Z]{1,3}$/.test(colPool[fci]) ? colPool[fci] : "");
+          if (fl) seqLs.push(fl);
+        }
+        if (seqLs.length >= 2) {
+          var numsLs = seqLs.map(_colNum).sort(function (a, b) { return a - b; });
+          var contig = true;
+          for (var cki2 = 1; cki2 < numsLs.length; cki2++) {
+            if (numsLs[cki2] - numsLs[cki2 - 1] > 1) { contig = false; break; }
+          }
+          if (contig) {
+            var spanRg = _colRange(table, [_colLetter(numsLs[0]), _colLetter(numsLs[numsLs.length - 1])]);
+            if (spanRg) {
+              op.range = spanRg;
+              delete op.col;
+            }
+          }
+        }
+      }
+      // 表示形式の自然文詳細補正
+      if (/(?:数値\s*[（(]?標準[）)]?|表示形式を標準|標準形式|標準に戻)/.test(text)) {
+        op.number_format = "General";
+      } else if (/(?:hh:mm|09:00|時刻.{0,4}2桁|2桁.{0,4}時刻|時分形式)/i.test(text)) {
+        op.number_format = "hh:mm";
+      } else if (/(?:yyyy\/mm\/dd|2026\/11\/04|スラッシュ.{0,4}日付|年\/月\/日)/i.test(text)) {
+        op.number_format = "yyyy/mm/dd";
+      } else if (op.number_format === 'm"月"d"日"(ddd)' && /(?:年|yyyy)/i.test(text)) {
+        op.number_format = "yyyy/mm/dd(ddd)";
+      } else if (!op.number_format && /(?:パーセント|%\s*表示)/.test(text)) {
+        op.number_format = "0.0%";
+      } else if (!op.number_format && /(?:3桁|桁区切|カンマ)/.test(text)) {
+        op.number_format = "#,##0";
+      }
+    }
+    if (shelf.name === "cf.add" && op.when !== "formula") {
+      var mJpNum = /^([0-9][0-9,\.]*)(万|億)$/.exec(String(op.value || "").trim());
+      if (mJpNum) {
+        var mulJp = mJpNum[2] === "万" ? 10000 : 100000000;
+        var vfJp = parseFloat(mJpNum[1].replace(/,/g, "")) * mulJp;
+        op.value = String(vfJp);
+      }
+    }
+    if (shelf.name === "cf.add" && op.when !== "formula" && table && table.first_col && table.last_col) {
+      if (/(?:行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白))/.test(text)) {
+        var spCf = _dataSpan(table);
+        var cfR1 = spCf ? spCf[0] : ((table.header_row || 1) + 1);
+        var cfR2 = spCf ? spCf[1] : cfR1;
+        var refL = (names.length && _letterOf(table, names[0])) || (letters.length ? letters[0] : "");
+        var expr = "";
+        var numVal = (op.value !== undefined && op.value !== null) ? String(op.value).replace(/,/g, "") : "";
+        if (refL) {
+          if (op.when === "ge" && numVal !== "") expr = "=$" + refL + cfR1 + ">=" + numVal;
+          else if (op.when === "le" && numVal !== "") expr = "=$" + refL + cfR1 + "<=" + numVal;
+          else if (op.when === "gt" && numVal !== "") expr = "=$" + refL + cfR1 + ">" + numVal;
+          else if (op.when === "lt" && numVal !== "") expr = "=$" + refL + cfR1 + "<" + numVal;
+          else if (/マイナス|負の値/.test(text)) expr = "=$" + refL + cfR1 + "<0";
+          else if (/([0-9]+)\s*%?(?:になってない|ではない)/.test(text)) {
+            var mNot = /([0-9]+)\s*%?(?:になってない|ではない)/.exec(text);
+            expr = "=$" + refL + cfR1 + "<>" + mNot[1];
+          } else if (op.value !== undefined && op.value !== "") {
+            expr = "=ISNUMBER(SEARCH(\"" + String(op.value).replace(/"/g, "\"\"") + "\",$" + refL + cfR1 + "))";
+          }
+        } else if (/欠席|完了|未完了|終了/.test(text)) {
+          var kwCf = /欠席/.test(text) ? "欠席" : (/未完了/.test(text) ? "未完了" : (/完了/.test(text) ? "完了" : "終了"));
+          expr = "=COUNTIF($" + table.first_col + cfR1 + ":$" + table.last_col + cfR1 + ",\"*" + kwCf + "*\")>0";
+        }
+        if (expr) {
+          op.range = table.first_col + cfR1 + ":" + table.last_col + cfR2;
+          op.when = "formula";
+          op.value = expr;
+          named = true;
+        }
+      }
+      if (!op.bg && !op.color && /(?:色[を]?付|色[を]?つ|目立)/.test(text)) {
+        op.bg = "薄黄";
+      }
+    }
+    if (shelf.name === "renumber" && !_hasOwn(op, "col") && table && Array.isArray(table.columns)) {
+      for (var rci = 0; rci < table.columns.length; rci++) {
+        var rColNm = String((table.columns[rci] && table.columns[rci].name) || "");
+        if (/^(?:no|番号|連番|項番|id)$/i.test(rColNm.trim())) {
+          op.col = rColNm;
+          named = true;
+          break;
+        }
+      }
+    }
     if (shelf.name === "sheet.rename" && !_hasOwn(op, "name") && _hasOwn(op, "to") && curSheet) {
       op.name = curSheet;
+    }
+    if (shelf.name === "table.new" && Array.isArray(op.headers) && op.headers.length === 1 && String(op.headers[0]).indexOf("と") >= 0) {
+      op.headers = String(op.headers[0]).split("と").map(function (h) { return h.trim(); }).filter(function (h) { return h; });
+    }
+    if (shelf.name === "replace") {
+      if (_hasOwn(op, "find") && typeof op.find === "string") {
+        var cleanFind = op.find.replace(/^(?:全シート|すべてのシート|全てのシート|ブック全体)で\s*/, "").trim();
+        if (cleanFind !== op.find) {
+          op.all_sheets = true;
+          op.find = cleanFind;
+        }
+      }
+      if (/全シート|すべてのシート|全てのシート|ブック全体/.test(text)) {
+        op.all_sheets = true;
+      }
+    }
+    if (shelf.name === "sort") {
+      var sortPairs = [];
+      var sortReG = /(?:その中で\s*)?([^\s、,の]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順))/g;
+      var sm;
+      var nfkcTxt = nfkc(text);
+      while ((sm = sortReG.exec(nfkcTxt)) !== null) {
+        var rawColS = sm[1].trim();
+        var mappedColS = rawColS;
+        if (table && Array.isArray(table.columns)) {
+          for (var sci = 0; sci < table.columns.length; sci++) {
+            if (table.columns[sci] && table.columns[sci].name === rawColS) {
+              mappedColS = table.columns[sci].name;
+              break;
+            }
+          }
+        }
+        sortPairs.push((sm[2] ? "-" : "") + mappedColS);
+      }
+      if (sortPairs.length >= 2) {
+        op.cols = sortPairs;
+        delete op.col;
+        delete op.desc;
+        named = true;
+      }
+    }
+    if (shelf.name === "sheet.diff") {
+      delete op.sheet;
+      if (sheetHits.length && (op.from === op.to || !_hasOwn(op, "from") || !_hasOwn(op, "to"))) {
+        var nfkcDiff = nfkc(text);
+        var uniqSh = [];
+        var seenShD = {};
+        for (var sdi = 0; sdi < sheetHits.length; sdi++) {
+          if (!seenShD[sheetHits[sdi]]) {
+            seenShD[sheetHits[sdi]] = true;
+            uniqSh.push(sheetHits[sdi]);
+          }
+        }
+        uniqSh.sort(function (a, b) {
+          return nfkcDiff.indexOf(nfkc(a)) - nfkcDiff.indexOf(nfkc(b));
+        });
+        if (uniqSh.length >= 2) {
+          op.from = uniqSh[0];
+          op.to = uniqSh[1];
+        }
+      }
+    }
+    if (shelf.name === "top.n") {
+      if (op.into === "別") delete op.into;
+      if (!_hasOwn(op, "col") && table && Array.isArray(table.columns)) {
+        for (var tni = 0; tni < table.columns.length; tni++) {
+          var tc = table.columns[tni];
+          if (tc && tc.number && !/^(?:no\.?|番号|id)$/i.test(String(tc.name || "").trim())) {
+            op.col = tc.name;
+            named = true;
+            break;
+          }
+        }
+      }
     }
     if (shelf.name === "width" && _hasOwn(op, "col") && !_hasOwn(op, "width") && !_hasOwn(op, "auto") &&
         /(?:自動|中身に合|オートフィット)/.test(text)) {
@@ -1067,12 +1302,20 @@ var ComboPlanner = (function () {
       delete op.col;
     }
 
-    if (shelf.name === "filter.where") {
-      var mName = /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim());
-      if (mName) {
-        op.equals = mName[1].trim();
-      } else if (_hasOwn(op, "equals") && typeof op.equals === "string") {
-        op.equals = op.equals.replace(/(?:さん|様)$/, "").trim();
+    if (shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") {
+      if (shelf.name === "filter.extract" && op.into === "別") delete op.into;
+      if (_hasOwn(op, "when") && _hasOwn(op, "equals") && typeof op.equals === "string") {
+        if (/以上|以下|未満|より|超|を含|含む|以外|ではな|でない|空白|空欄/.test(op.equals)) {
+          delete op.equals;
+        }
+      }
+      if (shelf.name === "filter.where") {
+        var mName = /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim());
+        if (mName) {
+          op.equals = mName[1].trim();
+        } else if (_hasOwn(op, "equals") && typeof op.equals === "string") {
+          op.equals = op.equals.replace(/(?:さん|様)$/, "").trim();
+        }
       }
       if (!_hasOwn(op, "col") && table && table.columns) {
         var cols = [];
@@ -1102,6 +1345,9 @@ var ComboPlanner = (function () {
           }
           if (textCols.length) op.col = textCols[0];
         }
+      }
+      if (shelf.name === "filter.delete" && op.col && (op.when || _hasOwn(op, "equals") || _hasOwn(op, "value"))) {
+        named = true;
       }
     }
 
@@ -1327,6 +1573,22 @@ var ComboPlanner = (function () {
     for (var ai = 0; ai < sArgs.length; ai++) argNames[sArgs[ai].name] = true;
     var shName = shelf.name || "";
 
+    // 危険な行/列削除へのブラウザ選択自動補完は厳格化（行選択・列選択または指示代名詞のみ許可、条件文脈なら絶対補完しない）
+    if (shName === "rows.delete" || shName === "cols.delete" || shName === "filter.delete") {
+      if (shName === "filter.delete") {
+        return { missing: missing, added: false };
+      }
+      if (/(?:が|は|の).{0,16}(?:行|データ)|以上|以下|未満|超え?|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行/.test(clause)) {
+        return { missing: missing, added: false };
+      }
+      if (shName === "rows.delete" && !sourceScope.row_select && !_HERE_ROW_RE.test(clause)) {
+        return { missing: missing, added: false };
+      }
+      if (shName === "cols.delete" && !sourceScope.col_select && !_HERE_COL_RE.test(clause)) {
+        return { missing: missing, added: false };
+      }
+    }
+
     if (shName === "write" && sourceScope.cell && !op.cells && !op.tsv) {
       var qs = _quotes(clause);
       var ns = _numbers(clause);
@@ -1532,6 +1794,73 @@ var ComboPlanner = (function () {
         continue;
       }
 
+      // 競合する新・既存棚の文脈調停（明示的文脈がある側を優遇）
+      var boostName = "";
+      if (scored.length >= 2) {
+        var topBase = scored[0].total;
+        var candMap = {};
+        for (var cmi = 0; cmi < scored.length; cmi++) candMap[scored[cmi].shelf.name] = true;
+        var hasFmtCue = /(?:表示形式|曜日|hh:mm|yyyy|mm\/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻)/i.test(c);
+        var hasRowCfCue = /(?:行全体|の行|行を|行に)/.test(c) &&
+          /(?:以上|以下|未満|より大きい|より小さい|を超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了)/.test(c) &&
+          _colorHits(c).length > 0;
+        var hasRowDelCond = /(?:の行|行を|行に|行は|データ)/.test(c) &&
+          /(?:以上|以下|未満|より大きい|より小さい|を超え|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) &&
+          /消|削除/.test(c);
+        if (hasFmtCue && candMap["format"] && candMap["date.fix"] && (scored[0].shelf.name === "format" || scored[0].shelf.name === "date.fix")) {
+          boostName = "format";
+        } else if (hasRowCfCue && candMap["cf.add"]) {
+          boostName = "cf.add";
+        } else if (hasRowDelCond && candMap["filter.delete"]) {
+          boostName = "filter.delete";
+        } else if (candMap["link.clear"] && /(?:リンク|ハイパーリンク).*(?:外|解除|消|削除|クリア)/.test(c)) {
+          boostName = "link.clear";
+        } else if (candMap["link.extract"] && /(?:URL|リンク先).*(?:抽出|取り出)|埋め込みリンク/i.test(c)) {
+          boostName = "link.extract";
+        } else if (candMap["top.n"] && /(?:上位|下位|トップ|ワースト|ベスト)\s*[0-9]*/.test(c)) {
+          boostName = "top.n";
+        } else if (candMap["filter.extract"] && c.indexOf("抽出") >= 0 && !/(?:上位|下位|トップ|ワースト|ベスト|URL|リンク)/i.test(c)) {
+          boostName = "filter.extract";
+        } else if (candMap["merge.unmerge"] && /結合.*(?:埋め|バラ|ばら|分解|ほど|穴埋)|(?:埋め|穴埋).*結合/.test(c)) {
+          boostName = "merge.unmerge";
+        } else if (candMap["fill.blank"] && /穴埋め|(?:空白|空欄|ブランク).*上の値/.test(c)) {
+          boostName = "fill.blank";
+        } else if (candMap["transpose"] && /転置|縦横を入れ替|行列を入れ替|行と列を入れ替|縦と横を逆|横向きを縦向き|縦向きを横向き/.test(c)) {
+          boostName = "transpose";
+        } else if (candMap["number.fix"] && /(?:文字|テキスト).{0,6}数字|数値に変換|本物の数値|文字.{0,4}数値に直/.test(c)) {
+          boostName = "number.fix";
+        } else if (candMap["sheet.diff"] && /シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート/.test(c)) {
+          boostName = "sheet.diff";
+        } else if (candMap["sheet.toc"] && /目次|インデックスシート|シート一覧/.test(c)) {
+          boostName = "sheet.toc";
+        } else if (candMap["sheet.sort"] && /(?:シート|タブ).*(?:名前順|昇順|降順|並べ替)/.test(c)) {
+          boostName = "sheet.sort";
+        } else if (candMap["sheet.gridlines"] && /(?:グリッド線|目盛り線|シート.*枠線|全シート.*枠線|枠線を非表示|枠線を表示)/.test(c) && !/(?:印刷|PDF|A4|A3|余白|ページ)/i.test(c) && !CELL_RE.test(c)) {
+          boostName = "sheet.gridlines";
+        } else if (candMap["sheet.snapshot"] && /スナップショット|日付[つ付入].*(?:複製|控え|コピー|保存)|控えを複製|今日の控え/.test(c)) {
+          boostName = "sheet.snapshot";
+        } else if (/書式|見た目/.test(c) && !/消|クリア|削除|外|解除/.test(c) && (scored[0].shelf.name === "copy" || scored[0].shelf.name === "copy.format")) {
+          if (candMap["copy.format"] && candMap["copy"]) boostName = "copy.format";
+        }
+        if (boostName) {
+          for (var bsi = 0; bsi < scored.length; bsi++) {
+            if (scored[bsi].shelf.name === boostName) {
+              scored[bsi] = {
+                total: Math.max(topBase, scored[bsi].total, WEAK_SCORE) + MARGIN,
+                order: scored[bsi].order,
+                shelf: scored[bsi].shelf,
+                detail: scored[bsi].detail
+              };
+              break;
+            }
+          }
+          scored.sort(function (a, b) {
+            if (b.total !== a.total) return b.total - a.total;
+            return a.order - b.order;
+          });
+        }
+      }
+
       var lead = scored[0].total;
       var near = [];
       var hit = [];
@@ -1546,51 +1875,63 @@ var ComboPlanner = (function () {
         }
       }
 
-      if (far.length && scored[0].shelf.name === "replace" && CELL_RE.test(c)) {
-        var wItem = null;
-        for (var fi = 0; fi < far.length; fi++) {
-          if (far[fi].shelf.name === "write") {
-            wItem = far[fi];
-            break;
+      if (!boostName) {
+        if (far.length && scored[0].shelf.name === "replace" && CELL_RE.test(c)) {
+          var wItem = null;
+          for (var fi = 0; fi < far.length; fi++) {
+            if (far[fi].shelf.name === "write") {
+              wItem = far[fi];
+              break;
+            }
+          }
+          if (wItem) {
+            hit = [wItem];
+            var newFar = [];
+            for (var fi2 = 0; fi2 < far.length; fi2++) {
+              if (far[fi2].shelf.name !== "write") newFar.push(far[fi2]);
+            }
+            far = newFar;
           }
         }
-        if (wItem) {
-          hit = [wItem];
-          var newFar = [];
-          for (var fi2 = 0; fi2 < far.length; fi2++) {
-            if (far[fi2].shelf.name !== "write") newFar.push(far[fi2]);
+
+        if (far.length && !hit.length) {
+          var topNmFar = scored[0].shelf.name || "";
+          var intentActionFar = /解除|外し|外す|やめ|消|削除|クリア|一覧|教え|見|確認|動か|移動|入れ替/.test(c);
+          var topIsActionFar = /(?:^|\.)(?:clear|remove|off|list|move|delete|diff|audit|check|extract)|^unfreeze$/.test(topNmFar);
+          if (!(scored[0].total >= WEAK_SCORE && intentActionFar && topIsActionFar)) {
+            p.reasons.push("「" + c + "」の当てが割れた（" + scored[0].shelf.name + " と " + far[0].shelf.name + "）");
+            p.cards.push(scored[0].shelf, far[0].shelf);
+            fatalErr = true;
+            lastIncomplete = null;
+            continue;
           }
-          far = newFar;
         }
-      }
 
-      if (far.length && !hit.length) {
-        p.reasons.push("「" + c + "」の当てが割れた（" + scored[0].shelf.name + " と " + far[0].shelf.name + "）");
-        p.cards.push(scored[0].shelf, far[0].shelf);
-        fatalErr = true;
-        lastIncomplete = null;
-        continue;
-      }
-
-      if (hit.length === 1 && hit[0] !== scored[0]) {
-        var h0 = hit[0];
-        var reordered = [{
-          total: Math.max(lead, h0.total, WEAK_SCORE) + MARGIN,
-          order: h0.order,
-          shelf: h0.shelf,
-          detail: h0.detail
-        }];
-        for (var ri2 = 0; ri2 < scored.length; ri2++) {
-          if (scored[ri2] !== h0) reordered.push(scored[ri2]);
+        if (hit.length === 1 && hit[0] !== scored[0]) {
+          var h0 = hit[0];
+          var s0Nm = scored[0].shelf.name || "";
+          var intentAct = /解除|外し|外す|やめ|消|削除|クリア|一覧|教え|見|確認|動か|移動|入れ替/.test(c);
+          var s0IsAct = /(?:^|\.)(?:clear|remove|off|list|move|delete|diff|audit|check|extract)|^unfreeze$/.test(s0Nm);
+          if (!(scored[0].total >= WEAK_SCORE && intentAct && s0IsAct && h0.total < scored[0].total)) {
+            var reordered = [{
+              total: Math.max(lead, h0.total, WEAK_SCORE) + MARGIN,
+              order: h0.order,
+              shelf: h0.shelf,
+              detail: h0.detail
+            }];
+            for (var ri2 = 0; ri2 < scored.length; ri2++) {
+              if (scored[ri2] !== h0) reordered.push(scored[ri2]);
+            }
+            scored = reordered;
+          }
+        } else if (hit.length === 1) {
+          scored[0] = {
+            total: Math.max(scored[0].total, WEAK_SCORE) + MARGIN,
+            order: scored[0].order,
+            shelf: scored[0].shelf,
+            detail: scored[0].detail
+          };
         }
-        scored = reordered;
-      } else if (hit.length === 1) {
-        scored[0] = {
-          total: Math.max(scored[0].total, WEAK_SCORE) + MARGIN,
-          order: scored[0].order,
-          shelf: scored[0].shelf,
-          detail: scored[0].detail
-        };
       }
 
       var topT = scored[0].total;
@@ -1673,13 +2014,14 @@ var ComboPlanner = (function () {
     }
 
     var hasGuideBlock = false;
+    var isPureUndoAsk = /^(?:さっきの?|直前の?|1つ前の?|ひとつ前の?)?(?:元に戻|戻して|取り消|やり直)/.test(nfkc(askText).trim());
     for (var gi = 0; gi < p.guide.length; gi++) {
       var g = p.guide[gi];
       var isSoftGuide = (g.indexOf("棚はありません") >= 0 || g.indexOf("棚ではありません") >= 0) &&
         p.ops.some(function (o) {
-          return o.shelf === "doc.outline" || o.shelf === "filter.where" || o.shelf === "filter.on" || o.shelf === "drive.list";
+          return /^(?:doc\.outline|filter\.where|filter\.on|filter\.off|filter\.extract|drive\.list|cf\.list|name\.list|protect\.list|note\.list|audit\.check|find|rows\.show|cols\.show|sheet\.show|top\.n)$/.test(o.shelf || "");
         });
-      if (g.indexOf("外です") >= 0 || g.indexOf("ws_undo") >= 0 || ((g.indexOf("棚はありません") >= 0 || g.indexOf("棚ではありません") >= 0) && !isSoftGuide)) {
+      if (g.indexOf("外です") >= 0 || (g.indexOf("ws_undo") >= 0 && (!p.ops.length || isPureUndoAsk)) || (g.indexOf("ws_undo") < 0 && (g.indexOf("棚はありません") >= 0 || g.indexOf("棚ではありません") >= 0) && !isSoftGuide)) {
         hasGuideBlock = true;
         break;
       }

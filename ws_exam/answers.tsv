@@ -6,114 +6,134 @@ batchUpdate 棚に無い api	api
 C列の重複消して連番ふり直して	seiri,dedupe,replace,renumber,cf.dup
 重複してるとこ赤くして	cf.dup,format,dedupe
 売上が100万以上の行を目立たせて	cf.add,filter.where,doc.from.sheet,calc.percent,calc.rank
-田中さんの行だけ見せて	filter.where,format
+田中さんの行だけ見せて	filter.where,filter.extract,format
 これ印刷用にA4横で	print.setup,export.pdf
 さっきの戻して	
-A列とB列入れ替えて	cols.move,doc.move,width,fill.series,rows.move
+A列とB列入れ替えて	cols.move,transpose,doc.move,width,fill.series
 合計のとこ太字で黄色に	format,calc.running
-他の人が触れないようにして、でもB2:B20だけは打てるように	protect.sheet,date.fix,write
+他の人が触れないようにして、でもB2:B20だけは打てるように	protect.sheet,count.if,date.fix
 これ見やすくして	tidy
-月ごとの売上の推移を出して	chart.new,calc.percent,calc.rank,doc.from.sheet,drive.rename
+月ごとの売上の推移を出して	chart.new,calc.percent,calc.rank,doc.from.sheet,calc.diff
 プルダウンで未着手・進行中・完了を選べるようにして、完了は灰色に	validation.list,validation.clear
-全角の数字を半角に	seiri,text.case,validation.number
+全角の数字を半角に	seiri,text.case,validation.number,number.fix
 空白行を詰めて	seiri
 1行おきに色つけて、ついでにヘッダーは青	banding.add,format,doc.insert,banding.remove,doc.new,doc.section
 これを PDF にしてメールで送って	export.pdf,doc.export.pdf,dedupe,drive.rename,drive.move
-非表示になってる列ない？あったら出して	cols.show,format,rows.show,sheet.show,filter.off
+非表示になってる列ない？あったら出して	cols.show,format,sheet.gridlines,rows.show,sheet.show
 3行目から5行目を消して	rows.delete,rows.hide,group.rows,group.remove,rows.insert
 見積書つくって	doc.new,doc.export.pdf
 集計用のシートを追加して	sheet.add,sheet.show,lookup.add,protect.sheet,export.pdf
 空のシートを1枚足して	sheet.add,calc.col,sheet.merge,lookup.add,protect.sheet
 新しいタブ欲しいな	sheet.add,sheet.delete,doc.from.sheet,doc.template,sort
-シート 追加 来月分	sheet.add,sheet.copy,doc.from.sheet,doc.copy,lookup.add
+シート 追加 来月分	sheet.add,sheet.copy,doc.from.sheet,doc.copy,filter.extract
 シート1の名前を売上に変更して	sheet.rename,drive.rename,sheet.copy,doc.from.sheet,name.delete
-タブの名前を付け替えたい	sheet.rename,sheet.copy,doc.from.sheet,protect.remove,name.add
+タブの名前を付け替えたい	sheet.rename,sheet.copy,sheet.sort,doc.from.sheet,protect.remove
 このシート、名前を集計に変えて	sheet.rename,sheet.add,sheet.move,lookup.add,protect.sheet,export.pdf,drive.rename,doc.heading
-シート 改名 名前変更	sheet.rename,drive.rename,sheet.copy,doc.from.sheet,lookup.add
+シート 改名 名前変更	sheet.rename,drive.rename,sheet.copy,sheet.diff,sheet.sort
 集計シートを一番左に移動して	sheet.move,sheet.delete,sheet.hide,sheet.show,folder
-シートの順番を入れ替えたい	sheet.move,doc.move,cols.move,doc.from.sheet,rows.move
-売上のタブを先頭にして	doc.from.sheet,export.pdf,sheet.move,sheet.color,lookup.add
-シート 並び順 移動	sheet.move,doc.from.sheet,lookup.add,protect.sheet,protect.remove
-集計シートを削除して	sheet.delete,sheet.hide,sheet.show,protect.remove,note.clear
-「メモ」のシートはいらないので削除して	sheet.delete,rows.delete,cols.delete,note.clear,lookup.add
-このタブ消しといて	sheet.delete,note.clear,lookup.add,protect.sheet,export.pdf
-シート 削除 不要	sheet.delete,drive.trash,note.clear,doc.delete,doc.from.sheet
-テンプレートのシートを複製して	sheet.copy,doc.template,doc.from.sheet,note.clear,sheet.color
-同じシートをもう1枚作って	sheet.copy,sheet.merge,sheet.split,doc.from.sheet,doc.template
-売上シートを複製して来月分を作っておいて	sheet.copy,doc.copy,export.pdf,sheet.color,doc.from.sheet
-シート コピー 複製	sheet.copy,doc.copy,fill.down,doc.from.sheet,lookup.add
-「一時保存」シートを隠して	sheet.hide,print.setup,export.pdf,sheet.show,doc.from.sheet
-設定シートを非表示にして	sheet.hide,format,sheet.show,filter.off,print.setup
+シートの順番を入れ替えたい	sheet.move,doc.move,transpose,cols.move,doc.from.sheet
+売上のタブを先頭にして	doc.from.sheet,export.pdf,chart.delete,sheet.move,sheet.color
+シート 並び順 移動	sheet.move,sheet.sort,doc.from.sheet,filter.extract,top.n
+集計シートを削除して	sheet.delete,chart.delete,sheet.hide,sheet.show,protect.remove
+「メモ」のシートはいらないので削除して	sheet.delete,rows.delete,cols.delete,chart.delete,note.clear
+このタブ消しといて	sheet.delete,chart.delete,note.clear,lookup.add,protect.sheet
+シート 削除 不要	sheet.delete,drive.trash,chart.delete,note.clear,doc.delete
+テンプレートのシートを複製して	sheet.copy,doc.template,doc.from.sheet,chart.delete,note.clear
+同じシートをもう1枚作って	sheet.copy,sheet.merge,sheet.split,sheet.toc,doc.from.sheet
+売上シートを複製して来月分を作っておいて	sheet.copy,doc.copy,sheet.snapshot,export.pdf,sheet.color
+シート コピー 複製	sheet.copy,doc.copy,fill.down,sheet.snapshot,doc.from.sheet
+「一時保存」シートを隠して	sheet.hide,print.setup,export.pdf,export.csv,sheet.show
+設定シートを非表示にして	sheet.hide,format,sheet.gridlines,sheet.show,filter.off
 このタブ見えなくしといて	sheet.hide,sheet.show,sheet.color,lookup.add,protect.sheet
-シート 非表示 隠す	sheet.hide,sheet.show,rows.hide,rows.show,cols.hide
+シート 非表示 隠す	sheet.hide,sheet.show,sheet.gridlines,rows.hide,rows.show
 隠してある「一時保存」シートを再表示して	sheet.show,cols.show,sheet.hide,formula.guard,print.setup
-非表示になっているシートを全部出して	format,sheet.show,rows.show,cols.show,filter.off
-隠したタブを出したい	sheet.show,sheet.hide,sheet.color,doc.from.sheet,filter.on
-シート 再表示 表示	sheet.show,sheet.hide,doc.from.sheet,filter.off,lookup.add
-売上シートのタブを赤色に変えて	sheet.color,format,sheet.rename,export.pdf,sheet.copy
+非表示になっているシートを全部出して	cols.show,format,sheet.show,sheet.gridlines,rows.show
+隠したタブを出したい	sheet.show,filter.extract,top.n,transpose,note.list
+シート 再表示 表示	sheet.show,sheet.gridlines,sheet.hide,doc.from.sheet,filter.off
+売上シートのタブを赤色に変えて	sheet.color,format,sheet.rename,export.pdf,chart.delete
 「集計」のシート見出しの色を青にして	sheet.color,format,sheet.show,sheet.add,sheet.hide
-タブの色を緑っぽくしたい	sheet.color,doc.from.sheet,protect.remove,print.setup,note.clear
+タブの色を緑っぽくしたい	sheet.color,doc.from.sheet,protect.remove,print.setup,sheet.gridlines
 シート タブ 色 変更	sheet.add,sheet.rename,sheet.delete,sheet.show,sheet.color
-全シートの表を「統合」シートに縦にまとめて	sheet.merge,summary,doc.from.sheet,sheet.color,lookup.add
-複数シートを1枚のシートに縦結合して	sheet.merge,format,sheet.color,lookup.add,text.join
-複数のシートを縦に合体させたい	sheet.merge,lookup.add,protect.sheet,export.pdf,note.clear
-シート 結合 統合 縦にまとめ	sheet.merge,doc.from.sheet,lookup.add,protect.sheet,protect.remove
-部署ごとにシートを分けて作って	sheet.split,doc.template,summary,sheet.rename,doc.from.sheet
-項目ごとに別シートに分割して	sheet.split,split.col,sheet.color,sheet.merge,doc.from.sheet
+全シートの表を「統合」シートに縦にまとめて	sheet.merge,summary,doc.from.sheet,sheet.gridlines,transpose
+複数シートを1枚のシートに縦結合して	sheet.merge,format,sheet.color,filter.extract,top.n
+複数のシートを縦に合体させたい	sheet.merge,filter.extract,lookup.add,protect.sheet,export.pdf
+シート 結合 統合 縦にまとめ	sheet.merge,doc.from.sheet,filter.extract,top.n,lookup.add
+部署ごとにシートを分けて作って	sheet.split,doc.template,filter.extract,summary,sheet.rename
+項目ごとに別シートに分割して	sheet.split,filter.extract,top.n,transpose,note.list
 列の値ごとにシートを自動分割したい	sheet.split,write,sheet.rename,doc.from.sheet,split.col
-シート 分割 別シート 分ける	sheet.split,doc.from.sheet,split.col,lookup.add,protect.sheet
+シート 分割 別シート 分ける	sheet.split,filter.extract,top.n,transpose,note.list
+4月と5月のシートの差分を比較して	sheet.diff,sheet.merge,calc.diff,export.pdf,chart.delete
+2つのシートの違いを比較して変更点を出して	sheet.diff,sheet.color,chart.delete,note.clear,sheet.rename
+集計シートと売上シートを比較して差分シートに出して	sheet.diff,sheet.color,transpose,note.list,sheet.show
+シート比較 差分 違い 変更点	sheet.diff,sheet.rename,doc.from.sheet,filter.extract,top.n
+全シートの目次シートを作って	sheet.toc,sheet.add,sheet.gridlines,sheet.merge,sheet.snapshot
+リンク付きのシート一覧目次を作成して	sheet.toc,doc.toc,link.set,export.pdf,export.csv
+ブック内のインデックスシートを作って	sheet.toc,sheet.add,sheet.snapshot,note.list,sheet.split
+目次シート シート一覧 リンク付き目次	sheet.toc,link.set,note.list,doc.link,drive.share
+全シートをA1に揃えて提出前仕上げをして	book.finish,transpose,protect.remove,export.pdf,sheet.gridlines
+全シートのカーソルをA1に揃えて納品前仕上げをして	book.finish,protect.remove,sheet.gridlines,transpose,sheet.merge
+全シートA1選択で提出用に整えて	book.finish,protect.remove,export.pdf,sheet.gridlines,transpose
+提出前仕上げ 納品前仕上げ 全シートA1	book.finish,protect.remove,export.pdf,sheet.gridlines,transpose
+シートを名前順に並べ替えて	sheet.sort,sort,sheet.rename,transpose,cols.move
+全シートのタブを名前順で昇順に並べ替えて	sheet.sort,sort,sheet.rename,sheet.merge,sheet.gridlines
+シート名で降順に並べ替えて	sort,sheet.rename,sheet.sort,transpose,cols.move
+シート並べ替え 名前順 タブ昇順	sheet.sort,sort,transpose,cols.move,sheet.rename
+売上シートを日付つきで複製保存して	sheet.snapshot,export.pdf,sheet.copy,export.csv,sheet.color
+集計シートの日付入りスナップショットを作って	sheet.snapshot,sheet.toc,sheet.add,sheet.move,sheet.delete
+今日の控えを作ってバックアップシートを複製保存して	sheet.snapshot,backup,sheet.copy,export.pdf,export.csv
+スナップショット 日付付き控え 複製保存	sheet.snapshot,backup,format,cf.scale
 見出しが氏名と電話番号の表を新しく作って	format,table.new,doc.table.style,doc.header,text.join
 名簿みたいな一覧表を用意して	table.new
-名前と金額の表ほしいんだけど	table.new,format,sort,calc.col,stat.row
+名前と金額の表ほしいんだけど	table.new,format,sort,top.n,calc.col
 テーブル 新規 作成 見出し 合計行付き	table.new,format,total,doc.outline,summary
 C列にプルダウンの入力規則を付けて	validation.list,validation.clear,checkbox,drive.share,cf.dup
-ステータス列を選択肢から選べるようにして	validation.list
-D2:D50でリストから選ぶように設定して	validation.list,filter.on,doc.list,fill.down
+ステータス列を選択肢から選べるようにして	validation.list,filter.delete
+D2:D50でリストから選ぶように設定して	validation.list,filter.on,doc.list,count.if,fill.down
 プルダウン ドロップダウン リスト 選択肢	validation.list,validation.clear,doc.list
-D列に数値だけ入るように入力規則を設定して	validation.number,validation.list,validation.clear,filter.on,calc.col
+D列に数値だけ入るように入力規則を設定して	validation.number,validation.list,write,validation.clear,filter.on
 年齢列には0以上の数字しか入れられないようにして	validation.number,filter.where,doc.from.sheet,seiri,calc.col
 数量列に数字以外は入らないように制限して	validation.number,validation.date,calc.col
-数字だけ 数値限定 入力制限	validation.number,clear.values,seiri
+数字だけ 数値限定 入力制限	validation.number,clear.values,seiri,number.fix
 申請日列は日付だけ入るように設定して	validation.date,filter.on,validation.number
 B列でカレンダーから日付を選べるようにして	fill.date,validation.list,validation.date
-A2:A100に日付以外は入らないようにして	validation.date,validation.number,copy,filter.where,filter.on
+A2:A100に日付以外は入らないようにして	validation.date,validation.number,copy,copy.values,filter.where
 日付だけ カレンダー 入力制限	fill.date,validation.date
-完了列にチェックボックスを付けて	checkbox,validation.list,link.set
-F列のセルにチェック欄を設置して	checkbox,doc.table,link.set,api,doc.table.cell
-E2:E30に済みの印を入れられるチェックボックスを付けて	checkbox,copy,doc.toc,filter.on,name.add
-チェックボックス チェック欄 作成	checkbox
-C列の入力規則を外して	validation.clear,validation.list,width,cf.dup,copy.values
+完了列にチェックボックスを付けて	checkbox,audit.check,validation.list,link.set,sheet.toc
+F列のセルにチェック欄を設置して	checkbox,doc.table,audit.check,link.set,api
+E2:E30に済みの印を入れられるチェックボックスを付けて	checkbox,audit.check,copy,copy.values,doc.toc
+チェックボックス チェック欄 作成	checkbox,audit.check,sheet.toc
+C列の入力規則を外して	validation.clear,validation.list,width,cf.dup,link.clear
 D列のプルダウンを消して	validation.clear,validation.list,drive.trash
 表全体の入力規則を解除して	validation.clear,validation.list,group.remove,filter.off,protect.remove
 入力規則 解除 プルダウン 消す	validation.clear,validation.list,bg.clear,clear.values
-このシートを保護して編集できないようにして	protect.sheet,protect.remove,protect.range,lookup.add,export.pdf
-シートを保護して、でもB2:B20だけは入力できるようにして	protect.sheet,protect.remove,write,doc.from.sheet,date.fix
+このシートを保護して編集できないようにして	protect.sheet,protect.remove,protect.range,protect.list,lookup.add
+シートを保護して、でもB2:B20だけは入力できるようにして	protect.sheet,count.if,protect.remove,protect.list,write
 他の人が書き換えられないように保護したい	protect.range,protect.sheet,replace,doc.table.cell,doc.replace
-シート 保護 ロック	protect.sheet,protect.remove,doc.from.sheet,lookup.add,print.setup
+シート 保護 ロック	protect.sheet,protect.list,protect.remove,doc.from.sheet,filter.extract
 A1からC10のセル範囲を保護して	protect.range,protect.remove,clear.values,clear.format,cf.add
 見出し行と合計のセルを保護して書き換えられないようにして	protect.sheet,protect.range,replace,format,doc.table.cell
-この範囲だけ触れないようにロックしたい	protect.sheet,protect.range,protect.remove
-範囲 保護 ロック	protect.range
-シートの保護を解除して	protect.remove,group.remove,doc.from.sheet,filter.off,protect.sheet
+この範囲だけ触れないようにロックしたい	protect.sheet,protect.range,protect.remove,protect.list
+範囲 保護 ロック	protect.range,protect.list
+シートの保護を解除して	protect.remove,protect.list,chart.delete,group.remove,doc.from.sheet
 A1:C10の保護を外して	protect.remove,protect.range,copy.values,copy,name.add
-ロックを解除して編集できるようにしたい	protect.remove,protect.sheet,protect.range,filter.off,unfreeze
-保護 解除 外す	protect.remove,filter.off,validation.clear,banding.remove,unfreeze
-A1:F20に「売上データ」という名前を付けて	name.add,name.delete,copy,drive.rename,sheet.rename
+ロックを解除して編集できるようにしたい	protect.remove,protect.sheet,protect.range,filter.off,merge.unmerge
+保護 解除 外す	protect.remove,filter.off,validation.clear,banding.remove,link.clear
+A1:F20に「売上データ」という名前を付けて	name.add,name.delete,copy,drive.rename,copy.values
 単価の列を名前付き範囲「商品単価」として定義して	name.add,name.delete,name.list,format,calc.col
 この範囲に名前をつけて式で呼べるようにしたい	name.add,protect.range,name.delete,name.list,clear.values
 名前付き範囲 作成 定義	name.add,name.delete,name.list,format,sheet.rename
-「売上データ」という名前付き範囲を削除して	name.delete,name.add,name.list,drive.rename,chart.delete
+「売上データ」という名前付き範囲を削除して	name.delete,name.add,name.list,filter.delete,drive.rename
 定義した名前「商品単価」を消して	name.list,name.delete,lookup.add,name.add,drive.rename
 いらない名前付き範囲を消したい	name.delete,name.add,rows.delete,cols.delete,name.list
 名前付き範囲 削除 消す	name.delete,name.add,name.list,doc.delete,dedupe
-定義されている名前付き範囲を一覧で教えて	name.list,name.add,name.delete,cf.list,drive.list
-名前付き範囲がどこにあるか確認したい	name.add,find,name.delete,name.list,format
+定義されている名前付き範囲を一覧で教えて	name.list,name.add,name.delete,protect.list,cf.list
+名前付き範囲がどこにあるか確認したい	name.add,find,name.delete,name.list,protect.list
 どんな名前がついてるか調べたい	name.list
-名前付き範囲 一覧 確認	name.list,name.add,name.delete,cf.list,doc.outline
-バックアップを取って	backup
-バックアップ取らなくていい	backup
+名前付き範囲 一覧 確認	name.list,name.add,name.delete,protect.list,cf.list
+バックアップを取って	backup,sheet.snapshot
+バックアップ取らなくていい	backup,sheet.snapshot
 変更前に控えを残しておきたい	backup,sheet.rename
-バックアップ 控え オン オフ	backup
+バックアップ 控え オン オフ	backup,sheet.snapshot
 「営業部」フォルダに移動して	folder,drive.move,drive.list,drive.trash,drive.rename
 これからは「月次報告」フォルダに作って	folder,drive.move,drive.list,drive.trash,drive.share
 別のフォルダに整理したい	drive.move,folder,drive.list,seiri,drive.rename
@@ -130,59 +150,87 @@ A1:F20に「売上データ」という名前を付けて	name.add,name.delete,c
 「作業用」フォルダごと移動して	drive.move,folder,drive.trash,drive.list,drive.rename
 PDFや画像やフォルダを別のフォルダに整理したい	drive.move,drive.rename,drive.trash,folder,drive.list
 PDF 画像 フォルダごと 移動 ドライブ移動	drive.move,drive.rename,drive.list,drive.trash,folder
-「古い下書き.pdf」をゴミ箱に入れて	drive.trash,drive.move,doc.export.pdf,export.pdf,drive.rename
+「古い下書き.pdf」をゴミ箱に入れて	drive.trash,write,drive.move,doc.export.pdf,export.pdf
 「一時作業」フォルダを削除して	drive.trash,drive.move,folder,drive.list,drive.rename
 ドライブの不要ファイルを消して整理したい	drive.trash,drive.move,drive.list,drive.rename,seiri
-ゴミ箱 ごみ箱 削除 不要ファイル	drive.trash,drive.list,drive.rename,drive.move,drive.share
+ゴミ箱 ごみ箱 削除 不要ファイル	drive.trash,drive.list,drive.rename,drive.move,export.csv
 A4横・幅1ページに収める印刷設定にして	print.setup,doc.header,export.pdf,doc.pagebreak
-A4縦で枠線なしの印刷設定を保存して	print.setup,export.pdf,doc.export.pdf,folder
+A4縦で枠線なしの印刷設定を保存して	print.setup,export.pdf,doc.export.pdf,folder,export.csv
 印刷の向きや用紙サイズを設定したい	print.setup,doc.style,filter.on,format,link.set
 印刷設定 A4横 1ページ 余白	print.setup,doc.header,export.pdf,api,doc.pagebreak
-このシートをA4横のPDFにして保存して	export.pdf,print.setup,doc.export.pdf,lookup.add,protect.sheet
-売上シートをPDF出力して保存して	export.pdf,doc.export.pdf,sheet.copy,sheet.color,doc.from.sheet
-シートをPDFファイルに書き出したい	export.pdf,doc.export.pdf,drive.trash,drive.rename,drive.move
+このシートをA4横のPDFにして保存して	export.pdf,print.setup,doc.export.pdf,export.csv,sheet.snapshot
+売上シートをPDF出力して保存して	export.pdf,sheet.snapshot,doc.export.pdf,export.csv,sheet.copy
+シートをPDFファイルに書き出したい	export.pdf,export.csv,doc.export.pdf,drive.trash,drive.rename
 PDF出力 PDF化 印刷用PDF 保存	export.pdf,doc.export.pdf,drive.rename,drive.move,drive.trash
-閲覧専用の共有リンクを作って	drive.share,doc.link,link.set
+閲覧専用の共有リンクを作って	drive.share,sheet.toc,doc.link,link.set,link.clear
 yamada@example.comに編集権限を付けて共有して	drive.share
-リンクを知っている全員に閲覧権限を付けたい	drive.share,doc.link,link.set,calc.rank
-共有リンク 閲覧リンク 権限 付与	drive.share,doc.link,link.set
+リンクを知っている全員に閲覧権限を付けたい	drive.share,doc.link,link.set,calc.rank,link.clear
+共有リンク 閲覧リンク 権限 付与	drive.share,doc.link,link.set,link.clear,link.extract
+このシートをCSVにしてDriveに保存して	export.csv,export.pdf,sheet.snapshot,lookup.add,protect.sheet
+売上シートをCSV出力してファイル保存して	export.csv,export.pdf,sheet.snapshot,drive.rename,drive.trash
+データをCSVに書き出して保存して	export.csv,doc.export.pdf,export.pdf,doc.insert,note.list
+CSV出力 CSV保存 CSVファイル 書き出し	export.csv,doc.export.pdf,drive.trash,export.pdf,drive.list
+保護中のシートと範囲を一覧にして教えて	protect.list,name.list,protect.sheet,lookup.add,protect.remove
+いま保護されている範囲の一覧を確認して	protect.list,protect.range,doc.outline,name.delete,name.list
+どこが保護されているか保護を調べて	protect.list
+保護一覧 保護確認 どこが保護	protect.list,doc.outline,cf.list
 表の見た目を整えて	doc.table.style,tidy,seiri,copy.format
 罫線と列幅を揃えて綺麗にして	tidy,width,format
 この表、見やすくして	tidy
 表 体裁 整形	tidy,doc.style
-全角の数字を半角に直して	seiri,replace,text.case,doc.replace,renumber
-空白を取り除いてデータを整理して	seiri,dedupe,name.add,name.delete,clear.values
+全角の数字を半角に直して	seiri,replace,number.fix,text.case,doc.replace
+空白を取り除いてデータを整理して	seiri,dedupe,audit.check,name.add,name.delete
 空行を詰めて	seiri
 重複 削除 整理	dedupe,seiri
 番号の列を1から振り直して	renumber,replace,fill.series,cols.insert
-No列を連番に直して	renumber,replace,doc.replace,seiri
+No列を連番に直して	renumber,replace,doc.replace,seiri,number.fix
 通し番号をつけ直して	renumber,replace,fill.series,doc.list
 番号 連番 振り直し	renumber,fill.series
-重複した行を削除して	dedupe,rows.delete,doc.table.row,name.delete,drive.trash
+重複した行を削除して	dedupe,rows.delete,filter.delete,doc.table.row,name.delete
 同じ行がダブっているのを取り除いて	cf.dup,dedupe,rows.delete,cols.delete
 ダブりを消しといて	dedupe,cf.dup
-重複行 削除 クレンジング	dedupe,rows.delete,doc.table.row,seiri
+重複行 削除 クレンジング	dedupe,rows.delete,doc.table.row,seiri,filter.delete
 名前の列を姓と名に分割して	split.col,text.join,sheet.split
 C列をカンマで区切って別の列に分けて	split.col,format,doc.pagebreak,calc.col,text.join
 D列の名前をスペースで姓と名に分けといて	split.col,sheet.split,doc.pagebreak,text.join,name.delete
-列 分割 区切り テキスト分流	split.col,doc.pagebreak,format,sheet.split
+列 分割 区切り テキスト分流	split.col,number.fix,doc.pagebreak,format,sheet.split
+この表のエラーや重複や空欄を診断して	audit.check,doc.table,doc.table.cell,doc.table.row,doc.table.style
+データの品質チェックをして異常をチェックして	audit.check,checkbox,seiri,name.add,name.delete
+表を点検して問題点を診断して	audit.check
+表の診断 エラーチェック 空欄 重複	audit.check,checkbox,seiri,formula.guard
+結合セルを解除して値を埋めて	merge.unmerge,format,filter.off,protect.remove,fill.blank
+結合を解除して同じ値で埋めて	format,merge.unmerge,fill.blank,dedupe,filter.off
+結合セルをほどいて値を分解して入れて	merge.unmerge,write,format,doc.table
+結合解除 値埋め セル結合をほどく	format,merge.unmerge,fill.blank,link.clear
+空白セルを上の値で穴埋めして	fill.blank,write,doc.table.cell,filter.where,cf.add
+A列の空欄を上の値で埋めて	fill.blank,write,width,fill.series,link.clear
+表のブランクを埋めて穴埋めして	fill.blank,calc.rank,link.extract
+穴埋め 空白セル 上の値で埋める	fill.blank,write,doc.table.cell,filter.where,cf.add
+金額列の文字の数字を本物の数値に直して	number.fix,replace,seiri,date.fix,doc.replace
+文字列の数字を数値に変換して	number.fix,seiri,formula.tovalue,text.case,validation.number
+文字になってる数字を本物の数値にして	number.fix,validation.number,seiri,date.fix,format
+文字の数字 数値変換 本物の数値	number.fix,seiri,validation.number,date.fix,format
+顧客名列の末尾に「様」を付けて	text.affix,doc.append,doc.table.row,link.set,formula.tovalue
+品番列の先頭に「ID-」を付けて	text.affix,doc.move,formula.tovalue,text.case,cf.dup
+先頭に文字や末尾に文字を付けて	text.affix,doc.append,doc.move,doc.table.row,text.join
+先頭 末尾 文字 付ける 接頭辞 接尾辞	text.affix,format
 見出しと箇条書きの文書を作って	doc.new,format,doc.section,doc.outline,doc.insert
 議事録を書いて	write,doc.new,doc.copy
 見積書の文章をつくって	doc.new,doc.export.pdf,doc.replace,doc.outline,doc.table.cell
 文書 新規 本文 作成	doc.new,doc.template,doc.export.pdf
 文書の最後に「以上です」と追記して	doc.append,doc.new,doc.replace,doc.section,doc.style
 決定事項の下に「次回は12/2」という項目を足して	doc.append,doc.insert,calc.col,stat.row,total
-末尾にひとこと足しといて	doc.append,doc.table.row
+末尾にひとこと足しといて	doc.append,doc.table.row,text.affix
 文書 追記 末尾	doc.append,doc.table.row
 文書の中の山田を山田（総務）に置き換えて	doc.replace,replace,doc.table.cell,formula.tovalue,doc.new
 文中の表記を統一したい	doc.replace
 文書の「株式会社」を全部「(株)」に直して	replace,doc.replace,doc.section,seiri,doc.new
 文書 置換 語句	doc.replace,replace
 概要の節を書き直して	doc.section,replace
-概要の節を削除して	doc.section,doc.delete,dedupe,name.delete,drive.trash
+概要の節を削除して	doc.section,doc.delete,dedupe,filter.delete,name.delete
 決定事項の節を「保留」の1行に差し替えて	doc.insert,doc.section
 文書 節 差し替え 削除	doc.section,doc.insert,doc.delete,doc.table.row,doc.from.sheet
-文書の最後に項目と内容の2列の表を入れて	doc.table,doc.append,doc.from.sheet,doc.table.cell,doc.table.row
+文書の最後に項目と内容の2列の表を入れて	doc.table,doc.append,write,doc.from.sheet,doc.table.cell
 文書の1つ目の表の2行1列を「新」に直して	doc.table,replace,doc.replace,doc.table.cell,doc.table.row
 文書へ表を挿入して	doc.table,doc.insert
 文書 表 挿入 セル	doc.table,doc.insert,doc.table.cell
@@ -193,7 +241,7 @@ D列の名前をスペースで姓と名に分けといて	split.col,sheet.split
 この文書の章立てを見せて	doc.outline,doc.new,doc.replace,doc.table.cell,doc.section
 文書の見出し一覧を出して	doc.outline,format,doc.table.style,doc.new,doc.section
 文書 目次 章立て 見出し	doc.outline,format,doc.new,doc.section,doc.style
-文書 構成 目次 アウトライン	doc.outline,doc.toc,banding.add,banding.remove
+文書 構成 目次 アウトライン	doc.outline,doc.toc,banding.add,banding.remove,sheet.toc
 決定事項の下に『次回は来週』と1行足して	doc.insert,calc.col,rows.insert,doc.append,stat.row
 参加者の後に『オブザーバー佐藤』を差し込んで	doc.insert,doc.from.sheet,doc.template,rows.insert,cols.insert
 見出し 下 段落 差し込み	format,doc.insert,doc.section,doc.delete,doc.template
@@ -206,73 +254,73 @@ D列の名前をスペースで姓と名に分けといて	split.col,sheet.split
 文書内で決定事項を検索して	find,doc.insert,doc.find
 文書 言葉 探す 検索	doc.find,find,doc.replace,doc.link,drive.list
 文書内を検索 キーワード検索 探す	doc.find,find,drive.list
-この行を見出し1にして	format,doc.heading,doc.new,doc.section,doc.style
+この行を見出し1にして	format,doc.heading,transpose,doc.new,doc.section
 議事録のタイトルを見出しに変更して	doc.heading,doc.header,format,chart.new,doc.new
 見出し レベル 変更 段落	format,doc.heading,doc.insert,doc.delete,doc.new
 見出しに変更 大見出し 中見出し レベル	doc.heading,doc.header,format,doc.new,doc.section
 決定事項を箇条書きにして	doc.list,doc.insert,doc.new
-手順を番号つきリストにして	doc.list,validation.list
+手順を番号つきリストにして	doc.list,top.n,validation.list
 箇条書き 番号 リスト	doc.list,doc.new,validation.list
-リスト 箇条書き 変換	doc.list,doc.new,validation.list
+リスト 箇条書き 変換	doc.list,doc.new,validation.list,number.fix
 2番目の段落を消して	doc.delete
-この節をまるごと削除して	doc.section,doc.delete,dedupe,name.delete,drive.trash
+この節をまるごと削除して	doc.section,doc.delete,dedupe,filter.delete,name.delete
 段落 節 削除 消去	doc.delete,doc.section
 文書 削除 節 段落	doc.section,doc.delete,doc.append,doc.insert,doc.table.row
 決定事項の節を参加者の前に移して	doc.insert,doc.move,rows.insert,rows.move,cols.insert
-この節を先頭に持ってきて	doc.move,sheet.move
+この節を先頭に持ってきて	doc.move,text.affix,sheet.move
 段落 節 移動 移す	doc.move
-順番 入れ替え 節	sheet.move,doc.move,cols.move,rows.move,sort
+順番 入れ替え 節	sheet.move,doc.move,cols.move,transpose,rows.move
 表に新しい行を追加して	rows.insert,doc.table.row,table.new,sheet.add
-表の2行目を削除して	doc.table,doc.table.row,dedupe,name.delete,drive.trash
+表の2行目を削除して	doc.table,doc.table.row,dedupe,filter.delete,name.delete
 表 行 追加 削除	rows.insert,doc.table.row
-文書 表に行を追加 表の行を削除	doc.table.row,rows.insert,rows.delete,doc.append,doc.section
+文書 表に行を追加 表の行を削除	doc.table.row,filter.delete,rows.insert,rows.delete,doc.append
 文字サイズを14ポイントにして太字にして	format,doc.style,doc.font,doc.align,text.case
-文字の色を赤色に変えて	format,doc.font,doc.replace,doc.style,doc.heading
+文字の色を赤色に変えて	format,doc.font,number.fix,doc.replace,doc.style
 フォント 文字 色 サイズ 太字	format,doc.style,doc.font,print.setup
 文字色 大きさ 書式	format,doc.style,doc.font,cf.add
 タイトルを中央寄せにして	doc.align,format,chart.new
 段落の行間を広げて	doc.align,width,doc.style
 中央寄せ 右寄せ 行間 字下げ	doc.align,format,doc.style
-揃え 配置 行間 インデント	doc.align,doc.style,format
+揃え 配置 行間 インデント	doc.align,doc.style,format,sheet.toc
 表の見出し行の背景色をグレーにして	format,doc.table.style,banding.add,bg.clear,freeze
 表の罫線を細い実線にして	doc.table.style,tidy
 表 見た目 罫線 背景色	format,doc.table.style,tidy,bg.clear,banding.add
 文書 表の見た目 表の罫線 背景色	doc.table.style,format,tidy,doc.table,doc.outline
-ここで改ページを入れて	doc.pagebreak,doc.header,print.setup
+ここで改ページを入れて	doc.pagebreak,write,doc.header,print.setup
 見出しの前に改ページを挿入して	doc.pagebreak,format,doc.header,doc.insert,rows.insert
 改ページ 挿入 ページ区切り	doc.pagebreak,format,doc.header,split.col,print.setup
 改ページ 区切り	doc.pagebreak,format,doc.header,split.col,print.setup
 文書のヘッダーにタイトルを設定して	doc.header,format,doc.outline,doc.table.style,doc.new
-ページ番号をフッターに付けて	doc.header,doc.pagebreak,renumber,print.setup,format
+ページ番号をフッターに付けて	doc.header,doc.pagebreak,renumber,text.affix,print.setup
 ヘッダー フッター ページ番号	doc.header,format,doc.new,doc.section,doc.style
 柱 ページ 番号 ヘッダ	doc.header,format,doc.new,doc.section,doc.style
-文書の先頭に目次を入れて	doc.toc,doc.outline,doc.move,sheet.move,doc.new
+文書の先頭に目次を入れて	doc.toc,write,doc.outline,doc.move,text.affix
 目次を挿入して	doc.toc
 目次 挿入 作成 更新	doc.toc
-アウトライン 目次 追加	doc.outline,doc.toc,banding.add,banding.remove
-参考資料の文字にURLのリンクを付けて	doc.link,link.set,text.case,drive.share,format
-この文字のハイパーリンクを外して	doc.link,link.set,doc.replace,doc.style,doc.table.cell
-リンク 挿入 解除 URL	doc.link,link.set,drive.share
-ハイパーリンク 付与 削除	link.set,doc.link,drive.share
-スプレッドシートの売上表を文書に貼り付けて	copy,doc.from.sheet,sheet.rename,print.setup,sheet.copy
+アウトライン 目次 追加	doc.outline,doc.toc,banding.add,banding.remove,sheet.toc
+参考資料の文字にURLのリンクを付けて	doc.link,link.set,link.extract,text.case,drive.share
+この文字のハイパーリンクを外して	doc.link,link.clear,link.set,format,number.fix
+リンク 挿入 解除 URL	doc.link,link.set,link.extract,link.clear,drive.share
+ハイパーリンク 付与 削除	link.set,doc.link,link.clear,drive.share,sheet.toc
+スプレッドシートの売上表を文書に貼り付けて	copy,doc.from.sheet,sheet.rename,print.setup,sheet.gridlines
 シートの集計表を文書に差し込んで	doc.from.sheet,summary,doc.insert,doc.template,sheet.move
-スプレッドシート 表 差し込み 文書	doc.template,doc.from.sheet,doc.insert,print.setup,doc.section
-シート 表 挿入 ドキュメント	doc.table,doc.from.sheet,doc.insert,doc.template,lookup.add
+スプレッドシート 表 差し込み 文書	doc.template,doc.from.sheet,doc.insert,print.setup,sheet.gridlines
+シート 表 挿入 ドキュメント	doc.table,doc.from.sheet,doc.insert,doc.template,filter.extract
 ひな形文書の社名を埋めて新しい文書を作って	doc.new,doc.template,doc.copy,doc.replace,doc.section
 テンプレートの変数を差し替えて文書を作成して	doc.new,doc.template,doc.from.sheet,doc.section,doc.insert
 ひな形 テンプレート 差し込み 文書生成	doc.template,doc.from.sheet,doc.insert,doc.section,filter.off
-テンプレート 変数 埋め込み	doc.template,doc.from.sheet,filter.off
+テンプレート 変数 埋め込み	doc.template,link.extract,doc.from.sheet,filter.off
 この文書のコピーを作って	doc.copy,doc.new,doc.replace,doc.outline,doc.table.cell
-文書を複製して別の名前で保存して	doc.copy,doc.export.pdf,sheet.rename,sheet.copy,name.add
+文書を複製して別の名前で保存して	doc.copy,doc.export.pdf,sheet.rename,sheet.copy,sheet.snapshot
 文書 複製 コピー 作成	doc.copy,sheet.copy,doc.template,doc.export.pdf,copy
 ドキュメント 複製 別名	doc.copy
 この文書をPDFにして保存して	doc.export.pdf,export.pdf,doc.new,doc.replace,doc.outline
 このドキュメントをPDFに書き出して	doc.export.pdf,export.pdf,doc.new,doc.insert,doc.section
 GoogleドキュメントをPDF化したい	doc.export.pdf,export.pdf,drive.rename,drive.move,drive.trash
 文書 PDF 書き出し 保存	doc.export.pdf,export.pdf,doc.new,doc.section,doc.insert
-B2に100を入れて	write,fill.series,filter.where,cf.add,clear.values
+B2に100を入れて	write,count.if,fill.series,filter.where,cf.add
 セルA1へ合計と書き込んで	write,protect.range,doc.table.cell,find,copy.values
-A1に3って書いといて	write,copy.format
+A1に3って書いといて	write,copy.format,transpose,book.finish
 セル 値 入力 書き込み	write,doc.table.cell,protect.sheet,protect.range,clear.values
 営業部を営業課に置換して	replace,doc.replace,folder
 全部の株を(株)に書き換えて	replace,protect.sheet,protect.range,doc.replace,doc.table.cell
@@ -285,61 +333,77 @@ A1に3って書いといて	write,copy.format
 F2からG10の値をクリアして	clear.values,write,clear.all,clear.format,copy.values
 B列の中身を空っぽにして	clear.values,width,doc.table,doc.table.cell,drive.list
 この表の数字だけ消しといて	seiri,clear.values,doc.table.row,validation.number,doc.table
-値 クリア 消去	clear.values,clear.format,clear.all,note.clear
-A1からE21の書式をクリアして	clear.format,format,clear.all,copy.format,filter.on
+値 クリア 消去	clear.values,cf.clear,clear.format,clear.all,note.clear
+A1からE21の書式をクリアして	clear.format,format,cf.clear,clear.all,copy.format
 B2:E20に付けた色や罫線を消して元に戻して	clear.format,format,protect.sheet,name.add,copy
 ここの書式リセットしといて	clear.format,format,write,doc.style,doc.font
-書式 リセット 色 クリア	clear.format,format,clear.values,clear.all,write
-J2:K9をすべてクリアして	clear.all,clear.format,clear.values,note.clear
+書式 リセット 色 クリア	clear.format,format,cf.clear,clear.values,clear.all
+J2:K9をすべてクリアして	clear.all,clear.format,cf.clear,clear.values,note.clear
 G1:H10を書式ごと全部消して白紙にして	clear.all,format,cf.clear,clear.values,note.clear
 この枠の中まっさらにしといて	clear.all
-すべて消去 全部クリア	clear.all,note.clear,clear.values,clear.format
+すべて消去 全部クリア	clear.all,cf.clear,note.clear,clear.values,clear.format
 セル範囲をコピーして別の場所に貼り付けて	copy,copy.format,fill.down,formula.tovalue,format
-A1:E21をG1に写して	copy,copy.format,protect.remove,name.add,clear.format
-A1からB10をD列にコピーしといて	copy,copy.format,fill.down,protect.range,copy.values
+A1:E21をG1に写して	copy,copy.format,copy.values,transpose,protect.remove
+A1からB10をD列にコピーしといて	copy,copy.format,copy.values,fill.down,protect.range
 範囲 複製 コピー 貼り付け	copy,copy.format,doc.copy,formula.tovalue,copy.values
 E2:E20の数式を値にして固定して	formula.tovalue,copy.values,clear.format,seiri,protect.sheet
-E列の計算結果を値として貼り付けて	copy.values,copy,formula.tovalue,copy.format,checkbox
+E列の計算結果を値として貼り付けて	copy.values,copy,formula.tovalue,copy.format,calc.diff
 ここ式を値に変えといて	copy.values,formula.tovalue,doc.heading,drive.rename,format
 値貼り付け 数式 値化	formula.tovalue,copy.values,copy,copy.format
-A1:E1の書式をA21:E21にコピーして貼り付けて	copy,copy.format,format,copy.values,clear.format
+A1:E1の書式をA21:E21にコピーして貼り付けて	copy,copy.format,copy.values,format,clear.format
 B列をA列と同じ見た目に揃えて	copy.format,tidy,width,cols.move,doc.table.style
 ここの書式だけ写しといて	format,copy.format,doc.style,doc.font,clear.format
 書式 コピー 貼り付け	copy.format,copy,format,formula.tovalue,copy.values
-A列に1から連番を入れて	fill.series,doc.move,renumber,calc.col,validation.number
-通し番号を下まで埋めて	fill.series,renumber,fill.date
+A列に1から連番を入れて	fill.series,write,doc.move,renumber,calc.col
+通し番号を下まで埋めて	fill.series,renumber,fill.date,fill.blank
 A2からA20に1から順に番号振っといて	fill.series,renumber,fill.date,doc.list,filter.on
 連番 入力 自動採番	fill.series
-A列に日付を連続で埋めて	fill.date,fill.series,validation.date,date.fix
-カレンダー用に毎日の日付をB2からB20に入れて	fill.date,validation.date,write,drive.move,date.fix
+A列に日付を連続で埋めて	fill.date,fill.series,fill.blank,validation.date,date.fix
+カレンダー用に毎日の日付をB2からB20に入れて	fill.date,write,validation.date,drive.move,date.fix
 1日ずつ日付下まで伸ばしといて	fill.date,fill.down
 日付 連続データ フィル	fill.date,seiri,filter.where,filter.on,filter.off
-E2の計算式をE20まで下方向にコピーして	fill.down,copy,copy.format,formula.tovalue,copy.values
+E2の計算式をE20まで下方向にコピーして	fill.down,copy,copy.format,formula.tovalue,doc.copy
 D2の内容をD3からD20まで下に写して	copy,fill.down
 式を下までオートフィルで伸ばしといて	fill.down,filter.on,filter.off,filter.where
 下 コピー オートフィル	fill.down,filter.on,filter.off,sheet.copy,doc.copy
 日付の列に文字で入っている日付を、ちゃんとした日付にして	date.fix,cf.add,format
-B2:B30の日付が文字になっているので日付に直して	date.fix,replace,doc.font,doc.replace,protect.sheet
-文字の日付を日付として扱えるようにしたい	date.fix,doc.font,format,doc.style,fill.date
-日付 文字 変換 日付型	date.fix,doc.font,text.case,format
-B5に「確認済み」とメモを付けて	note.set,checkbox,note.clear
-C3のセルに「要再確認」とメモを入れて	note.set,doc.table,write,api,doc.table.cell
-セルにメモや注釈を付けたい	note.set,format,cf.add,write,note.clear
-メモ 付ける 注釈 セル	note.set,format,cf.add,note.clear,link.set
-B5のメモを消して	note.clear,note.set
-このシートのメモを全部消して	note.clear,clear.all,sheet.show,sheet.color,sheet.merge
-付いているメモをクリアしたい	note.clear,clear.format,clear.all,clear.values,note.set
-メモ 消す 削除 クリア	note.clear,clear.values,clear.format,clear.all,doc.delete
-A2に公式サイトへのハイパーリンクを貼って	link.set,doc.link,drive.share,cf.dup
-会社名列にURL列のリンクを一括で貼って	link.set,doc.link,split.col,text.case,drive.share
-セルにクリックで飛べるリンクを設定したい	link.set,doc.link,drive.share,api,filter.on
-リンク 貼る ハイパーリンク URL	link.set,doc.link,drive.share
-金額の大きい順に並べ替えて	sort,cols.move,doc.style,calc.col,stat.row
+B2:B30の日付が文字になっているので日付に直して	date.fix,replace,doc.font,number.fix,doc.replace
+文字の日付を日付として扱えるようにしたい	date.fix,doc.font,format,doc.style,text.affix
+日付 文字 変換 日付型	date.fix,doc.font,text.case,format,number.fix
+B5に「確認済み」とメモを付けて	note.set,text.affix,checkbox,note.clear
+C3のセルに「要再確認」とメモを入れて	note.set,write,doc.table,api,doc.table.cell
+セルにメモや注釈を付けたい	note.set,note.list,format,cf.add,write
+メモ 付ける 注釈 セル	note.set,note.list,format,cf.add,note.clear
+B5のメモを消して	note.clear,note.set,note.list
+このシートのメモを全部消して	note.clear,clear.all,chart.delete,note.list,sheet.show
+付いているメモをクリアしたい	note.clear,clear.format,clear.all,cf.clear,clear.values
+メモ 消す 削除 クリア	note.clear,cf.clear,clear.values,clear.format,clear.all
+A2に公式サイトへのハイパーリンクを貼って	link.set,doc.link,link.clear,drive.share,format
+会社名列にURL列のリンクを一括で貼って	link.set,link.extract,doc.link,link.clear,split.col
+セルにクリックで飛べるリンクを設定したい	link.set,doc.link,drive.share,link.clear,sheet.toc
+リンク 貼る ハイパーリンク URL	link.set,doc.link,link.clear,link.extract,drive.share
+A1:D5の行と列を入れ替えてF1に貼って	transpose,cols.move,doc.move,copy.format,subtotal
+この表を転置して別シートに出して	transpose,note.list,filter.extract,top.n,sheet.color
+縦横を入れ替えて行列を逆にして	transpose,doc.move,cols.move,rows.move,sheet.move
+転置 行と列を入れ替える 縦横逆転	transpose,cols.move,doc.move,rows.move,sheet.move
+A列のハイパーリンクを外して	link.clear,doc.link,link.set,fill.blank,link.extract
+表の中のリンクを解除して消して	link.clear,doc.table,doc.link,link.set,doc.table.cell
+セルに貼られたリンクだけ外して	link.clear,doc.link,link.set,drive.share,format
+ハイパーリンク 外す 解除 消す	link.clear,doc.link,link.set,filter.off,validation.clear
+会社名列の埋め込みリンクのURLを隣列へ抽出して	link.extract,link.set,doc.link,filter.extract,calc.rank
+A列のリンクのURLを取り出してURL列を作って	link.extract,link.set,doc.link,link.clear,calc.rank
+セルの埋め込みリンク先を隣列に抽出して	link.extract,link.set,link.clear,filter.extract,top.n
+埋め込みリンク URL抽出 URL列	link.extract,link.set,doc.link,doc.template,drive.share
+シート内のメモ一覧を別シートに出して	note.list,transpose,filter.extract,top.n,note.clear
+全シートのメモを一覧にしてまとめて	note.list,summary,note.clear,sheet.toc,protect.list
+セルのコメント一覧シートに書き出して	note.list,export.pdf,export.csv,doc.export.pdf,filter.extract
+メモ一覧 コメント一覧 注釈 書き出し	note.list,note.set,doc.export.pdf,doc.new,doc.section
+金額の大きい順に並べ替えて	sort,sheet.sort,cols.move,doc.style,top.n
 日付の新しい順にソートして	sort,doc.template,calc.rank,format,date.fix
-売上が高い順に並べて	sort,calc.rank,cf.add
-並べ替え 昇順 降順	sort,cols.move,rows.move,sheet.move
-部署が営業の行だけ表示して	filter.where,formula.guard,format,rows.show,cols.show
-条件に合う行だけ見せて	filter.where,count.if
+売上が高い順に並べて	sort,calc.rank,sheet.sort,cf.add
+並べ替え 昇順 降順	sort,sheet.sort,cols.move,rows.move
+部署が営業の行だけ表示して	filter.where,filter.extract,count.if,formula.guard,format
+条件に合う行だけ見せて	filter.where,filter.extract,filter.delete,count.if
 営業だけに絞って	filter.where
 絞り込み フィルタ 表示	filter.off,filter.where,filter.on,fill.down
 表にフィルタを設定して	filter.on,filter.where,filter.off,doc.header,fill.down
@@ -347,33 +411,41 @@ A2に公式サイトへのハイパーリンクを貼って	link.set,doc.link,dr
 オートフィルタかけといて	filter.on,fill.down,filter.where,filter.off,lookup.add
 フィルタ 設定 追加	filter.on,filter.where,filter.off,fill.down
 表のフィルタを解除して	filter.off,filter.where,filter.on,protect.remove,fill.down
-絞り込みを解除して全部表示に戻して	filter.off,format,group.remove,filter.where,cols.show
+絞り込みを解除して全部表示に戻して	filter.off,format,group.remove,filter.where,sheet.gridlines
 絞り込みを解除したい	filter.off,group.remove,filter.where,filter.on,protect.remove
 フィルタ 解除 外す	filter.off,filter.where,filter.on,validation.clear,protect.remove
+ステータスが完了の行を一括削除して	filter.delete,name.delete,doc.table.row,dedupe,validation.list
+金額が0以下の行を削除して	filter.delete,filter.where,rows.delete,doc.table.row,dedupe
+状態が不要に一致する行を消して	filter.delete,rows.delete,dedupe,doc.delete,doc.table.row
+条件に合う行を一括削除したい	filter.delete,filter.where,filter.extract,count.if,dedupe
+部署が営業の行を別シートに抽出して	filter.extract,top.n,filter.where,transpose,note.list
+金額が10000以上の行を別シートへ抽出して	filter.extract,filter.where,top.n,cf.add,transpose
+条件に合う行を「抽出」シートに抽出して	filter.extract,top.n,filter.where,filter.delete,count.if
+条件に合う行を別シートに抽出したい	filter.extract,top.n,filter.where,filter.delete,transpose
 3行目の前に行を挿入して	rows.insert,rows.move,cols.insert,api,doc.table
 5行目と6行目の間に空行を1つ入れたい	seiri,rows.insert,doc.table,rows.move,group.remove
 行を増やしたいんだけど	rows.insert
 行 追加 挿入 差し込み	rows.insert,doc.insert,cols.insert,doc.template,doc.table.row
-3行目を削除して	rows.delete,dedupe,name.delete,drive.trash,chart.delete
+3行目を削除して	rows.delete,dedupe,filter.delete,name.delete,drive.trash
 この行いらないから消して	rows.delete,cols.delete,doc.table.row
 10行目は不要なので取り除いて	rows.delete,cols.delete,rows.hide,group.rows,group.remove
-行 削除 消去	rows.delete,doc.table.row,dedupe
+行 削除 消去	rows.delete,doc.table.row,dedupe,filter.delete
 5行目を2行目に移動して	rows.move,folder,drive.move,rows.insert,rows.delete
 3行目と4行目の順番を入れ替えたい	sheet.move,doc.move,rows.move,cols.move,rows.insert
 この行を上に動かして	rows.move,sheet.move
-行 移動 並べ替え	sort,rows.move,cols.move,sheet.move,doc.move
-C列の前に列を挿入して	cols.insert,rows.insert,doc.table,doc.pagebreak,validation.clear
+行 移動 並べ替え	sort,rows.move,cols.move,sheet.sort,doc.move
+C列の前に列を挿入して	cols.insert,rows.insert,doc.table,doc.pagebreak,text.affix
 B列とC列の間に空の列を足して	cols.insert,calc.col,width,calc.diff,date.parts
 列を1つ増やしたい	cols.insert
 列 追加 挿入	cols.insert,doc.insert,doc.toc,rows.insert
-B列を削除して	cols.delete,dedupe,name.delete,drive.trash,chart.delete
+B列を削除して	cols.delete,dedupe,filter.delete,name.delete,drive.trash
 この列いらないから消して	cols.delete,rows.delete,renumber
 D列は不要なので取り除いて	rows.delete,cols.delete,doc.delete,dedupe,drive.trash
 列 削除 消去	cols.delete
-A列とB列を入れ替えて	cols.move,doc.move,width,fill.series,rows.move
-E列をA列の位置に動かして	cols.move,width,rows.move,freeze,sheet.move
+A列とB列を入れ替えて	cols.move,transpose,doc.move,width,fill.series
+E列をA列の位置に動かして	cols.move,width,fill.blank,link.clear,rows.move
 この列を右に動かして	rows.move,cols.move,sheet.move
-列 移動 並べ替え	sort,cols.move,rows.move,sheet.move,doc.move
+列 移動 並べ替え	sort,cols.move,rows.move,sheet.sort,doc.move
 1行目を固定して	freeze,api,unfreeze
 スクロールしても見出しが動かないようにして	freeze,format,doc.new,doc.section,doc.style
 ウィンドウ枠の固定しといて	freeze,unfreeze
@@ -387,14 +459,14 @@ E列をA列の位置に動かして	cols.move,width,rows.move,freeze,sheet.move
 この行見えなくしといて	rows.hide,doc.heading,format,rows.show
 行 非表示 隠す	rows.hide,rows.show,cols.hide,cols.show,sheet.hide
 隠れている5行目から10行目を再表示して	rows.hide,rows.show,group.rows,group.remove,cols.show
-シート内の非表示の行を全部出して	rows.show,sheet.show,cols.show,sheet.hide,filter.off
+シート内の非表示の行を全部出して	rows.show,sheet.show,note.list,cols.show,filter.extract
 隠した行を出したい	rows.show,cols.show,sheet.show
 行 再表示 表示	rows.show,cols.show,sheet.show
-C列とD列を非表示にして	cols.hide,format,cols.show,filter.off,width
+C列とD列を非表示にして	cols.hide,format,cols.show,sheet.gridlines,filter.off
 不要なF列を隠して	cols.hide,doc.delete,drive.trash,rows.delete,cols.delete
 この列見えなくしといて	cols.hide
 列 非表示 隠す	cols.hide,cols.show,rows.hide,rows.show,sheet.hide
-非表示になっているC列を再表示して	cols.show,format,sheet.show,rows.show,cols.hide
+非表示になっているC列を再表示して	cols.show,format,sheet.show,sheet.gridlines,rows.show
 隠れている列を全部出して	cols.show,rows.show,sheet.show
 隠した列を出したい	cols.show,rows.show,sheet.show
 列 再表示 表示	cols.show,rows.show,sheet.show
@@ -407,14 +479,14 @@ D列からF列をグループ化して	group.cols,group.rows,group.remove,tidy
 列を折りたためるようにグループにしたい	group.cols,group.rows,group.remove
 列 グループ化 折りたたみ	group.cols,group.rows,group.remove
 5行目から10行目のグループ化を解除して	group.remove,group.rows,rows.hide,group.cols,protect.remove
-シート全体のグループを全部外して	group.remove,sheet.show,protect.remove,note.clear,group.rows
+シート全体のグループを全部外して	group.remove,sheet.show,protect.remove,chart.delete,note.clear
 折りたたみのグループをなくしたい	group.remove,group.rows,group.cols
 グループ 解除 外す	group.remove,banding.remove,group.rows,group.cols,filter.off
 見出しを太字にして背景を青にして	format,doc.font,doc.table.style,bg.clear,sheet.color
 金額の列を桁区切りの書式にして	format,doc.font,calc.col,calc.running,copy.format
 文字を赤くしたいんだけど	doc.font,format
 書式 太字 色 背景	format,doc.font
-A列の幅を広げて	width,cols.move
+A列の幅を広げて	width,fill.blank,link.clear,cols.move
 列幅を中身に合わせて自動調整して	width
 列が狭くて見えないから広げて	width
 幅 列幅 調整	width
@@ -422,65 +494,69 @@ A列の幅を広げて	width,cols.move
 F列で100以上のセルを赤く目立たせて	cf.add,format,filter.where,validation.number,write
 E列の点数が80未満は黄色にしてくれる？	format,cf.add
 条件付き書式 以上 赤	cf.add,format,cf.clear,cf.list,count.if
-C列の重複に色を付けて	cf.dup,format,doc.table.style,banding.add,copy.values
+C列の重複に色を付けて	cf.dup,format,doc.table.style,banding.add,formula.tovalue
 メール列でダブってる行をハイライトして	dedupe,cf.dup,link.set
 B列の重複してるとこ赤くして	cf.dup,format,dedupe,width,cols.move
 重複 ダブり 色 ハイライト	cf.dup,dedupe,link.set
 売上列にカラースケールを付けて	cf.scale,split.col,calc.col,calc.rank,validation.list
-金額の大きいほど濃い青のグラデーションにして	cf.scale,sort,format,doc.style,calc.col
-F2:F20をヒートマップみたいに色の濃淡つけて	cf.scale,protect.sheet,name.add,clear.format,fill.down
-カラースケール グラデーション ヒートマップ	cf.scale,backup,sheet.copy
-設定されている条件付き書式を外して	cf.clear,cf.add,cf.list,format,count.if
-表全体の自動でついた色を消して	clear.format,cf.clear,bg.clear,cf.add,banding.remove
-F列の条件付き書式を削除して	cf.clear,cf.add,format,cf.list,count.if
+金額の大きいほど濃い青のグラデーションにして	cf.scale,sort,format,doc.style,top.n
+F2:F20をヒートマップみたいに色の濃淡つけて	cf.scale,protect.sheet,name.add,top.n,cf.add
+カラースケール グラデーション ヒートマップ	cf.scale,top.n,sheet.snapshot,audit.check,backup
+設定されている条件付き書式を外して	cf.list,cf.clear,cf.add,format,count.if
+表全体の自動でついた色を消して	clear.format,cf.add,cf.clear,bg.clear,banding.remove
+F列の条件付き書式を削除して	cf.clear,cf.add,format,cf.list,filter.delete
 条件付き書式 削除 クリア 解除	cf.clear,cf.add,format,cf.list,count.if
-シートの条件付き書式を一覧にして	cf.list,cf.add,format,cf.clear,doc.from.sheet
+シートの条件付き書式を一覧にして	cf.list,cf.add,format,cf.clear,sheet.toc
 いま設定されてる条件付き書式を確認して	cf.list,cf.add,format,cf.clear,count.if
 このシートの条件付き書式はどこにあるか調べて	cf.list,cf.add,find,format,cf.clear
 条件付き書式 一覧 確認 調べる	cf.list,cf.add,format,cf.clear,count.if
 表に交互の色を付けて	banding.add,format,banding.remove,doc.table.style,filter.on
 1行おきに薄いグレーの背景色にして	format,banding.add,banding.remove,doc.table.style,bg.clear
 明細を見やすくしましまの縞模様にして	banding.add,tidy,banding.remove
-交互の色 しましま ストライプ 1行おき	banding.add,banding.remove,doc.outline
+交互の色 しましま ストライプ 1行おき	banding.add,banding.remove,doc.outline,top.n
 表の交互の色を外して	banding.remove,banding.add,bg.clear
 1行おきのしましまを消して	banding.remove,banding.add,doc.table.row
 縞模様のストライプを解除して	banding.add,banding.remove,group.remove,doc.outline,filter.off
 交互の色 解除 消す 外す	banding.add,banding.remove,bg.clear,filter.off,validation.clear
 A1の背景色を消して	bg.clear,format,clear.format,banding.remove,doc.table.style
 見出しの背景色をなしにして	bg.clear,format,doc.table.style,banding.add,banding.remove
-B2:E5の塗りつぶしを消して	bg.clear,doc.delete,protect.sheet,clear.values,clear.all
+B2:E5の塗りつぶしを消して	bg.clear,doc.delete,count.if,protect.sheet,clear.values
 セルの背景を塗りなしに戻したい	bg.clear,format,api,doc.table.cell,doc.table.style
 背景色 消す 塗りつぶし なし	bg.clear,format,clear.format,banding.remove,doc.table.style
+グリッド線を非表示にして	sheet.gridlines,print.setup,format,cols.show,filter.off
+全シートの枠線を非表示にして	sheet.gridlines,format,sheet.hide,sheet.show,sheet.merge
+目盛り線を表示に戻して	sheet.gridlines,format,filter.off,cols.show
+グリッド線 枠線 目盛り線 表示 非表示	sheet.gridlines,print.setup,doc.table.style,rows.hide,rows.show
 表の下に合計行を足して	total,calc.col,rows.insert,stat.row,doc.append
-金額の合計を出して	total,summary,calc.running,format,table.new
+金額の合計を出して	total,summary,calc.running,top.n,format
 合計も入れといて	count.if,total
 合計 行 集計 追加	total,summary,sheet.add
-部署ごとの金額の合計表を作って	summary,table.new,total,calc.running,count.if
+部署ごとの金額の合計表を作って	summary,table.new,pivot.new,total,calc.running
 部署別に件数を集計して	summary,pivot.new,count.if
 担当ごとの売上をまとめて	summary,pivot.new
 集計 項目別 部署ごと	summary,sheet.split,count.if,pivot.new
 売上のピボットテーブルを作って	pivot.new,table.new,summary,doc.from.sheet,calc.percent
 部署と商品でクロス集計表を作成して	summary,pivot.new,table.new
-縦と横で集計してくれる？	pivot.new
+縦と横で集計してくれる？	pivot.new,transpose
 ピボット クロス集計 新規作成	pivot.new
 売上の棒グラフを作って	chart.new,chart.delete,doc.from.sheet,calc.percent,calc.rank
 月別の推移を折れ線グラフにして	chart.new,chart.delete,pivot.new
-商品別の円グラフを作成して	chart.new,lookup.add,pivot.new,chart.delete
+商品別の円グラフを作成して	chart.new,lookup.add,chart.delete
 表をグラフにして	chart.new,chart.delete
 グラフ 作成 棒グラフ 折れ線	chart.new,chart.delete
 グラフを消して	chart.delete,chart.new
-売上推移グラフを削除して	chart.delete,chart.new,name.delete,dedupe,drive.trash
+売上推移グラフを削除して	chart.delete,chart.new,name.delete,dedupe,filter.delete
 グラフをなくして	chart.delete,chart.new
 グラフはいらないから消して	chart.delete,rows.delete,cols.delete,chart.new
 グラフ 削除 消去	chart.delete,chart.new
 数量×単価で金額の列を足して	calc.col,calc.running,stat.row,calc.diff,date.parts
-D列に利益（売上-費用）の列を足して	calc.col,calc.percent,calc.diff,calc.rank,date.parts
-計算列 追加 計算式	calc.col,cols.insert,formula.tovalue,copy.values,fill.down
-計算 式 列 追加	cols.insert,calc.col,formula.tovalue,copy.values,fill.down
-売上の構成比を出して	calc.percent,doc.outline,calc.rank,doc.from.sheet,drive.rename
-売上の構成比の列を足して	calc.percent,calc.col,calc.rank,calc.diff,date.parts
+D列に利益（売上-費用）の列を足して	calc.col,calc.diff,calc.percent,calc.rank,date.parts
+計算列 追加 計算式	calc.col,cols.insert,formula.tovalue,fill.down
+計算 式 列 追加	cols.insert,calc.col,formula.tovalue,fill.down
+売上の構成比を出して	calc.percent,doc.outline,calc.rank,doc.from.sheet,calc.diff
+売上の構成比の列を足して	calc.percent,calc.col,calc.diff,calc.rank,date.parts
 割合 列 構成比	calc.percent
-構成比 パーセント 列	calc.percent
+構成比 パーセント 列	calc.percent,format
 表の下に平均の行を足して	stat.row,calc.col,rows.insert,total,doc.append
 表の下に最大値と最小値の行を追加して	stat.row,rows.insert,doc.append,doc.table.row,doc.insert
 平均行 追加 下	stat.row,rows.insert,doc.table.row
@@ -490,55 +566,59 @@ D列に利益（売上-費用）の列を足して	calc.col,calc.percent,calc.di
 別の表 列 参照 追加	lookup.add,doc.table.row,sheet.add
 マスタ 参照 列 追加 引く	cols.insert,lookup.add
 前月との差額の列を足して	calc.col,calc.diff,calc.running,date.parts,cols.insert
-売上の前年比の列を追加して	cols.insert,calc.diff,calc.percent,calc.rank,doc.from.sheet
+売上の前年比の列を追加して	calc.diff,cols.insert,calc.percent,calc.rank,doc.from.sheet
 前年比 差分 増減 列	calc.diff
 前月比 伸び率 差の列	calc.diff
-売上の累計列を足して	calc.col,calc.percent,calc.running,calc.rank,doc.from.sheet
+売上の累計列を足して	calc.col,calc.percent,calc.diff,calc.running,calc.rank
 金額の累積合計の列を追加して	calc.running,cols.insert,calc.col,format,total
 累計 累積 列 追加	cols.insert,calc.running
 ランニングトータル 累計	calc.running,calc.rank
-売上順位の列を足して	calc.col,calc.rank,calc.percent,calc.diff,date.parts
+売上順位の列を足して	calc.col,calc.rank,calc.diff,calc.percent,date.parts
 点数の高い順に順位の列をつけて	calc.rank,sort,text.join
-順位 ランク 列 追加	cols.insert,calc.rank
+順位 ランク 列 追加	cols.insert,calc.rank,fill.blank
 ランキング 列 計算	calc.rank,calc.col,calc.running
 合格の件数を数えて	count.if,summary
 東京の件数をカウントして	count.if,summary
 件数 カウント 個数 条件	count.if
 COUNTIF 条件 件数	count.if,round
 部署ごとの小計行を挟んで	subtotal,count.if,summary,sheet.split
-月ごとの小計を入れて	subtotal,total
+月ごとの小計を入れて	subtotal,write,total
 小計 行 挿入	rows.insert,subtotal
 小計 集計 行 挟む	subtotal,summary
-数式をIFERRORでエラーが出ないように囲んで	formula.guard,text.case
-計算式のエラー表示を空白にして	formula.guard,format,filter.where,calc.col,formula.tovalue
-数式 IFERROR エラー保護	formula.guard,text.case
-計算式 エラー 回避 囲む	calc.col,formula.guard,formula.tovalue,copy.values,fill.down
-この列の計算式を確定した値に変えて	copy.values,formula.tovalue,calc.col,drive.rename,format
+数式をIFERRORでエラーが出ないように囲んで	formula.guard,audit.check,text.case
+計算式のエラー表示を空白にして	formula.guard,format,audit.check,filter.where,calc.col
+数式 IFERROR エラー保護	formula.guard,audit.check,text.case
+計算式 エラー 回避 囲む	audit.check,calc.col,formula.guard,formula.tovalue,fill.down
+この列の計算式を確定した値に変えて	formula.tovalue,copy.values,calc.col,calc.diff,drive.rename
 計算結果を値貼り付けして	formula.tovalue,copy.values,copy,copy.format
 数式 値 変換	formula.tovalue,copy.values
-計算式 値 固定化	formula.tovalue,copy.values,calc.col,fill.down
+計算式 値 固定化	formula.tovalue,calc.col,fill.down
 金額を千円単位で四捨五入して	round
 計算結果を切り捨てて	round,formula.tovalue
 四捨五入 切り捨て 切り上げ	round
 ROUND ラウンド 端数処理	round,count.if
-日付から年と月の列を分けて	date.parts,split.col,format,date.fix,fill.date
-日付の列から曜日を取り出して	format,date.parts,date.fix,calc.percent,calc.diff
+日付から年と月の列を分けて	date.parts,split.col,calc.diff,format,date.fix
+日付の列から曜日を取り出して	format,date.parts,date.fix,link.extract,calc.percent
 日付 年 月 曜日 分解	date.parts,format,fill.date
-日付から年 日付から月 曜日の列	date.parts,format,fill.date,date.fix
+日付から年 日付から月 曜日の列	date.parts,format,fill.date,date.fix,sheet.snapshot
 姓と名の列を結合して	text.join,format,split.col,sheet.merge
 住所の各列を1つにつなげて	text.join,cols.insert
-文字列 結合 列 つなげる	text.join,split.col,text.case,format
+文字列 結合 列 つなげる	text.join,split.col,text.case,format,number.fix
 列をつないで 列を連結 結合	text.join
-品番を大文字にそろえて	text.case,doc.font,format,date.fix
-英字を小文字に変換して	text.case,format,doc.replace,doc.font,formula.tovalue
-大文字 小文字 変換	text.case
+品番を大文字にそろえて	text.case,doc.font,text.affix,format,date.fix
+英字を小文字に変換して	text.case,number.fix,format,doc.replace,doc.font
+大文字 小文字 変換	text.case,number.fix
 半角 全角 統一	seiri,text.case
+金額の上位5件を別シートに抽出して	filter.extract,top.n,transpose,note.list,sheet.color
+売上のトップ10だけを抽出して	top.n,filter.extract,calc.percent,calc.rank,cf.add
+金額の下位3件をワースト抽出して	top.n,total,stat.row,calc.running,format
+上位抽出 下位抽出 トップ5 ワースト	top.n,cf.scale
 棚に無いけど、1 行目のセルを青い背景にして	api,format,doc.table
 見出しと箇条書きの文書を書いて	doc.new,format,write,doc.section,doc.outline
 最後に1行足して	doc.append,calc.col,rows.insert,doc.insert,doc.table.row
-山田を山田（総務）に直して	doc.replace,replace,seiri,renumber
+山田を山田（総務）に直して	doc.replace,replace,seiri,renumber,number.fix
 「概要」の節を書き直して	doc.section,replace
-文末に2列の表を入れて	doc.table,doc.from.sheet,doc.append,total,write
+文末に2列の表を入れて	doc.table,write,doc.from.sheet,doc.append,total
 1つ目の表の2行1列を直して	doc.table,replace,doc.table.cell,doc.table.row,doc.table.style
 文書のフォントをMeiryoに	doc.style,format,doc.new,doc.replace,doc.section
 決定事項の下に1行足して	doc.insert,calc.col,doc.append,rows.insert,doc.table.row
@@ -547,58 +627,61 @@ ROUND ラウンド 端数処理	round,count.if
 この行を見出し2にして	doc.heading,format,doc.new,doc.section,doc.style
 出席者を箇条書きにして	doc.list,doc.new
 補足の節を消して	doc.delete
-次回予定を先頭に持ってきて	doc.move,sheet.move
+次回予定を先頭に持ってきて	doc.move,text.affix,sheet.move
 表に1行足して	doc.table.row,calc.col,rows.insert,doc.append,doc.insert
 締め切りの日付を赤い太字にして	doc.font,format,date.fix,fill.date
 題を中央にして	doc.align
 表の見出しに色を付けて	doc.table.style,format,doc.header,sheet.color,doc.outline
 議事の前で改ページして	doc.pagebreak,doc.header,print.setup
-フッターにページ番号を入れて	doc.header,doc.pagebreak,fill.series,print.setup
+フッターにページ番号を入れて	doc.header,write,doc.pagebreak,fill.series,print.setup
 目次を付けて	doc.toc
-資料という言葉にリンクを付けて	doc.link,link.set,drive.share,calc.rank,checkbox
-売上の表を報告書に入れて	doc.from.sheet,doc.table,folder,chart.new,calc.col
-この見積のひな形に宛名を入れて作って	doc.template,doc.export.pdf,folder,sheet.split
+資料という言葉にリンクを付けて	doc.link,link.set,drive.share,sheet.toc,calc.rank
+売上の表を報告書に入れて	doc.from.sheet,write,doc.table,folder,chart.new
+この見積のひな形に宛名を入れて作って	doc.template,write,doc.export.pdf,folder,sheet.split
 この議事録を写して来月分を作って	doc.copy,sheet.copy,copy,doc.new
 この見積書を「見積書_山田様.pdf」としてPDF書き出しして	doc.export.pdf,export.pdf,drive.trash,doc.new,drive.rename
 この表を見やすく整えて	tidy,doc.table.style
 B列からD列だけ体裁を整えて	tidy,doc.style,group.cols
 空行を詰めて重複行も消して	seiri,dedupe
 行を消したのでNoを2から付け直して	renumber,replace,rows.delete,doc.table.row,seiri
-金額の大きい順に並べて	sort,doc.style,calc.col,stat.row,calc.running
-部署が営業の行だけ見せて	filter.where,format
-金額が10000以上の行だけ絞り込んで	filter.where,cf.add,validation.number,doc.from.sheet,filter.on
+金額の大きい順に並べて	sort,sheet.sort,doc.style,top.n,calc.col
+部署が営業の行だけ見せて	filter.where,filter.extract,count.if,format
+金額が10000以上の行だけ絞り込んで	filter.where,cf.add,filter.delete,validation.number,doc.from.sheet
 表にフィルタを付けて	filter.on,filter.where,filter.off,format,fill.down
 A1からE50にフィルタを設定して	filter.on,filter.where,filter.off,clear.format,fill.down
 メールアドレス列が同じ重複行を消して	dedupe,rows.delete,seiri,doc.table.row,renumber
 氏名列を姓と名にスペースで分けて	split.col,text.join,doc.pagebreak
 住所列をカンマで列に分割して	split.col,format,sheet.split
-フィルタを解除して全部表示に戻して	filter.off,format,filter.where,filter.on,cols.show
+フィルタを解除して全部表示に戻して	filter.off,format,filter.where,filter.on,sheet.gridlines
 表の下に平均の行も足して	stat.row,calc.col,total,doc.append,doc.insert
 金額の最大値の行を足して	calc.col,stat.row,rows.insert,total,doc.table.row
-前月との差と伸び率の列を足して	calc.diff,calc.col,calc.percent,date.parts,cols.insert
-金額の累計を出して	calc.running,total,summary,format,table.new
+売上と原価の差の列を足して	calc.diff,calc.col,calc.percent,calc.rank,date.parts
+今月と前月の差と伸び率の列を足して	calc.diff,calc.col,date.parts,calc.percent,cols.insert
+金額の累計を出して	calc.running,total,summary,top.n,format
 売上の多い順に順位を付けて	calc.rank,sort,cf.add,doc.from.sheet,calc.percent
+B2:B10で「営業」の件数を数えて	count.if,protect.sheet,copy,copy.values,date.fix
 部署ごとの人数を数えて	count.if,summary,sheet.split
-得意先ごとに小計を入れて	subtotal,summary,total
+得意先ごとに小計を入れて	subtotal,write,summary,total
 #DIV/0! が出ないようにして	formula.guard
-この列の式を値にして	formula.tovalue,copy.values,cols.insert
+この列の式を値にして	formula.tovalue,copy.values,calc.diff,number.fix,cols.insert
 金額を千円単位に丸めて	round
 日付から曜日の列を作って	date.parts,text.join,format,date.fix,fill.date
 姓と名をつないで氏名の列に	text.join,split.col,calc.col,date.fix
-C列に未着手、進行中、完了のプルダウンを付けて	validation.list,validation.clear,checkbox,drive.share
+C列に未着手、進行中、完了のプルダウンを付けて	validation.list,validation.clear,filter.delete
 D列には0以上の数字だけ入れられるようにして	validation.number,filter.where,calc.col,doc.from.sheet,seiri
 A列は日付だけ入るようにして	validation.date,validation.number
-E列にチェックボックスを付けて	checkbox,link.set,validation.list
-C列のプルダウンを外して	validation.clear,validation.list,width,cf.dup,copy.values
+E列にチェックボックスを付けて	checkbox,audit.check,link.set,validation.list,sheet.toc
+C列のプルダウンを外して	validation.clear,validation.list,width,cf.dup,link.clear
 A1からC10の範囲を保護して	protect.range,protect.remove,clear.format,clear.values,copy
-A1:F20に売上データという名前を付けて	name.add,name.delete,copy,sheet.rename,filter.on
-売上データという名前付き範囲を削除して	name.delete,name.add,name.list,chart.delete,clear.values
-定義されている名前付き範囲を教えて	name.add,name.list,name.delete,format,cf.list
+A1:F20に売上データという名前を付けて	name.add,name.delete,copy,copy.values,sheet.rename
+売上データという名前付き範囲を削除して	name.delete,name.add,name.list,filter.delete,chart.delete
+定義されている名前付き範囲を教えて	name.list,name.add,name.delete,protect.list,format
 「見積」を含むファイルを探して	drive.list,find,doc.find,drive.rename,drive.move
-「資料_old.pdf」の名前を「資料_2026.pdf」に変えて	drive.rename,drive.move,doc.export.pdf,drive.trash,export.pdf
+ファイル「資料_old.pdf」の名前を「資料_2026.pdf」に変えて	drive.rename,drive.move,drive.trash,doc.export.pdf,export.pdf
 今開いているファイルの名前を「売上確定」に変更して	drive.rename,sheet.rename,name.delete,drive.list,drive.move
-「請求書.pdf」を「経理/2026」フォルダに移動して	drive.move,folder,drive.rename,drive.trash,export.pdf
-「作業用」フォルダを「アーカイブ」フォルダに入れて	drive.move,folder,drive.trash,drive.list,drive.rename
+ファイル「請求書.pdf」を「経理/2026」フォルダに移動して	drive.move,folder,drive.rename,drive.trash,drive.list
+「作業用」フォルダを「アーカイブ」フォルダに入れて	drive.move,write,folder,drive.trash,drive.list
+「下書き.pdf」をゴミ箱に入れて	drive.trash,write,drive.move,doc.export.pdf,export.pdf
 売上シートを「請求書_5月.pdf」としてPDF出力して	export.pdf,doc.export.pdf,drive.move,drive.rename,drive.trash
 yamada@example.com に編集権限を付けて共有して	drive.share
 見出しを太字で青い背景に	format,api,doc.table.style,bg.clear,doc.new
@@ -606,61 +689,62 @@ yamada@example.com に編集権限を付けて共有して	drive.share
 A列を幅200にして	width,name.add,write
 B列とC列の幅を中身に合わせて	width,cols.move,validation.clear,cf.dup,total
 売上が100万以上のセルを赤く	cf.add,format,filter.where,write,find
-C列の重複を赤く	cf.dup,format,validation.clear,width,copy.values
-売上列を青のグラデーションにして	cf.scale,name.add,name.delete,chart.new,chart.delete
-条件付き書式を全部消して	cf.add,clear.all,cf.clear,format,cf.list
-設定されている条件付き書式を教えて	cf.add,cf.list,format,cf.clear,count.if
+C列の重複を赤く	cf.dup,format,validation.clear,width,cols.insert
+売上列を青のグラデーションにして	cf.scale,chart.delete,name.add,name.delete,cf.add
+条件付き書式を全部消して	cf.clear,cf.add,clear.all,format,cf.list
+設定されている条件付き書式を教えて	cf.list,cf.add,format,cf.clear,count.if
 表を1行おきに薄いグレーにして	banding.add,banding.remove
 1行おきについてる色を外して	banding.remove,banding.add
-見出しが名前と金額の表を作って	table.new,format,summary,doc.table.style,calc.running
-得意先ごとの金額の合計を出して	summary,total,calc.running,subtotal,format
+見出しが名前と金額の表を作って	table.new,format,summary,pivot.new,doc.table.style
+得意先ごとの金額の合計を出して	summary,total,calc.running,top.n,subtotal
+部署別に金額のピボットテーブルを作って	pivot.new,table.new,summary,format,sort
 部署別・月別の売上ピボットテーブルを作って	pivot.new,table.new,summary,date.parts,copy
-商品ごとの数量ピボットを作って	pivot.new,summary
 売上の推移を折れ線グラフにして	chart.new,chart.delete,doc.from.sheet,calc.percent,calc.rank
 今あるグラフのタイトルを分類別在庫に変えて	chart.new,doc.align,doc.heading,formula.tovalue,drive.rename
-B2に100、B3に200を入れて	write,fill.series,doc.table,filter.where,cf.add,drive.move
+このシートのグラフを消して	chart.delete,note.clear,sheet.color,sheet.merge,sheet.diff
+B2に100、B3に200を入れて	write,count.if,fill.series,filter.where,doc.table,drive.move
 営業部を営業課に置き換えて	replace,doc.replace,formula.tovalue,doc.table.cell,protect.sheet
 売上合計が入っているセルを探して	find,cf.add,doc.find,drive.list,summary
-A列から完了のセルを検索して	find,api,doc.table,doc.table.cell,validation.list
+A列から完了のセルを検索して	find,api,doc.table,doc.table.cell,filter.delete
 B2からD10の中身を消して	clear.values,clear.all,copy.values,doc.table.cell,renumber
 数字だけ消して式は残して	clear.values,seiri,validation.number
-A1からE20の書式をクリアして	clear.format,format,clear.values,clear.all,filter.on
-B2からD10を全部クリアして	clear.all,clear.values,clear.format,note.clear,write
-A1:B10をD1:E10にコピーして	copy,copy.format,copy.values,fill.down,protect.remove
+A1からE20の書式をクリアして	clear.format,format,cf.clear,clear.values,clear.all
+B2からD10を全部クリアして	clear.all,clear.values,cf.clear,clear.format,note.clear
+A1:B10をD1:E10にコピーして	copy,copy.values,copy.format,fill.down,count.if
 売上表を別の場所に写して	copy,pivot.new,sheet.rename,sheet.copy
-C列の計算式を値に変えて	formula.tovalue,copy.values,width,fill.down,doc.heading
+A1:B10をD1:E10に値だけ貼り付けて	copy.values,copy,copy.format,formula.tovalue,name.add
 A1:B10の値をD1へ値貼り付けして	copy.values,copy,formula.tovalue,write,copy.format
-A1の書式をB1:E1にコピーして	copy,copy.format,format,fill.down,clear.format
+A1の書式をB1:E1にコピーして	copy,copy.format,format,copy.values,fill.down
 10から5刻みで番号を埋めて	fill.series
-B2:B30の日付が文字になっているので日付にして	date.fix,doc.font,protect.sheet,format,text.case
+B2:B30の日付が文字になっているので日付にして	date.fix,doc.font,count.if,protect.sheet,format
 A2からA31まで5月の日付を埋めて	fill.date,doc.font,date.parts,date.fix,sheet.merge
-毎週月曜の日付を下に連続で入れて	fill.date,date.fix,doc.font,total,fill.series
-C2の計算式をC2:C50まで下へコピーして	fill.down,copy,formula.tovalue,copy.values,copy.format
-A2に公式サイトへのリンクを貼って	link.set,doc.link,drive.share
+毎週月曜の日付を下に連続で入れて	fill.date,write,date.fix,doc.font,total
+C2の計算式をC2:C50まで下へコピーして	fill.down,copy,formula.tovalue,copy.format,doc.copy
+A2に公式サイトへのリンクを貼って	link.set,doc.link,drive.share,link.clear,link.extract
 3行目の前に2行足して	rows.insert,calc.col,rows.move,doc.table,cols.insert
 5行目を2行目の前に動かして	rows.move,rows.insert,freeze,group.remove,api
-C列の前に列を1つ足して	cols.insert,calc.col,rows.insert,doc.table,validation.clear
+C列の前に列を1つ足して	cols.insert,calc.col,rows.insert,doc.table,calc.diff
 B列を消して	cols.delete
 1行目の見出しを固定して	freeze,format,api,doc.outline,doc.insert
 見出し行とA列を固定して	freeze,format,filter.on,doc.new,doc.section
-ウィンドウ枠の固定を解除して	freeze,unfreeze,filter.off,protect.remove,group.remove
+ウィンドウ枠の固定を解除して	unfreeze,freeze,filter.off,protect.remove,merge.unmerge
 5行目から10行目を隠して	rows.hide,group.rows,group.remove,rows.delete,rows.show
 隠れている5行目を出して	rows.show,rows.delete,rows.move,freeze,rows.hide
 非表示の行を全部出して	rows.show,sheet.show,cols.show,format,doc.heading
-C列とD列を隠して	cols.hide,width,cols.show
-非表示になっているC列を出して	cols.show,format,rows.show,cols.hide,sheet.show
+C列とD列を隠して	cols.hide,cols.show,width
+非表示になっているC列を出して	cols.show,format,sheet.gridlines,rows.show,cols.hide
 隠れている列を全部再表示して	cols.show,rows.show,sheet.show,filter.off,formula.guard
 5行目から10行目をグループ化して折りたたんで	group.rows,group.remove,group.cols,rows.hide,rows.delete
 集計というシートを足して	sheet.add,calc.col,sheet.move,sheet.delete,sheet.hide
 シート1の名前を売上に変えて	sheet.rename,drive.rename,sheet.copy,sheet.color,doc.from.sheet
-集計を先頭に動かして	sheet.move,doc.move,rows.move
-古い集計シートを消して	sheet.delete,sheet.hide,sheet.show,note.clear,sheet.add
-売上シートを複製して	sheet.copy,export.pdf,sheet.color,doc.from.sheet,sheet.rename
+集計を先頭に動かして	sheet.move,doc.move,text.affix,rows.move
+集計シートを消して	sheet.delete,sheet.hide,sheet.show,chart.delete,note.clear
+売上シートを複製して	sheet.copy,sheet.snapshot,export.pdf,sheet.color,doc.from.sheet
 売上シートを写して名前を来月売上にして	sheet.copy,copy,sheet.rename,export.pdf,sheet.color
-古い集計シートを隠して	sheet.hide,sheet.delete,sheet.show,sheet.add,sheet.move
+集計シートを隠して	sheet.hide,sheet.show,sheet.delete,sheet.add,sheet.move
 隠してある集計シートを再表示して	sheet.show,sheet.hide,cols.show,sheet.delete,formula.guard
-非表示のシートを全部出して	sheet.show,rows.show,cols.show,note.clear,group.remove
-売上シートのタブを赤にして	sheet.color,format,export.pdf,sheet.copy,doc.from.sheet
-このシートの見出し色を青にして	format,sheet.color,note.clear,sheet.show,sheet.merge
-全シートの表を統合シートに縦にまとめて	sheet.merge,summary,doc.from.sheet,sheet.color,lookup.add
-4月と5月のシートを上半期シートに結合して	sheet.merge,format,export.pdf,sheet.color,lookup.add
+非表示のシートを全部出して	sheet.show,rows.show,cols.show,sheet.gridlines,note.clear
+売上シートのタブを赤にして	sheet.color,format,export.pdf,chart.delete,sheet.copy
+このシートの見出し色を青にして	format,sheet.color,chart.delete,note.clear,sheet.show
+全シートの表を統合シートに縦にまとめて	sheet.merge,summary,doc.from.sheet,sheet.gridlines,transpose
+4月と5月のシートを上半期シートに結合して	sheet.merge,format,sheet.diff,export.pdf,sheet.color

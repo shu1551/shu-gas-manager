@@ -5,7 +5,7 @@
 // 分類: 入力
 // 語: プルダウン|選択肢から選|リストから選|選べるように|入力規則
 // 引数: range*=範囲, items=配列, from=範囲, strict=真偽=true
-// 頼み: items~((?:[^\s、。・:に]+・)+[^\s、。・:]+?)(?:から|の)
+// 頼み: items~(?:に|へ|は)\s*([^\s、。・:に]+(?:[・、,][^\s、。・:に、,]+)+)(?:の|という|から)?(?:プルダウン|リスト|選択肢) ; items~((?:[^\s、。・:に]+・)+[^\s、。・:]+?)(?:から|の)
 // どれか: items from
 // 例: 「C列に未着手、進行中、完了のプルダウンを付けて」 → {"shelf":"validation.list","range":"C2:C100","items":["未着手","進行中","完了"]}
 // 触る: 入力規則
@@ -32,8 +32,9 @@ SHELF['validation.list'] = function (ctx, op) {
 // 棚: validation.number
 // 題: 数だけ入るようにする
 // 分類: 入力
-// 語: 数字だけ入|数値だけ入|数字しか入|数字以外は入|文字を入れられない
+// 語: 数字だけ入|数値だけ入|数字しか入|数字以外は入|文字を入れられない|数字だけ入れられる
 // 引数: range*=範囲, min=数, max=数
+// 頼み: min~([0-9]+(?:\.[0-9]+)?)以上の(?:数字|数値) ; max~([0-9]+(?:\.[0-9]+)?)以下の(?:数字|数値)
 // 例: 「D列には0以上の数字だけ入れられるようにして」 → {"shelf":"validation.number","range":"D2:D100","min":0}
 // 触る: 入力規則
 // 控え: 今
@@ -193,7 +194,7 @@ SHELF['protect.remove'] = function (ctx, op) {
 // 語: 名前付き範囲|範囲に名前|名前を付けて|名前を定義|名前で呼べる
 // 違い: 名前を消すなら name.delete、一覧は name.list
 // 引数: name*=文字, range*=範囲
-// 頼み: name~[『「]([^』」]+)[』」]という名前 ; name~[『「]([^』」]+)[』」]と名付 ; name~[『「]([^』」]+)[』」]
+// 頼み: name~[『「]([^』」]+)[』」]という名前 ; name~[『「]([^』」]+)[』」]と名付 ; name~[A-Za-z0-9:]+に([^\sにを「『]+)という名前 ; name~[『「]([^』」]+)[』」]
 // 例: 「A1:F20に売上データという名前を付けて」 → {"shelf":"name.add","name":"売上データ","range":"A1:F20"}
 // 触る: 名前
 // 控え: 今
@@ -212,6 +213,7 @@ SHELF['name.add'] = function (ctx, op) {
 // 語: 名前付き範囲を消|名前付き範囲を削除|範囲の名前を消|定義した名前を消
 // 違い: 作成は name.add、一覧は name.list
 // 引数: name*=文字
+// 頼み: name~[『「]([^』」]+)[』」]という名前 ; name~([^\sにを「『]+)という名前(?:付き範囲)?
 // 例: 「売上データという名前付き範囲を削除して」 → {"shelf":"name.delete","name":"売上データ"}
 // 触る: 名前
 // 控え: 今
@@ -228,7 +230,7 @@ SHELF['name.delete'] = function (ctx, op) {
 // 棚: name.list
 // 題: 名前付き範囲を一覧にする
 // 分類: 守る
-// 語: 名前付き範囲を一覧|名前付き範囲を調べ|名前付き範囲を見|定義した名前
+// 語: 名前付き範囲を一覧|名前付き範囲を調べ|名前付き範囲を見|定義した名前|名前付き範囲を教え|定義されている名前付き範囲
 // 違い: 作成は name.add、削除は name.delete
 // 引数: なし
 // 例: 「定義されている名前付き範囲を教えて」 → {"shelf":"name.list"}
@@ -372,9 +374,10 @@ SHELF['drive.list'] = function (ctx, op) {
 // 題: ファイルやフォルダの名前を変える
 // 対象: 両方
 // 分類: 守る
-// 語: ファイル名を変更|ファイル名を変える|フォルダ名を変更|フォルダ名を変える|ドライブ上の名前|リネーム
+// 語: ファイル名を変更|ファイル名を変える|フォルダ名を変更|フォルダ名を変える|ドライブ上の名前|リネーム|ファイルの名前を変|ファイルの名前を
 // 引数: name*=文字, item=文字
-// 例: 「「資料_old.pdf」の名前を「資料_2026.pdf」に変えて」 → {"shelf":"drive.rename","item":"資料_old.pdf","name":"資料_2026.pdf"}
+// 頼み: item~[「『]([^」』]+)[」』]の名前 ; name~名前を[「『]([^」』]+)[」』]
+// 例: 「ファイル「資料_old.pdf」の名前を「資料_2026.pdf」に変えて」 → {"shelf":"drive.rename","item":"資料_old.pdf","name":"資料_2026.pdf"}
 // 例: 「今開いているファイルの名前を「売上確定」に変更して」 → {"shelf":"drive.rename","name":"売上確定"}
 // 触る: なし
 // 控え: なし
@@ -393,9 +396,10 @@ SHELF['drive.rename'] = function (ctx, op) {
 // 題: ファイルやフォルダを別のフォルダへ移動する
 // 対象: 両方
 // 分類: 守る
-// 語: ドライブ移動|フォルダごと移動|PDFを移動|画像を移動|項目を移動|ファイルを整理
+// 語: ドライブ移動|フォルダごと移動|PDFを移動|画像を移動|項目を移動|ファイルを整理|フォルダに移動|フォルダへ移動|ファイル移動
 // 引数: to*=文字, item=文字, create=真偽=false
-// 例: 「「請求書.pdf」を「経理/2026」フォルダに移動して」 → {"shelf":"drive.move","item":"請求書.pdf","to":"経理/2026"}
+// 頼み: item~[「『]([^」』]+)[」』]を ; to~を[「『]([^」』]+)[」』]フォルダ
+// 例: 「ファイル「請求書.pdf」を「経理/2026」フォルダに移動して」 → {"shelf":"drive.move","item":"請求書.pdf","to":"経理/2026"}
 // 例: 「「作業用」フォルダを「アーカイブ」フォルダに入れて」 → {"shelf":"drive.move","item":"作業用","to":"アーカイブ"}
 // 触る: なし
 // 控え: なし
@@ -417,9 +421,10 @@ SHELF['drive.move'] = function (ctx, op) {
 // 題: 不要なファイルやフォルダをゴミ箱に入れる
 // 対象: 両方
 // 分類: 守る
-// 語: ゴミ箱|ごみ箱|ファイルを削除|フォルダを削除|不要ファイル削除|ファイルを消して|フォルダを消して
+// 語: ゴミ箱|ごみ箱|ゴミ箱に入れ|ごみ箱に入れ|ファイルを削除|フォルダを削除|不要ファイル削除|ファイルを消して|フォルダを消して
 // 引数: item=文字
-// 例: 「「古い下書き.pdf」をゴミ箱に入れて」 → {"shelf":"drive.trash","item":"古い下書き.pdf"}
+// 頼み: item~[「『"“]([^」』"”]+)[」』"”]
+// 例: 「「下書き.pdf」をゴミ箱に入れて」 → {"shelf":"drive.trash","item":"下書き.pdf"}
 // 例: 「「一時作業」フォルダを削除して」 → {"shelf":"drive.trash","item":"一時作業"}
 // 危ない: 消す
 // 触る: なし
@@ -466,14 +471,15 @@ SHELF['print.setup'] = function (ctx, op) {
 // 分類: 守る
 // 語: PDF出力|PDFに書き出|PDFにして|PDF保存|PDFを作成|PDF化|印刷用PDF|シートをPDF
 // 違い: 印刷設定だけ保存するなら print.setup。GoogleドキュメントのPDF化は doc.export.pdf
-// 引数: name=文字, folder=文字, paper=選択(a4/a3/b4/b5/letter), landscape=真偽, fit_width=真偽, gridlines=真偽
-// 頼み: landscape=false<縦向き|A4縦 ; landscape=true<横向き|A4横 ; paper=a3<A3 ; paper=a4<A4 ; folder~[「『"“]([^」』"”]+)[」』"”]フォルダ
+// 引数: name=文字, folder=文字, paper=選択(a4/a3/b4/b5/letter), landscape=真偽, fit_width=真偽, gridlines=真偽, all_sheets=真偽=false
+// 頼み: landscape=false<縦向き|A4縦 ; landscape=true<横向き|A4横 ; paper=a3<A3 ; paper=a4<A4 ; folder~[「『"“]([^」』"”]+)[」』"”]フォルダ ; all_sheets=true<全シート|すべてのシート|全てのシート|ブック全体|全ページ
 // 例: 「このシートをA4横のPDFにして保存して」 → {"shelf":"export.pdf","paper":"a4","landscape":true}
 // 例: 「売上シートを「請求書_5月.pdf」としてPDF出力して」 → {"shelf":"export.pdf","sheet":"売上","name":"請求書_5月.pdf"}
 // 触る: なし
 // 控え: なし
 SHELF['export.pdf'] = function (ctx, op) {
   var ss = ctx.ss;
+  var allSheets = !!op.all_sheets;
   var sh = op.sheet ? sheetOf_(ss, op.sheet, '') : sheetCtx_(ctx, op);
   var saved = {};
   try {
@@ -489,7 +495,7 @@ SHELF['export.pdf'] = function (ctx, op) {
 
   SpreadsheetApp.flush();
   var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf'
-    + '&gid=' + sh.getSheetId()
+    + (allSheets ? '' : ('&gid=' + sh.getSheetId()))
     + '&size=' + encodeURIComponent(paper)
     + '&portrait=' + (landscape ? 'false' : 'true')
     + '&fitw=' + (fitWidth ? 'true' : 'false')
@@ -504,13 +510,52 @@ SHELF['export.pdf'] = function (ctx, op) {
   if (resp.getResponseCode() !== 200) {
     throw new ArgError('PDF出力に失敗しました（HTTP ' + resp.getResponseCode() + '）');
   }
-  var fileName = String(op.name || (ss.getName() + '_' + sh.getName() + '.pdf')).trim();
+  var defPdfName = allSheets ? (ss.getName() + '.pdf') : (ss.getName() + '_' + sh.getName() + '.pdf');
+  var fileName = String(op.name || defPdfName).trim();
   if (!/\.pdf$/i.test(fileName)) fileName += '.pdf';
   var blob = resp.getBlob().setName(fileName);
   var destFolder = op.folder ? resolveFolder_(op.folder, true).folder : null;
   var pdfFile = destFolder ? destFolder.createFile(blob) : DriveApp.createFile(blob);
   note_(ctx, 'PDF保存完了: ' + pdfFile.getName() + '\nID: ' + pdfFile.getId() + '\nURL: ' + pdfFile.getUrl());
-  chg_(ctx, sh, '', 'PDFを作成: 「' + pdfFile.getName() + '」（' + paper + '・' + (landscape ? '横' : '縦') + '）');
+  chg_(ctx, allSheets ? null : sh, '', (allSheets ? '全シート ' : '') + 'PDFを作成: 「' + pdfFile.getName() + '」（' + paper + '・' + (landscape ? '横' : '縦') + '）');
+};
+
+// 棚: export.csv
+// 題: シートをCSVでDriveに保存する
+// 分類: 守る
+// 語: CSV出力|CSVに書き出|CSVにして|CSV保存|CSVを作成|CSV化|CSVファイル|シートをCSV
+// 違い: PDF保存は export.pdf
+// 引数: name=文字, folder=文字, bom=真偽=true
+// 頼み: bom=false<BOMなし|BOM無し ; folder~[「『"“]([^」』"”]+)[」』"”]フォルダ
+// 例: 「このシートをCSVにしてDriveに保存して」 → {"shelf":"export.csv"}
+// 触る: なし
+// 控え: なし
+SHELF['export.csv'] = function (ctx, op) {
+  var ss = ctx.ss, sh = sheetCtx_(ctx, op);
+  var lr = sh.getLastRow(), lc = sh.getLastColumn();
+  var csvLines = [];
+  if (lr > 0 && lc > 0) {
+    var disp = sh.getRange(1, 1, lr, lc).getDisplayValues();
+    for (var r = 0; r < disp.length; r++) {
+      var cells = [];
+      for (var c = 0; c < disp[r].length; c++) {
+        var s = String(disp[r][c] === undefined || disp[r][c] === null ? '' : disp[r][c]);
+        if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+        cells.push(s);
+      }
+      csvLines.push(cells.join(','));
+    }
+  }
+  var body = csvLines.join('\r\n');
+  var withBom = op.bom !== false;
+  var csvContent = (withBom ? '\uFEFF' : '') + body;
+  var fileName = String(op.name || (ss.getName() + '_' + sh.getName() + '.csv')).trim();
+  if (!/\.csv$/i.test(fileName)) fileName += '.csv';
+  var blob = Utilities.newBlob(csvContent, 'text/csv; charset=utf-8', fileName);
+  var destFolder = op.folder ? resolveFolder_(op.folder, true).folder : null;
+  var csvFile = destFolder ? destFolder.createFile(blob) : DriveApp.createFile(blob);
+  note_(ctx, 'CSV保存完了: ' + csvFile.getName() + '\nID: ' + csvFile.getId() + '\nURL: ' + csvFile.getUrl());
+  chg_(ctx, sh, '', 'CSVを作成: 「' + csvFile.getName() + '」（' + lr + '行・' + (withBom ? 'BOM付きUTF-8' : 'UTF-8') + '）');
 };
 
 // 棚: drive.share
@@ -549,4 +594,39 @@ SHELF['drive.share'] = function (ctx, op) {
   }
   note_(ctx, '共有URL: ' + target.obj.getUrl());
   chg_(ctx, null, '', '「' + target.name + '」を共有（' + actions.join(' / ') + '）');
+};
+
+// 棚: protect.list
+// 題: 保護中のシートと範囲を一覧にする
+// 分類: 守る
+// 語: 保護を一覧|保護一覧|保護されている|保護中の|保護を確認|保護を調べ|保護を教え|どこが保護
+// 違い: 保護をかけるなら protect.sheet / protect.range、外すなら protect.remove
+// 引数: なし
+// 例: 「保護中のシートと範囲を一覧にして教えて」 → {"shelf":"protect.list"}
+// 触る: なし
+// 控え: なし
+SHELF['protect.list'] = function (ctx, op) {
+  var ss = ctx.ss;
+  var sp = ss.getProtections(SpreadsheetApp.ProtectionType.SHEET) || [];
+  var rp = ss.getProtections(SpreadsheetApp.ProtectionType.RANGE) || [];
+  var lines = [];
+  sp.forEach(function (p) {
+    var rg = p.getRange();
+    var shNm = rg ? rg.getSheet().getName() : '?';
+    var warn = p.isWarningOnly() ? '（警告のみ）' : '';
+    var desc = p.getDescription() ? (' [' + p.getDescription() + ']') : '';
+    lines.push('[シート] ' + shNm + warn + desc);
+  });
+  rp.forEach(function (p) {
+    var rg = p.getRange();
+    var loc = rg ? (rg.getSheet().getName() + '!' + rg.getA1Notation()) : '?';
+    var warn = p.isWarningOnly() ? '（警告のみ）' : '';
+    var desc = p.getDescription() ? (' [' + p.getDescription() + ']') : '';
+    lines.push('[範囲] ' + loc + warn + desc);
+  });
+  if (!lines.length) {
+    note_(ctx, 'このブックに保護は設定されていません');
+    return;
+  }
+  note_(ctx, '保護設定の一覧（' + lines.length + ' 件）:\n' + lines.join('\n'));
 };

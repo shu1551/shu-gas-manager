@@ -1292,7 +1292,7 @@
     var qName = "'" + String(sheetName).replace(/'/g, "''") + "'!A1:Z30";
     var url = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(state.target.id) +
       "?ranges=" + encodeURIComponent(qName) +
-      "&fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount)),bandedRanges(bandedRangeId),data(rowData(values(userEnteredFormat,userEnteredValue,effectiveValue(errorValue)))))";
+      "&fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),bandedRanges(bandedRangeId),data(rowData(values(userEnteredFormat,userEnteredValue,effectiveValue(errorValue)))))";
     fetch(url, {
       method: "GET",
       headers: { "Authorization": "Bearer " + state.oauthToken }
@@ -1329,6 +1329,7 @@
           vals: valsOfRowData(rowData),
           frozenRows: gp.frozenRowCount || 0,
           frozenCols: gp.frozenColumnCount || 0,
+          hideGridlines: !!gp.hideGridlines,
           bandedRangeIds: bIds,
           cells: cells
         };
@@ -1683,6 +1684,7 @@
         changed.push(sheetName + "!" + (op.shelf === "unfreeze" ? "固定解除" : ("固定 " + fRows + "行")));
         whatList.push(op.shelf);
       } else if (op.shelf === "width") {
+        if (op.all_sheets || op.auto_rows) return null;
         var wDid = [];
         if (op.cols && typeof op.cols === "object") {
           var ckList = Object.keys(op.cols);
@@ -1807,7 +1809,7 @@
         changed.push(sheetName + "!" + fRg.a1 + " フィルター設定");
         whatList.push("filter.on");
       } else if (op.shelf === "sort") {
-        if (op.where || op.filter || !op.col) return null;
+        if (op.where || op.filter || (op.cols && op.cols.length) || !op.col) return null;
         var sortColLetter = resolveColLetterFromTable(op.col);
         var sortColIdx = colToNum0(sortColLetter);
         if (sortColIdx < 0) return null;
@@ -1979,6 +1981,126 @@
         });
         changed.push(op.name + " 再表示");
         whatList.push("sheet.show");
+      } else if (op.shelf === "sheet.gridlines") {
+        if (op.all_sheets) return null;
+        var snapG = state.sheetSnapshot[sheetName];
+        if (op.show === undefined && !snapG) return null;
+        var prevHideG = snapG ? !!snapG.hideGridlines : false;
+        var nextHideG = (op.show === undefined) ? !prevHideG : !op.show;
+        requests.push({
+          updateSheetProperties: {
+            properties: { sheetId: sheetId, gridProperties: { hideGridlines: nextHideG } },
+            fields: "gridProperties.hideGridlines"
+          }
+        });
+        if (snapG) {
+          undoRequests.unshift({
+            updateSheetProperties: {
+              properties: { sheetId: sheetId, gridProperties: { hideGridlines: prevHideG } },
+              fields: "gridProperties.hideGridlines"
+            }
+          });
+          (function(sName, nHide, oHide) {
+            snapshotMutators.push(function() {
+              var sp = state.sheetSnapshot[sName];
+              if (sp) sp.hideGridlines = nHide;
+            });
+            undoSnapshotMutators.push(function() {
+              var sp = state.sheetSnapshot[sName];
+              if (sp) sp.hideGridlines = oHide;
+            });
+          })(sheetName, nextHideG, prevHideG);
+        }
+        changed.push(sheetName + " 枠線" + (nextHideG ? "非表示" : "表示"));
+        whatList.push("sheet.gridlines");
+      } else if (op.shelf === "rows.hide" || op.shelf === "rows.show") {
+        var rRaw = Array.isArray(op.rows) ? op.rows : (op.rows !== undefined ? [op.rows] : []);
+        if (!rRaw.length) return null;
+        var rSeen = {}, rNums = [];
+        for (var rhi = 0; rhi < rRaw.length; rhi++) {
+          var rn = parseInt(rRaw[rhi], 10);
+          if (!rn || rn < 1) return null;
+          if (!rSeen[rn]) { rSeen[rn] = 1; rNums.push(rn); }
+        }
+        if (!rNums.length) return null;
+        rNums.sort(function(a, b) { return a - b; });
+        var isHideR = op.shelf === "rows.hide";
+        for (var rIdx0 = 0; rIdx0 < rNums.length; ) {
+          var rStart = rNums[rIdx0], rEnd = rStart;
+          while (rIdx0 + 1 < rNums.length && rNums[rIdx0 + 1] === rEnd + 1) rEnd = rNums[++rIdx0];
+          requests.push({
+            updateDimensionProperties: {
+              range: { sheetId: sheetId, dimension: "ROWS", startIndex: rStart - 1, endIndex: rEnd },
+              properties: { hiddenByUser: isHideR },
+              fields: "hiddenByUser"
+            }
+          });
+          undoRequests.unshift({
+            updateDimensionProperties: {
+              range: { sheetId: sheetId, dimension: "ROWS", startIndex: rStart - 1, endIndex: rEnd },
+              properties: { hiddenByUser: !isHideR },
+              fields: "hiddenByUser"
+            }
+          });
+          rIdx0++;
+        }
+        changed.push(sheetName + "!" + rNums.join("・") + "行目 " + (isHideR ? "非表示" : "再表示"));
+        whatList.push(op.shelf);
+      } else if (op.shelf === "cols.hide" || op.shelf === "cols.show") {
+        var cRaw = Array.isArray(op.cols) ? op.cols : (op.cols !== undefined ? [op.cols] : []);
+        if (!cRaw.length) return null;
+        var cSeen = {}, cNums = [];
+        for (var chi2 = 0; chi2 < cRaw.length; chi2++) {
+          var cLet = typeof cRaw[chi2] === "number" ? num0ToCol(cRaw[chi2] - 1) : resolveColLetterFromTable(cRaw[chi2]);
+          var c0Idx = colToNum0(cLet);
+          if (c0Idx < 0) return null;
+          if (!cSeen[c0Idx]) { cSeen[c0Idx] = 1; cNums.push(c0Idx); }
+        }
+        if (!cNums.length) return null;
+        cNums.sort(function(a, b) { return a - b; });
+        var isHideC = op.shelf === "cols.hide";
+        for (var cIdx0 = 0; cIdx0 < cNums.length; ) {
+          var cStart = cNums[cIdx0], cEnd = cStart;
+          while (cIdx0 + 1 < cNums.length && cNums[cIdx0 + 1] === cEnd + 1) cEnd = cNums[++cIdx0];
+          requests.push({
+            updateDimensionProperties: {
+              range: { sheetId: sheetId, dimension: "COLUMNS", startIndex: cStart, endIndex: cEnd + 1 },
+              properties: { hiddenByUser: isHideC },
+              fields: "hiddenByUser"
+            }
+          });
+          undoRequests.unshift({
+            updateDimensionProperties: {
+              range: { sheetId: sheetId, dimension: "COLUMNS", startIndex: cStart, endIndex: cEnd + 1 },
+              properties: { hiddenByUser: !isHideC },
+              fields: "hiddenByUser"
+            }
+          });
+          cIdx0++;
+        }
+        changed.push(sheetName + "!" + cRaw.join("・") + "列 " + (isHideC ? "非表示" : "再表示"));
+        whatList.push(op.shelf);
+      } else if (op.shelf === "note.set" || op.shelf === "note.clear") {
+        if (!op.range) return null;
+        if (op.shelf === "note.set" && (op.text === undefined || op.text === null || op.text === "")) return null;
+        var noteRg = parseSimpleA1Range(String(op.range), sheetId);
+        if (!noteRg) return null;
+        requests.push({
+          repeatCell: {
+            range: noteRg.gridRange,
+            cell: op.shelf === "note.set" ? { note: String(op.text) } : {},
+            fields: "note"
+          }
+        });
+        changed.push(sheetName + "!" + noteRg.a1 + (op.shelf === "note.set" ? " メモ設定" : " メモ消去"));
+        whatList.push(op.shelf);
+      } else if (op.shelf === "validation.clear") {
+        if (!op.range) return null;
+        var vcRg = parseSimpleA1Range(String(op.range), sheetId);
+        if (!vcRg) return null;
+        requests.push({ setDataValidation: { range: vcRg.gridRange } });
+        changed.push(sheetName + "!" + vcRg.a1 + " 入力規則解除");
+        whatList.push("validation.clear");
       } else if (op.shelf === "api") {
         if (!els.chkOk || !els.chkOk.checked) return null;
         if (!Array.isArray(op.requests) || !op.requests.length) return null;

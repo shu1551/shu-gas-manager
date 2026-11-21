@@ -89,7 +89,24 @@ PLACE_ONLY = re.compile(r"^.{1,12}(?:のとこ|のところ|の所|の列に|の
 
 
 def clauses(ask):
-    parts = [p.strip() for p in SPLIT.split(nfkc(ask))]
+    src = nfkc(ask)
+    saved = []
+
+    def _prot(pat):
+        nonlocal src
+
+        def _repl(m):
+            k = f"\ue010{len(saved)}\ue011"
+            saved.append(m.group(0))
+            return k
+
+        src = re.sub(pat, _repl, src)
+
+    # プルダウン候補や複数セルの「、」区切り、複数キー並べ替えを節分割から守る
+    _prot(r"(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))")
+    _prot(r"[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+")
+    _prot(r"[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+")
+    parts = [re.sub(r"\ue010(\d+)\ue011", lambda m: saved[int(m.group(1))], p).strip() for p in SPLIT.split(src)]
     parts = [p for p in parts if len(p) >= 2]
     out = []
     for p in parts:
@@ -184,6 +201,20 @@ def _range_of(text, table):
     if m:
         return m.group(1)
     return None
+
+
+def _all_explicit_ranges(text):
+    spans = []
+    m = COLROWS_RE.search(text)
+    if m:
+        spans.append((m.start(), m.end(), f"{m.group(1)}{m.group(2)}:{m.group(1)}{m.group(3)}"))
+    for m in RANGE_RE.finditer(text):
+        spans.append((m.start(), m.end(), f"{m.group(1)}:{m.group(2)}"))
+    for m in CELL_RE.finditer(text):
+        if not any(st <= m.start() < ed for st, ed, _ in spans):
+            spans.append((m.start(), m.end(), m.group(1)))
+    spans.sort(key=lambda x: x[0])
+    return [v for _, _, v in spans]
 
 
 def _data_span(table):
@@ -297,10 +328,18 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     quotes = _quotes(text)
     for r in shelf.get("ask_rules") or []:
         a = args[r["arg"]]
-        if r["arg"] in op:
+        if r["arg"] in op and r["arg"] != "cells":
             continue
         if "re" in r:
             rx = _rx(r["re"])
+            if r["arg"] == "cells" and a["type"] == "対応" and rx.groups >= 2:
+                for gm in rx.finditer(text):
+                    val = gm.group(2).strip()
+                    op.setdefault("cells", {})[gm.group(1).strip()] = int(val) if re.fullmatch(r"-?[0-9]+", val) else val
+                    for g in gm.groups():
+                        if g and g.strip() in quotes:
+                            quotes.remove(g.strip())
+                continue
             m = rx.search(text)
             if m:
                 if a["type"] == "対応" and rx.groups >= 2:
@@ -326,7 +365,10 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         scan = nfkc(scan).replace(nfkc(sh_nm), " ")
     names = _col_names(scan, table)
     letters = _col_letters(scan)
-    explicit_range = _range_of(scan, table)
+    explicit_ranges = _all_explicit_ranges(scan)
+    explicit_range = explicit_ranges[0] if explicit_ranges else None
+    rem_ranges = list(explicit_ranges)
+    has_from_to_ranges = args.get("from", {}).get("type") == "範囲" and args.get("to", {}).get("type") == "範囲"
     rows = _rows_of(scan)
     nums = _numbers(scan)
     named = bool(explicit_range or rows or letters or names or sheet_hits or shelf["name"] in ("dedupe", "seiri"))
@@ -377,7 +419,9 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         wanted = k in need
         v = None
         if t == "範囲":
-            if range_given or (not wanted and any(op.get(x) not in (None, "", []) for x in shelf["any"])):
+            if has_from_to_ranges and k in ("from", "to") and rem_ranges:
+                v = rem_ranges.pop(0)
+            elif range_given or (not wanted and any(op.get(x) not in (None, "", []) for x in shelf["any"])):
                 pass
             elif explicit_range:
                 v = explicit_range
@@ -425,16 +469,136 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         fmt_first_r = table.get("header_row") or 1
         fmt_last_r = table.get("total_row") or (str(table["data"]).split("-")[-1] if table.get("data") else fmt_first_r)
         op["range"] = f"{table['first_col']}{fmt_first_r}:{table['last_col']}{fmt_last_r}"
+    if shelf["name"] == "format":
+        if "col" in op and col_pool and "range" not in op and table:
+            first_l = _letter_of(table, op["col"]) or (op["col"] if re.fullmatch(r"[A-Z]{1,3}", str(op["col"])) else "")
+            seq_ls = [first_l] if first_l else []
+            for cp in col_pool:
+                fl = _letter_of(table, cp) or (cp if re.fullmatch(r"[A-Z]{1,3}", str(cp)) else "")
+                if fl:
+                    seq_ls.append(fl)
+            if len(seq_ls) >= 2:
+                nums_ls = sorted(_col_num(x) for x in seq_ls)
+                if all(nums_ls[i] - nums_ls[i - 1] <= 1 for i in range(1, len(nums_ls))):
+                    span_rg = _col_range(table, [_col_letter(nums_ls[0]), _col_letter(nums_ls[-1])])
+                    if span_rg:
+                        op["range"] = span_rg
+                        op.pop("col", None)
+        if re.search(r"数値\s*[（(]?標準[）)]?|表示形式を標準|標準形式|標準に戻", text):
+            op["number_format"] = "General"
+        elif re.search(r"(?:hh:mm|09:00|時刻.{0,4}2桁|2桁.{0,4}時刻|時分形式)", text, re.IGNORECASE):
+            op["number_format"] = "hh:mm"
+        elif re.search(r"(?:yyyy/mm/dd|2026/11/04|スラッシュ.{0,4}日付|年/月/日)", text, re.IGNORECASE):
+            op["number_format"] = "yyyy/mm/dd"
+        elif op.get("number_format") == 'm"月"d"日"(ddd)' and re.search(r"年|yyyy", text, re.IGNORECASE):
+            op["number_format"] = "yyyy/mm/dd(ddd)"
+        elif not op.get("number_format") and re.search(r"パーセント|%\s*表示", text):
+            op["number_format"] = "0.0%"
+        elif not op.get("number_format") and re.search(r"3桁|桁区切|カンマ", text):
+            op["number_format"] = "#,##0"
+    if shelf["name"] == "cf.add" and op.get("when") != "formula":
+        m_jpnum = re.fullmatch(r"([0-9][0-9,\.]*)(万|億)", str(op.get("value") or "").strip())
+        if m_jpnum:
+            mul = 10000 if m_jpnum.group(2) == "万" else 100000000
+            v_f = float(m_jpnum.group(1).replace(",", "")) * mul
+            op["value"] = str(int(v_f)) if v_f.is_integer() else str(v_f)
+    if shelf["name"] == "cf.add" and op.get("when") != "formula" and table and table.get("first_col") and table.get("last_col"):
+        if re.search(r"行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白)", text):
+            sp_cf = _data_span(table)
+            cf_r1 = sp_cf[0] if sp_cf else ((table.get("header_row") or 1) + 1)
+            cf_r2 = sp_cf[1] if sp_cf else cf_r1
+            ref_l = (_letter_of(table, names[0]) if names else None) or (letters[0] if letters else "")
+            expr = ""
+            num_val = str(op["value"]).replace(",", "") if op.get("value") is not None else ""
+            if ref_l:
+                w = op.get("when")
+                if w == "ge" and num_val != "":
+                    expr = f"=${ref_l}{cf_r1}>={num_val}"
+                elif w == "le" and num_val != "":
+                    expr = f"=${ref_l}{cf_r1}<={num_val}"
+                elif w == "gt" and num_val != "":
+                    expr = f"=${ref_l}{cf_r1}>{num_val}"
+                elif w == "lt" and num_val != "":
+                    expr = f"=${ref_l}{cf_r1}<{num_val}"
+                elif re.search(r"マイナス|負の値", text):
+                    expr = f"=${ref_l}{cf_r1}<0"
+                elif re.search(r"([0-9]+)\s*%?(?:になってない|ではない)", text):
+                    m_not = re.search(r"([0-9]+)\s*%?(?:になってない|ではない)", text)
+                    expr = f"=${ref_l}{cf_r1}<>{m_not.group(1)}"
+                elif op.get("value") not in (None, ""):
+                    escaped_v = str(op["value"]).replace('"', '""')
+                    expr = f'=ISNUMBER(SEARCH("{escaped_v}",${ref_l}{cf_r1}))'
+            elif re.search(r"欠席|完了|未完了|終了", text):
+                kw_cf = "欠席" if "欠席" in text else ("未完了" if "未完了" in text else ("完了" if "完了" in text else "終了"))
+                expr = f'=COUNTIF(${table["first_col"]}{cf_r1}:${table["last_col"]}{cf_r1},"*{kw_cf}*")>0'
+            if expr:
+                op["range"] = f"{table['first_col']}{cf_r1}:{table['last_col']}{cf_r2}"
+                op["when"] = "formula"
+                op["value"] = expr
+                named = True
+        if not op.get("bg") and not op.get("color") and re.search(r"色[を]?付|色[を]?つ|目立", text):
+            op["bg"] = "薄黄"
+    if shelf["name"] == "renumber" and "col" not in op and table:
+        for col_info in table.get("columns") or []:
+            c_nm = str((col_info or {}).get("name") or "")
+            if re.fullmatch(r"no|番号|連番|項番|id", c_nm.strip(), re.IGNORECASE):
+                op["col"] = c_nm
+                named = True
+                break
     if shelf["name"] == "sheet.rename" and "name" not in op and "to" in op and cur_sheet:
         op["name"] = cur_sheet
-    if shelf["name"] == "width" and "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
-        op["auto"] = [op.pop("col")]
-    if shelf["name"] == "filter.where":
-        m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip())
-        if m_name:
-            op["equals"] = m_name.group(1).strip()
-        elif "equals" in op and isinstance(op["equals"], str):
-            op["equals"] = re.sub(r"(?:さん|様)$", "", op["equals"]).strip()
+    if shelf["name"] == "table.new" and isinstance(op.get("headers"), list) and len(op["headers"]) == 1 and "と" in op["headers"][0]:
+        op["headers"] = [h.strip() for h in op["headers"][0].split("と") if h.strip()]
+    if shelf["name"] == "replace":
+        if "find" in op and isinstance(op["find"], str):
+            clean_find = re.sub(r"^(?:全シート|すべてのシート|全てのシート|ブック全体)で\s*", "", op["find"]).strip()
+            if clean_find != op["find"]:
+                op["all_sheets"] = True
+                op["find"] = clean_find
+        if re.search(r"全シート|すべてのシート|全てのシート|ブック全体", text):
+            op["all_sheets"] = True
+    if shelf["name"] == "sort":
+        sort_pairs = []
+        for sm in re.finditer(
+            r"(?:その中で\s*)?([^\s、,の]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順))",
+            nfkc(text),
+        ):
+            raw_c = sm.group(1).strip()
+            col_c = next((c["name"] for c in (table or {}).get("columns", []) if c["name"] == raw_c), raw_c)
+            is_desc = bool(sm.group(2))
+            sort_pairs.append(("-" if is_desc else "") + col_c)
+        if len(sort_pairs) >= 2:
+            op["cols"] = sort_pairs
+            op.pop("col", None)
+            op.pop("desc", None)
+            named = True
+    if shelf["name"] == "sheet.diff":
+        op.pop("sheet", None)
+        if sheet_hits and (op.get("from") == op.get("to") or "from" not in op or "to" not in op):
+            ordered_sh = sorted(set(sheet_hits), key=lambda x: nfkc(text).find(nfkc(x)))
+            if len(ordered_sh) >= 2:
+                op["from"] = ordered_sh[0]
+                op["to"] = ordered_sh[1]
+    if shelf["name"] == "top.n":
+        if op.get("into") == "別":
+            op.pop("into", None)
+        if "col" not in op and table and table.get("columns"):
+            num_cols = [c["name"] for c in table["columns"] if c.get("number") and not re.fullmatch(r"no\.?|番号|id", c["name"].strip(), re.IGNORECASE)]
+            if num_cols:
+                op["col"] = num_cols[0]
+                named = True
+    if shelf["name"] in ("filter.where", "filter.delete", "filter.extract"):
+        if shelf["name"] == "filter.extract" and op.get("into") == "別":
+            op.pop("into", None)
+        if "when" in op and "equals" in op and isinstance(op["equals"], str):
+            if re.search(r"以上|以下|未満|より|超|を含|含む|以外|ではな|でない|空白|空欄", op["equals"]):
+                op.pop("equals", None)
+        if shelf["name"] == "filter.where":
+            m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip())
+            if m_name:
+                op["equals"] = m_name.group(1).strip()
+            elif "equals" in op and isinstance(op["equals"], str):
+                op["equals"] = re.sub(r"(?:さん|様)$", "", op["equals"]).strip()
         if "col" not in op and table:
             cols = [c["name"] for c in table.get("columns", [])]
             eq = op.get("equals", "")
@@ -446,6 +610,10 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 text_cols = [c["name"] for c in table.get("columns", []) if not c.get("number")]
                 if text_cols:
                     op["col"] = text_cols[0]
+        if shelf["name"] == "filter.delete" and op.get("col") and (op.get("when") or op.get("equals") is not None or op.get("value") is not None):
+            named = True
+    if shelf["name"] == "width" and "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
+        op["auto"] = [op.pop("col")]
     missing = [k for k in (a["name"] for a in shelf["args"] if a["req"]) if op.get(k) in (None, "", [])]
     if shelf["any"] and not any(op.get(k) not in (None, "", []) for k in shelf["any"]):
         missing.append("・".join(shelf["any"]) + " のどれか")
@@ -574,6 +742,16 @@ def _apply_scope_fallback(op, missing, source_scope, shelf=None, clause=""):
     # ブラウザ選択連動時の棚別スコープ補完
     arg_names = {a["name"] for a in shelf.get("args") or []}
     sh_name = shelf.get("name", "")
+    # 危険な行/列削除へのブラウザ選択自動補完は厳格化（行選択・列選択または指示代名詞のみ許可、条件文脈なら絶対補完しない）
+    if sh_name in ("rows.delete", "cols.delete", "filter.delete"):
+        if sh_name == "filter.delete":
+            return missing, False
+        if re.search(r"(?:が|は|の).{0,16}(?:行|データ)|以上|以下|未満|超え?|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", clause):
+            return missing, False
+        if sh_name == "rows.delete" and not source_scope.get("row_select") and not _HERE_ROW_RE.search(clause):
+            return missing, False
+        if sh_name == "cols.delete" and not source_scope.get("col_select") and not _HERE_COL_RE.search(clause):
+            return missing, False
     # write 棚で単一セル選択中に値だけが指定された場合
     if sh_name == "write" and source_scope.get("cell") and not op.get("cells") and not op.get("tsv"):
         qs = _quotes(clause)
@@ -674,27 +852,96 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             fatal_err = True
             last_incomplete = None
             continue
-        # 札の「頼み:」の正規表現が当たった棚は、点が近ければ（EVIDENCE_GAP 以内）その棚を 1 位にする（当たった棚が 1 本だけのとき）
+        # 競合する新・既存棚の文脈調停
+        boost_name = ""
+        if len(scored) >= 2:
+            top_base = scored[0][0]
+            cand_names = {x[2]["name"] for x in scored}
+            has_fmt_cue = bool(re.search(r"表示形式|曜日|hh:mm|yyyy|mm/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻", c, re.IGNORECASE))
+            has_row_cf_cue = bool(
+                re.search(r"行全体|の行|行を|行に", c)
+                and re.search(r"以上|以下|未満|より大きい|より小さい|を超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了", c)
+                and _color_hits(c)
+            )
+            has_row_del_cond = bool(
+                re.search(r"の行|行を|行に|行は|データ", c)
+                and re.search(r"以上|以下|未満|より大きい|より小さい|を超え|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", c)
+                and re.search(r"消|削除", c)
+            )
+            if has_fmt_cue and "format" in cand_names and "date.fix" in cand_names and scored[0][2]["name"] in ("format", "date.fix"):
+                boost_name = "format"
+            elif has_row_cf_cue and "cf.add" in cand_names:
+                boost_name = "cf.add"
+            elif has_row_del_cond and "filter.delete" in cand_names:
+                boost_name = "filter.delete"
+            elif "link.clear" in cand_names and re.search(r"(?:リンク|ハイパーリンク).*(?:外|解除|消|削除|クリア)", c):
+                boost_name = "link.clear"
+            elif "link.extract" in cand_names and re.search(r"(?:URL|リンク先).*(?:抽出|取り出)|埋め込みリンク", c, re.IGNORECASE):
+                boost_name = "link.extract"
+            elif "top.n" in cand_names and re.search(r"(?:上位|下位|トップ|ワースト|ベスト)\s*[0-9]*", c):
+                boost_name = "top.n"
+            elif "filter.extract" in cand_names and "抽出" in c and not re.search(r"上位|下位|トップ|ワースト|ベスト|URL|リンク", c, re.IGNORECASE):
+                boost_name = "filter.extract"
+            elif "merge.unmerge" in cand_names and re.search(r"結合.*(?:埋め|バラ|ばら|分解|ほど|穴埋)|(?:埋め|穴埋).*結合", c):
+                boost_name = "merge.unmerge"
+            elif "fill.blank" in cand_names and re.search(r"穴埋め|(?:空白|空欄|ブランク).*上の値", c):
+                boost_name = "fill.blank"
+            elif "transpose" in cand_names and re.search(r"転置|縦横を入れ替|行列を入れ替|行と列を入れ替|縦と横を逆|横向きを縦向き|縦向きを横向き", c):
+                boost_name = "transpose"
+            elif "number.fix" in cand_names and re.search(r"(?:文字|テキスト).{0,6}数字|数値に変換|本物の数値|文字.{0,4}数値に直", c):
+                boost_name = "number.fix"
+            elif "sheet.diff" in cand_names and re.search(r"シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート", c):
+                boost_name = "sheet.diff"
+            elif "sheet.toc" in cand_names and re.search(r"目次|インデックスシート|シート一覧", c):
+                boost_name = "sheet.toc"
+            elif "sheet.sort" in cand_names and re.search(r"(?:シート|タブ).*(?:名前順|昇順|降順|並べ替)", c):
+                boost_name = "sheet.sort"
+            elif "sheet.gridlines" in cand_names and re.search(r"グリッド線|目盛り線|シート.*枠線|全シート.*枠線|枠線を非表示|枠線を表示", c) and not re.search(r"印刷|PDF|A4|A3|余白|ページ", c, re.IGNORECASE) and not CELL_RE.search(c):
+                boost_name = "sheet.gridlines"
+            elif "sheet.snapshot" in cand_names and re.search(r"スナップショット|日付[つ付入].*(?:複製|控え|コピー|保存)|控えを複製|今日の控え", c):
+                boost_name = "sheet.snapshot"
+            elif re.search(r"書式|見た目", c) and not re.search(r"消|クリア|削除|外|解除", c) and scored[0][2]["name"] in ("copy", "copy.format"):
+                if "copy.format" in cand_names and "copy" in cand_names:
+                    boost_name = "copy.format"
+            if boost_name:
+                new_sc = []
+                for x in scored:
+                    if x[2]["name"] == boost_name:
+                        new_sc.append((max(top_base, x[0], gas_ws_find.WEAK_SCORE) + MARGIN,) + tuple(x[1:]))
+                    else:
+                        new_sc.append(x)
+                scored = sorted(new_sc, key=lambda x: (-x[0], x[1]))
+
+        # 札の「頼み:」の正規表現が当たった棚は、点が近ければ（EVIDENCE_GAP 以内）その棚を 1 位にする（調停済みならスキップ）
         lead = scored[0][0]
         near = [x for x in scored if lead - x[0] <= EVIDENCE_GAP]
         rx_hit = lambda x: any("re" in r and _rx(r["re"]).search(c) for r in x[2].get("ask_rules") or [])
         hit = [x for x in near if rx_hit(x)]
         far = [x for x in scored if x not in near and rx_hit(x)]
-        if far and any(x[2]["name"] == "write" for x in far) and scored[0][2]["name"] == "replace" and CELL_RE.search(c):
-            w_item = next(x for x in far if x[2]["name"] == "write")
-            hit = [w_item]
-            far = [x for x in far if x[2]["name"] != "write"]
-        if far and not hit:
-            p.reasons.append(f"「{c}」の当てが割れた（{scored[0][2]['name']} と {far[0][2]['name']}）")
-            p.cards += [scored[0][2], far[0][2]]
-            fatal_err = True
-            last_incomplete = None
-            continue
-        if len(hit) == 1 and hit[0] is not scored[0]:
-            scored = [hit[0]] + [x for x in scored if x is not hit[0]]
-            scored[0] = (max(lead, hit[0][0], gas_ws_find.WEAK_SCORE) + MARGIN,) + tuple(scored[0][1:])
-        elif len(hit) == 1:
-            scored[0] = (max(scored[0][0], gas_ws_find.WEAK_SCORE) + MARGIN,) + tuple(scored[0][1:])
+        if not boost_name:
+            if far and any(x[2]["name"] == "write" for x in far) and scored[0][2]["name"] == "replace" and CELL_RE.search(c):
+                w_item = next(x for x in far if x[2]["name"] == "write")
+                hit = [w_item]
+                far = [x for x in far if x[2]["name"] != "write"]
+            if far and not hit:
+                top_nm_far = scored[0][2]["name"]
+                intent_act_far = bool(re.search(r"解除|外し|外す|やめ|消|削除|クリア|一覧|教え|見|確認|動か|移動|入れ替", c))
+                top_is_act_far = bool(re.search(r"(?:^|\.)(?:clear|remove|off|list|move|delete|diff|audit|check|extract)|^unfreeze$", top_nm_far))
+                if not (scored[0][0] >= gas_ws_find.WEAK_SCORE and intent_act_far and top_is_act_far):
+                    p.reasons.append(f"「{c}」の当てが割れた（{scored[0][2]['name']} と {far[0][2]['name']}）")
+                    p.cards += [scored[0][2], far[0][2]]
+                    fatal_err = True
+                    last_incomplete = None
+                    continue
+            if len(hit) == 1 and hit[0] is not scored[0]:
+                s0_nm = scored[0][2]["name"]
+                intent_act = bool(re.search(r"解除|外し|外す|やめ|消|削除|クリア|一覧|教え|見|確認|動か|移動|入れ替", c))
+                s0_is_act = bool(re.search(r"(?:^|\.)(?:clear|remove|off|list|move|delete|diff|audit|check|extract)|^unfreeze$", s0_nm))
+                if not (scored[0][0] >= gas_ws_find.WEAK_SCORE and intent_act and s0_is_act and hit[0][0] < scored[0][0]):
+                    scored = [hit[0]] + [x for x in scored if x is not hit[0]]
+                    scored[0] = (max(lead, hit[0][0], gas_ws_find.WEAK_SCORE) + MARGIN,) + tuple(scored[0][1:])
+            elif len(hit) == 1:
+                scored[0] = (max(scored[0][0], gas_ws_find.WEAK_SCORE) + MARGIN,) + tuple(scored[0][1:])
         top_t, _, top, _ = scored[0]
         second = scored[1] if len(scored) > 1 else None
         if top_t < gas_ws_find.WEAK_SCORE:
@@ -745,7 +992,9 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             last_incomplete = None
         else:
             last_incomplete = None
-    if any(("外です" in g or "ws_undo" in g or (("棚はありません" in g or "棚ではありません" in g) and not any(o["shelf"] in ("doc.outline", "filter.where", "filter.on", "drive.list") for o in p.ops))) for g in p.guide) or (p.guide and not p.ops):
+    is_pure_undo = bool(re.match(r"^(?:さっきの?|直前の?|1つ前の?|ひとつ前の?)?(?:元に戻|戻して|取り消|やり直)", nfkc(ask).strip()))
+    soft_pat = r"^(?:doc\.outline|filter\.where|filter\.on|filter\.off|filter\.extract|drive\.list|cf\.list|name\.list|protect\.list|note\.list|audit\.check|find|rows\.show|cols\.show|sheet\.show|top\.n)$"
+    if any(("外です" in g or ("ws_undo" in g and (not p.ops or is_pure_undo)) or ("ws_undo" not in g and ("棚はありません" in g or "棚ではありません" in g) and not any(re.match(soft_pat, o["shelf"]) for o in p.ops))) for g in p.guide) or (p.guide and not p.ops):
         p.reasons.append("案内が出ています（棚でない頼み）")
         fatal_err = True
     kinds = {finder.cat.by_name[o["shelf"]]["kind"] for o in p.ops if not finder.cat.by_name[o["shelf"]].get("shared") and o["shelf"] not in gas_ws_catalog.LOCAL_HANDLERS}

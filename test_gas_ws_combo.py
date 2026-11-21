@@ -1220,7 +1220,7 @@ def test_planner_to_direct_api_e2e_59_prompts():
         ("元データシートを非表示にして", "sheet.hide", True),
         ("元データシートを隠して", "sheet.hide", True),
         ("元データシートを再表示して", "sheet.show", True),
-        ("C列を非表示にして", "cols.hide", False),
+        ("C列を非表示にして", "cols.hide", True),
         ("A1の背景色を消して", "bg.clear", True),
         ("見出しの背景色を消して", "bg.clear", True),
         ("タイトルの背景色を消して", "bg.clear", True),
@@ -1265,7 +1265,7 @@ const tbl = {
   columns: [{col:'A',name:'日付'},{col:'B',name:'部門'},{col:'C',name:'担当者'},{col:'D',name:'金額',number:true}]
 };
 dt.state.table = tbl;
-dt.state.sheetSnapshot = { '売上表': { frozenRows: 0, frozenCols: 0, bandedRangeIds: [901], vals: {}, cells: Array.from({ length: 30 }, () => Array.from({ length: 26 }, () => ({}))) } };
+dt.state.sheetSnapshot = { '売上表': { frozenRows: 0, frozenCols: 0, hideGridlines: false, bandedRangeIds: [901], vals: {}, cells: Array.from({ length: 30 }, () => Array.from({ length: 26 }, () => ({}))) } };
 dt.els.chkBackup.checked = false;
 dt.els.chkOk.checked = false;
 
@@ -1292,7 +1292,16 @@ const saved = dt.state.sheetSnapshot['売上表'];
 delete dt.state.sheetSnapshot['売上表'];
 const noSnap = dt.buildDirectBatchUpdate([{ shelf: 'format', title: true, color: '赤' }], '売上表');
 dt.state.sheetSnapshot['売上表'] = saved;
-process.stdout.write(JSON.stringify({ total: input.cases.length, failures, bgReq, redUndo: redReq && redReq.undoRequests, noSnap, wFull, wEmptyUndo: wEmpty && wEmpty.undoRequests }));
+const extraDirect = {
+  gridReq: dt.buildDirectBatchUpdate([{ shelf: 'sheet.gridlines', show: false }], '売上表'),
+  rowHideReq: dt.buildDirectBatchUpdate([{ shelf: 'rows.hide', rows: [4, 5, 6] }], '売上表'),
+  noteSetReq: dt.buildDirectBatchUpdate([{ shelf: 'note.set', range: 'B5', text: '確認済み' }], '売上表'),
+  noteClrReq: dt.buildDirectBatchUpdate([{ shelf: 'note.clear', range: 'B5' }], '売上表'),
+  valClrReq: dt.buildDirectBatchUpdate([{ shelf: 'validation.clear', range: 'C4:C8' }], '売上表'),
+  widthAllNull: dt.buildDirectBatchUpdate([{ shelf: 'width', all_sheets: true }], '売上表'),
+  sortColsNull: dt.buildDirectBatchUpdate([{ shelf: 'sort', cols: ['部門', '-金額'] }], '売上表'),
+};
+process.stdout.write(JSON.stringify({ total: input.cases.length, failures, bgReq, redUndo: redReq && redReq.undoRequests, noSnap, wFull, wEmptyUndo: wEmpty && wEmpty.undoRequests, extraDirect }));
 """
     res = _run_node_json(node_code, {"scripts": scripts, "cases": cases})
     assert res["total"] == 64
@@ -1308,6 +1317,15 @@ process.stdout.write(JSON.stringify({ total: input.cases.length, failures, bgReq
     assert res["noSnap"] is None
     assert res["wFull"] is None
     assert res["wEmptyUndo"] == [{"updateCells": {"start": {"sheetId": 111, "rowIndex": 9, "columnIndex": 0}, "rows": [{"values": [{}]}], "fields": "userEnteredValue"}}]
+    ed = res["extraDirect"]
+    assert ed["gridReq"]["requests"][0]["updateSheetProperties"]["properties"]["gridProperties"]["hideGridlines"] is True
+    assert ed["gridReq"]["undoRequests"][0]["updateSheetProperties"]["properties"]["gridProperties"]["hideGridlines"] is False
+    assert ed["rowHideReq"]["requests"][0]["updateDimensionProperties"]["range"] == {"sheetId": 111, "dimension": "ROWS", "startIndex": 3, "endIndex": 6}
+    assert ed["rowHideReq"]["undoRequests"][0]["updateDimensionProperties"]["properties"]["hiddenByUser"] is False
+    assert ed["noteSetReq"]["requests"][0]["repeatCell"]["cell"]["note"] == "確認済み"
+    assert ed["noteClrReq"]["requests"][0]["repeatCell"]["cell"] == {}
+    assert ed["valClrReq"]["requests"][0]["setDataValidation"]["range"] == {"sheetId": 111, "startRowIndex": 3, "endRowIndex": 8, "startColumnIndex": 2, "endColumnIndex": 3}
+    assert ed["widthAllNull"] is None and ed["sortColsNull"] is None
 
 
 def _find_requests(obj):

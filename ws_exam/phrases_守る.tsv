@@ -59,3 +59,11 @@ drive.share	閲覧専用の共有リンクを作って
 drive.share	yamada@example.comに編集権限を付けて共有して
 ?drive.share	リンクを知っている全員に閲覧権限を付けたい
 ?drive.share	共有リンク 閲覧リンク 権限 付与
+export.csv	このシートをCSVにしてDriveに保存して
+export.csv	売上シートをCSV出力してファイル保存して
+export.csv	データをCSVに書き出して保存して
+?export.csv	CSV出力 CSV保存 CSVファイル 書き出し
+protect.list	保護中のシートと範囲を一覧にして教えて
+protect.list	いま保護されている範囲の一覧を確認して
+protect.list	どこが保護されているか保護を調べて
+?protect.list	保護一覧 保護確認 どこが保護

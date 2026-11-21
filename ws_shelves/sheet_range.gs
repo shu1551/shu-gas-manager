@@ -3,9 +3,9 @@
 // 棚: write
 // 題: セルに値・式を書く
 // 分類: 範囲
-// 語: 値を書|値を入れ|セルに入れ|式を入れ|書いて|を書き込|入力して|打ち直|と入力|と書いて|セットして|の値を|値を変え|値を書き換
+// 語: 値を書|値を入れ|セルに入れ|式を入れ|書いて|を書き込|入力して|打ち直|と入力|と書いて|セットして|の値を|値を変え|値を書き換|を入れて|に入力
 // 引数: cells=対応, range=範囲, tsv=文字
-// 頼み: cells~([A-Z]{1,3}[0-9]+)の[^\sを]{0,8}を[『「]?([^』」に]+?)[』」]?に(?:書き換|打ち直|直|変え|入れ) ; cells~(?<![A-Za-z0-9:])([A-Za-z]{1,3}[0-9]+)に(?!チェックボックス)[『「]?([^』」]+?)[』」]?(?:と(?:書|入力|記載|記入|入)|を(?:書|入|入力|セット))
+// 頼み: cells~([A-Z]{1,3}[0-9]+)の[^\sを]{0,8}を[『「]?([^』」に]+?)[』」]?に(?:書き換|打ち直|直|変え|入れ) ; cells~(?<![A-Za-z0-9:])([A-Za-z]{1,3}[0-9]+)に(?!チェックボックス)[『「]?([^』」]+?)[』」]?(?=[、,]\s*[A-Za-z]{1,3}[0-9]+に|(?:と(?:書|入力|記載|記入|入)|を(?:書|入|入力|セット)))
 // どれか: cells tsv
 // 例: 「B2に100、B3に200を入れて」 → {"shelf":"write","cells":{"B2":100,"B3":200}}
 // 触る: 値
@@ -30,18 +30,45 @@ SHELF['write'] = function (ctx, op) {
 // 分類: 範囲
 // 語: 置換|置き換え|書き換え|文字を探して|を直して|一括で変|名前を変えて|に置き換
 // 違い: 重複行を消すなら dedupe。全角半角や空白の整理なら seiri
-// 引数: find*=文字, with=文字, range=範囲, match_case=真偽, whole=真偽
-// 頼み: find~[『「]([^』」]+)[』」]を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換) ; with~[『「][^』」]+[』」]を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換) ; find~([^0-9A-Za-z\sを式]+)を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換) ; with~[^0-9A-Za-z\sを式]+を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換)
+// 引数: find*=文字, with=文字, range=範囲, match_case=真偽, whole=真偽, all_sheets=真偽=false
+// 頼み: find~[『「]([^』」]+)[』」]を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換) ; with~[『「][^』」]+[』」]を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換) ; find~(?:(?:全シート|すべてのシート|全てのシート|ブック全体)で\s*)?([^0-9A-Za-z\sを式]+)を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換) ; with~(?:(?:全シート|すべてのシート|全てのシート|ブック全体)で\s*)?[^0-9A-Za-z\sを式]+を[『「]?([^』」に]+?)[』」]?に(?:置き換|置換) ; all_sheets=true<全シート|すべてのシート|全てのシート|ブック全体
 // 例: 「営業部を営業課に置き換えて」 → {"shelf":"replace","find":"営業部","with":"営業課"}
 // 触る: 値
 SHELF['replace'] = function (ctx, op) {
   need_(op, ['find']);
+  var replWith = String(op['with'] === undefined ? '' : op['with']);
+  if (op.all_sheets) {
+    var totalHits = 0, hitSheets = [];
+    ctx.ss.getSheets().forEach(function (s) {
+      if (s.getName() === '_GASクイックの控え') return;
+      var sc = s.getDataRange();
+      var tf = sc.createTextFinder(String(op.find)).matchCase(!!op.match_case).matchEntireCell(!!op.whole);
+      var cnt = tf.findAll().length;
+      if (cnt > 0) {
+        sc.createTextFinder(String(op.find)).matchCase(!!op.match_case).matchEntireCell(!!op.whole).replaceAllWith(replWith);
+        totalHits += cnt;
+        hitSheets.push(s.getName() + '(' + cnt + '件)');
+      }
+    });
+    if (!totalHits) { note_(ctx, '全シートで「' + op.find + '」は見つかりませんでした'); return; }
+    chg_(ctx, null, hitSheets.slice(0, 4).join('・') + (hitSheets.length > 4 ? ' ほか' : ''), '全シート「' + op.find + '」→「' + replWith + '」（計 ' + totalHits + ' 件）');
+    return;
+  }
   var sh = sheetCtx_(ctx, op), scope = op.range ? sh.getRange(op.range) : sh.getDataRange();
   var tf = scope.createTextFinder(String(op.find)).matchCase(!!op.match_case).matchEntireCell(!!op.whole);
   var hits = tf.findAll().map(function (r) { return r.getA1Notation(); });
   if (!hits.length) { note_(ctx, '「' + op.find + '」は見つかりませんでした'); return; }
-  scope.createTextFinder(String(op.find)).matchCase(!!op.match_case).matchEntireCell(!!op.whole).replaceAllWith(String(op['with'] === undefined ? '' : op['with']));
-  chg_(ctx, sh, hits.slice(0, 4).join('・') + (hits.length > 4 ? ' ほか' + (hits.length - 4) + ' 件' : ''), '「' + op.find + '」→「' + (op['with'] || '') + '」');
+  scope.createTextFinder(String(op.find)).matchCase(!!op.match_case).matchEntireCell(!!op.whole).replaceAllWith(replWith);
+  chg_(ctx, sh, hits.slice(0, 4).join('・') + (hits.length > 4 ? ' ほか' + (hits.length - 4) + ' 件' : ''), '「' + op.find + '」→「' + replWith + '」');
+};
+DYNAMIC['replace'] = {
+  touch: function () { return ['値']; },
+  sheets: function (ctx, op) {
+    if (op.all_sheets) {
+      return ctx.ss.getSheets().filter(function (s) { return s.getName() !== '_GASクイックの控え'; }).map(function (s) { return s.getName(); });
+    }
+    return [op.sheet || ctx.sheetName || ctx.ss.getSheets()[0].getName()];
+  }
 };
 
 // 棚: find
@@ -50,6 +77,7 @@ SHELF['replace'] = function (ctx, op) {
 // 語: を探して|を検索|どこにある|があるセル|入っているセル|どのセル
 // 違い: 置き換えるなら replace、値を取り出すなら ws_look
 // 引数: text*=文字, range=範囲, whole=真偽, all_sheets=真偽
+// 頼み: text~[「『]([^」』]+)[」』] ; text~([^\sがを]+?)が入って ; text~([^\sがを]+?)がある ; text~から([^\sをの]+)のセル
 // 例: 「売上合計が入っているセルを探して」 → {"shelf":"find","text":"売上合計"}
 // 例: 「A列から完了のセルを検索して」 → {"shelf":"find","text":"完了","range":"A:A","whole":true}
 // 触る: なし
@@ -206,7 +234,7 @@ SHELF['copy'] = function (ctx, op) {
 // 語: 値だけ貼|値のみ貼|値として貼|式を値に|数式を値に|値に変え|値貼り付け
 // 違い: 全部写すなら copy、書式だけなら copy.format
 // 引数: from*=範囲, to=範囲
-// 例: 「C列の計算式を値に変えて」 → {"shelf":"copy.values","from":"C2:C50"}
+// 例: 「A1:B10をD1:E10に値だけ貼り付けて」 → {"shelf":"copy.values","from":"A1:B10","to":"D1:E10"}
 // 例: 「A1:B10の値をD1へ値貼り付けして」 → {"shelf":"copy.values","from":"A1:B10","to":"D1"}
 // 危ない: 上書き
 // 触る: 値
@@ -226,7 +254,7 @@ SHELF['copy.values'] = function (ctx, op) {
 // 棚: copy.format
 // 題: 書式だけ貼り付ける
 // 分類: 範囲
-// 語: 書式だけ貼|書式のみ貼|書式をコピー|書式を写|同じ書式に|同じ見た目に|書式貼り付け
+// 語: 書式だけ貼|書式のみ貼|書式をコピー|の書式をコピー|書式を写|同じ書式に|同じ見た目に|書式貼り付け
 // 違い: 全部写すなら copy、値だけなら copy.values
 // 引数: from*=範囲, to*=範囲
 // 例: 「A1の書式をB1:E1にコピーして」 → {"shelf":"copy.format","from":"A1","to":"B1:E1"}
@@ -474,4 +502,333 @@ SHELF['link.set'] = function (ctx, op) {
   var rtv = SpreadsheetApp.newRichTextValue().setText(label).setLinkUrl(url).build();
   rg.setRichTextValue(rtv);
   chg_(ctx, sh, rg.getA1Notation(), 'ハイパーリンクを設定（' + url + '）');
+};
+
+// 棚: merge.unmerge
+// 題: 結合セルを解除して値を埋める
+// 分類: 整える
+// 語: 結合を解除して埋め|結合解除して埋め|結合セルを解除して埋め|結合セルをほどいて|結合をばらし|結合を分解|結合解除して値を埋め|結合を解除して値を埋め|結合セルを解除して値を
+// 違い: 値を埋めずに結合を解除するだけなら format（merge=false）
+// 引数: range=範囲
+// 例: 「結合セルを解除して値を埋めて」 → {"shelf":"merge.unmerge"}
+// 触る: 値 書式
+// 控え: 今
+SHELF['merge.unmerge'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op);
+  var rg = op.range ? sh.getRange(op.range) : sh.getDataRange();
+  var merged = rg.getMergedRanges();
+  if (!merged || !merged.length) {
+    note_(ctx, '結合セルはありませんでした（変更なし）');
+    return;
+  }
+  var count = 0;
+  merged.forEach(function (mr) {
+    var nr = mr.getNumRows(), nc = mr.getNumColumns();
+    var topVal = mr.getCell(1, 1).getValue();
+    mr.breakApart();
+    if (!isBlank_(topVal)) {
+      var fill = [];
+      for (var r = 0; r < nr; r++) {
+        var row = [];
+        for (var c = 0; c < nc; c++) row.push(topVal);
+        fill.push(row);
+      }
+      mr.setValues(fill);
+    }
+    count++;
+  });
+  chg_(ctx, sh, rg.getA1Notation(), '結合セル ' + count + ' か所を解除して値を充填');
+};
+
+// 棚: fill.blank
+// 題: 空白セルを上の値で穴埋めする
+// 分類: 整える
+// 語: 空白セルを上の値|空欄を上の値|空白を上の値|上の値で穴埋|上の値で埋|穴埋め|空欄を埋|空白を埋|ブランクを埋
+// 違い: 計算式を下までコピーするなら fill.down、結合解除して埋めるなら merge.unmerge
+// 引数: range=範囲, col=列
+// 例: 「空白セルを上の値で穴埋めして」 → {"shelf":"fill.blank"}
+// 例: 「A列の空欄を上の値で埋めて」 → {"shelf":"fill.blank","col":"A"}
+// 触る: 値
+// 控え: 今
+SHELF['fill.blank'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), rg;
+  if (op.col) {
+    var t = needTable_(sh), ci = colIndexOf_(t, op.col);
+    rg = sh.getRange(t.firstData, ci, Math.max(1, t.lastData - t.firstData + 1), 1);
+  } else if (op.range) {
+    rg = sh.getRange(op.range);
+  } else {
+    var t2 = needTable_(sh);
+    rg = dataRange_(t2);
+  }
+  var vals = rg.getValues(), forms = rg.getFormulas();
+  var nr = vals.length, nc = nr ? vals[0].length : 0, filled = 0;
+  for (var c = 0; c < nc; c++) {
+    var hasLast = false, lastVal = '';
+    for (var r = 0; r < nr; r++) {
+      var f = forms[r][c], v = vals[r][c];
+      if (f) {
+        vals[r][c] = f;
+        hasLast = true;
+        lastVal = v;
+      } else if (!isBlank_(v)) {
+        hasLast = true;
+        lastVal = v;
+      } else if (hasLast) {
+        vals[r][c] = lastVal;
+        filled++;
+      }
+    }
+  }
+  if (!filled) {
+    note_(ctx, '埋める空白セルはありませんでした（変更なし）');
+    return;
+  }
+  rg.setValues(vals);
+  chg_(ctx, sh, rg.getA1Notation(), '空白 ' + filled + ' セルを上の値で穴埋め');
+};
+
+// 棚: transpose
+// 題: 行と列を入れ替える（転置）
+// 分類: 範囲
+// 語: 行と列を入れ替|縦横を入れ替|転置|縦と横を逆|行列を入れ替|横向きを縦向き|縦向きを横向き
+// 違い: 行や列の順序移動なら rows.move / cols.move
+// 引数: range=範囲, to=範囲, into=文字
+// 例: 「A1:D5の行と列を入れ替えてF1に貼って」 → {"shelf":"transpose","range":"A1:D5","to":"F1"}
+// 例: 「この表を転置して別シートに出して」 → {"shelf":"transpose","into":"転置"}
+// 危ない: 上書き
+// 触る: 値 シート構成
+// 控え: 今,先
+SHELF['transpose'] = function (ctx, op) {
+  var ss = ctx.ss, sh = sheetCtx_(ctx, op), srcRg;
+  if (op.range) {
+    srcRg = op.range.indexOf('!') >= 0 ? ss.getRange(op.range) : sh.getRange(op.range);
+  } else {
+    var t = findTable_(sh);
+    srcRg = t
+      ? sh.getRange(t.headerRow, t.firstCol, (t.totalRow || t.lastData) - t.headerRow + 1, t.lastCol - t.firstCol + 1)
+      : sh.getDataRange();
+  }
+  var vals = srcRg.getValues();
+  var nr = vals.length, nc = nr ? vals[0].length : 0;
+  if (!nr || !nc) throw new ArgError('転置する元データがありません');
+  var out = [];
+  for (var c = 0; c < nc; c++) {
+    var row = [];
+    for (var r = 0; r < nr; r++) row.push(vals[r][c]);
+    out.push(row);
+  }
+  if (op.to) {
+    var dBase = op.to.indexOf('!') >= 0 ? ss.getRange(op.to) : sh.getRange(op.to);
+    var destSh = dBase.getSheet();
+    var destRg = destSh.getRange(dBase.getRow(), dBase.getColumn(), out.length, out[0].length);
+    guardOverwrite_(ctx, destRg, '転置先「' + destRg.getA1Notation() + '」');
+    destRg.setValues(out);
+    chg_(ctx, destSh, destRg.getA1Notation(), srcRg.getA1Notation() + ' を転置（' + out.length + '行×' + out[0].length + '列）');
+    return;
+  }
+  var intoName = String(op.into || '転置').trim();
+  var dst = ss.getSheetByName(intoName);
+  if (!dst) {
+    dst = ss.insertSheet(intoName, ss.getSheets().length);
+    ctx.createdSheets.push(intoName);
+  } else {
+    var chkRg = dst.getRange(1, 1, out.length, out[0].length);
+    guardOverwrite_(ctx, chkRg, '転置先シート「' + intoName + '」');
+    dst.clearContents();
+  }
+  var outRg = dst.getRange(1, 1, out.length, out[0].length);
+  outRg.setValues(out);
+  ctx.curSheet = intoName;
+  chg_(ctx, dst, outRg.getA1Notation(), srcRg.getA1Notation() + ' を転置（' + out.length + '行×' + out[0].length + '列）');
+};
+
+// 棚: number.fix
+// 題: 文字の数字を本物の数値に直す
+// 分類: 整える
+// 語: 文字の数字を数値|文字列の数字を数値|文字列を数値に直|数値に変換|本物の数値|数字の文字列を数値|文字になってる数字|テキストの数字を数値
+// 違い: 空白・全角・体裁まで全部整えるなら seiri、日付文字列を直すなら date.fix
+// 引数: col=列, range=範囲
+// 例: 「金額列の文字の数字を本物の数値に直して」 → {"shelf":"number.fix","col":"金額"}
+// 触る: 値
+// 控え: 今
+SHELF['number.fix'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), rg;
+  if (op.col) {
+    var t = needTable_(sh), ci = colIndexOf_(t, op.col);
+    rg = sh.getRange(t.firstData, ci, Math.max(1, t.lastData - t.firstData + 1), 1);
+  } else if (op.range) {
+    rg = sh.getRange(op.range);
+  } else {
+    var t2 = needTable_(sh);
+    rg = dataRange_(t2);
+  }
+  var vals = rg.getValues(), forms = rg.getFormulas(), count = 0;
+  for (var r = 0; r < vals.length; r++) {
+    for (var c = 0; c < vals[r].length; c++) {
+      var f = forms[r][c], v = vals[r][c];
+      if (f) { vals[r][c] = f; continue; }
+      if (typeof v !== 'string') continue;
+      var hw = v.replace(/[０-９＋－．，]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+        .replace(/　/g, ' ').trim();
+      var cleaned = hw.replace(/[¥￥$,\s]/g, '');
+      if (!cleaned) continue;
+      if (/^-?\d+(\.\d+)?$/.test(cleaned) && !/^-?0\d/.test(cleaned)) {
+        vals[r][c] = Number(cleaned);
+        count++;
+      }
+    }
+  }
+  if (!count) {
+    note_(ctx, '変換対象の文字列数字は見つかりませんでした（変更なし）');
+    return;
+  }
+  rg.setValues(vals);
+  chg_(ctx, sh, rg.getA1Notation(), '文字の数字を数値に変換（' + count + ' 件）');
+};
+
+// 棚: link.clear
+// 題: セルのハイパーリンクを外す
+// 分類: 範囲
+// 語: リンクを外|リンクを解除|リンクを消|リンクを削除|ハイパーリンクを外|ハイパーリンクを解除|ハイパーリンクを消|リンクだけ外
+// 違い: リンクを付けるなら link.set、URLを取り出すなら link.extract
+// 引数: range=範囲, col=列
+// 例: 「A列のハイパーリンクを外して」 → {"shelf":"link.clear","col":"A"}
+// 触る: 値 書式
+// 控え: 今
+SHELF['link.clear'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), rg;
+  if (op.col) {
+    var t = needTable_(sh), ci = colIndexOf_(t, op.col);
+    rg = sh.getRange(t.firstData, ci, Math.max(1, t.lastData - t.firstData + 1), 1);
+  } else if (op.range) {
+    rg = sh.getRange(op.range);
+  } else {
+    rg = sh.getDataRange();
+  }
+  var rich = rg.getRichTextValues(), forms = rg.getFormulas();
+  var r0 = rg.getRow(), c0 = rg.getColumn(), cleared = 0;
+  for (var r = 0; r < rich.length; r++) {
+    for (var c = 0; c < rich[r].length; c++) {
+      var f = forms[r][c];
+      if (f && /^=HYPERLINK\(/i.test(f)) {
+        var disp = sh.getRange(r0 + r, c0 + c).getDisplayValue();
+        sh.getRange(r0 + r, c0 + c).setValue(disp);
+        cleared++;
+        continue;
+      }
+      var rtv = rich[r][c];
+      if (!rtv) continue;
+      var hasLink = !!rtv.getLinkUrl();
+      if (!hasLink && typeof rtv.getRuns === 'function') {
+        hasLink = rtv.getRuns().some(function (run) { return !!run.getLinkUrl(); });
+      }
+      if (hasLink) {
+        var plain = SpreadsheetApp.newRichTextValue().setText(rtv.getText()).build();
+        sh.getRange(r0 + r, c0 + c).setRichTextValue(plain);
+        cleared++;
+      }
+    }
+  }
+  if (!cleared) {
+    note_(ctx, 'ハイパーリンクは見つかりませんでした（変更なし）');
+    return;
+  }
+  chg_(ctx, sh, rg.getA1Notation(), 'ハイパーリンクを解除（' + cleared + ' 件）');
+};
+
+// 棚: link.extract
+// 題: 埋め込みリンクのURLを隣列へ抽出
+// 分類: 範囲
+// 語: リンクのURLを抽出|URLを抽出|リンク先を抽出|URLを取り出|リンクのURLを取り出|埋め込みリンクを抽出|URL列を作|URLを隣列
+// 違い: リンクを貼るなら link.set、リンクを消すなら link.clear
+// 引数: col*=列, name=文字=URL
+// 頼み: col~([^\sの、。]+?)(?:列)?の(?:埋め込みリンク|リンク|URL).*(?:抽出|取り出|URL)
+// 例: 「会社名列の埋め込みリンクのURLを隣列へ抽出して」 → {"shelf":"link.extract","col":"会社名"}
+// 触る: 値
+// 控え: 今
+SHELF['link.extract'] = function (ctx, op) {
+  need_(op, ['col']);
+  var sh = sheetCtx_(ctx, op), t = needTable_(sh);
+  var ci = colIndexOf_(t, op.col);
+  var nr = Math.max(0, t.lastData - t.firstData + 1);
+  sh.insertColumnAfter(ci);
+  var headName = op.name || 'URL';
+  var dstHead = sh.getRange(t.headerRow, ci + 1);
+  dstHead.setValue(headName);
+  var srcHead = sh.getRange(t.headerRow, ci);
+  dstHead.setBackground(srcHead.getBackground()).setFontColor(srcHead.getFontColor()).setFontWeight(srcHead.getFontWeight()).setHorizontalAlignment('center');
+  var extracted = 0;
+  if (nr > 0) {
+    var srcRg = sh.getRange(t.firstData, ci, nr, 1);
+    var rich = srcRg.getRichTextValues(), forms = srcRg.getFormulas(), out = [];
+    for (var i = 0; i < nr; i++) {
+      var u = '';
+      var rtv = rich[i][0];
+      if (rtv) {
+        u = rtv.getLinkUrl() || '';
+        if (!u && typeof rtv.getRuns === 'function') {
+          var runs = rtv.getRuns();
+          for (var ri = 0; ri < runs.length; ri++) {
+            var ru = runs[ri].getLinkUrl();
+            if (ru) { u = ru; break; }
+          }
+        }
+      }
+      if (!u && forms[i][0]) {
+        var hm = String(forms[i][0]).match(/^=HYPERLINK\(\s*"([^"]+)"/i);
+        if (hm) u = hm[1];
+      }
+      if (u) extracted++;
+      out.push([u]);
+    }
+    sh.getRange(t.firstData, ci + 1, nr, 1).setValues(out);
+  }
+  chg_(ctx, sh, colLetter_(ci + 1) + '列', 'リンクURL「' + headName + '」を隣列へ抽出（' + extracted + ' 件）');
+};
+
+// 棚: note.list
+// 題: セルのメモ一覧を別シートに出す
+// 分類: 範囲
+// 語: メモ一覧|メモを一覧|メモをまとめ|コメント一覧|注釈一覧|全メモを一覧|メモを一覧シート|メモを書き出
+// 違い: メモを付けるなら note.set、消すなら note.clear
+// 引数: all_sheets=真偽=false, into=文字=メモ一覧
+// 頼み: all_sheets=true<全シート|すべてのシート|全てのシート|ブック全体
+// 例: 「シート内のメモ一覧を別シートに出して」 → {"shelf":"note.list"}
+// 触る: シート構成 値
+// 控え: 先
+SHELF['note.list'] = function (ctx, op) {
+  var ss = ctx.ss, intoName = String(op.into || 'メモ一覧').trim();
+  var targets = op.all_sheets
+    ? ss.getSheets().filter(function (s) { return s.getName() !== '_GASクイックの控え' && s.getName() !== intoName; })
+    : [sheetCtx_(ctx, op)];
+  var rowsOut = [];
+  targets.forEach(function (s) {
+    var lr = s.getLastRow(), lc = s.getLastColumn();
+    if (lr < 1 || lc < 1) return;
+    var rg = s.getRange(1, 1, lr, lc);
+    var notes = rg.getNotes(), disp = rg.getDisplayValues();
+    for (var r = 0; r < notes.length; r++) {
+      for (var c = 0; c < notes[r].length; c++) {
+        var nt = String(notes[r][c] || '').trim();
+        if (nt) rowsOut.push([s.getName(), a1_(r + 1, c + 1), disp[r][c], nt]);
+      }
+    }
+  });
+  if (!rowsOut.length) {
+    note_(ctx, 'メモは見つかりませんでした（作成していません）');
+    return;
+  }
+  var dst = ss.getSheetByName(intoName);
+  if (!dst) {
+    dst = ss.insertSheet(intoName, ss.getSheets().length);
+    ctx.createdSheets.push(intoName);
+  } else {
+    dst.clearContents();
+  }
+  var out = [['シート', 'セル', 'セルの値', 'メモ']].concat(rowsOut);
+  dst.getRange(1, 1, out.length, 4).setValues(out);
+  dst.getRange(1, 1, 1, 4).setBackground(STYLE.headBg).setFontColor(STYLE.headFg).setFontWeight('bold');
+  ctx.curSheet = intoName;
+  chg_(ctx, dst, a1_(1, 1, out.length, 4), 'メモ一覧を作成（' + rowsOut.length + ' 件）');
 };
