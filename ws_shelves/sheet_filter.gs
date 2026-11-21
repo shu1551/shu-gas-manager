@@ -15,6 +15,58 @@ function filterSpanOf_(sh) {
     return { row: rg.getRow(), c1: rg.getColumn(), c2: rg.getLastColumn() };
   } catch (e) { return null; }
 }
+// 文字列の日付（2026-11-01 / 2026/11/1 / 2026年11月1日 / 2026.11.01）を本物の Date に直す
+function parseDateText_(s) {
+  var m = /^(\d{4})[\/\-\.年](\d{1,2})[\/\-\.月](\d{1,2})日?$/.exec(s);
+  if (!m) return null;
+  var y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+  if (y < 1900 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  var dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+// 列ごとの書式・配置・折り返しを、見出し名・値の型・既存書式から自動判定する
+function tidyColSpec_(headName, vals, existingFmts, isNoCol) {
+  var h = String(headName || '').trim();
+  if (isNoCol) return { fmt: null, fmtType: null, align: 'center', wrap: false, kind: null };
+  var nums = vals.filter(function (v) { return typeof v === 'number'; });
+  var dates = vals.filter(function (v) { return Object.prototype.toString.call(v) === '[object Date]'; });
+  var nonEmptyList = vals.filter(function (v) { return !isBlank_(v); });
+  var nonEmpty = nonEmptyList.length;
+  var fmtSample = (existingFmts || []).filter(function (f) { return f && f !== 'General' && f !== '@'; });
+  var hasPctFmt = fmtSample.length > 0 && fmtSample.filter(function (f) { return f.indexOf('%') >= 0; }).length / fmtSample.length > 0.5;
+  var hasCurFmt = fmtSample.length > 0 && fmtSample.filter(function (f) { return /[¥￥]/.test(f); }).length / fmtSample.length > 0.5;
+
+  if (nonEmpty && nums.length / nonEmpty > 0.5) {
+    var hasNeg = nums.some(function (v) { return v < 0; });
+    var isPctHead = /(?:率|割合|構成比|達成|進捗|％|%)/.test(h) && nums.filter(function (v) { return Math.abs(v) <= 2; }).length / nums.length > 0.5;
+    if (hasPctFmt || isPctHead) {
+      return { fmt: hasNeg ? '0.0%;[Red]-0.0%' : '0.0%', fmtType: 'PERCENT', align: 'right', wrap: false, kind: 'pct' };
+    }
+    var dec = nums.some(function (v) { return v % 1 !== 0; });
+    if (hasCurFmt) {
+      var cBase = dec ? '¥#,##0.00' : '¥#,##0';
+      return { fmt: hasNeg ? (cBase + ';[Red]-' + cBase) : cBase, fmtType: 'CURRENCY', align: 'right', wrap: false, kind: dec ? 'cur_dec' : 'cur' };
+    }
+    var nBase = dec ? STYLE.numFmtDec : STYLE.numFmt;
+    return { fmt: hasNeg ? (nBase + ';[Red]-' + nBase) : nBase, fmtType: 'NUMBER', align: 'right', wrap: false, kind: dec ? 'dec' : 'int' };
+  }
+  if (nonEmpty && dates.length / nonEmpty > 0.5) {
+    return { fmt: STYLE.dateFmt, fmtType: 'DATE', align: 'center', wrap: false, kind: 'date' };
+  }
+  // 文字列列：ID/コード/区分/ステータス系は中央寄せ、備考/長文は左寄せ＋折り返し
+  var strList = nonEmptyList.map(function (v) { return String(v).trim(); });
+  var isCodeHead = /^(?:No\.?|NO|番号|ID|コード|区分|状態|ステータス|判定|結果|出欠|性別|曜日|ランク|評価|フラグ|承認|有無)$/i.test(h);
+  if (isCodeHead || (strList.length >= 2 && strList.every(function (s) { return wlen_(s) <= 4 && s.indexOf('\n') < 0; }))) {
+    return { fmt: null, fmtType: null, align: 'center', wrap: false, kind: null };
+  }
+  var avgLen = strList.length ? strList.reduce(function (a, s) { return a + wlen_(s); }, 0) / strList.length : 0;
+  var isNoteHead = /(?:備考|メモ|内容|説明|コメント|詳細|住所|理由)/.test(h);
+  if (isNoteHead || avgLen >= 28) {
+    return { fmt: null, fmtType: null, align: 'left', wrap: true, kind: null };
+  }
+  return { fmt: null, fmtType: null, align: 'left', wrap: false, kind: null };
+}
 function tidyRange_(ctx, sh, rangeA1) {
   if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets || typeof Sheets.Spreadsheets.batchUpdate !== 'function') return tidyRangeLegacy_(ctx, sh, rangeA1);
   var t = findTable_(sh);
@@ -32,29 +84,52 @@ function tidyRange_(ctx, sh, rangeA1) {
       { repeatCell: { range: grid(t.headerRow, last, t.firstCol, t.lastCol), cell: { userEnteredFormat: { verticalAlignment: 'MIDDLE' } }, fields: 'userEnteredFormat.verticalAlignment' } },
       { repeatCell: { range: grid(t.headerRow, t.headerRow, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.headBg), textFormat: { bold: true, foregroundColor: hexColor_(STYLE.headFg) }, horizontalAlignment: 'CENTER', wrapStrategy: 'WRAP' } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor),horizontalAlignment,wrapStrategy)' } }
     ];
-    var colFmt = {};   // 列ごとの書式（幅の見積もりに使う）
+    var colFmt = {}, hasWrapCol = false;   // 列ごとの書式（幅の見積もり・行高さ判定に使う）
     if (t.lastData - t.firstData + 1 >= 1) {
       var rows = (t.totalRow ? t.totalRow : t.lastData) - t.firstData + 1;
+      var existFmts = sh.getRange(t.firstData, t.firstCol, t.lastData - t.firstData + 1, nc).getNumberFormats();
       for (var ci = t.firstCol; ci <= t.lastCol; ci++) {
-        var vals = [];
-        for (var rr = t.firstData; rr <= t.lastData; rr++) vals.push(t.vals[rr - 1][ci - 1]);
-        var fmt = null, align = null, kind = null;
-        if (isNoCol_(t, ci)) align = 'center';
-        else {
-          var nums = vals.filter(function (v) { return typeof v === 'number'; });
-          var dates = vals.filter(function (v) { return Object.prototype.toString.call(v) === '[object Date]'; });
-          var nonEmpty = vals.filter(function (v) { return !isBlank_(v); }).length;
-          if (nonEmpty && nums.length / nonEmpty > 0.5) { var dec = nums.some(function (v) { return v % 1 !== 0; }); fmt = dec ? STYLE.numFmtDec : STYLE.numFmt; align = 'right'; kind = dec ? 'dec' : 'int'; }
-          else if (nonEmpty && dates.length / nonEmpty > 0.5) { fmt = STYLE.dateFmt; align = 'center'; kind = 'date'; }
+        var kCol = ci - t.firstCol, vals = [], fCol = [];
+        for (var rr = t.firstData; rr <= t.lastData; rr++) {
+          vals.push(t.vals[rr - 1][ci - 1]);
+          fCol.push(existFmts[rr - t.firstData] ? existFmts[rr - t.firstData][kCol] : '');
         }
-        colFmt[ci] = kind;
+        var headNm = t.vals[t.headerRow - 1] ? t.vals[t.headerRow - 1][ci - 1] : '';
+        var spec = tidyColSpec_(headNm, vals, fCol, isNoCol_(t, ci));
+        colFmt[ci] = spec.kind;
+        if (spec.wrap) hasWrapCol = true;
         var uf = {}, fl = [];
-        if (fmt) { uf.numberFormat = { type: kind === 'date' ? 'DATE' : 'NUMBER', pattern: fmt }; fl.push('numberFormat'); }
-        if (align) { uf.horizontalAlignment = align.toUpperCase(); fl.push('horizontalAlignment'); }
+        if (spec.fmt) { uf.numberFormat = { type: spec.fmtType || 'NUMBER', pattern: spec.fmt }; fl.push('numberFormat'); }
+        if (spec.align) { uf.horizontalAlignment = spec.align.toUpperCase(); fl.push('horizontalAlignment'); }
+        if (spec.wrap) { uf.wrapStrategy = 'WRAP'; fl.push('wrapStrategy'); }
         if (fl.length) reqs.push({ repeatCell: { range: grid(t.firstData, t.firstData + rows - 1, ci, ci), cell: { userEnteredFormat: uf }, fields: 'userEnteredFormat(' + fl.join(',') + ')' } });
       }
     }
-    if (t.totalRow) reqs.push({ repeatCell: { range: grid(t.totalRow, t.totalRow, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.totalBg), textFormat: { bold: true } } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold))' } });
+    if (t.totalRow) {
+      var bdTop = { style: 'DOUBLE', color: hexColor_('#595959') };
+      reqs.push({ repeatCell: { range: grid(t.totalRow, t.totalRow, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.totalBg), textFormat: { bold: true } } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold))' } });
+      reqs.push({ updateBorders: { range: grid(t.totalRow, t.totalRow, t.firstCol, t.lastCol), top: bdTop } });
+    }
+    // タイトル行の自動仕上げ（見出しの上に単一タイトルがあり 12pt 以下なら太字 14pt に引き上げる）
+    if (t.headerRow > 1) {
+      try {
+        var tRg = titleRange_(sh);
+        if (tRg && tRg.getRow() < t.headerRow) {
+          var curSz = tRg.getFontSize();
+          if (!curSz || curSz <= 12) {
+            reqs.push({ repeatCell: { range: grid(tRg.getRow(), tRg.getLastRow(), tRg.getColumn(), tRg.getLastColumn()), cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 14 } } }, fields: 'userEnteredFormat.textFormat(bold,fontSize)' } });
+          }
+        }
+      } catch (eTitle) { }
+    }
+    // 行高さの最適化（見出し 28px・データ行 24px（長文折り返し列が無いとき）・合計行 26px）
+    reqs.push({ updateDimensionProperties: { range: { sheetId: sid, dimension: 'ROWS', startIndex: t.headerRow - 1, endIndex: t.headerRow }, properties: { pixelSize: 28 }, fields: 'pixelSize' } });
+    if (!hasWrapCol && t.lastData >= t.firstData) {
+      reqs.push({ updateDimensionProperties: { range: { sheetId: sid, dimension: 'ROWS', startIndex: t.firstData - 1, endIndex: t.lastData }, properties: { pixelSize: 24 }, fields: 'pixelSize' } });
+    }
+    if (t.totalRow) {
+      reqs.push({ updateDimensionProperties: { range: { sheetId: sid, dimension: 'ROWS', startIndex: t.totalRow - 1, endIndex: t.totalRow }, properties: { pixelSize: 26 }, fields: 'pixelSize' } });
+    }
     // 列幅：中身に合わせる。数値・日付は、これから付ける書式で表示される形に見積もる（フィルター付き見出しは▼アイコン分を足す）
     var disp = sh.getRange(t.headerRow, t.firstCol, last - t.headerRow + 1, nc).getDisplayValues();
     var flSpan = filterSpanOf_(sh);
@@ -64,6 +139,8 @@ function tidyRange_(ctx, sh, rangeA1) {
         var s = row[c], v = t.vals[t.headerRow - 1 + ri][t.firstCol - 1 + c];
         if (k && ri > 0) {
           if (k === 'date' && Object.prototype.toString.call(v) === '[object Date]') s = '0000/00/00';
+          else if (k === 'pct' && typeof v === 'number') s = (v * 100).toFixed(1) + '%';
+          else if ((k === 'cur' || k === 'cur_dec') && typeof v === 'number') s = '¥' + tidyNumText_(v, k === 'cur_dec');
           else if ((k === 'int' || k === 'dec') && typeof v === 'number') s = tidyNumText_(v, k === 'dec');
         }
         mx = Math.max(mx, wlen_(s));
@@ -105,29 +182,51 @@ function tidyRangeLegacy_(ctx, sh, rangeA1) {
   full.setVerticalAlignment('middle');
   var hd = sh.getRange(t.headerRow, t.firstCol, 1, nc);
   hd.setFontWeight('bold').setBackground(STYLE.headBg).setFontColor(STYLE.headFg).setHorizontalAlignment('center').setWrap(true);
-  var cnt = t.lastData - t.firstData + 1;
+  var cnt = t.lastData - t.firstData + 1, hasWrapColL = false;
   if (cnt >= 1) {
     // 表の値は findTable_ が 1 回で読んだもの（t.vals）を使う。書式は範囲ごとの配列で一括して書く
     var rows = (t.totalRow ? t.totalRow : t.lastData) - t.firstData + 1;
     var bodyRg = sh.getRange(t.firstData, t.firstCol, rows, nc);
-    var nf = bodyRg.getNumberFormats(), al = bodyRg.getHorizontalAlignments();
+    var nf = bodyRg.getNumberFormats(), al = bodyRg.getHorizontalAlignments(), wr = bodyRg.getWraps();
     for (var ci = t.firstCol; ci <= t.lastCol; ci++) {
-      var k = ci - t.firstCol, vals = [];
-      for (var r = t.firstData; r <= t.lastData; r++) vals.push(t.vals[r - 1][ci - 1]);
-      var fmt = null, align = null;
-      if (isNoCol_(t, ci)) align = 'center';
-      else {
-        var nums = vals.filter(function (v) { return typeof v === 'number'; });
-        var dates = vals.filter(function (v) { return Object.prototype.toString.call(v) === '[object Date]'; });
-        var nonEmpty = vals.filter(function (v) { return !isBlank_(v); }).length;
-        if (nonEmpty && nums.length / nonEmpty > 0.5) { fmt = nums.some(function (v) { return v % 1 !== 0; }) ? STYLE.numFmtDec : STYLE.numFmt; align = 'right'; }
-        else if (nonEmpty && dates.length / nonEmpty > 0.5) { fmt = STYLE.dateFmt; align = 'center'; }
+      var k = ci - t.firstCol, vals = [], fColL = [];
+      for (var r = t.firstData; r <= t.lastData; r++) {
+        vals.push(t.vals[r - 1][ci - 1]);
+        fColL.push(nf[r - t.firstData] ? nf[r - t.firstData][k] : '');
       }
-      for (var rr = 0; rr < rows; rr++) { if (fmt) nf[rr][k] = fmt; if (align) al[rr][k] = align; }
+      var headNmL = t.vals[t.headerRow - 1] ? t.vals[t.headerRow - 1][ci - 1] : '';
+      var specL = tidyColSpec_(headNmL, vals, fColL, isNoCol_(t, ci));
+      if (specL.wrap) hasWrapColL = true;
+      for (var rr = 0; rr < rows; rr++) {
+        if (specL.fmt) nf[rr][k] = specL.fmt;
+        if (specL.align) al[rr][k] = specL.align;
+        if (specL.wrap) wr[rr][k] = true;
+      }
     }
     bodyRg.setNumberFormats(nf).setHorizontalAlignments(al);
+    if (hasWrapColL && typeof bodyRg.setWraps === 'function') bodyRg.setWraps(wr);
   }
-  if (t.totalRow) sh.getRange(t.totalRow, t.firstCol, 1, nc).setFontWeight('bold').setBackground(STYLE.totalBg);
+  if (t.totalRow) {
+    var totRg = sh.getRange(t.totalRow, t.firstCol, 1, nc);
+    totRg.setFontWeight('bold').setBackground(STYLE.totalBg);
+    try { totRg.setBorder(true, null, null, null, null, null, '#595959', SpreadsheetApp.BorderStyle.DOUBLE); } catch (eBd) { }
+  }
+  if (t.headerRow > 1) {
+    try {
+      var tRgL = titleRange_(sh);
+      if (tRgL && tRgL.getRow() < t.headerRow) {
+        var curSzL = tRgL.getFontSize();
+        if (!curSzL || curSzL <= 12) tRgL.setFontWeight('bold').setFontSize(14);
+      }
+    } catch (eTL) { }
+  }
+  if (typeof sh.setRowHeight === 'function') {
+    try {
+      sh.setRowHeight(t.headerRow, 28);
+      if (!hasWrapColL && t.lastData >= t.firstData) sh.setRowHeights(t.firstData, t.lastData - t.firstData + 1, 24);
+      if (t.totalRow) sh.setRowHeight(t.totalRow, 26);
+    } catch (eRh) { }
+  }
   // 列幅：中身に合わせる（上限・下限つき・フィルター付き見出しは▼アイコン分を足す）
   var disp = sh.getRange(t.headerRow, t.firstCol, last - t.headerRow + 1, nc).getDisplayValues();
   var flSpanL = filterSpanOf_(sh);
@@ -198,8 +297,8 @@ function deleteRowRuns_(sh, rowNums) {
 SHELF['seiri'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
   var rg = sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1);
-  var vals = rg.getValues(), forms = rg.getFormulas(), fixed = [], nTrim = 0, nHalf = 0, nNum = 0;
-  var doTrim = op.trim !== false, doHalf = op.halfwidth !== false, doNum = op.numbers !== false;
+  var vals = rg.getValues(), forms = rg.getFormulas(), fixed = [], nTrim = 0, nHalf = 0, nNum = 0, nDate = 0;
+  var doTrim = op.trim !== false, doHalf = op.halfwidth !== false, doNum = op.numbers !== false, doDate = op.dates !== false;
   for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
     var v = vals[r][c];
     if (forms[r][c] || typeof v !== 'string') continue;
@@ -207,6 +306,7 @@ SHELF['seiri'] = function (ctx, op) {
     if (doHalf) { var h = nv.replace(/[！-～]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); }).replace(/　/g, ' '); if (h !== nv) { nv = h; nHalf++; } }
     if (doTrim) { var tr = nv.replace(/^[\s　]+|[\s　]+$/g, ''); if (tr !== nv) { nv = tr; nTrim++; } }
     if (doNum && r > 0 && /^-?[\d,]+(\.\d+)?$/.test(nv) && !/^-?0\d/.test(nv)) { nv = Number(nv.replace(/,/g, '')); nNum++; }
+    else if (doDate && r > 0 && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
     if (nv !== v) { vals[r][c] = nv; fixed.push(a1_(t.headerRow + r, t.firstCol + c)); }
   }
   if (fixed.length) {
@@ -222,7 +322,7 @@ SHELF['seiri'] = function (ctx, op) {
         r2 = r3 + 1;
       }
     }
-    chg_(ctx, sh, fixed.slice(0, 4).join('・') + (fixed.length > 4 ? ' ほか' + (fixed.length - 4) + ' 件' : ''), '空白' + nTrim + '・全角→半角' + nHalf + '・数値化' + nNum);
+    chg_(ctx, sh, fixed.slice(0, 4).join('・') + (fixed.length > 4 ? ' ほか' + (fixed.length - 4) + ' 件' : ''), '空白' + nTrim + '・全角→半角' + nHalf + '・数値化' + nNum + (nDate ? '・日付化' + nDate : ''));
     if (_TBL_CACHE) _TBL_CACHE = { _once: true };   // 値を書いたので表の読み取り結果を捨てる
   }
   // 空行を詰める＊ / 重複行を消す＊
