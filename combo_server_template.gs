@@ -707,10 +707,37 @@ function comboFastUndoSave_(sh, ops, table, optSsId) {
       snap.colWidths = cw;
     }
 
-    var jsonStr = JSON.stringify(snap);
-    if (jsonStr.length > 50000) {
-      var gz = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(jsonStr, 'application/json')).getBytes());
-      jsonStr = JSON.stringify({ __gz: gz, ssId: snap.ssId });
+    var stack = [];
+    try {
+      var prevRaw = cache ? cache.get(COMBO_PROP_FAST_UNDO) : null;
+      if (prevRaw) {
+        var prevParsed = JSON.parse(prevRaw);
+        if (prevParsed && prevParsed.__gz) {
+          var prevUnz = Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(prevParsed.__gz), 'application/x-gzip')).getDataAsString('utf-8');
+          prevParsed = JSON.parse(prevUnz);
+        }
+        if (prevParsed && Array.isArray(prevParsed.__stack)) {
+          stack = prevParsed.__stack.filter(function (x) { return x && x.ssId === snap.ssId; });
+        } else if (prevParsed && prevParsed.ssId === snap.ssId) {
+          stack = [prevParsed];
+        }
+      }
+    } catch (ePrev) { stack = []; }
+    stack.push(snap);
+    if (stack.length > 5) stack = stack.slice(stack.length - 5);
+
+    var encodeStack = function (arr) {
+      var s = JSON.stringify({ __stack: arr, ssId: snap.ssId });
+      if (s.length > 50000) {
+        var gz = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(s, 'application/json')).getBytes());
+        s = JSON.stringify({ __gz: gz, ssId: snap.ssId });
+      }
+      return s;
+    };
+    var jsonStr = encodeStack(stack);
+    while (jsonStr.length > 95000 && stack.length > 1) {
+      stack.shift();
+      jsonStr = encodeStack(stack);
     }
     if (jsonStr.length > 95000) {
       cache.remove(COMBO_PROP_FAST_UNDO);
@@ -741,15 +768,21 @@ function comboFastUndoRestore_(ss, optRaw) {
   if (!raw) {
     return { ok: false, error: '戻せる高速控えがありません' };
   }
-  var snap;
+  var parsed, stack = null, snap;
   try {
-    snap = JSON.parse(raw);
-    if (snap && snap.__gz) {
-      var unz = Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(snap.__gz), 'application/x-gzip')).getDataAsString('utf-8');
-      snap = JSON.parse(unz);
+    parsed = JSON.parse(raw);
+    if (parsed && parsed.__gz) {
+      var unz = Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(parsed.__gz), 'application/x-gzip')).getDataAsString('utf-8');
+      parsed = JSON.parse(unz);
+    }
+    if (parsed && Array.isArray(parsed.__stack)) {
+      stack = parsed.__stack.slice();
+      snap = stack.pop();
+    } else {
+      snap = parsed;
     }
   } catch (e) {
-    cache.remove(COMBO_PROP_FAST_UNDO);
+    if (cache) cache.remove(COMBO_PROP_FAST_UNDO);
     return { ok: false, error: '高速控えのデータが壊れていました' };
   }
   var ssId = ss.getId();
@@ -786,8 +819,21 @@ function comboFastUndoRestore_(ss, optRaw) {
       sh.setColumnWidth(parseInt(k, 10), snap.colWidths[k]);
     });
   }
+  try { SpreadsheetApp.flush(); } catch (eFl) {}
 
-  cache.remove(COMBO_PROP_FAST_UNDO);
+  if (cache) {
+    if (stack && stack.length > 0) {
+      var restStr = JSON.stringify({ __stack: stack, ssId: ssId });
+      if (restStr.length > 50000) {
+        var gzRest = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(restStr, 'application/json')).getBytes());
+        restStr = JSON.stringify({ __gz: gzRest, ssId: ssId });
+      }
+      if (restStr.length <= 95000) cache.put(COMBO_PROP_FAST_UNDO, restStr, COMBO_TBL_CACHE_TTL);
+      else cache.remove(COMBO_PROP_FAST_UNDO);
+    } else {
+      cache.remove(COMBO_PROP_FAST_UNDO);
+    }
+  }
   if (fromProp) {
     try { PropertiesService.getScriptProperties().deleteProperty(COMBO_PROP_FAST_UNDO); } catch (eDelP) {}
   }
