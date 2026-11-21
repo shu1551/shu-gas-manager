@@ -60,23 +60,25 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
     sec.addWidget(CardService.newTextButton().setText('このシートで使う')
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonGrant')));
   } else {
-    sec.addWidget(CardService.newTextParagraph().setText('<b>' + comboAddonEsc_(tg.title) + '</b>'));
-    sec.addWidget(CardService.newTextButton().setText('操作窓を開く（続けて頼むならこちら）').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
-      .setOnClickAction(CardService.newAction().setFunctionName('onAddonOpenWindow')));
     // 1 行の入力欄。Enter（音声入力の終わりの Enter も）で確定したら、そのまま実行する
     sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle('頼み（例: タイトルの文字の色を赤に）').setMultiline(false)
       .setOnChangeAction(CardService.newAction().setFunctionName('onAddonRun')));
-    sec.addWidget(CardService.newTextButton().setText('実行')
-      .setOnClickAction(CardService.newAction().setFunctionName('onAddonRun')));
-    sec.addWidget(CardService.newTextButton().setText('直前を取り消す')
-      .setOnClickAction(CardService.newAction().setFunctionName('onAddonUndo')));
+    // 実行・戻す・操作窓を横 1 行にまとめて縦スペースを圧縮
+    var btnRow = CardService.newButtonSet()
+      .addButton(CardService.newTextButton().setText('実行').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+        .setOnClickAction(CardService.newAction().setFunctionName('onAddonRun')))
+      .addButton(CardService.newTextButton().setText('戻す')
+        .setOnClickAction(CardService.newAction().setFunctionName('onAddonUndo')))
+      .addButton(CardService.newTextButton().setText('操作窓')
+        .setOnClickAction(CardService.newAction().setFunctionName('onAddonOpenWindow')));
+    sec.addWidget(btnRow);
     if (msg) sec.addWidget(CardService.newTextParagraph().setText(comboAddonEsc_(msg)));
     if (suggestBtn) {
       sec.addWidget(CardService.newTextButton().setText('はい（撃って覚える）').setTextButtonStyle(CardService.TextButtonStyle.FILLED)
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonAcceptSuggest')));
     }
   }
-  return CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('GASコンボ')).addSection(sec).build();
+  return CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle(tg.title || 'GASコンボ')).addSection(sec).build();
 }
 
 function comboAddonReply_(e, msg, suggestBtn, optTg) {
@@ -130,7 +132,22 @@ function onAddonAcceptSuggest(e) {
   return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0), false, tg);
 }
 
-function comboAddonSecs_(t0) { return '（合計 ' + ((Date.now() - t0) / 1000).toFixed(2) + ' 秒）'; }
+function comboAddonSecs_(t0) { return '（' + ((Date.now() - t0) / 1000).toFixed(2) + ' 秒）'; }
+function comboAddonShortMsg_(res, t0) {
+  if (!res) return 'エラー\n' + comboAddonSecs_(t0);
+  if (res.ok === false) return '✗ ' + (res.error || res.text || '失敗しました') + '\n' + comboAddonSecs_(t0);
+  var head = '';
+  if (res.undone) {
+    head = '↶ 戻しました（' + (res.what || '直前') + '）';
+  } else if (Array.isArray(res.changed) && res.changed.length) {
+    var items = res.changed.slice(0, 2).map(function (c) { return String(c).replace(/^[^!]+!/, ''); });
+    head = '✓ ' + items.join(' ／ ');
+  } else {
+    head = String(res.text || '完了').split('\n')[0];
+  }
+  var extra = (Array.isArray(res.notes) && res.notes.length) ? ('\n' + res.notes[0]) : '';
+  return head + extra + '\n' + comboAddonSecs_(t0);
+}
 
 function onAddonRun(e) {
   var t0 = Date.now(), res, tg = null;
@@ -176,11 +193,10 @@ function onAddonRun(e) {
     }
     var keepsShape = !!(p && p.fire && p.ops && p.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); }));
     if (!keepsShape) comboAddonForget_(tg, curSheet);
-    res.text = (res.text || '') + (init._cached ? '\n（表の形は覚えから）' : '') + '\n内訳: 前 ' + (tA - t0) + 'ms・表 ' + (tB - tA) + 'ms・棚当て ' + (tC - tB) + 'ms・撃つ ' + (Date.now() - tC) + 'ms';
   } catch (err) {
-    res = { ok: false, text: String(err && err.message || err) };
+    res = { ok: false, error: String(err && err.message || err) };
   }
-  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0), false, tg);
+  return comboAddonReply_(e, comboAddonShortMsg_(res, t0), false, tg);
 }
 
 function onAddonUndo(e) {
@@ -192,8 +208,8 @@ function onAddonUndo(e) {
       try { comboAddonForget_(tgU, (tgU._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName()); } catch (eF) {}
     }
   }
-  catch (err) { res = { ok: false, text: String(err && err.message || err) }; }
-  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0), false, tgU);
+  catch (err) { res = { ok: false, error: String(err && err.message || err) }; }
+  return comboAddonReply_(e, comboAddonShortMsg_(res, t0), false, tgU);
 }
 
 // ---------------------------------------------------------------- 操作窓（前のサイドバーと同じ HTML の画面を別の窓で開く）
