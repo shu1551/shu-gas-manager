@@ -90,10 +90,15 @@ SHELF['width'] = function (ctx, op) {
   if (op.cols) Object.keys(op.cols).forEach(function (k) { sh.setColumnWidth(colRef(k), op.cols[k]); did.push(k + '列'); });
   if (op.col && op.width) { sh.setColumnWidth(colRef(op.col), op.width); did.push(op.col + '列'); }
   if (op.rows) Object.keys(op.rows).forEach(function (k) { sh.setRowHeight(parseInt(k), op.rows[k]); did.push(k + '行'); });
+  var flSpanW = (op.auto && op.auto.length && typeof filterSpanOf_ === 'function') ? filterSpanOf_(sh) : null;
   (op.auto || []).forEach(function (k) {
-    var ci = colRef(k), lr = sh.getLastRow(), mx = 0;
-    if (lr > 0) sh.getRange(1, ci, lr, 1).getDisplayValues().forEach(function (x) { mx = Math.max(mx, wlen_(x[0])); });
-    sh.setColumnWidth(ci, Math.max(STYLE.colMin, Math.min(STYLE.colMax, mx * STYLE.px + STYLE.pad))); did.push(k + '列(自動)');
+    var ci = colRef(k), lr = sh.getLastRow(), mx = 0, colDisp = lr > 0 ? sh.getRange(1, ci, lr, 1).getDisplayValues() : [];
+    colDisp.forEach(function (x) { mx = Math.max(mx, wlen_(x[0])); });
+    var wantW = mx * STYLE.px + STYLE.pad;
+    if (flSpanW && flSpanW.row >= 1 && flSpanW.row <= colDisp.length && ci >= flSpanW.c1 && ci <= flSpanW.c2) {
+      wantW = Math.max(wantW, wlen_(colDisp[flSpanW.row - 1][0]) * STYLE.px + STYLE.pad + 42);
+    }
+    sh.setColumnWidth(ci, Math.max(STYLE.colMin, Math.min(STYLE.colMax, wantW))); did.push(k + '列(自動)');
   });
   if (op.auto_rows && !op.all_sheets) {
     var lr0 = sh.getLastRow();
@@ -109,10 +114,15 @@ SHELF['width'] = function (ctx, op) {
       var lrA = s.getLastRow(), lcA = s.getLastColumn();
       if (lrA > 0 && lcA > 0) {
         var dA = s.getRange(1, 1, lrA, lcA).getDisplayValues();
+        var flA = (typeof filterSpanOf_ === 'function') ? filterSpanOf_(s) : null;
         for (var cA = 0; cA < lcA; cA++) {
           var mxA = 0;
           for (var rA = 0; rA < lrA; rA++) mxA = Math.max(mxA, wlen_(dA[rA][cA]));
-          s.setColumnWidth(cA + 1, Math.max(STYLE.colMin, Math.min(STYLE.colMax, mxA * STYLE.px + STYLE.pad)));
+          var wantA = mxA * STYLE.px + STYLE.pad;
+          if (flA && flA.row >= 1 && flA.row <= lrA && (cA + 1) >= flA.c1 && (cA + 1) <= flA.c2) {
+            wantA = Math.max(wantA, wlen_(dA[flA.row - 1][cA]) * STYLE.px + STYLE.pad + 42);
+          }
+          s.setColumnWidth(cA + 1, Math.max(STYLE.colMin, Math.min(STYLE.colMax, wantA)));
         }
         if (op.auto_rows && typeof s.autoResizeRows === 'function') s.autoResizeRows(1, lrA);
       }

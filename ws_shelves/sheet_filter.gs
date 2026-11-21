@@ -7,6 +7,14 @@ function tidyNumText_(v, dec) {
   p[0] = p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return (v < 0 ? '-' : '') + p.join('.');
 }
+function filterSpanOf_(sh) {
+  try {
+    var f = (typeof sh.getFilter === 'function') ? sh.getFilter() : null;
+    if (!f) return null;
+    var rg = f.getRange();
+    return { row: rg.getRow(), c1: rg.getColumn(), c2: rg.getLastColumn() };
+  } catch (e) { return null; }
+}
 function tidyRange_(ctx, sh, rangeA1) {
   if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets || typeof Sheets.Spreadsheets.batchUpdate !== 'function') return tidyRangeLegacy_(ctx, sh, rangeA1);
   var t = findTable_(sh);
@@ -47,10 +55,11 @@ function tidyRange_(ctx, sh, rangeA1) {
       }
     }
     if (t.totalRow) reqs.push({ repeatCell: { range: grid(t.totalRow, t.totalRow, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.totalBg), textFormat: { bold: true } } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold))' } });
-    // 列幅：中身に合わせる。数値・日付は、これから付ける書式で表示される形に見積もる
+    // 列幅：中身に合わせる。数値・日付は、これから付ける書式で表示される形に見積もる（フィルター付き見出しは▼アイコン分を足す）
     var disp = sh.getRange(t.headerRow, t.firstCol, last - t.headerRow + 1, nc).getDisplayValues();
+    var flSpan = filterSpanOf_(sh);
     for (var c = 0; c < nc; c++) {
-      var k = colFmt[t.firstCol + c], mx = 0;
+      var colIdx = t.firstCol + c, k = colFmt[colIdx], mx = 0;
       disp.forEach(function (row, ri) {
         var s = row[c], v = t.vals[t.headerRow - 1 + ri][t.firstCol - 1 + c];
         if (k && ri > 0) {
@@ -59,7 +68,11 @@ function tidyRange_(ctx, sh, rangeA1) {
         }
         mx = Math.max(mx, wlen_(s));
       });
-      reqs.push({ updateDimensionProperties: { range: { sheetId: sid, dimension: 'COLUMNS', startIndex: t.firstCol - 1 + c, endIndex: t.firstCol + c }, properties: { pixelSize: Math.max(STYLE.colMin, Math.min(STYLE.colMax, mx * STYLE.px + STYLE.pad)) }, fields: 'pixelSize' } });
+      var wantPx = mx * STYLE.px + STYLE.pad;
+      if (flSpan && flSpan.row === t.headerRow && colIdx >= flSpan.c1 && colIdx <= flSpan.c2) {
+        wantPx = Math.max(wantPx, wlen_(disp[0][c]) * STYLE.px + STYLE.pad + 42);
+      }
+      reqs.push({ updateDimensionProperties: { range: { sheetId: sid, dimension: 'COLUMNS', startIndex: colIdx - 1, endIndex: colIdx }, properties: { pixelSize: Math.max(STYLE.colMin, Math.min(STYLE.colMax, wantPx)) }, fields: 'pixelSize' } });
     }
     // 見出しの行までを固定する。結合セルが固定の線をまたぐと Google が断るので、またぐ結合の終わりの行まで広げる
     var fr = t.headerRow;
@@ -115,11 +128,17 @@ function tidyRangeLegacy_(ctx, sh, rangeA1) {
     bodyRg.setNumberFormats(nf).setHorizontalAlignments(al);
   }
   if (t.totalRow) sh.getRange(t.totalRow, t.firstCol, 1, nc).setFontWeight('bold').setBackground(STYLE.totalBg);
-  // 列幅：中身に合わせる（上限・下限つき）
+  // 列幅：中身に合わせる（上限・下限つき・フィルター付き見出しは▼アイコン分を足す）
   var disp = sh.getRange(t.headerRow, t.firstCol, last - t.headerRow + 1, nc).getDisplayValues();
+  var flSpanL = filterSpanOf_(sh);
   for (var c = 0; c < nc; c++) {
-    var mx = 0; disp.forEach(function (row) { mx = Math.max(mx, wlen_(row[c])); });
-    sh.setColumnWidth(t.firstCol + c, Math.max(STYLE.colMin, Math.min(STYLE.colMax, mx * STYLE.px + STYLE.pad)));
+    var colIdxL = t.firstCol + c, mx = 0;
+    disp.forEach(function (row) { mx = Math.max(mx, wlen_(row[c])); });
+    var wantPxL = mx * STYLE.px + STYLE.pad;
+    if (flSpanL && flSpanL.row === t.headerRow && colIdxL >= flSpanL.c1 && colIdxL <= flSpanL.c2) {
+      wantPxL = Math.max(wantPxL, wlen_(disp[0][c]) * STYLE.px + STYLE.pad + 42);
+    }
+    sh.setColumnWidth(colIdxL, Math.max(STYLE.colMin, Math.min(STYLE.colMax, wantPxL)));
   }
   // 見出しの行までを固定する。結合セルが固定の線をまたぐと Google が断るので、またぐ結合の終わりの行まで広げる
   var fr = t.headerRow;
