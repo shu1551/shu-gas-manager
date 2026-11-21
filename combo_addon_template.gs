@@ -6,14 +6,15 @@
  */
 function onHome(e) { return comboAddonCard_(e, ''); }
 
-// 今開いているスプレッドシート（シートごとの許可は要らない。取れないときだけ 1 回の許可を求める）
+// 今開いているスプレッドシート（e.sheets に id/title があれば重い SpreadsheetApp 呼び出しを省く）
 function comboAddonTarget_(e) {
+  var s = (e && e.sheets) || {};
+  if (s.id && s.title) return { id: s.id, title: s.title };
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (ss) return { id: ss.getId(), title: ss.getName() };
+    if (ss) return { id: ss.getId(), title: ss.getName(), _ss: ss };
   } catch (err) {}
-  var s = (e && e.sheets) || {};
-  if (s.id) return { id: s.id, title: s.title };
+  if (s.id) return { id: s.id, title: s.title || '' };
   return {};
 }
 
@@ -25,15 +26,18 @@ function onFileScopeGranted(e) { return comboAddonCard_(e, ''); }
 // 表の形（見出し・列・合計行）とシートの一覧を覚えておき、2 回目からは読み直さない（読むと 0.9 秒かかる）。
 // 表の形を変えない手（書式・幅・色・縞・条件付き書式・固定・絞り込み・並べ替え）のときだけ覚えを残す
 var COMBO_ADDON_KEEPS_SHAPE = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|filter\.(?:on|off|where)|sort|tidy|sheet\.(?:gridlines|color|move)|book\.finish|audit\.check|protect\.|name\.|note\.(?:set|clear)|link\.(?:set|clear)|validation\.|print\.setup|chart\.)/;
+var COMBO_ADDON_LEARNED_CACHE_KEY = 'addon_learned_v1';
 function comboAddonKey_(tg, sheetName) { return 'addon_tbl:' + tg.id + ':' + sheetName; }
-function comboAddonInit_(tg) {
-  var sheetName = '';
-  try { sheetName = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName(); } catch (e0) {}
-  var cache = null;
-  try { cache = CacheService.getUserCache(); } catch (e1) {}
-  if (cache && sheetName) {
-    var hit = cache.get(comboAddonKey_(tg, sheetName));
-    if (hit) { try { var o = JSON.parse(hit); o._cached = true; return o; } catch (e2) {} }
+function comboAddonInit_(tg, optCache, optHitRaw, optSheetName) {
+  var sheetName = optSheetName || '';
+  if (!sheetName) {
+    try { sheetName = (tg._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName(); } catch (e0) {}
+  }
+  var cache = optCache || null;
+  if (!cache) { try { cache = CacheService.getUserCache(); } catch (e1) {} }
+  var hit = optHitRaw !== undefined ? optHitRaw : ((cache && sheetName) ? cache.get(comboAddonKey_(tg, sheetName)) : null);
+  if (hit) {
+    try { var o = JSON.parse(hit); o._cached = true; return o; } catch (e2) {}
   }
   var init = {lib_symbol}.comboInit({ targetId: tg.id });
   var keep = { target: init.target, table: init.table, sheets: init.sheets };
@@ -48,8 +52,8 @@ function comboAddonEsc_(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
 }
 
-function comboAddonCard_(e, msg, suggestBtn) {
-  var tg = comboAddonTarget_(e);
+function comboAddonCard_(e, msg, suggestBtn, optTg) {
+  var tg = optTg || comboAddonTarget_(e);
   var sec = CardService.newCardSection();
   if (!tg.id) {
     sec.addWidget(CardService.newTextParagraph().setText('このスプレッドシートで使うには、1 回だけ許可が要ります。'));
@@ -75,75 +79,100 @@ function comboAddonCard_(e, msg, suggestBtn) {
   return CardService.newCardBuilder().setHeader(CardService.newCardHeader().setTitle('GASコンボ')).addSection(sec).build();
 }
 
-function comboAddonReply_(e, msg, suggestBtn) {
+function comboAddonReply_(e, msg, suggestBtn, optTg) {
   return CardService.newActionResponseBuilder()
-    .setNavigation(CardService.newNavigation().updateCard(comboAddonCard_(e, msg, suggestBtn))).build();
+    .setNavigation(CardService.newNavigation().updateCard(comboAddonCard_(e, msg, suggestBtn, optTg))).build();
 }
 
-// 覚えた言い方（大元ライブラリに使う人ごとに置く。操作窓と同じ置き場）
-function comboAddonLoadLearned_() {
+// 覚えた言い方（UserCache にキャッシュして毎回のライブラリ＋PropertiesService 往復を省く）
+function comboAddonLoadLearned_(optCache, optCachedRaw) {
   try {
+    if (optCachedRaw !== undefined && optCachedRaw !== null) {
+      ComboPlanner.setLearned(JSON.parse(optCachedRaw));
+      return;
+    }
+    var cache = optCache || null;
+    if (!cache) { try { cache = CacheService.getUserCache(); } catch (e0) {} }
+    var hit = cache ? cache.get(COMBO_ADDON_LEARNED_CACHE_KEY) : null;
+    if (hit !== null && hit !== undefined) {
+      ComboPlanner.setLearned(JSON.parse(hit));
+      return;
+    }
     var r = {lib_symbol}.comboGetLearned();
-    if (r && r.learned) ComboPlanner.setLearned(r.learned);
+    var learned = (r && r.learned) ? r.learned : {};
+    ComboPlanner.setLearned(learned);
+    try { if (cache) cache.put(COMBO_ADDON_LEARNED_CACHE_KEY, JSON.stringify(learned), 600); } catch (e1) {}
   } catch (e) {}
 }
 var COMBO_ADDON_SUGGEST_KEY = 'addon_suggest';
 
 // 候補の［はい］: 出した候補を撃ち、その言い方を覚える
 function onAddonAcceptSuggest(e) {
-  var t0 = Date.now(), res, sg = null;
-  try { sg = JSON.parse(CacheService.getUserCache().get(COMBO_ADDON_SUGGEST_KEY) || 'null'); } catch (eC) {}
+  var t0 = Date.now(), res, sg = null, tg = null;
+  var cache = null;
+  try { cache = CacheService.getUserCache(); sg = JSON.parse((cache && cache.get(COMBO_ADDON_SUGGEST_KEY)) || 'null'); } catch (eC) {}
   if (!sg || !sg.ops) return comboAddonReply_(e, '候補の期限が切れました。もう一度頼んでください。');
   try {
-    var tg = comboAddonTarget_(e);
-    var init = comboAddonInit_(tg);
+    tg = comboAddonTarget_(e);
+    var init = comboAddonInit_(tg, cache);
     var curSheet = init.target && init.target.sheet;
-    res = {lib_symbol}.comboRunAsk({ ops: sg.ops, fastUndo: true, targetId: tg.id, sheet: curSheet, table: init.table, sheets: init.sheets });
+    res = {lib_symbol}.comboRunAsk({ ops: sg.ops, fastUndo: true, targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: init.table, sheets: init.sheets });
     if (res && res.ok !== false) {
       {lib_symbol}.comboLearn({ ask: sg.ask, ops: sg.ops, key: ComboPlanner.learnKey(sg.ask) });
+      try { if (cache) cache.remove(COMBO_ADDON_LEARNED_CACHE_KEY); } catch (eLC) {}
       res.text = (res.text || '') + '\n覚えました（次から「' + sg.ask + '」は一発で撃ちます）';
     }
-    try { CacheService.getUserCache().remove(COMBO_ADDON_SUGGEST_KEY); } catch (eR) {}
+    try { if (cache) cache.remove(COMBO_ADDON_SUGGEST_KEY); } catch (eR) {}
     if (!sg.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); })) comboAddonForget_(tg, curSheet);
   } catch (err) {
     res = { ok: false, text: String(err && err.message || err) };
   }
-  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0));
+  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0), false, tg);
 }
 
 function comboAddonSecs_(t0) { return '（合計 ' + ((Date.now() - t0) / 1000).toFixed(2) + ' 秒）'; }
 
 function onAddonRun(e) {
-  var t0 = Date.now(), res;
+  var t0 = Date.now(), res, tg = null;
   var f = (e && e.commonEventObject && e.commonEventObject.formInputs) || {};
   var ask = (f.ask && f.ask.stringInputs && f.ask.stringInputs.value[0]) || '';
-  // Enter の確定と「実行」ボタンが続けて来ても 2 回撃たない（同じ頼みが 3 秒以内なら 2 回目は捨てる）
-  try {
-    var cache = CacheService.getUserCache(), key = 'addon_last_ask';
-    var last = cache.get(key);
-    if (last && last === ask) return comboAddonReply_(e, '（同じ頼みを続けて受けたので、2 回目は撃っていません）');
-    cache.put(key, ask, 3);
-  } catch (eC) {}
   if (!String(ask).trim()) return comboAddonReply_(e, '');
   try {
-    var tg = comboAddonTarget_(e);
-    // 表の形（見出し・列・合計行）とシートの一覧を読み、棚に当てる。当たれば AI を通さずにそのまま撃つ
+    tg = comboAddonTarget_(e);
     var tA = Date.now();
-    var init = comboAddonInit_(tg);
+    var sheetName = '';
+    try { sheetName = (tg._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName(); } catch (eS) {}
+    // UserCache を getAll 1 往復でまとめて引く（二重送信チェック・表キャッシュ・学習済み言い方）
+    var cache = null, bag = {};
+    var dedupKey = 'addon_last_ask';
+    var tblKey = sheetName ? comboAddonKey_(tg, sheetName) : '';
+    try {
+      cache = CacheService.getUserCache();
+      var keys = [dedupKey, COMBO_ADDON_LEARNED_CACHE_KEY];
+      if (tblKey) keys.push(tblKey);
+      bag = cache.getAll(keys) || {};
+      if (bag[dedupKey] && bag[dedupKey] === ask) {
+        return comboAddonReply_(e, '（同じ頼みを続けて受けたので、2 回目は撃っていません）', false, tg);
+      }
+      cache.put(dedupKey, ask, 3);
+    } catch (eC) {}
+
+    // 表の形（見出し・列・合計行）とシートの一覧を読み、棚に当てる。当たれば AI を通さずにそのまま撃つ
+    var init = comboAddonInit_(tg, cache, tblKey ? (bag[tblKey] || null) : null, sheetName);
     var tB = Date.now();
-    var curSheet = init.target && init.target.sheet;
-    comboAddonLoadLearned_();
+    var curSheet = (init.target && init.target.sheet) || sheetName;
+    comboAddonLoadLearned_(cache, bag[COMBO_ADDON_LEARNED_CACHE_KEY]);
     var p = ComboPlanner.plan(ask, 'sheet', init.table, init.sheets, curSheet, null);
     var tC = Date.now();
     if (!(p && p.fire) && p && p.suggest && p.suggest.length) {
-      try { CacheService.getUserCache().put(COMBO_ADDON_SUGGEST_KEY, JSON.stringify({ ask: ask, ops: p.suggest }), 600); } catch (eS) {}
+      try { if (cache) cache.put(COMBO_ADDON_SUGGEST_KEY, JSON.stringify({ ask: ask, ops: p.suggest }), 600); } catch (eS2) {}
       return comboAddonReply_(e, '棚に当たりませんでした。近い候補: ' + ComboPlanner.formatOpsShort(p.suggest) +
-        '\nこれを撃ちますか？（［はい］で撃って、この言い方を覚えます）\n' + comboAddonSecs_(t0), true);
+        '\nこれを撃ちますか？（［はい］で撃って、この言い方を覚えます）\n' + comboAddonSecs_(t0), true, tg);
     }
     if (p && p.fire && p.ops && p.ops.length) {
-      res = {lib_symbol}.comboRunAsk({ ops: p.ops, fastUndo: true, targetId: tg.id, sheet: curSheet, table: init.table, sheets: init.sheets });
+      res = {lib_symbol}.comboRunAsk({ ops: p.ops, fastUndo: true, targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: init.table, sheets: init.sheets });
     } else {
-      res = {lib_symbol}.comboRunAsk({ ask: ask, fastUndo: true, targetId: tg.id, sheet: curSheet });   // 棚に当たらなければいつもの道（AI・郵便受け）
+      res = {lib_symbol}.comboRunAsk({ ask: ask, fastUndo: true, targetId: tg.id, targetName: tg.title, sheet: curSheet });   // 棚に当たらなければいつもの道（AI・郵便受け）
     }
     var keepsShape = !!(p && p.fire && p.ops && p.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); }));
     if (!keepsShape) comboAddonForget_(tg, curSheet);
@@ -151,18 +180,20 @@ function onAddonRun(e) {
   } catch (err) {
     res = { ok: false, text: String(err && err.message || err) };
   }
-  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0));
+  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0), false, tg);
 }
 
 function onAddonUndo(e) {
-  var t0 = Date.now(), res;
+  var t0 = Date.now(), res, tgU = null;
   try {
-    var tgU = comboAddonTarget_(e);
+    tgU = comboAddonTarget_(e);
     res = {lib_symbol}.comboUndo({ targetId: tgU.id });
-    try { comboAddonForget_(tgU, SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName()); } catch (eF) {}
+    if (res && res.ok && !res.fast) {
+      try { comboAddonForget_(tgU, (tgU._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName()); } catch (eF) {}
+    }
   }
   catch (err) { res = { ok: false, text: String(err && err.message || err) }; }
-  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0));
+  return comboAddonReply_(e, (res.text || res.error || '') + '\n' + comboAddonSecs_(t0), false, tgU);
 }
 
 // ---------------------------------------------------------------- 操作窓（前のサイドバーと同じ HTML の画面を別の窓で開く）
