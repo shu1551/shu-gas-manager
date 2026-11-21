@@ -304,10 +304,16 @@
     gap: 3px;
     margin-bottom: 6px;
   }
+  .quick-grid-4 {
+    grid-template-columns: repeat(4, 1fr);
+  }
   .quick-grid .btn {
     padding: 5px 2px;
     font-size: 11.2px;
     color: #333333;
+  }
+  .quick-grid-4 .btn {
+    font-size: 10.6px;
   }
   .auto-status-box {
     display: flex;
@@ -526,14 +532,13 @@
         <!-- Sheetモード -->
         <div id="autoSheetPanel">
           <button id="btnSeiri" class="btn btn-hero" type="button">【一発整形】データ整理 ＋ 表を整える</button>
-          <div class="quick-grid">
-            <button class="btn" type="button" data-action="look">読込</button>
-            <button class="btn" type="button" data-action="undo">戻す</button>
+          <div class="quick-grid quick-grid-4">
             <button class="btn" type="button" data-op='[{"shelf":"total"}]'>合計行</button>
             <button class="btn" type="button" data-action="autoWidth">列幅自動</button>
+            <button class="btn" type="button" data-op='[{"shelf":"dedupe"}]'>重複削除</button>
+            <button class="btn" type="button" data-action="borders" title="複数セル選択中は選択範囲、1セルなら表全体に罫線を引く">罫線</button>
             <button class="btn" type="button" data-action="freezeHeader">見出し固定</button>
             <button class="btn" type="button" data-op='[{"shelf":"unfreeze"}]'>固定解除</button>
-            <button class="btn" type="button" data-op='[{"shelf":"dedupe"}]'>重複削除</button>
             <button class="btn" type="button" data-op='[{"shelf":"banding.add","theme":"blue"}]'>交互の色</button>
             <button class="btn" type="button" data-op='[{"shelf":"banding.remove"}]'>交互解除</button>
           </div>
@@ -2670,6 +2675,44 @@
     onRunOps([{ shelf: "freeze", rows: hr }], "見出し固定");
   }
 
+  function onBorders() {
+    var runWithSel = function(selA1) {
+      var s = String(selA1 || "").trim().toUpperCase();
+      var isMulti = /^[A-Z]{1,3}[0-9]{1,7}:[A-Z]{1,3}[0-9]{1,7}$/.test(s);
+      if (isMulti) {
+        var pts = s.split(":");
+        if (pts[0] !== pts[1]) {
+          onRunOps([{ shelf: "format", range: s, borders: true }], "罫線 (" + s + ")");
+          return;
+        }
+      }
+      var tblRange = resolveTableRangeStr(true);
+      if (tblRange) {
+        onRunOps([{ shelf: "format", range: tblRange, borders: true }], "罫線 (表全体)");
+        return;
+      }
+      if (s) {
+        onRunOps([{ shelf: "format", range: s, borders: true }], "罫線 (" + s + ")");
+        return;
+      }
+      appendLog(els.chatLog, "is-err", "⚠ 罫線を引く範囲が見つかりません", "範囲を選択するか、表を読み込んでから押してください。");
+    };
+    requestLiveSelection(function(live) {
+      if (live && live.range) {
+        if (live.sheet && live.sheet !== state.curSheet && typeof state.sheetIdMap[live.sheet] === "number") {
+          state.curSheet = live.sheet;
+          syncSheetSelects();
+        }
+        state.selection = live.range.toUpperCase();
+        state.scope = Planner.parseSelectionScope ? Planner.parseSelectionScope(state.selection) : {};
+        updateSelectionLabel();
+        runWithSel(state.selection);
+      } else {
+        runWithSel(els.chkSync.checked ? state.selection : "");
+      }
+    });
+  }
+
   function onFindShelf() {
     var txt = (els.askInput.value || "").trim();
     var kind = (state.target && state.target.kind) || "sheet";
@@ -2997,6 +3040,8 @@
         onAutoWidth();
       } else if (action === "freezeHeader") {
         onFreezeHeader();
+      } else if (action === "borders") {
+        onBorders();
       } else if (action === "findShelf") {
         onFindShelf();
       }
