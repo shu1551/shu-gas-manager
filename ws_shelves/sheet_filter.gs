@@ -148,6 +148,23 @@ SHELF['tidy'] = function (ctx, op) {
   chg_(ctx, sh, op.range || 'A1', '書式をそろえた');
 };
 
+// 昇順または降順の行番号配列を連続ラン単位で後ろから一括削除する
+function deleteRowRuns_(sh, rowNums) {
+  if (!rowNums || !rowNums.length) return;
+  var seen = {}, desc = [];
+  for (var i = 0; i < rowNums.length; i++) {
+    var n = rowNums[i];
+    if (!seen[n]) { seen[n] = 1; desc.push(n); }
+  }
+  desc.sort(function (a, b) { return b - a; });
+  for (var di = 0; di < desc.length; ) {
+    var runEnd = desc[di], runStart = runEnd;
+    while (di + 1 < desc.length && desc[di + 1] === runStart - 1) { runStart = desc[++di]; }
+    sh.deleteRows(runStart, runEnd - runStart + 1);
+    di++;
+  }
+}
+
 // 棚: seiri
 // 題: 表のデータを整理する
 // 分類: 整える
@@ -200,7 +217,7 @@ SHELF['seiri'] = function (ctx, op) {
     // 表の途中の空行だけ（findTable_ が最後の非空行までを表とするので、すべて途中）
     if (blanks.length) {
       guardDelete_(ctx, '空行 ' + blanks.join('・') + ' 行目を詰めます', wideRowCount_(t2, blanks.length), blanks.length + ' 行');
-      for (var k = blanks.length - 1; k >= 0; k--) sh.deleteRow(blanks[k]);
+      deleteRowRuns_(sh, blanks);
       chg_(ctx, sh, blanks.join('・') + ' 行目', '空行を削除（' + blanks.length + ' 行）');
       if (_TBL_CACHE) _TBL_CACHE = { _once: true };
     }
@@ -214,7 +231,7 @@ SHELF['seiri'] = function (ctx, op) {
     }
     if (dups.length) {
       guardDelete_(ctx, '全列が同じ重複行 ' + dups.join('・') + ' 行目を消します', wideRowCount_(t2, dups.length), dups.length + ' 行');
-      for (var k2 = dups.length - 1; k2 >= 0; k2--) sh.deleteRow(dups[k2]);
+      deleteRowRuns_(sh, dups);
       chg_(ctx, sh, dups.join('・') + ' 行目', '重複行を削除（' + dups.length + ' 行）');
       if (_TBL_CACHE) _TBL_CACHE = { _once: true };
     }
@@ -357,7 +374,7 @@ SHELF['dedupe'] = function (ctx, op) {
     return;
   }
   guardDelete_(ctx, (colIndices.length ? '指定列が同じ' : '全列が同じ') + '重複行 ' + dups.join('・') + ' 行目を消します', wideRowCount_(t, dups.length), dups.length + ' 行');
-  for (var k = dups.length - 1; k >= 0; k--) sh.deleteRow(dups[k]);
+  deleteRowRuns_(sh, dups);
   chg_(ctx, sh, dups.join('・') + ' 行目', '重複行を削除（' + dups.length + ' 行）');
 };
 

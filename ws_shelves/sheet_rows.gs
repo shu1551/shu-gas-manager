@@ -17,7 +17,7 @@ SHELF['rows'] = function (ctx, op) {
   var isCol = !!op.cols, list = (isCol ? op.cols : op.rows) || [];
   var tw;
   var getTw = function () { if (tw === undefined) tw = findTable_(sh); return tw; };
-  var colRef = function (x) {
+  var resolveCol = function (x) {
     if (typeof x === 'number') return x;
     if (/^[A-Za-z]{1,3}$/.test(String(x).trim())) return colNum_(x);
     return getTw() ? colIndexOf_(getTw(), x) : colNum_(x);
@@ -25,25 +25,37 @@ SHELF['rows'] = function (ctx, op) {
   if (act === 'insert') {
     var at = op.at || list[0]; need_({ shelf: 'rows', at: at }, ['at']);
     var cnt = op.count || 1;
-    var atNum = isCol ? colRef(at) : parseInt(at);
+    var atNum = isCol ? resolveCol(at) : parseInt(at);
     if (isCol) sh.insertColumnsBefore(atNum, cnt); else sh.insertRowsBefore(atNum, cnt);
     chg_(ctx, sh, (isCol ? (typeof at === 'number' ? colLetter_(at) : at) + '列の前' : at + '行目の前'), cnt + ' ' + (isCol ? '列' : '行') + '挿入');
   } else if (act === 'delete') {
     if (!list.length) throw new ArgError('棚「rows」に rows（行番号の配列）か cols が要ります');
-    var nums = list.map(function (x) { return isCol ? colRef(x) : parseInt(x); }).sort(function (a, b) { return b - a; });
+    var seenN = {}, nums = [];
+    list.forEach(function (x) {
+      var n = isCol ? resolveCol(x) : parseInt(x, 10);
+      if (!seenN[n]) { seenN[n] = 1; nums.push(n); }
+    });
+    nums.sort(function (a, b) { return b - a; });
     var max = isCol ? sh.getMaxColumns() : sh.getMaxRows();
     nums.forEach(function (n) { if (n < 1 || n > max) throw new ArgError((isCol ? '列' : '行') + '番号 ' + n + ' は範囲外です（1〜' + max + '）'); });
     var peek = nums.map(function (n) { var v = isCol ? sh.getRange(1, n, Math.min(sh.getLastRow() || 1, 50), 1).getDisplayValues() : sh.getRange(n, 1, 1, Math.max(1, sh.getLastColumn())).getDisplayValues()[0]; return (isCol ? colLetter_(n) + '列' : n + '行目') + '「' + String(isCol ? v.map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('/') : v.filter(Boolean).slice(0, 3).join('/')).slice(0, 24) + '」'; });
     var wide = false;   // 表の外まで／明細の半分より多くを消す削除は、ok=True でも 1 回止める
     if (getTw()) wide = isCol ? nums.some(function (n) { return n < tw.firstCol || n > tw.lastCol; }) : (nums.some(function (n) { return n < tw.headerRow || n > (tw.totalRow || tw.lastData); }) || wideRowCount_(tw, nums.length));
     guardDelete_(ctx, peek.reverse().join('、') + ' を削除します', wide, nums.length + (isCol ? ' 列' : ' 行'));
-    nums.forEach(function (n) { if (isCol) sh.deleteColumn(n); else sh.deleteRow(n); });
+    // 連続した行・列は後ろから一括削除して API 往復回数を削減
+    for (var di = 0; di < nums.length; ) {
+      var runEnd = nums[di], runStart = runEnd;
+      while (di + 1 < nums.length && nums[di + 1] === runStart - 1) { runStart = nums[++di]; }
+      if (isCol) sh.deleteColumns(runStart, runEnd - runStart + 1);
+      else sh.deleteRows(runStart, runEnd - runStart + 1);
+      di++;
+    }
     chg_(ctx, sh, nums.slice().reverse().join('・') + (isCol ? ' 列' : ' 行目'), '削除');
   } else if (act === 'move') {
     need_(op, ['from', 'to']);
     // to＝動かした後にその列（行）が来る位置。moveColumns/moveRows は「その位置の手前へ」入れるので、右（下）へ動かすときは動かす幅だけ先へ渡す
     try {
-      if (isCol) { var f = colRef(op.from), to = colRef(op.to); sh.moveColumns(sh.getRange(1, f, 1, 1), to > f ? to + 1 : to); }
+      if (isCol) { var f = resolveCol(op.from), to = resolveCol(op.to); sh.moveColumns(sh.getRange(1, f, 1, 1), to > f ? to + 1 : to); }
       else { var fr = parseInt(op.from), cn = op.count || 1, tr = parseInt(op.to); sh.moveRows(sh.getRange(fr, 1, cn, 1), tr > fr ? tr + cn : tr); }
       SpreadsheetApp.flush();   // 結合をまたぐ移動の失敗は、書き込みが反映されるここで出る（棚の外で出ると「内部のエラー」になる）
     } catch (e) {

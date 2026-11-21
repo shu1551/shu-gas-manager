@@ -1,16 +1,1 @@
-{
-  "タイトル真っ赤っかに": [
-    {
-      "shelf": "format",
-      "title": true,
-      "color": "赤"
-    }
-  ],
-  "表題どどーんと緑に": [
-    {
-      "shelf": "format",
-      "title": true,
-      "color": "緑"
-    }
-  ]
-}
+{}

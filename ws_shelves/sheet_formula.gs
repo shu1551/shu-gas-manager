@@ -343,27 +343,49 @@ SHELF['subtotal'] = function (ctx, op) {
   var ki = colIndexOf_(t, op.key_col);
   var sumIndices = op.sum_cols ? op.sum_cols.map(function (c) { return colIndexOf_(t, c); }) : [];
   if (!sumIndices.length) {
-    for (var c = t.firstCol; c <= t.lastCol; c++) if (isNumberCol_(t, c)) sumIndices.push(c);
+    for (var c = t.firstCol; c <= t.lastCol; c++) if (!isNoCol_(t, c) && isNumberCol_(t, c)) sumIndices.push(c);
   }
   var vals = sh.getRange(t.firstData, ki, t.lastData - t.firstData + 1, 1).getValues();
-  var breaks = [];
-  for (var i = 1; i < vals.length; i++) {
-    if (vals[i][0] !== vals[i - 1][0] && vals[i][0] !== '' && vals[i - 1][0] !== '') {
-      breaks.push(t.firstData + i);
+  // 連続する非空キーの区間をすべて抽出（最終区分にも小計行を入れる）
+  var groups = [], cur = null;
+  for (var i = 0; i < vals.length; i++) {
+    var kv = vals[i][0], rowNo = t.firstData + i;
+    if (kv === '' || kv === null || kv === undefined) {
+      if (cur) { groups.push(cur); cur = null; }
+      continue;
+    }
+    var keyStr = String(kv);
+    if (!cur) cur = { sR: rowNo, eR: rowNo, key: keyStr };
+    else if (cur.key === keyStr) cur.eR = rowNo;
+    else { groups.push(cur); cur = { sR: rowNo, eR: rowNo, key: keyStr }; }
+  }
+  if (cur) groups.push(cur);
+  if (!groups.length) {
+    note_(ctx, '小計を入れるデータがありません');
+    return;
+  }
+  var nc = t.lastCol - t.firstCol + 1;
+  var labelCol = t.firstCol;
+  if (sumIndices.indexOf(labelCol) >= 0) {
+    for (var lc = t.firstCol; lc <= t.lastCol; lc++) {
+      if (sumIndices.indexOf(lc) < 0) { labelCol = lc; break; }
     }
   }
-  var inserted = 0, lastR = t.firstData;
-  for (var b = breaks.length - 1; b >= 0; b--) {
-    var rowIdx = breaks[b];
-    sh.insertRowBefore(rowIdx);
-    sh.getRange(rowIdx, t.firstCol).setValue('小計').setFontWeight('bold');
+  // 後ろの区間から順に挿入すると、前の区間の行番号がズレない
+  for (var b = groups.length - 1; b >= 0; b--) {
+    var g = groups[b];
+    sh.insertRowAfter(g.eR);
+    var rowIdx = g.eR + 1;
+    var rowArr = [];
+    for (var ci = 0; ci < nc; ci++) rowArr.push('');
+    rowArr[labelCol - t.firstCol] = '小計';
     sumIndices.forEach(function (si) {
       var cl = colLetter_(si);
-      sh.getRange(rowIdx, si).setFormula('=SUBTOTAL(9, ' + cl + lastR + ':' + cl + (rowIdx - 1) + ')').setFontWeight('bold');
+      rowArr[si - t.firstCol] = '=SUBTOTAL(9, ' + cl + g.sR + ':' + cl + g.eR + ')';
     });
-    inserted++;
+    sh.getRange(rowIdx, t.firstCol, 1, nc).setValues([rowArr]).setFontWeight('bold');
   }
-  chg_(ctx, sh, '表', inserted + ' か所に小計行を挿入');
+  chg_(ctx, sh, '表', groups.length + ' か所に小計行を挿入');
 };
 
 // 棚: formula.guard

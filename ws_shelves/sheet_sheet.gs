@@ -193,7 +193,8 @@ SHELF['sheet.merge'] = function (ctx, op) {
     });
   } else {
     ss.getSheets().forEach(function (s) {
-      if (s.getName() !== intoName && !s.isSheetHidden()) srcSheets.push(s);
+      var nm = s.getName();
+      if (nm !== intoName && nm !== '_GASクイックの控え' && !s.isSheetHidden()) srcSheets.push(s);
     });
   }
   if (!srcSheets.length) throw new ArgError('結合する元シートが見つかりません');
