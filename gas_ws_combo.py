@@ -525,6 +525,11 @@ def push_combo_dev(client=None, state_path=None, asks=None):
         futs = [ex.submit(_send_lib), ex.submit(_send_addon)]
         for f in futs:
             f.result()
+    if client.__class__.__name__ == "GasClient":
+        try:
+            deliver_bridge_token(client, addon_sid, st, spath)
+        except Exception as e_tok:
+            checks = list(checks or []) + [f"直結の合い言葉を操作窓へ渡せませんでした: {e_tok}"]
     return {"ok": True, "mode": "push", "checks": checks, "leak": leak_line, "engineLibId": lib_id, "addon": addon_sid, "window": webapp_url,
             "seconds": round(_time.time() - t0, 1),
             "next": "アドオン（カード・操作窓）は次に開いたときから新しいコード。テンプレートは配る節目に combo template"}
@@ -820,6 +825,13 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
         spath.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+    if client.__class__.__name__ == "GasClient":
+        try:
+            ensure_bridge_token(window_json)
+            st.pop("bridge_token_sent", None)   # 操作窓を作り直したときは渡し直す
+            deliver_bridge_token(client, sid, st, spath)
+        except Exception:
+            pass
     res = {"ok": True, "mode": "addon", "scriptId": sid, "engineLibId": lib_id, "engineVersion": ver, "window": webapp_url,
            "editor": f"https://script.google.com/home/projects/{sid}/edit"}
     # 郵便受け（AI 連携の PC の受け手）を、ログオンのたびに自分で起きるようにして今も起こす（テスト用の偽クライアント時は本番スタートアップを触らない）
@@ -2214,6 +2226,54 @@ def _open_watch_log(log_path=None, max_bytes=512 * 1024, keep_bytes=128 * 1024):
 COMBO_WATCH_PORT = 18766
 NATIVE_HOST_NAME = "com.shu.gas_combo_host"
 EXT_FIXED_ID = "mbkcmenmaeaiemdppphmbokhbfckpjhm"
+
+
+BRIDGE_TOKEN_PATH = HERE / ".combo_bridge_token"
+
+
+def ensure_bridge_token(window_json=None):
+    """拡張の直結の合い言葉を用意し、拡張のフォルダ（combo_window.json）にも書く。
+    操作窓は同じ合い言葉を人ごとの設定（UserProperties）から受け取り、拡張は合わない頼みを中継しない
+    ＝ほかの人のアドオンの窓から直結 AI を呼ばせない。合い言葉は手元にだけ置く（.gitignore 済み・公開しない）。"""
+    import secrets
+    tok = ""
+    try:
+        tok = BRIDGE_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except Exception:
+        tok = ""
+    if not re.match(r"^[A-Za-z0-9_-]{32,}$", tok):
+        tok = secrets.token_urlsafe(32)
+        BRIDGE_TOKEN_PATH.write_text(tok, encoding="utf-8")
+    wpath = Path(window_json) if window_json else HERE / "ws_browser_ext" / "combo_window.json"
+    try:
+        cur = json.loads(wpath.read_text(encoding="utf-8")) if wpath.exists() else {}
+        if not isinstance(cur, dict):
+            cur = {}
+    except Exception:
+        cur = {}
+    if cur.get("token") != tok:
+        cur["token"] = tok
+        try:
+            wpath.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    return tok
+
+
+def deliver_bridge_token(client, addon_sid, st, spath):
+    """合い言葉を操作窓（アドオン経由で人ごとの設定）へ渡す。渡し済みなら何もしない。"""
+    tok = ensure_bridge_token()
+    import hashlib
+    h = hashlib.sha256(tok.encode("utf-8")).hexdigest()[:16]
+    if not addon_sid or st.get("bridge_token_sent") == h:
+        return False
+    client.run_function(addon_sid, "comboSaveConfig", [{"bridgeToken": tok}], fast=True, force=True, timeout=30)
+    st["bridge_token_sent"] = h
+    try:
+        Path(spath).write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return True
 
 
 def install_native_host(extra_ext_ids=None):

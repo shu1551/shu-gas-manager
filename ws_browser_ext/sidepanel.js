@@ -64,9 +64,26 @@ function isAllowedSidepanelOrigin(origin) {
   return o === "https://script.google.com" || GOOGLE_SANDBOX_RE.test(o);
 }
 
+// 直結の合い言葉（combo_window.json）。本人の操作窓だけが同じ物を持つ
+async function bridgeToken() {
+  try {
+    const res = await fetch(chrome.runtime.getURL("combo_window.json"), { cache: "no-store" });
+    if (!res.ok) return "";
+    const j = await res.json();
+    return String((j && j.token) || "");
+  } catch (_e) {
+    return "";
+  }
+}
+const NEEDS_TOKEN = { GAS_COMBO_PING_LOCAL: 1, GAS_COMBO_DIRECT_AI: 1, GAS_COMBO_FETCH_RECORDED_MACROS: 1 };
+
 window.addEventListener("message", async (ev) => {
   const d = ev && ev.data;
   if (!d || !isAllowedSidepanelOrigin(ev.origin)) return;
+  if (NEEDS_TOKEN[d.type]) {
+    const t = await bridgeToken();
+    if (!t || d.token !== t) return;
+  }
   const targetOrigin = ev.origin && ev.origin !== "null" ? ev.origin : "*";
   if (d.type === "GAS_COMBO_PING_LOCAL") {
     const reqId = String(d.reqId || "");

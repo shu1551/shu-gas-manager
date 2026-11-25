@@ -223,6 +223,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
     return true;
   }
+  if (msg && msg.type === "GAS_COMBO_GET_TOKEN_BG") {
+    fetch(chrome.runtime.getURL("combo_window.json"), { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => sendResponse({ token: String((j && j.token) || "") }))
+      .catch(() => sendResponse({ token: "" }));
+    return true;
+  }
   if (msg && msg.type === "GAS_COMBO_PING_LOCAL_BG") {
     pingDirectLocal(false).then((res) => {
       sendResponse(res);

@@ -1826,6 +1826,7 @@ function comboGetRawConfig_(optAllProps) {
     apiKey: '',
     geminiKey: '',
     claudeKey: '',
+    bridgeToken: '',
     backupDefault: false
   };
   try {
@@ -1847,6 +1848,8 @@ function comboSanitizeConfig_(raw) {
     aiMode: raw.aiMode || 'postbox',
     aiModel: raw.aiModel || 'sonnet',
     backupDefault: !!raw.backupDefault,
+    // 拡張の直結の合い言葉（人ごとの設定にだけ置く。本人の操作窓だけが受け取り、拡張へ頼みと一緒に渡す）
+    bridgeToken: String(raw.bridgeToken || ''),
     hasApiKey: !!comboResolveApiKey_(raw),
     hasGeminiKey: !!comboResolveApiKey_({ aiMode: 'api_gemini', geminiKey: raw.geminiKey, apiKey: raw.apiKey }),
     hasClaudeKey: !!comboResolveApiKey_({ aiMode: 'api_claude', claudeKey: raw.claudeKey, apiKey: raw.apiKey })
@@ -1867,7 +1870,7 @@ function comboGetConfig() {
 function comboSaveConfig(cfg) {
   cfg = cfg || {};
   var cur = comboGetRawConfig_();
-  ['aiMode', 'aiModel', 'apiKey', 'geminiKey', 'claudeKey', 'backupDefault'].forEach(function (k) {
+  ['aiMode', 'aiModel', 'apiKey', 'geminiKey', 'claudeKey', 'bridgeToken', 'backupDefault'].forEach(function (k) {
     if (cfg[k] !== undefined) cur[k] = cfg[k];
   });
   cur.backupDefault = !!cur.backupDefault;

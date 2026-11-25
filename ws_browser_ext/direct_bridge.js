@@ -33,9 +33,38 @@
     return _trustedWindowPromise;
   }
 
+  // 直結の合い言葉（py gas.py combo addon / combo push が combo_window.json に書く）。
+  // 本人の操作窓だけが同じ合い言葉を持つ＝ほかの人のアドオンの窓からは PC の AI・記録取込を呼べない
+  let _tokenPromise = null;
+  function bridgeToken() {
+    if (!_tokenPromise) {
+      // 拡張のファイルはバックグラウンドに読んでもらう（ページの側からは読めないことがある）
+      _tokenPromise = new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ type: "GAS_COMBO_GET_TOKEN_BG" }, (res) => {
+            void chrome.runtime.lastError;
+            resolve(String((res && res.token) || ""));
+          });
+        } catch (_e) {
+          resolve("");
+        }
+      }).then((t) => {
+        if (!t) _tokenPromise = null;   // まだ無ければ次の頼みで読み直す
+        return t;
+      });
+    }
+    return _tokenPromise;
+  }
+  async function tokenOk(d) {
+    const t = await bridgeToken();
+    return !!t && typeof d.token === "string" && d.token === t;
+  }
+  const NEEDS_TOKEN = { GAS_COMBO_PING_LOCAL: 1, GAS_COMBO_DIRECT_AI: 1, GAS_COMBO_FETCH_RECORDED_MACROS: 1 };
+
   window.addEventListener("message", async (ev) => {
     const d = ev && ev.data;
     if (!d || !isAllowedMessageOrigin(ev.origin)) return;
+    if (NEEDS_TOKEN[d.type] && !(await tokenOk(d))) return;
     const targetOrigin = ev.origin && ev.origin !== "null" ? ev.origin : "*";
 
     if (d.type === "GAS_COMBO_PING_LOCAL") {

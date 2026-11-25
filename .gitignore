@@ -62,3 +62,4 @@ ws_browser_ext/combo_window.json
 .ws_direct_fp.json
 .native_host.bat
 .native_host_manifest.json
+.combo_bridge_token

@@ -1331,6 +1331,7 @@
     if (!cfg || typeof cfg !== "object") return;
     if (cfg.aiMode) state.config.aiMode = cfg.aiMode;
     if (cfg.aiModel) state.config.aiModel = cfg.aiModel;
+    if ("bridgeToken" in cfg) state.config.bridgeToken = String(cfg.bridgeToken || "");
     var bkp = ("backupDefault" in cfg) ? cfg.backupDefault : cfg.backup;
     if (typeof bkp === "boolean") {
       state.config.backupDefault = bkp;
@@ -2829,6 +2830,23 @@
     try { window.top.postMessage({ type: "GAS_COMBO_GET_SEL" }, "*"); } catch (e) { finish(null); }
   }
 
+  // 合い言葉つきの頼みは、いちばん外の窓が Google（シート・操作窓）のときだけ、その相手にだけ送る
+  function bridgeTopOrigin() {
+    try {
+      var ao = location.ancestorOrigins;
+      var top = ao && ao.length ? String(ao[ao.length - 1]) : "";
+      if (top === "https://docs.google.com" || top === "https://script.google.com" ||
+          top === "chrome-extension://mbkcmenmaeaiemdppphmbokhbfckpjhm") return top;
+    } catch (e) {}
+    return "";
+  }
+  function postToBridge(msg) {
+    var to = bridgeTopOrigin();
+    if (!to) throw new Error("bridge top is not Google");
+    msg.token = (state.config && state.config.bridgeToken) || "";
+    window.top.postMessage(msg, to);
+  }
+
   function canUseDirectLocalAi() {
     if (typeof window === "undefined" || !window.top || window.top === window) return false;
     var mode = (els.cfgAiMode && els.cfgAiMode.value) || (state.config && state.config.aiMode) || "postbox";
@@ -2874,7 +2892,7 @@
     window.addEventListener("message", onMsg);
     ackTimer = setTimeout(function() { finish({ reachable: false }); }, 350);
     try {
-      window.top.postMessage({ type: "GAS_COMBO_DIRECT_AI", reqId: reqId, payload: payload }, "*");
+      postToBridge({ type: "GAS_COMBO_DIRECT_AI", reqId: reqId, payload: payload });
     } catch (e) {
       finish({ reachable: false });
     }
@@ -2915,7 +2933,7 @@
     window.addEventListener("message", onMsg);
     ackTimer = setTimeout(function() { finish({ reachable: false }); }, 350);
     try {
-      window.top.postMessage({ type: "GAS_COMBO_FETCH_RECORDED_MACROS", reqId: reqId, payload: payload || {} }, "*");
+      postToBridge({ type: "GAS_COMBO_FETCH_RECORDED_MACROS", reqId: reqId, payload: payload || {} });
     } catch (e) {
       finish({ reachable: false });
     }
@@ -3269,7 +3287,7 @@
     window.addEventListener("message", onMsg);
     ackTimer = setTimeout(function() { finish({ reachable: false, inExtension: false }); }, 400);
     try {
-      window.top.postMessage({ type: "GAS_COMBO_PING_LOCAL", reqId: reqId }, "*");
+      postToBridge({ type: "GAS_COMBO_PING_LOCAL", reqId: reqId });
     } catch (e) {
       finish({ reachable: false, inExtension: false });
     }
