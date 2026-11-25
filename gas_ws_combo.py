@@ -854,7 +854,7 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
         "folder": ext_dir,
         "how": ("Chrome の右のサイドパネルで開く拡張（任意・おすすめ）: chrome://extensions を開き、右上の「デベロッパー モード」をオン →"
                 f"「パッケージ化されていない拡張機能を読み込む」→ {ext_dir} を選ぶ。入れてあるなら何もしなくてよい"
-                "（ファイルが変わると、サイドパネルを開いたときに拡張が自分で入れ直す）。あとは拡張のアイコンか Alt+G で、今開いているシートが相手の GASコンボが開きます"),
+                "（拡張のファイルが変わったら、シートのタブを読み込み直す。裏方の background.js が変わったときだけ chrome://extensions で再読み込みを押す）。あとは拡張のアイコンか Alt+G で、今開いているシートが相手の GASコンボが開きます"),
         # 人が入れるときの手ほどき（AI が 1 段ずつ読み上げ、押せたかを聞いてから次へ）。入れ済みの人には要らない
         "install_guide": [
             {"step": 1, "say": "Chrome のアドレス欄に chrome://extensions と入れて開いてください（AI がブラウザを開けるなら AI が開く）"},

@@ -128,7 +128,7 @@ async function fetchRecordedMacrosViaDirect(payload, _retried) {
   }
 }
 
-// 拡張のファイル（フォルダの今の中身）の指紋。道具が拡張を直したら、サイドパネルを開いたときに自分で入れ直すのに使う
+// 拡張のファイル（フォルダの今の中身）の指紋。道具が拡張を直したかを見分ける（自分で入れ直しはしない）
 const STAMP_FILES = ["manifest.json", "background.js", "content.js", "direct_bridge.js", "sidepanel.js", "sidepanel.html"];
 async function diskStamp() {
   let h = 0;
