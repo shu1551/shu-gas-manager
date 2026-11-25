@@ -729,6 +729,7 @@
           <label class="conf-label" for="cfgAiModel">AIモデル</label>
           <select id="cfgAiModel" class="conf-control">
             <option value="sonnet">Claude Sonnet（最新）</option>
+            <option value="opus">Claude Opus（最新・最高精度）</option>
             <option value="haiku">Claude Haiku（最新・高速）</option>
             <option value="gemini_hydrogen">Gemini Hydrogen（最新・高速 / APIキー用）</option>
             <option value="gemini_neon">Gemini Neon（最新・高精度 / APIキー用）</option>
@@ -1349,7 +1350,31 @@
     updateApiKeyPlaceholder();
   }
 
+  // 連携方式に合うモデルだけを出す（Gemini の鍵 → Gemini のモデル・それ以外 → Claude のモデル）
+  // 方式を替えても、その系統で前に選んだモデルに戻す（無ければ Claude は Sonnet・Gemini は Hydrogen）
+  function modelFamilyKey_(isGemini) { return "gasCombo.lastModel." + (isGemini ? "gemini" : "claude"); }
+  function rememberModel_() {
+    var v = els.cfgAiModel.value;
+    try { localStorage.setItem(modelFamilyKey_(v.indexOf("gemini_") === 0), v); } catch (e) {}
+  }
+  function syncModelOptions() {
+    var isGemini = els.cfgAiMode.value === "api_gemini";
+    var opts = els.cfgAiModel.options, okVals = {}, curOk = false;
+    for (var i = 0; i < opts.length; i++) {
+      var ok = (opts[i].value.indexOf("gemini_") === 0) === isGemini;
+      opts[i].hidden = !ok;
+      opts[i].disabled = !ok;
+      if (ok) okVals[opts[i].value] = true;
+      if (ok && opts[i].value === els.cfgAiModel.value) curOk = true;
+    }
+    if (curOk) return;
+    var last = "";
+    try { last = localStorage.getItem(modelFamilyKey_(isGemini)) || ""; } catch (e) {}
+    els.cfgAiModel.value = okVals[last] ? last : (isGemini ? "gemini_hydrogen" : "sonnet");
+  }
+
   function updateApiKeyPlaceholder() {
+    syncModelOptions();
     var mode = els.cfgAiMode.value;
     if (mode === "api_gemini" && (state.config.hasGeminiKey || state.config.hasApiKey)) {
       els.cfgApiKey.placeholder = "Geminiキー設定済み（変更時のみ入力）";
@@ -3594,6 +3619,15 @@
   });
 
   els.cfgAiMode.addEventListener("change", updateApiKeyPlaceholder);
+  // 方式・モデルは選んだその場で覚える（保存ボタンを押さなくても次に開いたとき残る）
+  function autoSaveAiChoice_() {
+    rememberModel_();
+    state.config.aiMode = els.cfgAiMode.value;
+    state.config.aiModel = els.cfgAiModel.value;
+    callGas("comboSaveConfig", { aiMode: els.cfgAiMode.value, aiModel: els.cfgAiModel.value }, function() {}, function() {});
+  }
+  els.cfgAiMode.addEventListener("change", autoSaveAiChoice_);
+  els.cfgAiModel.addEventListener("change", autoSaveAiChoice_);
   els.btnSaveConfig.addEventListener("click", onSaveConfig);
   els.btnCheckPostbox.addEventListener("click", onCheckPostbox);
 

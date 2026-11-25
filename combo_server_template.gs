@@ -1275,8 +1275,8 @@ function comboResolveLatestApiModel_(provider, aliasOrModel, apiKey) {
   var lower = raw.toLowerCase();
   if (provider === 'api_claude') {
     if (/^claude-(?:sonnet|haiku|opus|fable)-\d/.test(lower)) return raw;
-    var cFam = lower.indexOf('haiku') >= 0 ? 'haiku' : 'sonnet';
-    var cFallback = cFam === 'haiku' ? 'claude-haiku-5-5' : 'claude-sonnet-5-5';
+    var cFam = lower.indexOf('haiku') >= 0 ? 'haiku' : (lower.indexOf('opus') >= 0 ? 'opus' : 'sonnet');
+    var cFallback = 'claude-' + cFam + '-5-5';
     var cCacheKey = 'combo_latest_model:api_claude:' + cFam;
     try {
       var uc = CacheService.getUserCache();
