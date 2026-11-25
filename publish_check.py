@@ -105,6 +105,8 @@ FORBID_PATTERNS = [
     (r"AIza[0-9A-Za-z_-]{30,}|GOCSPX-[0-9A-Za-z_-]{20,}|ya29\.[0-9A-Za-z_-]{20,}", "Google APIキー / OAuthシークレット"),
     (r"\?{3,}", "文字化け (クエスチョン3連続)"),
     (r"ws_tria[l]/|Tria[l]\.gs|\.ws_tria[l]\.json|WS試験_", "試験用の物（試験の入口・試験場・ws_trial）"),
+    (r'shutil\.which\(\s*["\']agy["\']\s*\)|_AgySession|\bagy\s+-p\b', "Google(agy) CLI ラッパーの混入禁止"),
+    (r'Access-Control-Allow-Origin["\']?\s*[,:]\s*["\']\*["\']', "CORS ワイルドカード(*) 禁止（Origin 制限必須）"),
 ]
 
 
