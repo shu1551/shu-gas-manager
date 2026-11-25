@@ -128,25 +128,14 @@
   }
 
   function sendPayload(payload) {
+    // Python 操作窓 (18765) が未起動のときにページコンソールへ赤い ERR_CONNECTION_REFUSED を
+    // 連発しないよう、Service Worker 経由のみで静かに送信する
     try {
-      chrome.runtime.sendMessage({ type: "GAS_COMBO_SYNC", payload }, (res) => {
-        if (chrome.runtime.lastError || !res || !res.ok) {
-          // Service Worker 経由で送れなかった場合の直接送信フォールバック
-          fetch(DIRECT_SYNC_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-            mode: "cors",
-          }).catch(() => {});
-        }
+      chrome.runtime.sendMessage({ type: "GAS_COMBO_SYNC", payload }, () => {
+        void chrome.runtime.lastError;
       });
     } catch (_e) {
-      fetch(DIRECT_SYNC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        mode: "cors",
-      }).catch(() => {});
+      // ignore
     }
   }
 

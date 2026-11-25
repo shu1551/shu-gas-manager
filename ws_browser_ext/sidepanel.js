@@ -58,19 +58,22 @@ async function refresh() {
 }
 
 // GASコンボの画面から「直した所」へ移る頼みや、今の選択範囲の問い合わせが来たら、今のタブのシートへ渡す
+const GOOGLE_SANDBOX_RE = /^https:\/\/[a-z0-9-]+\.googleusercontent\.com$/i;
+function isAllowedSidepanelOrigin(origin) {
+  const o = String(origin || "");
+  return o === "https://script.google.com" || GOOGLE_SANDBOX_RE.test(o);
+}
+
 window.addEventListener("message", async (ev) => {
   const d = ev && ev.data;
-  if (!d) return;
-  if (d.type === "GAS_COMBO_KICK_WATCH") {
-    fetch("http://127.0.0.1:18766/kick", { cache: "no-store" }).catch(() => {});
-    return;
-  }
+  if (!d || !isAllowedSidepanelOrigin(ev.origin)) return;
+  const targetOrigin = ev.origin && ev.origin !== "null" ? ev.origin : "*";
   if (d.type === "GAS_COMBO_PING_LOCAL") {
     const reqId = String(d.reqId || "");
     const replyDone = (obj) => {
-      try { ev.source.postMessage(Object.assign({ type: "GAS_COMBO_PING_LOCAL_DONE", reqId, inExtension: true }, obj), "*"); } catch (_e) {}
+      try { ev.source.postMessage(Object.assign({ type: "GAS_COMBO_PING_LOCAL_DONE", reqId, inExtension: true }, obj), targetOrigin); } catch (_e) {}
     };
-    try { ev.source.postMessage({ type: "GAS_COMBO_PING_LOCAL_ACK", reqId }, "*"); } catch (_e) {}
+    try { ev.source.postMessage({ type: "GAS_COMBO_PING_LOCAL_ACK", reqId }, targetOrigin); } catch (_e) {}
     chrome.runtime.sendMessage({ type: "GAS_COMBO_PING_LOCAL_BG" }, (resp) => {
       if (chrome.runtime.lastError) {
         replyDone({ reachable: false, error: String(chrome.runtime.lastError.message || "extension_error") });
@@ -83,9 +86,9 @@ window.addEventListener("message", async (ev) => {
   if (d.type === "GAS_COMBO_DIRECT_AI") {
     const reqId = String(d.reqId || "");
     const replyDone = (obj) => {
-      try { ev.source.postMessage(Object.assign({ type: "GAS_COMBO_DIRECT_AI_DONE", reqId, inExtension: true }, obj), "*"); } catch (_e) {}
+      try { ev.source.postMessage(Object.assign({ type: "GAS_COMBO_DIRECT_AI_DONE", reqId, inExtension: true }, obj), targetOrigin); } catch (_e) {}
     };
-    try { ev.source.postMessage({ type: "GAS_COMBO_DIRECT_AI_ACK", reqId }, "*"); } catch (_e) {}
+    try { ev.source.postMessage({ type: "GAS_COMBO_DIRECT_AI_ACK", reqId }, targetOrigin); } catch (_e) {}
     chrome.runtime.sendMessage({ type: "GAS_COMBO_DIRECT_AI_BG", payload: d.payload || {} }, (resp) => {
       if (chrome.runtime.lastError) {
         replyDone({ reachable: false, error: String(chrome.runtime.lastError.message || "extension_error") });
@@ -98,9 +101,9 @@ window.addEventListener("message", async (ev) => {
   if (d.type === "GAS_COMBO_FETCH_RECORDED_MACROS") {
     const reqId = String(d.reqId || "");
     const replyDone = (obj) => {
-      try { ev.source.postMessage(Object.assign({ type: "GAS_COMBO_FETCH_RECORDED_DONE", reqId, inExtension: true }, obj), "*"); } catch (_e) {}
+      try { ev.source.postMessage(Object.assign({ type: "GAS_COMBO_FETCH_RECORDED_DONE", reqId, inExtension: true }, obj), targetOrigin); } catch (_e) {}
     };
-    try { ev.source.postMessage({ type: "GAS_COMBO_FETCH_RECORDED_ACK", reqId }, "*"); } catch (_e) {}
+    try { ev.source.postMessage({ type: "GAS_COMBO_FETCH_RECORDED_ACK", reqId }, targetOrigin); } catch (_e) {}
     chrome.runtime.sendMessage({ type: "GAS_COMBO_FETCH_RECORDED_BG", payload: d.payload || {} }, (resp) => {
       if (chrome.runtime.lastError) {
         replyDone({ reachable: false, error: String(chrome.runtime.lastError.message || "extension_error") });
@@ -113,7 +116,7 @@ window.addEventListener("message", async (ev) => {
   if (d.type === "GAS_COMBO_GET_SEL") {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const replySel = (ok, range, sheet) => {
-      try { ev.source.postMessage({ type: "GAS_COMBO_GET_SEL_DONE", ok: !!ok, range: range || "", sheet: sheet || "" }, "*"); } catch (_e) {}
+      try { ev.source.postMessage({ type: "GAS_COMBO_GET_SEL_DONE", ok: !!ok, range: range || "", sheet: sheet || "" }, targetOrigin); } catch (_e) {}
     };
     if (!tab || !tab.id) { replySel(false, "", ""); return; }
     chrome.scripting.executeScript({
@@ -133,7 +136,7 @@ window.addEventListener("message", async (ev) => {
   }
   if (d.type !== "GAS_COMBO_GOTO" || !d.range) return;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const reply = (ok, why) => { try { ev.source.postMessage({ type: "GAS_COMBO_GOTO_DONE", ok, why: why || "" }, "*"); } catch (_e) {} };
+  const reply = (ok, why) => { try { ev.source.postMessage({ type: "GAS_COMBO_GOTO_DONE", ok, why: why || "" }, targetOrigin); } catch (_e) {} };
   if (!tab || !tab.id) { reply(false, "シートのタブが見つかりません"); return; }
   // 拡張を再読み込みした後もシートのタブを開き直さずに効くよう、頼みのたびに差し込んで撃つ
   chrome.scripting.executeScript({

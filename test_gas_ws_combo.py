@@ -1666,14 +1666,16 @@ def test_combo_lite_catalog_trims_defaults_and_has_list_tab():
         "gascombo_quick_cache_v1",
         "決定して保存",
         "previewOnly: true",
-        "GAS_COMBO_KICK_WATCH",
+        "gemini_flash",
+        "gemini_hydrogen",
         "postboxOnly = true",
         "#pane-list {",
     ):
         assert marker in sidebar, f"ComboSidebar missing marker: {marker}"
     assert "quickCodeDetails" not in sidebar, "quickCodeDetails must be removed so code stays visible"
+    assert "18766/kick" not in sidebar and "GAS_COMBO_KICK_WATCH" not in sidebar
     sp_js = (combo_mod.HERE / "ws_browser_ext" / "sidepanel.js").read_text(encoding="utf-8")
-    assert "GAS_COMBO_KICK_WATCH" in sp_js and "18766/kick" in sp_js
+    assert "isAllowedSidepanelOrigin" in sp_js and "18766/kick" not in sp_js and "GAS_COMBO_KICK_WATCH" not in sp_js
 
 
 def test_combo_server_webapp_mymacro_proxy_and_sheetcopy_undo():
@@ -1993,6 +1995,23 @@ const ctx = vm.createContext({
         return {
           getResponseCode: () => 200,
           getContentText: () => JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(jsonOut) }] } }] })
+        };
+      }
+      if (url.includes('api.anthropic.com/v1/models')) {
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({ data: [{ id: 'claude-sonnet-5-5' }, { id: 'claude-haiku-5-5' }] })
+        };
+      }
+      if (url.includes('generativelanguage.googleapis.com/v1beta/models?')) {
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({
+            models: [
+              { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent'] }
+            ]
+          })
         };
       }
       if (url.includes('api.anthropic.com')) {
@@ -3173,3 +3192,96 @@ process.stdout.write(JSON.stringify({ colors, bold1, bold2, bgClr, hdrY, fbCopy,
     assert res["fbCopy"] is None
     assert res["fbOut"] is None
     assert res["fbDrive"] is None
+
+
+def test_headless_claude_session_refreshes_at_max_turns(monkeypatch):
+    import ws_window_ai
+    sess = ws_window_ai._HeadlessClaudeSession(model="sonnet")
+    sess.MAX_TURNS = 2
+    state = {"alive": False, "closed": 0, "started": 0}
+    monkeypatch.setattr(sess, "alive", lambda: state["alive"])
+    def fake_start():
+        state["alive"] = True
+        state["started"] += 1
+        sess.turns = 0
+    monkeypatch.setattr(sess, "start", fake_start)
+    monkeypatch.setattr(sess, "_send_and_wait", lambda p, t: f"ok:{p}")
+    orig_close = sess.close
+    def fake_close():
+        state["alive"] = False
+        state["closed"] += 1
+        orig_close()
+    monkeypatch.setattr(sess, "close", fake_close)
+    assert sess.ask("1") == "ok:1" and sess.turns == 1 and state["closed"] == 0 and state["started"] == 1
+    assert sess.ask("2") == "ok:2" and sess.turns == 2 and state["closed"] == 0 and state["started"] == 1
+    assert sess.ask("3") == "ok:3" and sess.turns == 1 and state["closed"] == 1 and state["started"] == 2
+
+
+def test_open_watch_log_truncates_oversized_file(tmp_path):
+    log_p = tmp_path / ".combo_watch.log"
+    log_p.write_text(("LINE\n" * 500), encoding="utf-8")
+    assert log_p.stat().st_size > 1000
+    f = combo_mod._open_watch_log(log_p, max_bytes=1000, keep_bytes=200)
+    f.close()
+    assert log_p.stat().st_size <= 200
+
+
+def test_resolve_latest_api_model_dynamic_cache_and_fallback():
+    files = combo_mod.build_combo_files(combo_lite=True)
+    by_name = {f["name"]: f["source"] for f in files}
+    node_code = r"""
+const vm = require('vm'), fs = require('fs');
+const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+const userCache = {};
+let fetchCount = 0;
+let failModels = false;
+const ctx = vm.createContext({
+  CacheService: {
+    getUserCache: () => ({
+      get: (k) => (k in userCache ? userCache[k] : null),
+      put: (k, v) => { userCache[k] = String(v); },
+      remove: (k) => { delete userCache[k]; }
+    }),
+    getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {} })
+  },
+  UrlFetchApp: {
+    fetch: (url) => {
+      fetchCount++;
+      if (failModels) return { getResponseCode: () => 500, getContentText: () => 'err' };
+      if (url.includes('api.anthropic.com/v1/models')) {
+        return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ data: [{ id: 'claude-sonnet-6-0' }, { id: 'claude-haiku-5-5' }] }) };
+      }
+      if (url.includes('generativelanguage.googleapis.com/v1beta/models')) {
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({
+            models: [
+              { name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-3.9-flash', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-3.9-flash-lite', supportedGenerationMethods: ['generateContent'] }
+            ]
+          })
+        };
+      }
+      return { getResponseCode: () => 404, getContentText: () => '' };
+    }
+  },
+  encodeURIComponent, parseFloat, JSON, Array, Object, String, RegExp
+});
+ctx.globalThis = ctx;
+vm.runInContext(payload.engine + '\n' + payload.server, ctx);
+const c1 = ctx.comboResolveLatestApiModel_('api_claude', 'sonnet', 'K1');
+const c2 = ctx.comboResolveLatestApiModel_('api_claude', 'sonnet', 'K1'); // cache hit
+const g1 = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_flash', 'K2');
+const g2 = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_hydrogen', 'K2');
+failModels = true;
+const fbC = ctx.comboResolveLatestApiModel_('api_claude', 'haiku', 'K1');
+const fbG = ctx.comboResolveLatestApiModel_('api_gemini', 'sonnet', 'K2'); // cached flash hit
+process.stdout.write(JSON.stringify({ c1, c2, g1, g2, fbC, fbG, fetchCount }));
+"""
+    res = _run_node_json(node_code, {"engine": by_name["Engine"], "server": by_name["ComboServer"]})
+    assert res["c1"] == "claude-sonnet-6-0" and res["c2"] == "claude-sonnet-6-0"
+    assert res["g1"] == "gemini-3.9-flash" and res["g2"] == "gemini-4-hydrogen"
+    assert res["fbC"] == "claude-haiku-5-5" and res["fbG"] == "gemini-3.9-flash"
+    assert res["fetchCount"] == 4

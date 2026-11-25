@@ -1270,6 +1270,91 @@ function comboResolveApiKey_(cfg) {
   return String(cfg.apiKey || '').trim();
 }
 
+function comboResolveLatestApiModel_(provider, aliasOrModel, apiKey) {
+  var raw = String(aliasOrModel || '').trim();
+  var lower = raw.toLowerCase();
+  if (provider === 'api_claude') {
+    if (/^claude-(?:sonnet|haiku|opus|fable)-\d/.test(lower)) return raw;
+    var cFam = lower.indexOf('haiku') >= 0 ? 'haiku' : 'sonnet';
+    var cFallback = cFam === 'haiku' ? 'claude-haiku-5-5' : 'claude-sonnet-5-5';
+    var cCacheKey = 'combo_latest_model:api_claude:' + cFam;
+    try {
+      var uc = CacheService.getUserCache();
+      var hit = uc ? uc.get(cCacheKey) : null;
+      if (hit) return hit;
+    } catch (eC0) {}
+    if (apiKey) {
+      try {
+        var r = UrlFetchApp.fetch('https://api.anthropic.com/v1/models?limit=50', {
+          method: 'get',
+          muteHttpExceptions: true,
+          headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+        });
+        if (r.getResponseCode() >= 200 && r.getResponseCode() < 300) {
+          var j = JSON.parse(r.getContentText() || '{}');
+          var arr = Array.isArray(j.data) ? j.data : [];
+          var picked = '';
+          for (var i = 0; i < arr.length; i++) {
+            var id = String((arr[i] && arr[i].id) || '').trim();
+            if (id.indexOf('claude-' + cFam + '-') === 0) { picked = id; break; }
+          }
+          if (picked) {
+            try { var uc2 = CacheService.getUserCache(); if (uc2) uc2.put(cCacheKey, picked, 21600); } catch (eC1) {}
+            return picked;
+          }
+        }
+      } catch (eC2) {}
+    }
+    return cFallback;
+  }
+  if (/^gemini-\d/.test(lower) && lower.indexOf('gemini-4-hydrogen-') !== 0) return raw;
+  var gFam = lower.indexOf('hydrogen') >= 0 ? 'hydrogen' : 'flash';
+  var gFallback = gFam === 'hydrogen' ? 'gemini-4-hydrogen' : 'gemini-3.8-flash';
+  var gCacheKey = 'combo_latest_model:api_gemini:' + gFam;
+  try {
+    var ug = CacheService.getUserCache();
+    var gHit = ug ? ug.get(gCacheKey) : null;
+    if (gHit) return gHit;
+  } catch (eG0) {}
+  if (apiKey) {
+    try {
+      var gr = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(apiKey) + '&pageSize=100', {
+        method: 'get',
+        muteHttpExceptions: true
+      });
+      if (gr.getResponseCode() >= 200 && gr.getResponseCode() < 300) {
+        var gj = JSON.parse(gr.getContentText() || '{}');
+        var models = Array.isArray(gj.models) ? gj.models : [];
+        var best = '';
+        var bestVer = -1;
+        for (var k = 0; k < models.length; k++) {
+          var m = models[k] || {};
+          var methods = Array.isArray(m.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
+          if (methods.length && methods.indexOf('generateContent') < 0) continue;
+          var nm = String(m.name || '').replace(/^models\//, '').trim();
+          var nl = nm.toLowerCase();
+          var vm = null;
+          if (gFam === 'hydrogen') {
+            vm = nl.match(/^gemini-(\d+(?:\.\d+)?)-hydrogen$/);
+          } else {
+            if (nl.indexOf('lite') >= 0 || nl.indexOf('exp') >= 0 || nl.indexOf('thinking') >= 0 || nl.indexOf('preview') >= 0) continue;
+            vm = nl.match(/^gemini-(\d+(?:\.\d+)?)-flash$/);
+          }
+          if (vm) {
+            var verNum = parseFloat(vm[1]);
+            if (verNum > bestVer) { bestVer = verNum; best = nm; }
+          }
+        }
+        if (best) {
+          try { var ug2 = CacheService.getUserCache(); if (ug2) ug2.put(gCacheKey, best, 21600); } catch (eG1) {}
+          return best;
+        }
+      }
+    } catch (eG2) {}
+  }
+  return gFallback;
+}
+
 function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets) {
   var apiKey = comboResolveApiKey_(cfg);
   if (!apiKey) throw new Error('APIキーが設定されていません');
@@ -1277,8 +1362,7 @@ function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets) {
   var rawText = '';
 
   if (cfg.aiMode === 'api_gemini') {
-    var gModel = String(cfg.aiModel || 'gemini-2.5-flash').trim();
-    if (!gModel || gModel === 'sonnet' || gModel === 'haiku' || gModel.indexOf('gemini-4-hydrogen') === 0) gModel = 'gemini-2.5-flash';
+    var gModel = comboResolveLatestApiModel_('api_gemini', cfg.aiModel, apiKey);
     var gUrl = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(gModel) + ':generateContent?key=' + encodeURIComponent(apiKey);
     var gResp = UrlFetchApp.fetch(gUrl, {
       method: 'post',
@@ -1298,9 +1382,7 @@ function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets) {
     var gJson = JSON.parse(gBody);
     rawText = (((((gJson.candidates || [])[0] || {}).content || {}).parts || [])[0] || {}).text || '';
   } else if (cfg.aiMode === 'api_claude') {
-    var cModel = String(cfg.aiModel || 'claude-3-5-haiku-latest').trim();
-    if (cModel === 'haiku') cModel = 'claude-3-5-haiku-latest';
-    else if (cModel === 'sonnet') cModel = 'claude-3-5-sonnet-latest';
+    var cModel = comboResolveLatestApiModel_('api_claude', cfg.aiModel, apiKey);
     var cResp = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
       method: 'post',
       contentType: 'application/json',
@@ -3359,8 +3441,7 @@ function comboCallAiMyMacro_(cfg, prompts) {
   var rawText = '';
 
   if (cfg.aiMode === 'api_gemini') {
-    var gModel = String(cfg.aiModel || 'gemini-2.5-flash').trim();
-    if (!gModel || gModel === 'sonnet' || gModel === 'haiku' || gModel.indexOf('gemini-4-hydrogen') === 0) gModel = 'gemini-2.5-flash';
+    var gModel = comboResolveLatestApiModel_('api_gemini', cfg.aiModel, apiKey);
     var gUrl = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(gModel) + ':generateContent?key=' + encodeURIComponent(apiKey);
     var gResp = UrlFetchApp.fetch(gUrl, {
       method: 'post',
@@ -3380,9 +3461,7 @@ function comboCallAiMyMacro_(cfg, prompts) {
     var gJson = JSON.parse(gBody);
     rawText = (((((gJson.candidates || [])[0] || {}).content || {}).parts || [])[0] || {}).text || '';
   } else if (cfg.aiMode === 'api_claude') {
-    var cModel = String(cfg.aiModel || 'claude-3-5-haiku-latest').trim();
-    if (cModel === 'haiku') cModel = 'claude-3-5-haiku-latest';
-    else if (cModel === 'sonnet') cModel = 'claude-3-5-sonnet-latest';
+    var cModel = comboResolveLatestApiModel_('api_claude', cfg.aiModel, apiKey);
     var cResp = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
       method: 'post',
       contentType: 'application/json',

@@ -2018,7 +2018,7 @@ class ComboPostboxWatcher:
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         # 窓なし（pythonw）で起きたときは標準出力が無い＝書き先を手元のログにする（無いと途中で黙って止まる）
         if sys.stdout is None or sys.stderr is None or Path(sys.executable).name.lower() == "pythonw.exe":
-            _log = open(HERE / ".combo_watch.log", "a", encoding="utf-8", buffering=1)
+            _log = _open_watch_log()
             sys.stdout = sys.stderr = _log
         kick = threading.Event()
         stop_ev = threading.Event()
@@ -2176,6 +2176,22 @@ class ComboPostboxWatcher:
                 self._ai_runner.close()
             if self._mymacro_session is not None:
                 self._mymacro_session.close()
+
+
+def _open_watch_log(log_path=None, max_bytes=512 * 1024, keep_bytes=128 * 1024):
+    """受け手ログ (.combo_watch.log) をサイズ上限付きで開く（肥大化防止のため超過時は末尾のみ残す）。"""
+    p = Path(log_path) if log_path else (HERE / ".combo_watch.log")
+    try:
+        if p.exists() and p.stat().st_size > max_bytes:
+            raw = p.read_bytes()
+            tail = raw[-keep_bytes:]
+            nl = tail.find(b"\n")
+            if nl >= 0 and nl + 1 < len(tail):
+                tail = tail[nl + 1:]
+            p.write_bytes(tail)
+    except Exception:
+        pass
+    return open(p, "a", encoding="utf-8", buffering=1)
 
 
 COMBO_WATCH_PORT = 18766
@@ -2530,7 +2546,7 @@ def _run_cli(argv=None):
     if args.cmd == "watch":
         # 窓なし（pythonw）起動時は初期化エラーも必ずログに残す
         if sys.stdout is None or sys.stderr is None or Path(sys.executable).name.lower() == "pythonw.exe":
-            _log = open(HERE / ".combo_watch.log", "a", encoding="utf-8", buffering=1)
+            _log = _open_watch_log()
             sys.stdout = sys.stderr = _log
         is_direct_only = (not args.once) and (not args.postbox)
         watcher = ComboPostboxWatcher(args.script_id, client=client, model=args.model or None, poll_interval=args.interval, direct_only=is_direct_only)

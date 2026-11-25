@@ -728,10 +728,10 @@
         <div class="conf-group">
           <label class="conf-label" for="cfgAiModel">AIモデル</label>
           <select id="cfgAiModel" class="conf-control">
-            <option value="sonnet">Claude Sonnet (sonnet)</option>
-            <option value="haiku">Claude Haiku (haiku)</option>
-            <option value="gemini-2.5-flash">Gemini 2.5 Flash (APIキー用)</option>
-            <option value="gemini-2.5-pro">Gemini 2.5 Pro (APIキー用)</option>
+            <option value="sonnet">Claude Sonnet（最新）</option>
+            <option value="haiku">Claude Haiku（最新・高速）</option>
+            <option value="gemini_flash">Gemini Flash（最新・APIキー用）</option>
+            <option value="gemini_hydrogen">Gemini Hydrogen（最新・APIキー用）</option>
           </select>
         </div>
         <div class="conf-group">
@@ -3203,7 +3203,7 @@
           if (mode === "api_claude") state.config.hasClaudeKey = true;
         }
         applyConfig(res.config || res);
-        var modeLabel = mode === "postbox" ? "ローカル直結 (CLI連携)" : (mode === "api_gemini" ? "Gemini API" : (mode === "api_claude" ? "Claude API" : mode));
+        var modeLabel = mode === "postbox" ? "ローカル直結 (Claude Code CLI)" : (mode === "api_gemini" ? "Gemini API" : (mode === "api_claude" ? "Claude API" : mode));
         els.postboxStatusLabel.textContent = "設定を保存しました（方式: " + modeLabel + " / モデル: " + model + "）";
       }
     });
@@ -3271,15 +3271,8 @@
     });
   }
 
-  // PC の郵便受けの受け手（py gas.py combo watch）を起こす。Chrome 拡張本体経由なら HTTPS 制限に引っかからない
-  function kickWatcher() {
-    try {
-      if (typeof window !== "undefined" && window.top && window.top !== window) {
-        window.top.postMessage({ type: "GAS_COMBO_KICK_WATCH" }, "*");
-      }
-      fetch("http://127.0.0.1:18766/kick", { mode: "no-cors", cache: "no-store" }).catch(function() {});
-    } catch (e) {}
-  }
+  // 直結専用モードでは不要な旧郵便受け向けキック処理は送らない（Origin 403 ノイズ防止）
+  function kickWatcher() {}
 
   function copyToClipboard(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {

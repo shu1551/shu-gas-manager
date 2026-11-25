@@ -85,7 +85,11 @@ def _parse_ai_json(text):
 
 
 class _HeadlessClaudeSession:
-    """claude -p (stream-json) を 1 会話 1 プロセスで温めて使うセッション。"""
+    """claude -p (stream-json) を 1 会話 1 プロセスで温めて使うセッション。
+    コンテキスト肥大と 5 時間枠の浪費を防ぐため、一定ターン数または長時間アイドルで自動リフレッシュする。"""
+
+    MAX_TURNS = 10
+    IDLE_TTL_SEC = 1800
 
     def __init__(self, model=DEFAULT_MODEL):
         self.model = model
@@ -93,10 +97,21 @@ class _HeadlessClaudeSession:
         self.lines = None
         self.err = []
         self.target_id = None
+        self.turns = 0
+        self.last_used_at = 0.0
         self.lock = threading.Lock()
 
     def alive(self):
         return self.proc is not None and self.proc.poll() is None
+
+    def _needs_refresh(self):
+        if not self.alive():
+            return False
+        if self.turns >= self.MAX_TURNS:
+            return True
+        if self.last_used_at > 0 and (time.monotonic() - self.last_used_at) >= self.IDLE_TTL_SEC:
+            return True
+        return False
 
     def start(self):
         if self.alive():
@@ -115,6 +130,8 @@ class _HeadlessClaudeSession:
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         self.err = []
         self.lines = queue.Queue()
+        self.turns = 0
+        self.last_used_at = time.monotonic()
         self.proc = subprocess.Popen(cmd, **kwargs)
         threading.Thread(target=self._pump, args=(self.proc.stdout, self.lines), daemon=True).start()
         threading.Thread(target=self._pump, args=(self.proc.stderr, None), daemon=True).start()
@@ -132,16 +149,24 @@ class _HeadlessClaudeSession:
 
     def ask(self, prompt, timeout=AI_TIMEOUT):
         with self.lock:
+            if self._needs_refresh():
+                self.close()
             if not self.alive():
                 self.start()
             try:
-                return self._send_and_wait(prompt, timeout)
+                res = self._send_and_wait(prompt, timeout)
+                self.turns += 1
+                self.last_used_at = time.monotonic()
+                return res
             except Exception:
                 # 常駐プロセスが途中で切れていた場合のみ 1 回やり直す
                 if not self.alive():
                     self.close()
                     self.start()
-                    return self._send_and_wait(prompt, timeout)
+                    res = self._send_and_wait(prompt, timeout)
+                    self.turns += 1
+                    self.last_used_at = time.monotonic()
+                    return res
                 raise
 
     def _send_and_wait(self, prompt, timeout):
@@ -176,6 +201,8 @@ class _HeadlessClaudeSession:
     def close(self):
         p, self.proc = self.proc, None
         self.target_id = None
+        self.turns = 0
+        self.last_used_at = 0.0
         if p is None:
             return
         try:
