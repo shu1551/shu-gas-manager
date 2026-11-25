@@ -1,0 +1,119 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+total	表の下に合計行を足して
+total	金額の合計を出して
+total	合計も入れといて
+?total	合計 行 集計 追加
+summary	部署ごとの金額の合計表を作って
+summary	部署別に件数を集計して
+?summary	担当ごとの売上をまとめて
+?summary	集計 項目別 部署ごと
+pivot.new	売上のピボットテーブルを作って
+pivot.new	部署と商品でクロス集計表を作成して
+pivot.new	縦と横で集計してくれる？
+?pivot.new	ピボット クロス集計 新規作成
+chart.new	売上の棒グラフを作って
+chart.new	月別の推移を折れ線グラフにして
+chart.new	商品別の円グラフを作成して
+chart.new	表をグラフにして
+?chart.new	グラフ 作成 棒グラフ 折れ線
+chart.delete	グラフを消して
+chart.delete	売上推移グラフを削除して
+chart.delete	グラフをなくして
+chart.delete	グラフはいらないから消して
+?chart.delete	グラフ 削除 消去
+calc.col	数量×単価で金額の列を足して
+calc.col	D列に利益（売上-費用）の列を足して
+?calc.col	計算列 追加 計算式
+?calc.col	計算 式 列 追加
+calc.percent	売上の構成比を出して
+calc.percent	売上の構成比の列を足して
+?calc.percent	割合 列 構成比
+?calc.percent	構成比 パーセント 列
+stat.row	表の下に平均の行を足して
+stat.row	表の下に最大値と最小値の行を追加して
+?stat.row	平均行 追加 下
+?stat.row	平均 最大 最小 行
+lookup.add	商品マスタから単価を引いてきて
+lookup.add	マスタ表から商品名をVLOOKUPで引いて足して
+?lookup.add	別の表 列 参照 追加
+?lookup.add	マスタ 参照 列 追加 引く
+calc.diff	前月との差額の列を足して
+calc.diff	売上の前年比の列を追加して
+?calc.diff	前年比 差分 増減 列
+?calc.diff	前月比 伸び率 差の列
+calc.running	売上の累計列を足して
+calc.running	金額の累積合計の列を追加して
+?calc.running	累計 累積 列 追加
+?calc.running	ランニングトータル 累計
+calc.rank	売上順位の列を足して
+calc.rank	点数の高い順に順位の列をつけて
+?calc.rank	順位 ランク 列 追加
+?calc.rank	ランキング 列 計算
+count.if	合格の件数を数えて
+count.if	東京の件数をカウントして
+?count.if	件数 カウント 個数 条件
+?count.if	COUNTIF 条件 件数
+subtotal	部署ごとの小計行を挟んで
+subtotal	月ごとの小計を入れて
+?subtotal	小計 行 挿入
+?subtotal	小計 集計 行 挟む
+formula.guard	数式をIFERRORでエラーが出ないように囲んで
+formula.guard	計算式のエラー表示を空白にして
+?formula.guard	数式 IFERROR エラー保護
+?formula.guard	計算式 エラー 回避 囲む
+formula.tovalue	この列の計算式を確定した値に変えて
+formula.tovalue	計算結果を値貼り付けして
+?formula.tovalue	数式 値 変換
+?formula.tovalue	計算式 値 固定化
+round	金額を千円単位で四捨五入して
+round	計算結果を切り捨てて
+?round	四捨五入 切り捨て 切り上げ
+?round	ROUND ラウンド 端数処理
+date.parts	日付から年と月の列を分けて
+date.parts	日付の列から曜日を取り出して
+?date.parts	日付 年 月 曜日 分解
+?date.parts	日付から年 日付から月 曜日の列
+text.join	姓と名の列を結合して
+text.join	住所の各列を1つにつなげて
+?text.join	文字列 結合 列 つなげる
+?text.join	列をつないで 列を連結 結合
+text.case	品番を大文字にそろえて
+text.case	英字を小文字に変換して
+?text.case	大文字 小文字 変換
+?text.case	半角 全角 統一
+top.n	金額の上位5件を別シートに抽出して
+top.n	売上のトップ10だけを抽出して
+top.n	金額の下位3件をワースト抽出して
+?top.n	上位抽出 下位抽出 トップ5 ワースト
+calc.if	金額が10000以上ならマルにするIF式の判定列を足して
+calc.if	条件分岐のIF文の列を追加して合格判定を出して
+calc.if	売上で達成判定を条件で判定する列を足して
+?calc.if	条件分岐 IF式 判定列を足す
+date.diff	開始日と終了日の経過日数の列を足して
+date.diff	入社日から今日までの経過年数と経過月数の列を足して
+date.diff	開始日から完了日までの営業日数と期間の日数を出して
+?date.diff	経過日数 日数の差 日付の差 営業日数
+unique.list	得意先列の重複を除いたユニーク一覧を別シートへ作って
+unique.list	部署ごとの重複なしの一覧を種類ごとの件数付きで作って
+unique.list	商品名の重複を省いた一覧表を抽出してユニークリストを作って
+?unique.list	ユニーク一覧 重複なしの一覧 ユニーク抽出 種類ごとの件数
+crosstab	部門とステータスで縦横集計のクロス集計表を作って
+crosstab	担当者を行、月を列にした2軸集計のマトリクス集計表を作って
+crosstab	カテゴリと地域で行と列で集計したクロス表を作って
+?crosstab	クロス集計 縦横集計 マトリクス集計 二次元集計
+formula.list	このシートの数式一覧を別シートに出して
+formula.list	ブック全体の関数一覧を調べて数式リストを作って
+formula.list	どこに式が入っているか数式をチェックして式を一覧にして
+?formula.list	数式一覧 式を一覧 関数一覧
+date.age	生年月日から満年齢を計算して年齢を出して
+date.age	入社日から勤続年数と経過年数を出して
+?date.age	満年齢を足して 経過年数
+?date.age	年齢 勤続年数 経過月数 計算
+calc.tax	金額列から消費税を計算して税込金額の列を足して
+calc.tax	商品価格の税抜価格と本体価格を計算して
+?calc.tax	税込金額 税抜金額 消費税10
+?calc.tax	消費税 税額を計算 税率
+col.compare	予算と実績の2列を比較して値が一致しているか判定して
+col.compare	A列とB列の2つの列を比べて差分を判定し突合して
+?col.compare	2列を比較 列を比較 同じ値か確認
+?col.compare	突合 比較結果の列 値が一致

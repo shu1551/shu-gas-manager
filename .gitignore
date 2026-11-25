@@ -1,0 +1,64 @@
+# ローカルバックアップ・キャッシュ・認証情報（公開厳禁）
+aliases.json
+index_restored.html
+.backups/
+backups_before_audit_fix/
+.cache.json
+.content_cache.json
+.content_cache.json.tmp.*
+.last_run.json
+.gas-sync.json
+.clasprc.json
+.env
+
+# Python キャッシュ・テスト
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.mocks/
+screenshots/
+
+# ローカル固有拡張
+gas_local_extras.py
+
+# 開発指示書・作業レポート（内部専用・公開厳禁）
+queue/
+.ws_state.json
+.ws_ledger.json
+.ws_engine_all.gs
+.ws_misses.tsv
+.ws_trial.json
+ws_trial/
+ws_trial/runs/
+.ws_api_uses.tsv
+
+# 試験用ハーネス・採点・対象テスト（公開しない）
+gas_ws_trial.py
+gas_ws_judge.py
+gas_ws_exam.py
+gas_ws_props.py
+gas_ws_shot.py
+gas_ws_sealreport.py
+gas_ws_coverage.py
+gas_ws_ai.py
+gas_ws_tables.py
+test_gas_ws_167.py
+test_gas_ws_ai.py
+test_gas_ws_coverage.py
+test_gas_ws_exam.py
+test_gas_ws_judge_extra.py
+test_gas_ws_lane.py
+test_gas_ws_props.py
+test_gas_ws_shot.py
+test_gas_ws_shot_sealed.py
+test_gas_ws_trial.py
+
+# GASコンボ・操作窓の手元の状態（人ごと）
+.combo_engine_state.json
+.combo_watch.log
+.ws_recent_targets.json
+.ws_window_ver.txt
+ws_browser_ext/combo_window.json
+.ws_direct_fp.json
+.native_host.bat
+.native_host_manifest.json

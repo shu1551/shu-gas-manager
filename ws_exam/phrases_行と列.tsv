@@ -1,0 +1,61 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+rows.insert	3行目の前に行を挿入して
+rows.insert	5行目と6行目の間に空行を1つ入れたい
+?rows.insert	行を増やしたいんだけど
+?rows.insert	行 追加 挿入 差し込み
+rows.delete	3行目を削除して
+?rows.delete	この行いらないから消して
+rows.delete	10行目は不要なので取り除いて
+?rows.delete	行 削除 消去
+rows.move	5行目を2行目に移動して
+rows.move	3行目と4行目の順番を入れ替えたい
+?rows.move	この行を上に動かして
+?rows.move	行 移動 並べ替え
+cols.insert	C列の前に列を挿入して
+cols.insert	B列とC列の間に空の列を足して
+?cols.insert	列を1つ増やしたい
+?cols.insert	列 追加 挿入
+cols.delete	B列を削除して
+?cols.delete	この列いらないから消して
+cols.delete	D列は不要なので取り除いて
+?cols.delete	列 削除 消去
+cols.move	A列とB列を入れ替えて
+cols.move	E列をA列の位置に動かして
+?cols.move	この列を右に動かして
+?cols.move	列 移動 並べ替え
+freeze	1行目を固定して
+freeze	スクロールしても見出しが動かないようにして
+freeze	ウィンドウ枠の固定しといて
+?freeze	行固定 列固定 枠固定
+unfreeze	行と列の固定を解除して
+unfreeze	見出しの固定を外して自由にスクロールできるようにして
+unfreeze	枠固定やめて
+?unfreeze	固定解除 フリーズ解除
+rows.hide	5行目から10行目を非表示にして
+rows.hide	不要な3行目と4行目を隠して
+?rows.hide	この行見えなくしといて
+?rows.hide	行 非表示 隠す
+rows.show	隠れている5行目から10行目を再表示して
+rows.show	シート内の非表示の行を全部出して
+?rows.show	隠した行を出したい
+?rows.show	行 再表示 表示
+cols.hide	C列とD列を非表示にして
+cols.hide	不要なF列を隠して
+?cols.hide	この列見えなくしといて
+?cols.hide	列 非表示 隠す
+cols.show	非表示になっているC列を再表示して
+cols.show	隠れている列を全部出して
+?cols.show	隠した列を出したい
+?cols.show	列 再表示 表示
+group.rows	5行目から10行目をグループ化して
+group.rows	内訳の行をまとめて折りたためるようにして
+?group.rows	行を畳めるようにグループにしたい
+?group.rows	行 グループ化 折りたたみ
+group.cols	D列からF列をグループ化して
+group.cols	詳細列をまとめてグループにして
+?group.cols	列を折りたためるようにグループにしたい
+?group.cols	列 グループ化 折りたたみ
+group.remove	5行目から10行目のグループ化を解除して
+group.remove	シート全体のグループを全部外して
+?group.remove	折りたたみのグループをなくしたい
+?group.remove	グループ 解除 外す

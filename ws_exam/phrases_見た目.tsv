@@ -1,0 +1,62 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+format	見出しを太字にして背景を青にして
+format	金額の列を桁区切りの書式にして
+?format	文字を赤くしたいんだけど
+?format	書式 太字 色 背景
+width	A列の幅を広げて
+width	列幅を中身に合わせて自動調整して
+?width	列が狭くて見えないから広げて
+?width	幅 列幅 調整
+cf.add	売上が100万以上のセルに条件付き書式を付けて
+cf.add	F列で100以上のセルを赤く目立たせて
+cf.add	E列の点数が80未満は黄色にしてくれる？
+?cf.add	条件付き書式 以上 赤
+cf.dup	C列の重複に色を付けて
+cf.dup	メール列でダブってる行をハイライトして
+cf.dup	B列の重複してるとこ赤くして
+?cf.dup	重複 ダブり 色 ハイライト
+cf.scale	売上列にカラースケールを付けて
+cf.scale	金額の大きいほど濃い青のグラデーションにして
+cf.scale	F2:F20をヒートマップみたいに色の濃淡つけて
+?cf.scale	カラースケール グラデーション ヒートマップ
+cf.clear	設定されている条件付き書式を外して
+cf.clear	表全体の自動でついた色を消して
+cf.clear	F列の条件付き書式を削除して
+?cf.clear	条件付き書式 削除 クリア 解除
+cf.list	シートの条件付き書式を一覧にして
+cf.list	いま設定されてる条件付き書式を確認して
+cf.list	このシートの条件付き書式はどこにあるか調べて
+?cf.list	条件付き書式 一覧 確認 調べる
+banding.add	表に交互の色を付けて
+banding.add	1行おきに薄いグレーの背景色にして
+banding.add	明細を見やすくしましまの縞模様にして
+?banding.add	交互の色 しましま ストライプ 1行おき
+banding.remove	表の交互の色を外して
+banding.remove	1行おきのしましまを消して
+banding.remove	縞模様のストライプを解除して
+?banding.remove	交互の色 解除 消す 外す
+bg.clear	A1の背景色を消して
+bg.clear	見出しの背景色をなしにして
+bg.clear	B2:E5の塗りつぶしを消して
+?bg.clear	セルの背景を塗りなしに戻したい
+?bg.clear	背景色 消す 塗りつぶし なし
+sheet.gridlines	グリッド線を非表示にして
+sheet.gridlines	全シートの枠線を非表示にして
+sheet.gridlines	目盛り線を表示に戻して
+?sheet.gridlines	グリッド線 枠線 目盛り線 表示 非表示
+cf.weekend	日付列を見て土日の行に自動で色を付けて
+cf.weekend	予定表の土曜と日曜の行を土日を色分けして
+cf.weekend	カレンダーの色として週末に色を付けて曜日で色分けして
+?cf.weekend	土日に色 土日の行 カレンダーの色 土日を色分け
+format.negred	金額列をマイナスを赤にする赤字表示に整えて
+format.negred	損益列の負の数を赤で三角表記にして
+format.negred	売上列を千円表示と百万円表示に直して
+?format.negred	マイナスを赤 赤字表示 三角表記 千円表示 百万円表示
+font.unify	シート全体のフォントをメイリオに統一して
+font.unify	全シートフォントとして書体を統一してフォントサイズ統一もして
+font.unify	フォントを揃え書体を揃えて文字を統一して
+?font.unify	フォントを統一 書体を統一 フォントサイズ統一
+rows.highlight	ステータス列など条件に合う行に色を付けてハイライトして
+rows.highlight	未完了の該当行を固定色で塗って目立たせて
+?rows.highlight	条件の行をハイライト 該当行に色
+?rows.highlight	条件に合う行 行を固定色で塗 目立たせ

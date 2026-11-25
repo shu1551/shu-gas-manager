@@ -1,0 +1,965 @@
+# -*- coding: utf-8 -*-
+"""
+gas_workspace.py - Workspace マネージャー（スプレッドシートとドキュメントを会話で作る・直す）
+
+通り道は 1 本：専用の GAS エンジン（shu-workspace-engine, workspace_engine.gs）の /exec に
+本人のトークンで POST する。型（棚）はエンジンが持ち、ここは
+  ・今の相手（.ws_state.json）を覚える　・ファイルを名前で探す（Drive 一覧）
+  ・ops（棚の名前と引数の JSON）を撃つ前に検査する　・呼び直しで二重にならない番号　・報告を 3〜5 行に組む
+だけを受け持つ。書く前の控え・失敗時の戻し・undo・指紋はエンジン側。
+"""
+
+import hashlib
+import json
+import os
+import re
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+
+import gas_ws_api
+import gas_ws_catalog
+import gas_ws_find
+
+HERE = Path(__file__).resolve().parent
+ENGINE_COMMON = HERE / "workspace_engine.gs"      # 共通部（入口・控え・戻し・台帳・look・render・手伝い）。棚は置かない
+SHELF_DIR = HERE / "ws_shelves"                   # 棚（札つき）。道具が *.gs を全部読む
+ENGINE_SOURCE = HERE / ".ws_engine_all.gs"        # 共通部＋Catalog＋棚をつないだ全文（GAS に入れる形・道具が作る・git に入れない）
+ENGINE_TITLE = "shu-workspace-engine"
+RETRY_MAX = 3
+
+MIME_SHEET = "application/vnd.google-apps.spreadsheet"
+MIME_DOC = "application/vnd.google-apps.document"
+
+CATALOG = gas_ws_catalog.load(SHELF_DIR)
+# 棚の検査表（kind / req / any / keys）は棚の札から作る。手では書かない
+SHELVES = CATALOG.specs()
+
+
+class WorkspaceError(Exception):
+    """利用者（AI）に日本語でそのまま返す種類のエラー"""
+
+
+class WorkspaceAuthNeeded(WorkspaceError):
+    pass
+
+
+class WorkspaceTimeout(WorkspaceError):
+    pass
+
+
+_ENGINE_CACHE = {}
+
+
+def _engine_bundle(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
+    """共通部・Catalog・棚の (texts, hash, version) をファイルの更新時刻つきでキャッシュして返す"""
+    cp, sd = Path(common_path).resolve(), Path(shelf_dir).resolve()
+    sfiles = gas_ws_catalog.shelf_files(sd)
+    try:
+        cst = cp.stat()
+        ast_m = Path(gas_ws_api.__file__).stat().st_mtime_ns
+        sig = (cst.st_mtime_ns, cst.st_size, ast_m, tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in sfiles))
+    except OSError:
+        sig = None
+    cached = _ENGINE_CACHE.get((cp, sd))
+    if sig is not None and cached is not None and cached[0] == sig:
+        return cached[1], cached[2], cached[3]
+    cat = CATALOG if (sd == SHELF_DIR.resolve() and cached is None) else gas_ws_catalog.load(sd)
+    common_text = cp.read_text(encoding="utf-8")
+    out = [("Engine", common_text), ("Catalog", gas_ws_catalog.build_catalog_gs(cat)), ("ApiTypes", gas_ws_api.build_types_gs())]
+    for p in sfiles:
+        out.append((p.stem, p.read_text(encoding="utf-8")))
+    h = hashlib.sha1()
+    for _, text in out:
+        h.update(text.encode("utf-8"))
+    fhash = h.hexdigest()[:8]
+    m = re.search(r"var ENGINE_VERSION = '([^']*)'", common_text)
+    ver = f"{m.group(1) if m else 'ws'}+{fhash}"
+    if sig is not None:
+        _ENGINE_CACHE[(cp, sd)] = (sig, out, fhash, ver)
+    return out, fhash, ver
+
+
+def _engine_texts(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
+    """GAS に入れる順の (名前, 本文): 共通部 → Catalog（札から作る）→ 棚のファイル（名前の順）"""
+    return list(_engine_bundle(common_path, shelf_dir)[0])
+
+
+class _Timer:
+    """ws_do 1 回の内訳（秒）。WS_TIMING=1 のときだけ返事に出す。普段は計るだけで何も出さない"""
+
+    def __init__(self):
+        self.t0 = self.last = time.perf_counter()
+        self.laps = {}
+        self.engine = {}
+
+    def lap(self, name):
+        n = time.perf_counter()
+        self.laps[name] = self.laps.get(name, 0.0) + (n - self.last)
+        self.last = n
+
+    def total(self):
+        return time.perf_counter() - self.t0
+
+
+ENGINE_LAP_NAMES = [("lock", "鍵待ち"), ("cacheGet", "呼び直し確認"), ("open", "ファイルを開く"), ("seq", "台帳の番号"), ("backup", "控え"), ("finger0", "書く前の指紋"), ("ops", "棚の本体"),
+                    ("save", "文書の保存"), ("finger", "書いた後の指紋"), ("noop", "変更なしの判定"), ("discard", "控えの破棄"), ("ledger", "台帳の書き込み"),
+                    ("bk_open", "控え:ブックを開く"), ("bk_list", "控え:タブ一覧"), ("bk_copy", "控え:シートの写し"), ("bk_name", "控え:名前付け"), ("bk_prune", "控え:古いタブを消す"), ("bk_side", "控え:脇の状態"), ("bk_lite", "控え:軽量")]
+
+
+def format_timing(tim):
+    """内訳の 2 行（秒）。準備＝Python 側（検査・相手の解決・状態の保存・エンジン版の確認）、往復＝Web アプリの呼び出しの待ち"""
+    L = tim.laps
+    eng = tim.engine or {}
+    roundtrip = L.get("往復", 0.0)
+    eng_total = (eng.get("total") or 0) / 1000.0
+    prep = sum(L.get(k, 0.0) for k in ("検査", "相手", "状態", "版"))
+    line1 = (f"内訳(秒) 合計 {tim.total():.2f}: 準備 {prep:.2f}（検査 {L.get('検査', 0):.2f}・相手 {L.get('相手', 0):.2f}・状態 {L.get('状態', 0):.2f}・版の確認 {L.get('版', 0):.2f}）"
+             f" ／ 往復 {roundtrip:.2f}（エンジン内 {eng_total:.2f}・残り＝通信と起動 {max(roundtrip - eng_total, 0):.2f}）"
+             f" ／ 返事の組み立て {L.get('返事', 0):.2f}")
+    parts = [f"{label} {eng[k] / 1000.0:.2f}" for k, label in ENGINE_LAP_NAMES if k in eng]
+    line2 = "エンジン内(秒): " + ("・".join(parts) if parts else "（エンジンが内訳を返していません）")
+    return line1 + "\n" + line2
+
+
+def _file_hash(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
+    """版の指紋: 入れる全ファイルの連結から取る"""
+    return _engine_bundle(common_path, shelf_dir)[1]
+
+
+def _digest(*parts):
+    h = hashlib.sha1()
+    for p in parts:
+        h.update(json.dumps(p, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+class WorkspaceManager:
+    def __init__(self, client=None, state_path=None, engine_path=None, shelf_dir=None):
+        self._client = client
+        self.state_path = Path(state_path) if state_path else HERE / ".ws_state.json"
+        self.engine_path = Path(engine_path) if engine_path else ENGINE_COMMON
+        self.shelf_dir = Path(shelf_dir) if shelf_dir else (self.engine_path.parent / "ws_shelves")
+        self.catalog = CATALOG if self.shelf_dir.resolve() == SHELF_DIR.resolve() else gas_ws_catalog.load(self.shelf_dir)
+        self.finder = gas_ws_find.Finder(self.catalog, synonyms=gas_ws_find.load_synonyms(self.shelf_dir / "synonyms.txt"),
+                                         guide=gas_ws_find.load_guide(self.shelf_dir / "guide.txt"))
+        self.misses_path = HERE / ".ws_misses.tsv"      # 弱かった頼み（git に入れない）
+        self.api_uses_path = gas_ws_api.USES_FILE        # 撃った api の型の記録（git に入れない）
+        self.engine_title = ENGINE_TITLE      # エンジンの GAS プロジェクトの名前（別のエンジンを使う道具が差し替える）
+        self.extra_texts = []                 # 共通部・棚のあとに足すファイル [(名前, 本文)]（別のエンジンの入口など）
+        self.timing = os.environ.get("WS_TIMING", "").lower() in ("1", "true", "yes", "on")   # ws_do の内訳を返事に足す
+        self.last_timing = None
+        self._tim = None
+
+    # ------------------------------------------------------------ 状態
+    @property
+    def client(self):
+        if self._client is None:
+            from gas_client import GasClient
+            self._client = GasClient()
+        return self._client
+
+    def _load(self):
+        try:
+            d = json.loads(self.state_path.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+        return {}
+
+    def _save(self, st):
+        tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self.state_path)
+
+    # ------------------------------------------------------------ エンジン
+    def engine_version(self):
+        return _engine_bundle(self.engine_path, self.shelf_dir)[2]
+
+    def _engine_files(self, split=False):
+        """GAS に入れるファイル。既定は appsscript と、全部をつないだ 1 本の Engine（順番は共通部 → Catalog → 棚）。
+        split=True は共通部・Catalog・棚のファイルごとに分ける（設計書の形）"""
+        texts = _engine_texts(self.engine_path, self.shelf_dir)
+        texts[0] = (texts[0][0], re.sub(r"var ENGINE_VERSION = '[^']*';", f"var ENGINE_VERSION = '{self.engine_version()}';", texts[0][1], count=1))
+        manifest = {
+            "timeZone": "Asia/Tokyo", "exceptionLogging": "STACKDRIVER", "runtimeVersion": "V8",
+            # 目（render）が罫線を読むのに Sheets の高度なサービスを使う（許可は spreadsheets のまま増えない）
+            "dependencies": {"enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
+            "oauthScopes": [
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/documents",
+                "https://www.googleapis.com/auth/drive",
+            ],
+            "webapp": {"executeAs": "USER_DEPLOYING", "access": "MYSELF"},
+        }
+        head = {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, indent=2)}
+        texts = texts + list(self.extra_texts)
+        if split:
+            return [head] + [{"name": n, "type": "SERVER_JS", "source": s} for n, s in texts]
+        return [head, {"name": "Engine", "type": "SERVER_JS", "source": "\n".join(s for _, s in texts)}]
+
+    def _find_engine_sid(self):
+        q = f"mimeType='application/vnd.google-apps.script' and name='{self.engine_title}' and trashed=false"
+        files = self._drive_list(q, "files(id,name)")
+        return files[0]["id"] if files else None
+
+    def install_engine(self, st=None):
+        """エンジンの置き場所を決め、リポジトリの版を差し替える（無ければ作る）"""
+        st = st if st is not None else self._load()
+        sid = st.get("engine_sid") or self._find_engine_sid()
+        if not sid:
+            sid = self.client.create_project(self.engine_title)["scriptId"]
+        self.client._put_content(sid, self._engine_files())
+        dep_id = st.get("engine_deploy_id") or None
+        dep = self.client.deploy(
+            sid,
+            description=f"{self.engine_title} {self.engine_version()}",
+            deployment_id=dep_id,
+            refresh=not dep_id,
+            fast=True,
+        )
+        dep_id = (dep or {}).get("deploymentId") or dep_id or ""
+        url = (dep or {}).get("webAppUrl") or ""
+        if not url.startswith("http"):
+            prev_url = st.get("engine_url") or ""
+            url = prev_url if (dep_id and prev_url.startswith("http") and prev_url.endswith("/exec")) else self.client.resolve_webapp_url(sid, refresh=True, dev=False)
+        st["engine_url"] = re.sub(r"/(exec|dev)$", "/exec", url)
+        if dep_id:
+            st["engine_deploy_id"] = dep_id
+        st["engine_sid"] = sid
+        st["engine_ver"] = self.engine_version()
+        self._save(st)
+        return st
+
+    def _ensure_engine(self):
+        st = self._load()
+        url = st.get("engine_url") or ""
+        if (
+            not st.get("engine_sid")
+            or not url.endswith("/exec")
+            or not st.get("engine_deploy_id")
+            or st.get("engine_ver") != self.engine_version()
+        ):
+            st = self.install_engine(st)
+        return st
+
+    def _post(self, body, timeout=90):
+        tim = self._tim
+        if getattr(self, "lane", "") and "lane" not in body:
+            body = dict(body, lane=self.lane)       # 並べて回すとき（試験用のエンジンだけが読む）
+        st = self._ensure_engine()
+        if tim:
+            tim.lap("版")
+        url = st["engine_url"]
+        try:
+            r = self.client.call_webapp(url, body=body, method="POST", use_auth=True, timeout=timeout)
+        except TimeoutError as e:
+            raise WorkspaceTimeout(str(e))
+        finally:
+            if tim:
+                tim.lap("往復")
+        data = r.get("data")
+        if isinstance(data, dict):
+            ver = data.get("version")
+            if ver and ver != self.engine_version() and not body.get("_retried"):
+                # 版が違う（誰かがエンジンを書き換えた）→ 差し替えて 1 回だけ撃ち直す
+                self.install_engine(self._load())
+                return self._post(dict(body, _retried=True), timeout)
+            err_msg = str(data.get("error") or "")
+            if data.get("ok") is False and ("呼び出す権限がありません" in err_msg or "You do not have permission to call" in err_msg or "Required permissions:" in err_msg):
+                raise WorkspaceAuthNeeded(self._auth_message(data.get("auth_url") or url))
+            return data
+        text = (r.get("text") or "")
+        if "Authorization needed" in text or "承認が必要" in text or "authorization" in text.lower()[:600]:
+            raise WorkspaceAuthNeeded(self._auth_message(url))
+        if r.get("status_code") in (500, 502, 503, 504) or "Exceeded maximum execution time" in text or "最大実行時間" in text:
+            raise WorkspaceTimeout(f"エンジンが応答しませんでした（HTTP {r.get('status_code')}）")
+        raise WorkspaceError("エンジンの返事が読めません: " + re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:200])
+
+    @staticmethod
+    def _auth_message(url):
+        return ("エンジンの許可がまだです（最初の 1 回だけ、ブラウザで押す必要があります）。\n"
+                f"1. このURLを開く: {url}\n"
+                "2. 「権限を確認」→ アカウントを選び、「詳細」→「（安全ではないページ）に移動」→「許可」を押す\n"
+                "3. 押したら、もう一度頼んでください。")
+
+    # ------------------------------------------------------------ Drive（名前で探す）
+    def _drive_list(self, q, fields):
+        r = self.client._request_with_retry(
+            "GET", "https://www.googleapis.com/drive/v3/files", headers=self.client._headers(),
+            params={"q": q, "fields": fields, "pageSize": 20, "orderBy": "modifiedTime desc"}, timeout=15)
+        if r.status_code != 200:
+            raise WorkspaceError(f"Drive の一覧に失敗しました（{r.status_code}）")
+        return r.json().get("files", [])
+
+    def _drive_meta(self, fid):
+        r = self.client._request_with_retry(
+            "GET", f"https://www.googleapis.com/drive/v3/files/{fid}", headers=self.client._headers(),
+            params={"fields": "id,name,mimeType,trashed"}, timeout=15)
+        if r.status_code == 404:
+            raise WorkspaceError(f"ファイル {fid} が見つかりません（または、このアカウントでは開けません）")
+        if r.status_code != 200:
+            raise WorkspaceError(f"ファイル情報の取得に失敗しました（{r.status_code}）")
+        return r.json()
+
+    @staticmethod
+    def _kind_of_mime(m):
+        return "sheet" if m == MIME_SHEET else "doc" if m == MIME_DOC else None
+
+    def _search_name(self, name, want_kind=None):
+        esc = name.replace("\\", "\\\\").replace("'", "\\'")
+        mimes = [MIME_SHEET, MIME_DOC] if not want_kind else [MIME_SHEET if want_kind == "sheet" else MIME_DOC]
+        mq = " or ".join(f"mimeType='{m}'" for m in mimes)
+        exact = self._drive_list(f"name='{esc}' and ({mq}) and trashed=false", "files(id,name,mimeType,modifiedTime,webViewLink)")
+        found = exact or self._drive_list(f"name contains '{esc}' and ({mq}) and trashed=false", "files(id,name,mimeType,modifiedTime,webViewLink)")
+        if not found:
+            raise WorkspaceError(f"「{name}」という名前のスプレッドシート・文書が見つかりません。")
+        if len(found) > 1:
+            lines = [f"「{name}」に当たるファイルが {len(found)} 件あります。どれか決めてください（URL か ID を target に）："]
+            for f in found[:6]:
+                lines.append(f"  - {f['name']}（{self._kind_label(f['mimeType'])}・最終更新 {f.get('modifiedTime', '')[:16].replace('T', ' ')}）{f.get('webViewLink', '')}")
+            raise WorkspaceError("\n".join(lines))
+        f = found[0]
+        return {"id": f["id"], "name": f["name"], "kind": self._kind_of_mime(f["mimeType"])}
+
+    @staticmethod
+    def _kind_label(m):
+        return "スプレッドシート" if m == MIME_SHEET else "文書" if m == MIME_DOC else "その他"
+
+    # ------------------------------------------------------------ ops の検査
+    @staticmethod
+    def parse_ops(ops):
+        if isinstance(ops, str):
+            try:
+                ops = json.loads(ops)
+            except Exception as e:
+                raise WorkspaceError(f"ops が JSON として読めません: {e}")
+        if isinstance(ops, dict):
+            ops = [ops]
+        if not isinstance(ops, list) or not ops:
+            raise WorkspaceError("ops は棚の JSON 配列です。例: [{\"shelf\":\"棚の名前\", …引数}]。棚の名前と引数は ws_find（または ws_look の ask）で引けます。")
+        return ops
+
+    def validate_ops(self, ops):
+        """棚の札（引数: どれか:）から形を検査する。意味（列があるか・範囲が表の中か）はエンジンが見る"""
+        kinds, first_kind = set(), None
+        for i, op in enumerate(ops, 1):
+            if not isinstance(op, dict) or not isinstance(op.get("shelf"), str):
+                raise WorkspaceError(f"{i} 番目の ops に \"shelf\"（棚の名前）がありません。棚の名前と引数は ws_find（または ws_look の ask）で引けます。")
+            name = op["shelf"]
+            spec = self.catalog.spec(name)
+            if not spec:
+                near = self.finder.near(name)
+                raise WorkspaceError(f"棚「{name}」はありません（{i} 番目）。" + ("\n" + near if near else ""))
+            msg = self.catalog.check_op(i, op) or (gas_ws_catalog.EXTRA_CHECKS[name](op) if name in gas_ws_catalog.EXTRA_CHECKS else None)
+            if msg:
+                s = self.catalog.by_name[name]
+                raise WorkspaceError(msg + "\nその棚の札:\n" + "\n".join(self.finder.card(s)) + "\n   引数: " + s["args_raw"])
+            if first_kind is None:
+                first_kind = spec["kind"]
+            if not self.catalog.by_name[name].get("shared") and name not in gas_ws_catalog.LOCAL_HANDLERS:
+                kinds.add(spec["kind"])
+        if len(kinds) > 1:
+            raise WorkspaceError("スプレッドシートの棚と文書の棚は、同じ ws_do にまとめられません。")
+        return kinds.pop() if kinds else first_kind
+
+    @staticmethod
+    def _op_needs_target(op):
+        sh = op.get("shelf")
+        if sh in gas_ws_catalog.LOCAL_HANDLERS:
+            return False
+        fn = gas_ws_catalog.NEEDS_TARGET_FN.get(sh)
+        return bool(fn(op)) if fn else True
+
+    @classmethod
+    def _ops_need_target(cls, ops):
+        return any(cls._op_needs_target(o) for o in ops)
+
+    # ------------------------------------------------------------ 相手を決める
+    def resolve_target(self, target, kind, st):
+        target = (target or "").strip()
+        cur = st.get("target") or {}
+        if not target:
+            if not cur.get("id"):
+                raise WorkspaceError("今の相手が決まっていません。target に URL・ID・名前、または \"new:名前\"（新規）を渡してください。")
+            return dict(cur), False
+        if target.lower().startswith("new:"):
+            raw = target[4:].strip()
+            if not raw:
+                raise WorkspaceError("new: のあとに新しいファイルの名前が要ります（例: new:見積書）。")
+            if "/" in raw:
+                folder_spec, name = raw.rsplit("/", 1)
+                folder_spec, name = folder_spec.strip(), name.strip()
+                if not name:
+                    raise WorkspaceError("new:フォルダ名/ のあとに新しいファイルの名前が要ります（例: new:営業部/見積書）。")
+                out = {"new": name, "kind": kind}
+                if folder_spec:
+                    out["folder"] = folder_spec
+                return out, True
+            return {"new": raw, "kind": kind}, True
+        m = re.search(r"/(spreadsheets|document)/d/([\w-]+)", target)
+        if m:
+            fid = m.group(2)
+            out = {"id": fid, "kind": "sheet" if m.group(1) == "spreadsheets" else "doc"}
+            if out["kind"] == "sheet":
+                mg = re.search(r"[?#&]gid=([0-9]+)", target)
+                tc = st.get("table_cache") or {}
+                if mg and int(mg.group(1)) == 0 and tc.get("id") == fid and tc.get("sheets"):
+                    out["sheet"] = tc["sheets"][0]
+                elif cur.get("id") == fid and cur.get("sheet"):
+                    out["sheet"] = cur["sheet"]
+            return out, False
+        m_open = re.search(r"(?:^|[?&])id=([\w-]{20,})", target)
+        if m_open and target.startswith("http"):
+            fid = m_open.group(1)
+            if cur.get("id") == fid:
+                return dict(cur), False
+            meta = self._drive_meta(fid)
+            k = self._kind_of_mime(meta["mimeType"])
+            if not k:
+                raise WorkspaceError(f"「{meta['name']}」はスプレッドシートでも文書でもありません。")
+            return {"id": meta["id"], "kind": k, "name": meta["name"]}, False
+        if re.fullmatch(r"[\w-]{25,}", target):
+            if cur.get("id") == target:
+                return dict(cur), False
+            meta = self._drive_meta(target)
+            k = self._kind_of_mime(meta["mimeType"])
+            if not k:
+                raise WorkspaceError(f"「{meta['name']}」はスプレッドシートでも文書でもありません。")
+            return {"id": meta["id"], "kind": k, "name": meta["name"]}, False
+        if cur.get("name") == target and cur.get("id"):
+            return dict(cur), False
+        return self._search_name(target, kind), False
+
+    # ------------------------------------------------------------ ws_do
+    def do(self, ops="", target="", ok=False, ask=""):
+        tim = _Timer()
+        self._tim = tim
+        try:
+            if ask and not (ops if isinstance(ops, (list, dict)) else str(ops or "").strip()):
+                out = self._do_ask(ask, target, ok, tim)
+            else:
+                out = self._do(ops, target, ok, tim)
+        finally:
+            self._tim = None
+        tim.lap("返事")
+        self.last_timing = tim
+        return out + ("\n" + format_timing(tim) if self.timing else "")
+
+    # ------------------------------------------------------------ ws_do(ask=…)：当てて・組んで・撃つを 1 回で
+    def _remember_table(self, st, tgt, table, sheets):
+        """表の形を覚える（次の頼みの引数を組むのに使う）。sheets は名前のリスト"""
+        if not tgt.get("id"):
+            return
+        st["table_cache"] = {"id": tgt["id"], "sheet": tgt.get("sheet", ""), "table": table or None,
+                             "sheets": [s["name"] if isinstance(s, dict) else s for s in (sheets or [])]}
+
+    def _cached_table(self, st, tgt):
+        tc = st.get("table_cache") or {}
+        if tgt.get("id") and tc.get("id") == tgt["id"] and (not tgt.get("sheet") or tc.get("sheet") == tgt.get("sheet")):
+            return tc
+        return None
+
+    def _do_ask(self, ask, target, ok, tim):
+        import gas_ws_ask
+        st = self._load()
+        # 相手が決まる前やターゲット不要の棚だけのときは、ファイルを開かずにそのまま実行する
+        p0 = gas_ws_ask.plan(ask, self.finder, "")
+        if p0.fire and p0.ops and not self._ops_need_target(p0.ops):
+            tim.lap("当て")
+            st2, res, key = self._do_res(p0.ops, target, ok, tim)
+            text = self._finish_do(st2, res, key)
+            if not res.get("ok"):
+                return text
+            shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p0.ops)
+            ch_text = " ／ ".join(res.get("changed") or []) or "なし"
+            out_lines = [self._title(res.get("target") or {}), f"直した所: {ch_text}（撃った棚: {shown}）"]
+            errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った"))]
+            rest = [x for x in (res.get("notes") or []) if x not in errs]
+            out_lines += errs
+            if rest:
+                out_lines.append("メモ: " + " ／ ".join(rest[:3]))
+            out_lines.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
+            return "\n".join(out_lines)
+        tgt, is_new = self.resolve_target(target, None, st)
+        kind = tgt.get("kind") or ""
+        if not kind and tgt.get("id"):
+            kind = self._kind_of_mime(self._drive_meta(tgt["id"])["mimeType"]) or ""
+        tim.lap("相手")
+        tc, fresh = None, False
+
+        def look_fresh():
+            try:
+                self._look(target=target)           # 表の形を見て覚える（1 往復）
+            except WorkspaceError as e:
+                if "がありません。あるのは" not in str(e):
+                    raise
+                s0 = self._load()                    # 覚えていたシートが消えた → 先頭のシートで見直す
+                (s0.get("target") or {}).pop("sheet", None)
+                self._save(s0)
+                self._look(target=target)
+            s = self._load()
+            t = dict(s.get("target") or tgt)
+            return t, self._cached_table(s, t)
+        if kind == "sheet" and not is_new:
+            tc = self._cached_table(st, tgt)
+            if tc is None:                          # 表の形を覚えていない相手は、先に 1 回だけ見る
+                tgt, tc = look_fresh()
+                fresh = True
+        tim.lap("表の形")
+        for attempt in range(2):
+            table = (tc or {}).get("table")
+            cur_sh = tgt.get("sheet") or (tc or {}).get("sheet") or ""
+            ls_info = st.get("last_scope") or {}
+            ls = ls_info.get("scope") if ls_info.get("id") == tgt.get("id") and (not cur_sh or not ls_info.get("sheet") or ls_info.get("sheet") == cur_sh) else None
+            p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=cur_sh, last_scope=ls)
+            tim.lap("当て")
+            if not p.fire and p.missing and not p.reasons and not fresh and kind == "sheet" and not is_new:
+                # 覚えていた形で引数が決まらなかった → 形が変わったのかもしれない。1 回だけ見直して組み直す
+                tgt, tc = look_fresh()
+                fresh = True
+                table = (tc or {}).get("table")
+                cur_sh = tgt.get("sheet") or (tc or {}).get("sheet") or ""
+                p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=cur_sh, last_scope=ls)
+                tim.lap("当て")
+            if not p.fire:
+                return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
+            # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
+            # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
+            keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
+            extra = {} if keeps_shape else {"want_table": True}
+            if table and kind == "sheet" and not is_new and not keeps_shape:
+                extra["expect"] = table
+            st2, res, key = self._do_res(p.ops, target, ok, tim, extra)
+            if res.get("stale") and attempt == 0:
+                t = res.get("target") or tgt
+                if t.get("sheet") and (st2.get("target") or {}).get("id") == t.get("id"):
+                    st2["target"]["sheet"] = t["sheet"]     # 覚えていたシートが消えていたら、エンジンが見た先頭のシートに替える
+                self._remember_table(st2, t, res.get("table"), res.get("sheets"))
+                self._save(st2)
+                tc = self._cached_table(st2, t)
+                tgt, fresh = dict(t), True
+                continue
+            break
+        text = self._finish_do(st2, res, key)
+        shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p.ops)
+        if not res.get("ok"):
+            return text + "\n撃った棚: " + shown
+        tgt_out = res.get("target") or res.get("created") or {}
+        ch = res.get("changed") or []
+        ch_text = (" ／ ".join(ch[:2]) + (f"（ほか {len(ch) - 2} 件）" if len(ch) > 2 else "")) if ch else "なし"
+        tail = []
+        if res.get("created"):
+            tail.append("新しく作りました")
+        if res.get("backup"):
+            tail.append(f"控え #{res['backup']}（ws_undo で戻せます）")
+        elif not st2.get("backup", True) and not res.get("created") and not res.get("local_only"):
+            tail.append("控えなし（backup=OFF）")
+        if res.get("replayed"):
+            tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
+        errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った"))]
+        rest = [x for x in (res.get("notes") or []) if x not in errs]
+        tail = errs + tail
+        tail.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
+        out_lines = [
+            self._title(tgt_out),
+            f"直した所: {ch_text}（撃った棚: {shown}）",
+        ]
+        if rest:
+            out_lines.append("メモ: " + " ／ ".join(rest[:3]))
+        out_lines.append(" ／ ".join(tail))
+        return "\n".join(out_lines)
+
+    def _keeps_shape(self, op):
+        """表の形を変えない棚か（触る に 値・シート構成 が無い。触る が引数で変わる api は変えるものとして扱う）"""
+        s = self.catalog.by_name.get(op.get("shelf"))
+        if not s or op.get("shelf") == "api":
+            return False
+        return not ({"値", "シート構成"} & set(s.get("touch") or []))
+
+    def _do(self, ops, target, ok, tim):
+        st, res, key = self._do_res(ops, target, ok, tim)
+        return self._finish_do(st, res, key)
+
+    def _do_res(self, ops, target, ok, tim, extra=None):
+        ops = self.parse_ops(ops)
+        if any(isinstance(o, dict) and o.get("ok") is True for o in ops):
+            ok = True
+        ops = [{k: v for k, v in o.items() if k != "ok"} if isinstance(o, dict) and "ok" in o else o for o in ops]
+        kind = self.validate_ops(ops)
+        ops = [self.catalog.normalize_op(o) for o in ops]   # 列[]・行[] に 1 つだけ渡された値を配列にそろえる
+        tim.lap("検査")
+        st = self._load()
+        local_ops = [o for o in ops if o["shelf"] in gas_ws_catalog.LOCAL_HANDLERS]
+        remote_ops = [o for o in ops if o["shelf"] not in gas_ws_catalog.LOCAL_HANDLERS]
+        pre_msgs, pending_local = [], []
+        for o in local_ops:
+            msg = gas_ws_catalog.LOCAL_HANDLERS[o["shelf"]](st, o, mgr=self, target=target, phase="pre")
+            if msg is None:
+                pending_local.append(o)
+            else:
+                pre_msgs.append(msg)
+        if pre_msgs:
+            self._save(st)
+        if not remote_ops:
+            tgt_out = dict(st.get("target") or {})
+            if pending_local:
+                tgt_out, _ = self.resolve_target(target, None, st)
+                for o in pending_local:
+                    msg = gas_ws_catalog.LOCAL_HANDLERS[o["shelf"]](
+                        st, o, mgr=self, target=target, target_id=tgt_out.get("id"), phase="post"
+                    )
+                    if msg:
+                        pre_msgs.append(msg)
+            return st, {"ok": True, "target": tgt_out, "changed": pre_msgs, "notes": [], "remaining": [], "backup": 0, "local_only": True}, None
+        backup = bool(st.get("backup", True))   # 既定は控えを取る（README・WORKSPACE.md の約束）。「バックアップ取らなくていい」で以後ずっと切れる
+        need_tgt = bool((target or "").strip()) or self._ops_need_target(remote_ops)
+        if need_tgt:
+            tgt, is_new = self.resolve_target(target, kind, st)
+            tim.lap("相手")
+            if tgt.get("kind") and tgt["kind"] != kind:
+                raise WorkspaceError("今の相手は" + ("文書" if tgt["kind"] == "doc" else "スプレッドシート")
+                                     + "ですが、頼みの棚は" + ("文書" if kind == "doc" else "シート") + "用です。target を替えてください。")
+            # やり直しは 3 回まで（同じ相手での失敗が続いたとき）
+            key = tgt.get("id") or tgt.get("new")
+            fails = st.get("fails") or {}
+            if not is_new and fails.get(key, 0) >= RETRY_MAX:
+                raise WorkspaceError(f"同じ相手（{tgt.get('name') or key}）で {RETRY_MAX} 回続けて通りませんでした。ここで止めます。"
+                                     "頼み方を変えるか、人の判断が要ります（ws_look で今の様子を見る・ws_undo list で控えを見る）。")
+            sheet = tgt.get("sheet") or ((st.get("target") or {}).get("sheet") if (st.get("target") or {}).get("id") == tgt.get("id") else "")
+            body_target = {k: v for k, v in tgt.items() if k in ("id", "kind", "new", "folder", "name")}
+            if is_new and not body_target.get("folder") and st.get("default_folder", {}).get("id"):
+                body_target["folder_id"] = st["default_folder"]["id"]
+            if sheet:
+                body_target["sheet"] = sheet
+        else:
+            tgt, is_new, key = {}, False, ""
+            tim.lap("相手")
+            body_target = {"no_file": True}
+        # 直接の道（Sheets API をエンジンの鍵で直接叩く。右の枠と同じ道）。戻しまで作れる棚だけ。乗らなければ下のエンジンの道
+        if need_tgt and not is_new and not pending_local and not os.environ.get("WS_NO_DIRECT"):
+            import gas_ws_direct
+            cur = st.get("target") or {}
+            dt = dict(tgt, kind=tgt.get("kind") or kind, sheet=sheet)
+            if cur.get("id") == dt.get("id"):
+                for k in ("name", "url"):
+                    dt.setdefault(k, cur.get(k))
+            dres = gas_ws_direct.DirectRunner(self).try_do(st, dt, remote_ops, tim)
+            if dres is not None:
+                for o in reversed(remote_ops):
+                    sc = next(({k: o[k]} for k in ("header", "title", "col", "range") if o.get(k) not in (None, "", [])), None)
+                    if sc:
+                        dres["_last_scope"] = sc
+                        break
+                tim.last = time.perf_counter()
+                return st, dres, key
+            self._save(st)          # 鍵・乗らなかった理由を残す
+        # 呼び直しで二重にならない番号：時間切れで終わった同じ頼みは同じ番号で撃つ
+        if extra or not backup:
+            h = _digest(body_target, remote_ops, bool(ok), extra, bool(backup))
+        else:
+            h = _digest(body_target, remote_ops, bool(ok))
+        pend = st.get("pending") or {}
+        call_id = pend["call_id"] if pend.get("hash") == h else uuid.uuid4().hex
+        st["pending"] = {"hash": h, "call_id": call_id}
+        self._save(st)
+        tim.lap("状態")
+        body = {"action": "do", "call_id": call_id, "target": body_target, "ops": remote_ops, "ok": bool(ok), "backup": bool(backup)}
+        body.update(extra or {})
+        try:
+            res = self._post(body)
+        except WorkspaceAuthNeeded:
+            st0 = self._load()
+            if st0.pop("pending", None) is not None:
+                self._save(st0)
+            raise
+        post_msgs = []
+        if res.get("ok"):
+            gas_ws_api.log_uses(remote_ops, self.api_uses_path)       # 撃った api の型と頼みの 1 行（棚に上げる候補の材料）
+            for o in reversed(remote_ops):
+                sc = next(({k: o[k]} for k in ("header", "title", "col", "range") if o.get(k) not in (None, "", [])), None)
+                if sc:
+                    res["_last_scope"] = sc
+                    break
+            tid = (res.get("created") or res.get("target") or {}).get("id") or tgt.get("id")
+            for o in pending_local:
+                msg = gas_ws_catalog.LOCAL_HANDLERS[o["shelf"]](
+                    st, o, mgr=self, target=target, target_id=tid, phase="post"
+                )
+                if msg:
+                    post_msgs.append(msg)
+            if pre_msgs or post_msgs:
+                res["changed"] = pre_msgs + (res.get("changed") or []) + post_msgs
+        tim.engine = res.get("ms") or {}
+        tim.last = time.perf_counter()
+        st = self._load()
+        st.pop("pending", None)
+        if res.get("ok") and not res.get("local_only"):     # エンジンの道で書いた時刻（ws_undo がどちらの道の直しを先に戻すか決める）
+            tid = (res.get("created") or res.get("target") or {}).get("id")
+            if tid:
+                st.setdefault("engine_last", {})[tid] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return st, res, key
+
+    def _finish_do(self, st, res, key):
+        tgt = res.get("target") or {}
+        created = res.get("created")
+        if created and not tgt.get("id"):
+            tgt = created
+        if tgt.get("id"):
+            # 失敗して戻したときのシート名は、作りかけて消えたシートかもしれないので覚えない（11/12 実機で踏んだ）
+            keys = ("id", "name", "kind", "url", "sheet") if res.get("ok") else ("id", "name", "kind", "url")
+            st["target"] = {k: tgt[k] for k in keys if tgt.get(k)}
+        df = res.get("default_folder")
+        if isinstance(df, dict):
+            if df.get("id") == "root" or not df.get("id"):
+                st.pop("default_folder", None)
+            else:
+                st["default_folder"] = {"id": df["id"], "name": df.get("name", "")}
+        fails = st.setdefault("fails", {})
+        if res.get("ok"):
+            for k in (key, tgt.get("id")):
+                if k:
+                    fails.pop(k, None)
+        elif not res.get("blocked") and not res.get("arg"):
+            nk = tgt.get("id") or key
+            if nk:
+                fails[nk] = fails.get(nk, 0) + 1
+                res["_fail_count"] = fails[nk]
+        if res.get("ok") and res.get("table") is not None:
+            self._remember_table(st, res.get("target") or {}, res.get("table"), res.get("sheets"))
+        if res.get("ok") and res.get("_last_scope") and tgt.get("id"):
+            prev_ls = st.get("last_scope") or {}
+            new_sc = dict(res["_last_scope"])
+            sel_keep = ""
+            if (
+                prev_ls.get("id") == tgt["id"]
+                and prev_ls.get("sheet", "") == tgt.get("sheet", "")
+                and prev_ls.get("selection")
+                and new_sc.get("range") == prev_ls.get("selection")
+            ):
+                new_sc = dict(prev_ls.get("scope") or new_sc)
+                sel_keep = prev_ls["selection"]
+            ls_entry = {"id": tgt["id"], "sheet": tgt.get("sheet", ""), "scope": new_sc}
+            if sel_keep:
+                ls_entry["selection"] = sel_keep
+            st["last_scope"] = ls_entry
+        self._save(st)
+        return self.format_do(res, backup=True) if st.get("backup", True) else self.format_do(res)
+
+    @staticmethod
+    def _title(tgt):
+        s = tgt.get("name") or "(名前なし)"
+        if tgt.get("sheet"):
+            s += " › " + tgt["sheet"]
+        return "対象: " + s
+
+    def format_do(self, res, backup=False):
+        tgt = res.get("target") or res.get("created") or {}
+        lines = [self._title(tgt)]
+        if res.get("ok"):
+            ch = res.get("changed") or []
+            for c in ch[:2]:
+                lines.append("直した所: " + c)
+            if len(ch) > 2:
+                lines[-1] += f"（ほか {len(ch) - 2} 件）"
+            if not ch:
+                lines.append("直した所: なし")
+            rest = []
+            if res.get("notes"):
+                rest.append("メモ: " + " ／ ".join(res["notes"][:3]))
+            if res.get("remaining"):
+                rest.append("残り: " + " ／ ".join(res["remaining"][:3]))
+            if rest:
+                lines.append("　".join(rest))
+            tail = []
+            if tgt.get("url"):
+                tail.append(tgt["url"])
+            if res.get("created"):
+                tail.insert(0, "新しく作りました")
+            if res.get("backup"):
+                tail.append(f"控え #{res['backup']}（ws_undo で戻せます）")
+            elif not backup and not res.get("created") and not res.get("local_only"):
+                tail.append("控えなし（backup=OFF）")
+            if res.get("replayed"):
+                tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
+            if tail:
+                lines.append(" ／ ".join(tail))
+            return "\n".join(lines[:5])
+        err = res.get("error") or "不明なエラー"
+        if res.get("blocked"):
+            lines.append("止めました: " + err)
+            lines.append("何も変えていません。消える物をユーザーに見せて確認し、ユーザーの承認の言葉があるときだけ ok=True で撃ち直してください。")
+        elif res.get("busy"):
+            lines.append("失敗: " + err)
+        else:
+            lines.append(f"失敗: {res.get('where', '')} {err}".strip())
+            if res.get("restored"):
+                lines.append("戻した: 書く前の控えから元に戻しました（途中の状態は残していません）")
+            elif res.get("restore_error"):
+                lines.append("戻せませんでした: " + res["restore_error"] + "（ws_undo list で控えを確認）")
+            if res.get("_fail_count"):
+                lines.append(f"やり直し: {res['_fail_count']}/{RETRY_MAX} 回目" + ("（次は止めます）" if res["_fail_count"] >= RETRY_MAX else ""))
+        if res.get("created") and not res.get("ok"):
+            lines.append("作ったファイルは今の相手として覚えました。やり直しは同じファイルに書きます: " + (res["created"].get("url") or ""))
+        return "\n".join(lines[:5])
+
+    # ------------------------------------------------------------ ws_look
+    def _cur_kind(self):
+        return (self._load().get("target") or {}).get("kind") or ""
+
+    def find(self, ask="", kind=""):
+        """棚の札を引く（通信なし）。kind 省略時は今の相手の種類で絞る"""
+        k = kind
+        if not k:
+            ask_s = (ask or "").strip()
+            # ask が文書系を指している場合は doc、そうでなければ今の相手の種類
+            if re.match(r"^分類\s*[:：]\s*文書$", ask_s) or re.match(r"^(?:棚\s*[:：]\s*)?doc\.", ask_s):
+                k = "doc"
+            else:
+                k = self._cur_kind()
+        return self.finder.ask(ask, k, log_to=self.misses_path)
+
+    def look(self, target="", sheet="", range="", image=False, ask=""):
+        if not ask:
+            return self._look_image(target, sheet, range, image)
+        try:
+            text = self._look_image(target, sheet, range, image)
+        except WorkspaceError as e:
+            # 相手が見られなくても、札は引ける（通信なし）
+            raise WorkspaceError(str(e) + "\n\n" + self.find(ask))
+        return text + "\n\n" + self.find(ask)
+
+    def _look_image(self, target="", sheet="", range="", image=False):
+        text = self._look(target=target, sheet=sheet, range=range)
+        if not image:
+            return text
+        st = self._load()
+        cur = st.get("target") or {}
+        body = {"action": "render", "target": {"id": cur.get("id"), "kind": cur.get("kind")},
+                "sheet": sheet or cur.get("sheet", ""), "range": range}
+        res = self._post(body)
+        if not res.get("ok"):
+            return text + "\n画像: 撮れませんでした（" + str(res.get("error") or "") + "）"
+        import gas_workspace_view
+        png = gas_workspace_view.render_to_png(res, HERE / "screenshots")
+        return text + f"\n画像: {png}（描き直した姿。グラフ・画像・プルダウンは写りません。この画像を開いて見た目を確かめる）"
+
+    def _look(self, target="", sheet="", range=""):
+        st = self._load()
+        tgt, is_new = self.resolve_target(target, None, st)
+        if is_new:
+            raise WorkspaceError("ws_look には new: は使えません（まだ無いファイルは見られません）。")
+        cur = st.get("target") or {}
+        body_target = {k: v for k, v in tgt.items() if k in ("id", "kind")}
+        if not body_target.get("kind"):
+            meta = self._drive_meta(tgt["id"])
+            body_target["kind"] = self._kind_of_mime(meta["mimeType"])
+        res = self._post({"action": "look", "target": body_target, "sheet": sheet or tgt.get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else ""), "range": range})
+        if not res.get("ok"):
+            raise WorkspaceError(res.get("error") or "見られませんでした")
+        t = res["target"]
+        st = self._load()
+        st["target"] = {k: t[k] for k in ("id", "name", "kind", "url", "sheet") if t.get(k)}
+        if t.get("kind") == "sheet":
+            self._remember_table(st, st["target"], res.get("table"), res.get("sheets"))
+        self._save(st)
+        return self.format_look(res)
+
+    @staticmethod
+    def format_look(res):
+        t = res["target"]
+        lines = [WorkspaceManager._title(t), "URL: " + t.get("url", "")]
+        if t["kind"] == "sheet":
+            lines.append("シート: " + "、".join(f"{s['name']}（{s['rows']}行×{s['cols']}列）" for s in res.get("sheets", [])))
+            tb = res.get("table")
+            if tb:
+                d = tb["data"].split("-")
+                lines.append(f"表: 見出し {tb['header_row']} 行目・{tb['first_col']}〜{tb['last_col']} 列・明細 {tb['data']} 行目" + (f"・合計行 {tb['total_row']} 行目" if tb.get("total_row") else "・合計行なし"))
+                lines.append("列: " + "、".join(f"{c['col']}={c['name']}{'(数値)' if c['number'] else ''}" for c in tb["columns"]))
+            else:
+                lines.append("表: 見つかりません（空のシート、または見出しの行がありません）")
+            for ln in res.get("side") or []:      # 脇の状態（入力規則・交互の色・保護・フィルタ・隠し・グループ・名前付き範囲・グラフ）。あるときだけ 1 行ずつ
+                lines.append(ln)
+            if res.get("values"):
+                lines.append(f"中身 {res['range']}:")
+                fm = res.get("formulas") or []
+                for i, row in enumerate(res["values"][:60]):
+                    cells = []
+                    for j, v in enumerate(row):
+                        f = fm[i][j] if i < len(fm) and j < len(fm[i]) else ""
+                        cells.append(f"{v}{'  {' + f + '}' if f else ''}")
+                    lines.append("\t".join(cells))
+        else:
+            lines.append(f"段落数 {res.get('paragraphs')}・見出し: " + (" / ".join(f"{h['no']}:{'#' * h['level']}{h['text']}" for h in res.get("headings", [])) or "なし"))
+            lines.extend(res.get("outline", []))
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------ ws_undo
+    def undo(self, to="", list=False, ok=False):
+        import gas_ws_direct
+        if list:
+            res = self._post({"action": "list"})
+            items = res.get("ledger") or []
+            st0 = self._load()
+            rows = [(it["time"][:16], f"#{it['n']} {it['time'][5:16]} {it['target']} {it['what']}" + ("（戻し済み）" if it.get("undone") else "")) for it in items[:15]]
+            rows += [(it["time"][:16], f"#D{it['n']} {it['time'][5:16]} {it.get('name') or it['id']} {it['what']}" + ("（戻し済み）" if it.get("undone") else ""))
+                     for it in (st0.get("direct_ledger") or [])[-15:]]
+            if not rows:
+                return "控えの記録はまだありません。"
+            rows.sort(key=lambda x: x[0], reverse=True)
+            return "\n".join(["番号 / 時刻 / 相手 / した事"] + [r for _, r in rows[:20]])
+        st = self._load()
+        dr = gas_ws_direct.DirectRunner(self)
+        tid = (st.get("target") or {}).get("id", "")
+        item = None
+        to_s = str(to or "").strip().lstrip("#")
+        if to_s.upper().startswith("D"):
+            item = next((x for x in (st.get("direct_ledger") or []) if str(x["n"]) == to_s[1:]), None)
+            if not item:
+                return f"戻せませんでした: 直接の道の控え #{to_s} がありません"
+            if item.get("undone"):
+                return f"戻せませんでした: #{to_s} はもう戻してあります"
+        elif not to_s and tid:
+            item = dr.latest(st, tid)
+            if item and (st.get("engine_last") or {}).get(tid, "") > item["time"]:
+                item = None          # エンジンの道の直しの方が新しい → そちらを戻す
+        if item:
+            res = dr.undo(st, item, ok=bool(ok))
+            self._save(st)
+            t = {"name": item.get("name") or "", "sheet": item.get("sheet", "")}
+            if res.get("ok"):
+                return "\n".join([self._title(t), f"戻した: #D{item['n']}（{item['what']}）を取り消しました"])
+            if res.get("needs_ok"):
+                return "\n".join([self._title(t), "止めました: " + res["error"]])
+            return "戻せませんでした: " + str(res.get("error") or "")
+        res = self._post({"action": "undo", "to": str(to or ""), "ok": bool(ok),
+                          "target_id": (st.get("target") or {}).get("id", "")})
+        t = res.get("target") or {}
+        if res.get("ok"):
+            if t.get("id"):
+                st["target"] = {k: t[k] for k in ("id", "name", "kind", "url") if t.get(k)}
+                st.get("fails", {}).pop(t["id"], None)
+                self._save(st)
+            return "\n".join([self._title(t), f"戻した: #{res['undone']}（{res.get('what', '')}）を取り消しました",
+                              f"控え #{res['backup']}（戻す前の状態。もう一度 ws_undo で元に戻せます）", t.get("url", "")])
+        msg = res.get("error") or "戻せませんでした"
+        if res.get("needs_ok"):
+            return "\n".join([self._title(t), "止めました: " + msg])
+        return "戻せませんでした: " + msg
+
+
+def write_engine_all(path=ENGINE_SOURCE):
+    """共通部＋Catalog＋棚をつないだ全文を書く（中身が同じなら触らない）。GAS に入れる Engine と同じ並び"""
+    text = "\n".join(s for _, s in _engine_texts())
+    path = Path(path)
+    try:
+        if not path.exists() or path.read_text(encoding="utf-8") != text:
+            path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    return path
+
+
+write_engine_all()

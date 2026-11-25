@@ -1,0 +1,77 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+tidy	表の見た目を整えて
+tidy	罫線と列幅を揃えて綺麗にして
+tidy	この表、見やすくして
+?tidy	表 体裁 整形
+seiri	全角の数字を半角に直して
+seiri	空白を取り除いてデータを整理して
+seiri	空行を詰めて
+?seiri	重複 削除 整理
+renumber	番号の列を1から振り直して
+renumber	No列を連番に直して
+renumber	通し番号をつけ直して
+?renumber	番号 連番 振り直し
+dedupe	重複した行を削除して
+dedupe	同じ行がダブっているのを取り除いて
+dedupe	ダブりを消しといて
+?dedupe	重複行 削除 クレンジング
+split.col	名前の列を姓と名に分割して
+split.col	C列をカンマで区切って別の列に分けて
+split.col	D列の名前をスペースで姓と名に分けといて
+?split.col	列 分割 区切り テキスト分流
+audit.check	この表のエラーや重複や空欄を診断して
+audit.check	データの品質チェックをして異常をチェックして
+audit.check	表を点検して問題点を診断して
+?audit.check	表の診断 エラーチェック 空欄 重複
+merge.unmerge	結合セルを解除して値を埋めて
+merge.unmerge	結合を解除して同じ値で埋めて
+merge.unmerge	結合セルをほどいて値を分解して入れて
+?merge.unmerge	結合解除 値埋め セル結合をほどく
+fill.blank	空白セルを上の値で穴埋めして
+fill.blank	A列の空欄を上の値で埋めて
+fill.blank	表のブランクを埋めて穴埋めして
+?fill.blank	穴埋め 空白セル 上の値で埋める
+number.fix	金額列の文字の数字を本物の数値に直して
+number.fix	文字列の数字を数値に変換して
+number.fix	文字になってる数字を本物の数値にして
+?number.fix	文字の数字 数値変換 本物の数値
+text.affix	顧客名列の末尾に「様」を付けて
+text.affix	品番列の先頭に「ID-」を付けて
+text.affix	先頭に文字や末尾に文字を付けて
+?text.affix	先頭 末尾 文字 付ける 接頭辞 接尾辞
+rows.trim	下の余分な空行と空列を削ってシートを軽くして
+rows.trim	末尾の空行を削除して不要な空行や余白の行を減らして
+rows.trim	下まで続く空行や空列を削って整理して
+?rows.trim	余分な空行 空列を削る シートを軽く
+blank.rows.delete	表の途中の空行を一括で削除して詰めて
+blank.rows.delete	空白の行を消して表を詰めて
+blank.rows.delete	途中の空いている行を消して空き行を消して
+?blank.rows.delete	空行を削除 空白行を消す 空行を詰める
+text.clean	備考列のセル内改行と連続空白を掃除して
+text.clean	セルの改行をスペースに直して余分なスペースを掃除して
+text.clean	不可視文字やゴミ文字を消してテキストを掃除して
+?text.clean	セル内改行 連続空白 不可視文字 テキスト掃除
+zero.pad	社員コード列を5桁で先頭0埋めして桁をそろえて
+zero.pad	番号列の前ゼロを補って桁数をそろえて
+zero.pad	IDの先頭に0を付けてゼロパディングして
+?zero.pad	ゼロ埋め ゼロパディング 先頭0 桁数をそろえる
+blank.fill.zero	数量列の空欄を0で一括埋めして
+blank.fill.zero	空白セルを0で埋めて未入力を埋めて
+blank.fill.zero	金額列のブランクに0を入れて空欄を埋めて
+?blank.fill.zero	空欄を0 空白を0 未入力を埋める
+text.mask	氏名列を先頭1文字だけ残して伏せ字にして
+text.mask	電話番号列をアスタリスクで隠してマスキングして
+text.mask	個人情報を隠すため文字の一部を隠して伏字にして
+?text.mask	伏せ字 マスキング 個人情報を隠す
+text.extract	備考列からメールアドレスを隣の列へ抽出して
+text.extract	説明列から数字だけ抽出して抜き出して
+text.extract	メモ列から括弧内を抽出して文字を抜き出して
+?text.extract	文字から抽出 メールを抽出 括弧内を抽出 正規表現で抽出
+split.rows	担当列のカンマ区切りを行に分割して縦に展開して
+split.rows	セル内の複数値を1行1件に展開して改行で行を分けて
+?split.rows	行に分割 縦に展開 1行1件に展開
+?split.rows	カンマで行を分け 改行で行を分け 行へ展開
+text.kana	フリガナ列のひらがなをカタカナに変換して統一して
+text.kana	名前の読みをひらがなに統一してフリガナを統一して
+?text.kana	カタカナに変換 ひらがなに変換 カタカナに統一
+?text.kana	ひらがなに統一 フリガナ かな変換 カナ変換

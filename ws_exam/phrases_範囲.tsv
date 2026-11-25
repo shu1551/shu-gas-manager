@@ -1,0 +1,89 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+write	B2に100を入れて
+write	セルA1へ合計と書き込んで
+write	A1に3って書いといて
+?write	セル 値 入力 書き込み
+replace	営業部を営業課に置換して
+replace	全部の株を(株)に書き換えて
+?replace	表記ゆれを一括で直したい
+?replace	文字 置き換え 検索 一括
+find	セルから合計という文字を検索して
+find	未払いがどのセルにあるか探して
+find	完了って入っているセルはどこ？
+?find	文字 検索 セル 番地
+clear.values	F2からG10の値をクリアして
+clear.values	B列の中身を空っぽにして
+clear.values	この表の数字だけ消しといて
+?clear.values	値 クリア 消去
+clear.format	A1からE21の書式をクリアして
+clear.format	B2:E20に付けた色や罫線を消して元に戻して
+?clear.format	ここの書式リセットしといて
+?clear.format	書式 リセット 色 クリア
+clear.all	J2:K9をすべてクリアして
+clear.all	G1:H10を書式ごと全部消して白紙にして
+?clear.all	この枠の中まっさらにしといて
+?clear.all	すべて消去 全部クリア
+?copy	セル範囲をコピーして別の場所に貼り付けて
+copy	A1:E21をG1に写して
+copy	A1からB10をD列にコピーしといて
+?copy	範囲 複製 コピー 貼り付け
+copy.values	E2:E20の数式を値にして固定して
+copy.values	E列の計算結果を値として貼り付けて
+?copy.values	ここ式を値に変えといて
+?copy.values	値貼り付け 数式 値化
+copy.format	A1:E1の書式をA21:E21にコピーして貼り付けて
+copy.format	B列をA列と同じ見た目に揃えて
+?copy.format	ここの書式だけ写しといて
+?copy.format	書式 コピー 貼り付け
+fill.series	A列に1から連番を入れて
+?fill.series	通し番号を下まで埋めて
+fill.series	A2からA20に1から順に番号振っといて
+?fill.series	連番 入力 自動採番
+?fill.date	A列に日付を連続で埋めて
+fill.date	カレンダー用に毎日の日付をB2からB20に入れて
+fill.date	1日ずつ日付下まで伸ばしといて
+?fill.date	日付 連続データ フィル
+fill.down	E2の計算式をE20まで下方向にコピーして
+fill.down	D2の内容をD3からD20まで下に写して
+?fill.down	式を下までオートフィルで伸ばしといて
+?fill.down	下 コピー オートフィル
+date.fix	日付の列に文字で入っている日付を、ちゃんとした日付にして
+date.fix	B2:B30の日付が文字になっているので日付に直して
+?date.fix	文字の日付を日付として扱えるようにしたい
+?date.fix	日付 文字 変換 日付型
+note.set	B5に「確認済み」とメモを付けて
+note.set	C3のセルに「要再確認」とメモを入れて
+?note.set	セルにメモや注釈を付けたい
+?note.set	メモ 付ける 注釈 セル
+note.clear	B5のメモを消して
+note.clear	このシートのメモを全部消して
+?note.clear	付いているメモをクリアしたい
+?note.clear	メモ 消す 削除 クリア
+link.set	A2に公式サイトへのハイパーリンクを貼って
+link.set	会社名列にURL列のリンクを一括で貼って
+?link.set	セルにクリックで飛べるリンクを設定したい
+?link.set	リンク 貼る ハイパーリンク URL
+transpose	A1:D5の行と列を入れ替えてF1に貼って
+transpose	この表を転置して別シートに出して
+transpose	縦横を入れ替えて行列を逆にして
+?transpose	転置 行と列を入れ替える 縦横逆転
+link.clear	A列のハイパーリンクを外して
+link.clear	表の中のリンクを解除して消して
+link.clear	セルに貼られたリンクだけ外して
+?link.clear	ハイパーリンク 外す 解除 消す
+link.extract	会社名列の埋め込みリンクのURLを隣列へ抽出して
+link.extract	A列のリンクのURLを取り出してURL列を作って
+link.extract	セルの埋め込みリンク先を隣列に抽出して
+?link.extract	埋め込みリンク URL抽出 URL列
+note.list	シート内のメモ一覧を別シートに出して
+note.list	全シートのメモを一覧にしてまとめて
+note.list	セルのコメント一覧シートに書き出して
+?note.list	メモ一覧 コメント一覧 注釈 書き出し
+rows.reverse	表のデータ行を上下反転して逆順に並べて
+rows.reverse	履歴行を下から上へ逆さにして最新を上に並べて
+rows.reverse	表の行を逆順にして順番を反転して
+?rows.reverse	上下反転 逆順 行を反転
+date.today	A1に今日の日付を入れて
+date.today	B2に現在時刻のタイムスタンプを入力して
+date.today	C1に本日の日付と今の日時を入れて
+?date.today	今日の日付 現在時刻 タイムスタンプ

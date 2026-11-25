@@ -1,0 +1,61 @@
+# 期待の棚<TAB>頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+sheet.add	集計用のシートを追加して
+sheet.add	空のシートを1枚足して
+?sheet.add	新しいタブ欲しいな
+?sheet.add	シート 追加 来月分
+sheet.rename	シート1の名前を売上に変更して
+?sheet.rename	タブの名前を付け替えたい
+sheet.rename	このシート、名前を集計に変えて
+?sheet.rename	シート 改名 名前変更
+sheet.move	集計シートを一番左に移動して
+?sheet.move	シートの順番を入れ替えたい
+sheet.move	売上のタブを先頭にして
+?sheet.move	シート 並び順 移動
+sheet.delete	集計シートを削除して
+sheet.delete	「メモ」のシートはいらないので削除して
+?sheet.delete	このタブ消しといて
+?sheet.delete	シート 削除 不要
+sheet.copy	テンプレートのシートを複製して
+?sheet.copy	同じシートをもう1枚作って
+sheet.copy	売上シートを複製して来月分を作っておいて
+?sheet.copy	シート コピー 複製
+sheet.hide	「一時保存」シートを隠して
+sheet.hide	設定シートを非表示にして
+?sheet.hide	このタブ見えなくしといて
+?sheet.hide	シート 非表示 隠す
+sheet.show	隠してある「一時保存」シートを再表示して
+sheet.show	非表示になっているシートを全部出して
+?sheet.show	隠したタブを出したい
+?sheet.show	シート 再表示 表示
+sheet.color	売上シートのタブを赤色に変えて
+sheet.color	「集計」のシート見出しの色を青にして
+?sheet.color	タブの色を緑っぽくしたい
+?sheet.color	シート タブ 色 変更
+sheet.merge	全シートの表を「統合」シートに縦にまとめて
+sheet.merge	複数シートを1枚のシートに縦結合して
+?sheet.merge	複数のシートを縦に合体させたい
+?sheet.merge	シート 結合 統合 縦にまとめ
+sheet.split	部署ごとにシートを分けて作って
+sheet.split	項目ごとに別シートに分割して
+?sheet.split	列の値ごとにシートを自動分割したい
+?sheet.split	シート 分割 別シート 分ける
+sheet.diff	4月と5月のシートの差分を比較して
+sheet.diff	2つのシートの違いを比較して変更点を出して
+sheet.diff	集計シートと売上シートを比較して差分シートに出して
+?sheet.diff	シート比較 差分 違い 変更点
+sheet.toc	全シートの目次シートを作って
+sheet.toc	リンク付きのシート一覧目次を作成して
+sheet.toc	ブック内のインデックスシートを作って
+?sheet.toc	目次シート シート一覧 リンク付き目次
+book.finish	全シートをA1に揃えて提出前仕上げをして
+book.finish	全シートのカーソルをA1に揃えて納品前仕上げをして
+book.finish	全シートA1選択で提出用に整えて
+?book.finish	提出前仕上げ 納品前仕上げ 全シートA1
+sheet.sort	シートを名前順に並べ替えて
+sheet.sort	全シートのタブを名前順で昇順に並べ替えて
+sheet.sort	シート名で降順に並べ替えて
+?sheet.sort	シート並べ替え 名前順 タブ昇順
+sheet.snapshot	売上シートを日付つきで複製保存して
+sheet.snapshot	集計シートの日付入りスナップショットを作って
+sheet.snapshot	今日の控えを作ってバックアップシートを複製保存して
+?sheet.snapshot	スナップショット 日付付き控え 複製保存

@@ -1,0 +1,77 @@
+# 期待の棚	頼みの文。期待が 2 本以上は + でつなぐ。(なし)＝棚が無いのが正解。(案内)＝案内の項目が返るのが正解。実在の人名・社名は書かない。
+protect.sheet	このシートを保護して編集できないようにして
+protect.sheet	シートを保護して、でもB2:B20だけは入力できるようにして
+?protect.sheet	他の人が書き換えられないように保護したい
+?protect.sheet	シート 保護 ロック
+protect.range	A1からC10のセル範囲を保護して
+protect.range	見出し行と合計のセルを保護して書き換えられないようにして
+?protect.range	この範囲だけ触れないようにロックしたい
+?protect.range	範囲 保護 ロック
+protect.remove	シートの保護を解除して
+protect.remove	A1:C10の保護を外して
+?protect.remove	ロックを解除して編集できるようにしたい
+?protect.remove	保護 解除 外す
+name.add	A1:F20に「売上データ」という名前を付けて
+name.add	単価の列を名前付き範囲「商品単価」として定義して
+?name.add	この範囲に名前をつけて式で呼べるようにしたい
+?name.add	名前付き範囲 作成 定義
+name.delete	「売上データ」という名前付き範囲を削除して
+name.delete	定義した名前「商品単価」を消して
+?name.delete	いらない名前付き範囲を消したい
+?name.delete	名前付き範囲 削除 消す
+name.list	定義されている名前付き範囲を一覧で教えて
+name.list	名前付き範囲がどこにあるか確認したい
+?name.list	どんな名前がついてるか調べたい
+?name.list	名前付き範囲 一覧 確認
+backup	バックアップを取って
+backup	バックアップ取らなくていい
+?backup	変更前に控えを残しておきたい
+?backup	バックアップ 控え オン オフ
+folder	「営業部」フォルダに移動して
+folder	これからは「月次報告」フォルダに作って
+?folder	別のフォルダに整理したい
+?folder	保存先 フォルダ 移動 設定
+drive.list	「TEST」フォルダの中身を一覧で見せて
+drive.list	ドライブを検索して「見積」を探して
+?drive.list	ドライブにどんなファイルがあるか一覧で確認したい
+?drive.list	ドライブ一覧 ファイル一覧 フォルダ一覧
+drive.rename	「資料_old.pdf」のファイル名を「資料_2026.pdf」に変えて
+drive.rename	「作業用」のフォルダ名を変更して
+?drive.rename	ドライブにある資料をリネームしたい
+?drive.rename	ファイル名 フォルダ名 変更 リネーム
+drive.move	「請求書.pdf」を移動してファイルを整理したい
+drive.move	「作業用」フォルダごと移動して
+?drive.move	PDFや画像やフォルダを別のフォルダに整理したい
+?drive.move	PDF 画像 フォルダごと 移動 ドライブ移動
+drive.trash	「古い下書き.pdf」をゴミ箱に入れて
+drive.trash	「一時作業」フォルダを削除して
+?drive.trash	ドライブの不要ファイルを消して整理したい
+?drive.trash	ゴミ箱 ごみ箱 削除 不要ファイル
+print.setup	A4横・幅1ページに収める印刷設定にして
+print.setup	A4縦で枠線なしの印刷設定を保存して
+?print.setup	印刷の向きや用紙サイズを設定したい
+?print.setup	印刷設定 A4横 1ページ 余白
+export.pdf	このシートをA4横のPDFにして保存して
+export.pdf	売上シートをPDF出力して保存して
+?export.pdf	シートをPDFファイルに書き出したい
+?export.pdf	PDF出力 PDF化 印刷用PDF 保存
+drive.share	閲覧専用の共有リンクを作って
+drive.share	yamada@example.comに編集権限を付けて共有して
+?drive.share	リンクを知っている全員に閲覧権限を付けたい
+?drive.share	共有リンク 閲覧リンク 権限 付与
+export.csv	このシートをCSVにしてDriveに保存して
+export.csv	売上シートをCSV出力してファイル保存して
+export.csv	データをCSVに書き出して保存して
+?export.csv	CSV出力 CSV保存 CSVファイル 書き出し
+protect.list	保護中のシートと範囲を一覧にして教えて
+protect.list	いま保護されている範囲の一覧を確認して
+protect.list	どこが保護されているか保護を調べて
+?protect.list	保護一覧 保護確認 どこが保護
+export.xlsx	このブックをExcel形式でDriveに保存して
+export.xlsx	スプレッドシートをxlsx出力してExcelに書き出して
+export.xlsx	報告書をエクセル形式にしてxlsx保存して
+?export.xlsx	Excel出力 エクセル出力 xlsx保存
+protect.formulas	シート内の数式セルを保護して計算式をロックして
+protect.formulas	入力セル以外を保護して数式が消えないようにロックして
+?protect.formulas	数式を保護 数式だけロック 計算式を保護
+?protect.formulas	数式セルを保護 計算式をロック 数式保護
