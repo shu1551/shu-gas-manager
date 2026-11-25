@@ -70,11 +70,11 @@ function comboMenuUndo() {
 // ---------------------------------------------------------------- 対象スプレッドシート・選択範囲
 
 /**
- * ヘッドレス API テスト用にターゲットスプレッドシート ID を ScriptProperties へ保存する。
+ * ヘッドレス API テスト用にターゲットスプレッドシート ID を人ごとの置き場（UserProperties）へ保存する（同じ大元を使う別の人に書き換えさせない）。
  * @param {string} ssId スプレッドシート ID
  */
 function comboSetTestTarget(ssId) {
-  var p = PropertiesService.getScriptProperties();
+  var p = PropertiesService.getUserProperties();
   var val = String(ssId || '').trim();
   if (val) {
     p.setProperty(COMBO_PROP_TARGET, val);
@@ -102,7 +102,7 @@ function comboOpenSs_(req) {
   }
   var propId = '';
   try {
-    propId = PropertiesService.getScriptProperties().getProperty(COMBO_PROP_TARGET) || '';
+    propId = PropertiesService.getUserProperties().getProperty(COMBO_PROP_TARGET) || '';
   } catch (e2) {}
   var id = reqId || propId || DEFAULT_TARGET_SS_ID || '';
   if (id) {
@@ -1879,9 +1879,10 @@ function comboSaveConfig(cfg) {
 }
 
 // ---------------------------------------------------------------- 郵便受け（PC側 watcher 連携）
+// 置き場は人ごと（UserProperties）。ライブラリ全体の置き場だと、同じ大元を使う別の人の頼み（シートの中身）が持ち主の PC の受け手に届いてしまう
 
 function comboPostboxEnqueue_(item) {
-  var p = PropertiesService.getScriptProperties();
+  var p = PropertiesService.getUserProperties();
   var q = [];
   try {
     var raw = p.getProperty(COMBO_PROP_PB_QUEUE);
@@ -1897,7 +1898,7 @@ function comboPostboxEnqueue_(item) {
 }
 
 function comboPushPostboxDone_(doneItem) {
-  var p = PropertiesService.getScriptProperties();
+  var p = PropertiesService.getUserProperties();
   var list = [];
   try {
     var raw = p.getProperty(COMBO_PROP_PB_DONE);
@@ -1909,7 +1910,7 @@ function comboPushPostboxDone_(doneItem) {
 }
 
 function comboPopPostboxDone_(ssId) {
-  var p = PropertiesService.getScriptProperties();
+  var p = PropertiesService.getUserProperties();
   var raw = p.getProperty(COMBO_PROP_PB_DONE);
   if (!raw) return [];
   var list = [];
@@ -1931,7 +1932,7 @@ function comboPopPostboxDone_(ssId) {
  * PC側ウォッチャー用：未処理の郵便受けキューを取得する。
  */
 function comboPostboxPoll() {
-  var p = PropertiesService.getScriptProperties();
+  var p = PropertiesService.getUserProperties();
   var q = [];
   try {
     var raw = p.getProperty(COMBO_PROP_PB_QUEUE);
@@ -1951,7 +1952,7 @@ function comboPostboxPoll() {
 var COMBO_PROP_PB_LAST_POLL = 'COMBO_PB_LAST_POLL';
 function comboPostboxListening_() {
   try {
-    var t = Number(PropertiesService.getScriptProperties().getProperty(COMBO_PROP_PB_LAST_POLL) || 0);
+    var t = Number(PropertiesService.getUserProperties().getProperty(COMBO_PROP_PB_LAST_POLL) || 0);
     return t > 0 && Date.now() - t < 60 * 1000;
   } catch (e) { return false; }
 }
@@ -1967,7 +1968,7 @@ function comboPostboxDeliver(resPayload) {
   var reqId = String(resPayload.reqId || '').trim();
   if (!reqId) return { ok: false, error: 'reqId がありません' };
 
-  var p = PropertiesService.getScriptProperties();
+  var p = PropertiesService.getUserProperties();
   var q = [];
   try {
     var raw = p.getProperty(COMBO_PROP_PB_QUEUE);
