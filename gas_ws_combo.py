@@ -1633,7 +1633,8 @@ class ComboPostboxWatcher:
         """1 件のローカル直結 / 郵便受けリクエストを公式 Claude Code CLI で解釈し、結果を返す。"""
         req_id = item.get("reqId")
         req_model = str(item.get("aiModel") or self.model or "").strip()
-        if req_model.startswith("gemini-"):
+        # ローカル直結は Claude Code だけ＝Claude の名前以外（gemini_hydrogen 等の古い設定）は Sonnet で答える
+        if not re.match(r"^(sonnet|opus|haiku|claude-[\w.-]+)$", req_model):
             req_model = "sonnet"
         if item.get("kind") == "mymacro":
             prompt = self._build_mymacro_prompt(item)
@@ -1833,8 +1834,20 @@ class ComboPostboxWatcher:
         rec_map = st.get("recorded_scripts") if isinstance(st.get("recorded_scripts"), dict) else {}
         sheets_map = st.get("sheets") if isinstance(st.get("sheets"), dict) else {}
 
-        if not script_id and ss_id:
-            script_id = str(rec_map.get(ss_id) or sheets_map.get(ss_id) or "").strip()
+        known_id = str(rec_map.get(ss_id) or sheets_map.get(ss_id) or "").strip() if ss_id else ""
+        if script_id and script_id != known_id:
+            # 頼みに付いてきた scriptId は、そのシートに紐づく Apps Script のときだけ使う（別のプロジェクトのコードを読ませない）
+            if not ss_id:
+                script_id = ""
+            else:
+                try:
+                    bound = self.client._get_bound_spreadsheet_id(script_id)
+                except Exception:
+                    bound = None
+                if bound != ss_id:
+                    script_id = ""
+        if not script_id:
+            script_id = known_id
 
         if not script_id:
             return {
@@ -2030,7 +2043,11 @@ class ComboPostboxWatcher:
             def _origin_ok(self):
                 # ブラウザからは固定の GASコンボ拡張機能のみ許可し、一般の外部 Web サイトからの無断アクセスを拒否する
                 o = str(self.headers.get("Origin") or "").strip()
-                return (not o) or (o == allowed_ext_origin)
+                if o:
+                    return o == allowed_ext_origin
+                # Origin なしでもブラウザ発（<img src=…/stop> 等）は Sec-Fetch-Site で見分けて断る。手元の CLI・Python は送らない
+                sfs = str(self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+                return sfs in ("", "none")
 
             def _reply(self, data=None, code=200):
                 self.send_response(code)

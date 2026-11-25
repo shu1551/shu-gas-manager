@@ -1265,9 +1265,11 @@ function comboBuildAiPrompts_(ask, ssName, sheetName, selection, table, sheets) 
 
 function comboResolveApiKey_(cfg) {
   if (!cfg) return '';
-  if (cfg.aiMode === 'api_gemini') return String(cfg.geminiKey || cfg.apiKey || '').trim();
-  if (cfg.aiMode === 'api_claude') return String(cfg.claudeKey || cfg.apiKey || '').trim();
-  return String(cfg.apiKey || '').trim();
+  // 鍵は方式ごと。共用の apiKey は形で見分けたときだけ使う（Gemini の鍵を Anthropic へ送る等、別の会社へ鍵を渡さない）
+  var legacy = String(cfg.apiKey || '').trim();
+  if (cfg.aiMode === 'api_gemini') return String(cfg.geminiKey || (/^AIza/.test(legacy) ? legacy : '') || '').trim();
+  if (cfg.aiMode === 'api_claude') return String(cfg.claudeKey || (/^sk-ant-/.test(legacy) ? legacy : '') || '').trim();
+  return '';
 }
 
 function comboResolveLatestApiModel_(provider, aliasOrModel, apiKey) {
@@ -1708,6 +1710,9 @@ function comboRunAsk(req) {
   }
 
   // 郵便受けモード（PC常駐ウォッチャー連携）
+  if (!comboPostboxListening_()) {
+    return { ok: false, error: COMBO_PB_NOT_LISTENING_MSG, text: COMBO_PB_NOT_LISTENING_MSG, gasMs: Date.now() - t0 };
+  }
   var reqId = comboPostboxEnqueue_({
     ssId: ss.getId(),
     ssName: ss.getName(),
@@ -1843,8 +1848,8 @@ function comboSanitizeConfig_(raw) {
     aiModel: raw.aiModel || 'sonnet',
     backupDefault: !!raw.backupDefault,
     hasApiKey: !!comboResolveApiKey_(raw),
-    hasGeminiKey: !!(raw.geminiKey || (raw.aiMode === 'api_gemini' && raw.apiKey)),
-    hasClaudeKey: !!(raw.claudeKey || (raw.aiMode === 'api_claude' && raw.apiKey))
+    hasGeminiKey: !!comboResolveApiKey_({ aiMode: 'api_gemini', geminiKey: raw.geminiKey, apiKey: raw.apiKey }),
+    hasClaudeKey: !!comboResolveApiKey_({ aiMode: 'api_claude', claudeKey: raw.claudeKey, apiKey: raw.apiKey })
   };
 }
 
@@ -1935,8 +1940,19 @@ function comboPostboxPoll() {
     if (fresh.length) p.setProperty(COMBO_PROP_PB_QUEUE, JSON.stringify(fresh));
     else p.deleteProperty(COMBO_PROP_PB_QUEUE);
   }
+  try { p.setProperty(COMBO_PROP_PB_LAST_POLL, String(now)); } catch (eLp) {}
   return { ok: true, queue: fresh, count: fresh.length, dropped: q.length - fresh.length };
 }
+
+// 郵便受けを取りに来る受け手（combo watch --postbox）が 1 分以内に来ていなければ、頼みを置いても誰も受け取らない
+var COMBO_PROP_PB_LAST_POLL = 'COMBO_PB_LAST_POLL';
+function comboPostboxListening_() {
+  try {
+    var t = Number(PropertiesService.getScriptProperties().getProperty(COMBO_PROP_PB_LAST_POLL) || 0);
+    return t > 0 && Date.now() - t < 60 * 1000;
+  } catch (e) { return false; }
+}
+var COMBO_PB_NOT_LISTENING_MSG = 'ローカル直結（Claude Code）は、Chrome 拡張「GASコンボ ブラウザ連動」のサイドパネルから使えます。この窓から AI を使うときは、設定タブで Gemini API か Claude API の鍵を入れてください（棚で済む頼みは今のまま動きます）。';
 
 /**
  * PC側ウォッチャー用：AI が解決した ops / 返答を受け取り、スプレッドシート上で実行して結果を保存する。
@@ -3609,6 +3625,9 @@ function comboQuickAiSave(req) {
       : [];
 
     if (effMode === 'postbox') {
+      if (!comboPostboxListening_()) {
+        return { ok: false, error: COMBO_PB_NOT_LISTENING_MSG, text: COMBO_PB_NOT_LISTENING_MSG, gasMs: Date.now() - t0 };
+      }
       var reqId = comboPostboxEnqueue_({
         kind: 'mymacro',
         mode: mode,
