@@ -1308,8 +1308,8 @@ function comboResolveLatestApiModel_(provider, aliasOrModel, apiKey) {
     return cFallback;
   }
   if (/^gemini-\d/.test(lower) && lower.indexOf('gemini-4-hydrogen-') !== 0) return raw;
-  var gFam = lower.indexOf('hydrogen') >= 0 ? 'hydrogen' : 'flash';
-  var gFallback = gFam === 'hydrogen' ? 'gemini-4-hydrogen' : 'gemini-3.8-flash';
+  var gFam = lower.indexOf('neon') >= 0 ? 'neon' : 'hydrogen';
+  var gFallback = gFam === 'neon' ? 'gemini-4-neon' : 'gemini-4-hydrogen';
   var gCacheKey = 'combo_latest_model:api_gemini:' + gFam;
   try {
     var ug = CacheService.getUserCache();
@@ -1333,13 +1333,9 @@ function comboResolveLatestApiModel_(provider, aliasOrModel, apiKey) {
           if (methods.length && methods.indexOf('generateContent') < 0) continue;
           var nm = String(m.name || '').replace(/^models\//, '').trim();
           var nl = nm.toLowerCase();
-          var vm = null;
-          if (gFam === 'hydrogen') {
-            vm = nl.match(/^gemini-(\d+(?:\.\d+)?)-hydrogen$/);
-          } else {
-            if (nl.indexOf('lite') >= 0 || nl.indexOf('exp') >= 0 || nl.indexOf('thinking') >= 0 || nl.indexOf('preview') >= 0) continue;
-            vm = nl.match(/^gemini-(\d+(?:\.\d+)?)-flash$/);
-          }
+          var vm = (gFam === 'neon')
+            ? nl.match(/^gemini-(\d+(?:\.\d+)?)-neon$/)
+            : nl.match(/^gemini-(\d+(?:\.\d+)?)-hydrogen$/);
           if (vm) {
             var verNum = parseFloat(vm[1]);
             if (verNum > bestVer) { bestVer = verNum; best = nm; }

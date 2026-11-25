@@ -1666,12 +1666,13 @@ def test_combo_lite_catalog_trims_defaults_and_has_list_tab():
         "gascombo_quick_cache_v1",
         "決定して保存",
         "previewOnly: true",
-        "gemini_flash",
         "gemini_hydrogen",
+        "gemini_neon",
         "postboxOnly = true",
         "#pane-list {",
     ):
         assert marker in sidebar, f"ComboSidebar missing marker: {marker}"
+    assert "gemini_flash" not in sidebar
     assert "quickCodeDetails" not in sidebar, "quickCodeDetails must be removed so code stays visible"
     assert "18766/kick" not in sidebar and "GAS_COMBO_KICK_WATCH" not in sidebar
     sp_js = (combo_mod.HERE / "ws_browser_ext" / "sidepanel.js").read_text(encoding="utf-8")
@@ -3256,10 +3257,9 @@ const ctx = vm.createContext({
           getResponseCode: () => 200,
           getContentText: () => JSON.stringify({
             models: [
-              { name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] },
-              { name: 'models/gemini-3.9-flash', supportedGenerationMethods: ['generateContent'] },
               { name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent'] },
-              { name: 'models/gemini-3.9-flash-lite', supportedGenerationMethods: ['generateContent'] }
+              { name: 'models/gemini-5-hydrogen', supportedGenerationMethods: ['generateContent'] },
+              { name: 'models/gemini-4-neon', supportedGenerationMethods: ['generateContent'] }
             ]
           })
         };
@@ -3273,15 +3273,19 @@ ctx.globalThis = ctx;
 vm.runInContext(payload.engine + '\n' + payload.server, ctx);
 const c1 = ctx.comboResolveLatestApiModel_('api_claude', 'sonnet', 'K1');
 const c2 = ctx.comboResolveLatestApiModel_('api_claude', 'sonnet', 'K1'); // cache hit
-const g1 = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_flash', 'K2');
-const g2 = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_hydrogen', 'K2');
+const g1 = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_hydrogen', 'K2');
+const g2 = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_neon', 'K2');
 failModels = true;
 const fbC = ctx.comboResolveLatestApiModel_('api_claude', 'haiku', 'K1');
-const fbG = ctx.comboResolveLatestApiModel_('api_gemini', 'sonnet', 'K2'); // cached flash hit
-process.stdout.write(JSON.stringify({ c1, c2, g1, g2, fbC, fbG, fetchCount }));
+const fbG = ctx.comboResolveLatestApiModel_('api_gemini', 'sonnet', 'K2'); // cached hydrogen hit
+const fbNeon = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_neon', 'K2'); // cached neon hit
+// 未キャッシュ状態でのフォールバック確認用 (apiKey なし)
+const fbDirectN = ctx.comboResolveLatestApiModel_('api_gemini', 'gemini_neon', '');
+process.stdout.write(JSON.stringify({ c1, c2, g1, g2, fbC, fbG, fbNeon, fbDirectN, fetchCount }));
 """
     res = _run_node_json(node_code, {"engine": by_name["Engine"], "server": by_name["ComboServer"]})
     assert res["c1"] == "claude-sonnet-6-0" and res["c2"] == "claude-sonnet-6-0"
-    assert res["g1"] == "gemini-3.9-flash" and res["g2"] == "gemini-4-hydrogen"
-    assert res["fbC"] == "claude-haiku-5-5" and res["fbG"] == "gemini-3.9-flash"
+    assert res["g1"] == "gemini-5-hydrogen" and res["g2"] == "gemini-4-neon"
+    assert res["fbC"] == "claude-haiku-5-5" and res["fbG"] == "gemini-5-hydrogen" and res["fbNeon"] == "gemini-4-neon"
+    assert res["fbDirectN"] == "gemini-4-neon"
     assert res["fetchCount"] == 4
