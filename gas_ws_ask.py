@@ -177,13 +177,41 @@ def _col_letter(n):
     return s
 
 
+def _resolve_col_ref(raw, table):
+    """列名の解決を 1 か所に統一する。順: 列記号 → 完全一致 → 含む列が 1 つだけ → 2 つ以上/0 なら None。"""
+    s = nfkc(str(raw or "")).strip()
+    if not s:
+        return None
+    if not table or not table.get("columns"):
+        return str(raw).strip()
+    if re.fullmatch(r"[A-Z]{1,3}", s):
+        return s
+    m_cl = re.fullmatch(r"([A-Z]{1,3})列", s)
+    if m_cl:
+        return m_cl.group(1)
+    s_clean = re.sub(r"(?:の列|列|の欄|欄)$", "", s).strip()
+    cols = [str(c.get("name") or "").strip() for c in table["columns"] if str(c.get("name") or "").strip()]
+    # 1. 完全一致
+    for cn in cols:
+        if nfkc(cn).strip() in (s, s_clean):
+            return cn
+    # 2. 含む列がちょうど 1 つだけ（2文字以上・ストップワード除外）
+    tok = re.sub(r"(?:別表|別|毎)$", "", s_clean).strip()
+    if len(tok) >= 2 and tok not in _COL_TOKEN_STOP:
+        hits = [cn for cn in cols if tok in nfkc(cn)]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
 def _col_names(text, table):
-    """見出しの名前で頼みに出てくる物（出てくる順・長い名前を優先して重なりを除く）"""
-    if not table:
+    """見出しの名前を 1 本化した順（完全一致 → 含む列が 1 つだけ）で出現順に返す。"""
+    if not table or not table.get("columns"):
         return []
-    names = [c["name"] for c in table.get("columns") or [] if str(c.get("name") or "").strip()]
+    names = [str(c.get("name") or "").strip() for c in table["columns"] if str(c.get("name") or "").strip()]
     hits = []
     taken = [False] * len(text)
+    # 1. 完全一致（長い名前優先）
     for nm in sorted(set(names), key=len, reverse=True):
         key = nfkc(nm).strip()
         start = 0
@@ -197,6 +225,20 @@ def _col_names(text, table):
                 hits.append((i, nm))
                 break
             start = i + 1
+    # 2. 残りの語から「含む列がちょうど 1 つだけ」を解決（2つ以上・0は採らない）
+    nfkc_text = nfkc(text)
+    if len(nfkc_text) == len(taken):
+        for m in re.finditer(r"[一-龥ァ-ヶA-Za-z0-9]{2,}", nfkc_text):
+            if any(taken[m.start():m.end()]):
+                continue
+            tok = re.sub(r"(?:別表|別|毎|列|欄)$", "", m.group(0))
+            if len(tok) < 2 or tok in _COL_TOKEN_STOP:
+                continue
+            matched = [nm for nm in names if tok in nfkc(nm)]
+            if len(matched) == 1 and not any(nm == matched[0] for _, nm in hits):
+                for k in range(m.start(), m.end()):
+                    taken[k] = True
+                hits.append((m.start(), matched[0]))
     return [nm for _, nm in sorted(hits)]
 
 
@@ -414,8 +456,102 @@ _COL_TOKEN_STOP = {
     "データ", "テーブル", "一覧", "全部", "全体", "全て", "行全体", "条件", "書式", "表示", "形式",
     "作成", "追加", "変更", "削除", "抽出", "固定", "並べ", "整理", "自動", "調整", "内容", "中身",
     "範囲", "セル", "タイトル", "見出し", "ヘッダ", "合計行", "標準", "棒グラフ", "折れ線", "円グラフ",
-    "新しい", "別表", "結果", "計算", "数式",
+    "新しい", "別表", "結果", "計算", "数式", "文字", "背景", "罫線", "太字", "斜体", "中央", "右揃",
+    "左揃", "非表示", "表示形式", "プルダウン", "リスト", "選択肢", "以上", "以下", "未満", "以外",
+    "重複", "空行", "空白", "空欄", "昇順", "降順", "上位", "下位", "最大", "最小", "小計", "累計",
+    "順位", "構成比", "割合", "消費税", "税込", "税抜", "円マーク", "カンマ", "パーセント", "年月日",
 }
+
+_FORMULA_COL_SHELVES = {
+    "calc.col", "calc.percent", "calc.diff", "calc.running", "calc.rank",
+    "calc.if", "calc.tax", "date.parts", "date.diff", "date.age",
+    "text.join", "col.compare", "lookup.add",
+}
+
+_SKIP_COL_VALIDATE = {
+    ("table.new", "number"), ("table.new", "total"),
+    ("lookup.add", "val_col"), ("lookup.add", "key_col"),
+}
+
+
+def _expr_referenced_cols(expr, table):
+    """計算式文字列の中で参照されている列名・列記号を抽出する。"""
+    if not expr:
+        return set()
+    s = nfkc(str(expr))
+    refs = set()
+    cols = (table or {}).get("columns") or []
+    for c in sorted(cols, key=lambda x: len(str(x.get("name") or "")), reverse=True):
+        nm = str(c.get("name") or "").strip()
+        cl = str(c.get("col") or "").strip()
+        if nm and nm in s:
+            refs.add(nm)
+            if cl:
+                refs.add(cl)
+            s = s.replace(nm, " ")
+    for m in re.finditer(r"(?<![A-Za-z0-9_$!])([A-Z]{1,3})(?![A-Za-z0-9_(])", s):
+        cl = m.group(1)
+        refs.add(cl)
+        for c in cols:
+            if c.get("col") == cl and c.get("name"):
+                refs.add(str(c["name"]).strip())
+    return refs
+
+
+def _validate_and_resolve_col_args(shelf, op, table, missing):
+    """全棚共通の列名解決ゲート。完全一致 → 一意部分一致 → 解けなければ止める（無い列名で撃たない）。"""
+    if not table or not table.get("columns"):
+        return
+    sh_name = shelf["name"]
+
+    def _add_miss(msg):
+        if msg not in missing:
+            missing.append(msg)
+
+    for a in shelf["args"]:
+        k, t = a["name"], a["type"]
+        if k not in op or (sh_name, k) in _SKIP_COL_VALIDATE:
+            continue
+        if t == "列":
+            raw = op[k]
+            res = _resolve_col_ref(raw, table)
+            if res:
+                op[k] = res
+            else:
+                op.pop(k, None)
+                _add_miss(f"表に無い列名（{raw}）")
+        elif t == "列[]":
+            vals = op[k] if isinstance(op[k], list) else [op[k]]
+            resolved_list = []
+            bad = []
+            for v in vals:
+                res = _resolve_col_ref(v, table)
+                if res:
+                    if res not in resolved_list:
+                        resolved_list.append(res)
+                else:
+                    bad.append(str(v))
+            if bad:
+                op.pop(k, None)
+                _add_miss(f"表に無い列名（{'・'.join(bad)}）")
+            elif resolved_list:
+                op[k] = resolved_list
+    if sh_name == "sort" and isinstance(op.get("cols"), list):
+        new_scols, bad_s = [], []
+        for spec in op["cols"]:
+            s = str(spec)
+            neg = s.startswith("-")
+            body = s[1:] if neg else s
+            res = _resolve_col_ref(body, table)
+            if res:
+                new_scols.append(("-" if neg else "") + res)
+            else:
+                bad_s.append(body)
+        if bad_s:
+            op.pop("cols", None)
+            _add_miss(f"表に無い列名（{'・'.join(bad_s)}）")
+        elif new_scols:
+            op["cols"] = new_scols
 
 
 def _has_number_meta(table):
@@ -586,6 +722,29 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
         if op.get("when") in ("gt", "ge", "lt", "le") and op.get("value") in (None, ""):
             _add_miss("value")
 
+    # 5. 式を入れる棚で入れ先の列(at)が式・計算の入力列と同じなら撃たない（自己上書き・循環参照防止）
+    if sh_name in _FORMULA_COL_SHELVES and op.get("at"):
+        dst_col = op["at"]
+        dst_l = _letter_of(table, dst_col) or dst_col
+        src_refs = set()
+        if sh_name == "calc.col" and op.get("expr"):
+            src_refs = _expr_referenced_cols(op["expr"], table)
+        else:
+            for sk in ("col", "col_a", "col_b", "start_col", "end_col"):
+                if op.get(sk):
+                    src_refs.add(op[sk])
+                    sl = _letter_of(table, op[sk])
+                    if sl:
+                        src_refs.add(sl)
+            if isinstance(op.get("cols"), list):
+                for sc in op["cols"]:
+                    src_refs.add(sc)
+                    sl = _letter_of(table, sc)
+                    if sl:
+                        src_refs.add(sl)
+        if dst_col in src_refs or dst_l in src_refs:
+            _add_miss(f"入れ先の列「{dst_col}」が式の入力列と同じため上書き不可")
+
 
 # ------------------------------------------------------------------ 1 節 → 1 op
 def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
@@ -703,7 +862,11 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             if v:
                 range_given = True
         elif t == "列":
-            if col_pool and not (k in shelf["any"] and any(op.get(x) not in (None, "", []) for x in shelf["any"])):
+            if k == "at" and not a["req"] and not re.search(r"(?:列|欄)[にへ]|の間に", text):
+                pass
+            elif shelf["name"] == "calc.col" and k == "at":
+                pass
+            elif col_pool and not (k in shelf["any"] and any(op.get(x) not in (None, "", []) for x in shelf["any"])):
                 v = col_pool.pop(0)
         elif t == "列[]":
             if col_pool:
@@ -916,11 +1079,21 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         has_at_cue = bool(re.search(r"(?:列|欄)[にへ]", t_nfkc))
         if not has_at_cue:
             op.pop("at", None)
-        elif tbl_cols_sorted:
+        elif "at" not in op or _resolve_col_ref(op.get("at"), table) is None:
+            op.pop("at", None)
             for cn in tbl_cols_sorted:
                 if re.search(re.escape(nfkc(cn)) + r"の?(?:列|欄)[にへ]", t_nfkc):
                     op["at"] = cn
                     break
+            if "at" not in op:
+                m_at_col = re.search(r"([^\s、,。をにのがとてで]{1,20}?)の?(?:列|欄)[にへ]", t_nfkc)
+                if m_at_col:
+                    raw_at = m_at_col.group(1).strip()
+                    res_at = _resolve_col_ref(raw_at, table)
+                    if res_at:
+                        op["at"] = res_at
+                    elif not re.search(r"足し|追加|作", t_nfkc):
+                        op["at"] = raw_at
         if "expr" not in op:
             ext_expr = _extract_calc_expr(text, table)
             if ext_expr:
@@ -933,17 +1106,21 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 after_op = m_after.group(1)
                 m_dest = re.search(r"([^\s、,。をの]{1,20}?)(?:の列|列|の欄|欄)?(?:を(?:出し|求め|計算|足し|追加|作|入れ)|に(?:出し|入れ|して))", after_op)
                 cand_nm = m_dest.group(1).strip() if m_dest else ""
-                if cand_nm in ("数式", "式", "計算式", "計算結果", "結果", "値", "金額"):
-                    # 一般語の場合は後ろにある既存列名を優先確認
+                if cand_nm in ("数式", "式", "計算式", "計算結果", "結果", "値"):
                     after_cols = _col_names(after_op, table)
-                    cand_nm = after_cols[-1] if after_cols else (cand_nm if cand_nm == "金額" else "")
+                    cand_nm = after_cols[-1] if after_cols else ""
+                elif cand_nm:
+                    # 既存列に一意解決できるなら（新規追加明示でなければ）既存列名へ正規化
+                    res_dest = _resolve_col_ref(cand_nm, table)
+                    if res_dest and not re.search(r"足し|追加|作", after_op):
+                        cand_nm = res_dest
                 if not cand_nm:
                     after_cols = _col_names(after_op, table)
                     if after_cols:
                         cand_nm = after_cols[-1]
                 if cand_nm:
                     op["name"] = cand_nm
-                    if cand_nm in tbl_cols_sorted and "at" not in op and not re.search(r"足し|追加", after_op):
+                    if cand_nm in tbl_cols_sorted and "at" not in op and not re.search(r"足し|追加|作", after_op):
                         op["at"] = cand_nm
         if op.get("expr") and op.get("name"):
             named = True
@@ -1085,7 +1262,11 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 if cols_auto:
                     op["auto"] = cols_auto
                     named = True
-    missing = [k for k in (a["name"] for a in shelf["args"] if a["req"]) if op.get(k) in (None, "", [])]
+    missing = []
+    _validate_and_resolve_col_args(shelf, op, table, missing)
+    for k in (a["name"] for a in shelf["args"] if a["req"]):
+        if op.get(k) in (None, "", []) and k not in missing:
+            missing.append(k)
     for em in extra_missing:
         if em not in missing:
             missing.append(em)

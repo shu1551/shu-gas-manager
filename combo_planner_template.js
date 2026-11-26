@@ -617,6 +617,121 @@ var ComboPlanner = (function () {
     return uniq;
   }
 
+  var _COL_TOKEN_STOP_TOP = {
+    "集計": 1, "合計": 1, "平均": 1, "件数": 1, "人数": 1, "グラフ": 1, "ピボット": 1, "クロス": 1, "シート": 1, "別シート": 1,
+    "データ": 1, "テーブル": 1, "一覧": 1, "全部": 1, "全体": 1, "全て": 1, "行全体": 1, "条件": 1, "書式": 1, "表示": 1, "形式": 1,
+    "作成": 1, "追加": 1, "変更": 1, "削除": 1, "抽出": 1, "固定": 1, "並べ": 1, "整理": 1, "自動": 1, "調整": 1, "内容": 1, "中身": 1,
+    "範囲": 1, "セル": 1, "タイトル": 1, "見出し": 1, "ヘッダ": 1, "合計行": 1, "標準": 1, "棒グラフ": 1, "折れ線": 1, "円グラフ": 1,
+    "新しい": 1, "別表": 1, "結果": 1, "計算": 1, "数式": 1, "文字": 1, "背景": 1, "罫線": 1, "太字": 1, "斜体": 1, "中央": 1, "右揃": 1,
+    "左揃": 1, "非表示": 1, "表示形式": 1, "プルダウン": 1, "リスト": 1, "選択肢": 1, "以上": 1, "以下": 1, "未満": 1, "以外": 1,
+    "重複": 1, "空行": 1, "空白": 1, "空欄": 1, "昇順": 1, "降順": 1, "上位": 1, "下位": 1, "最大": 1, "最小": 1, "小計": 1, "累計": 1,
+    "順位": 1, "構成比": 1, "割合": 1, "消費税": 1, "税込": 1, "税抜": 1, "円マーク": 1, "カンマ": 1, "パーセント": 1, "年月日": 1
+  };
+  var _FORMULA_COL_SHELVES_JS = {
+    "calc.col": 1, "calc.percent": 1, "calc.diff": 1, "calc.running": 1, "calc.rank": 1,
+    "calc.if": 1, "calc.tax": 1, "date.parts": 1, "date.diff": 1, "date.age": 1,
+    "text.join": 1, "col.compare": 1, "lookup.add": 1
+  };
+  var _SKIP_COL_VALIDATE_JS = {
+    "table.new:number": 1, "table.new:total": 1,
+    "lookup.add:val_col": 1, "lookup.add:key_col": 1
+  };
+
+  function _resolveColRefJs(raw, table) {
+    var s = nfkc(String(raw === null || raw === undefined ? "" : raw)).trim();
+    if (!s) return null;
+    if (!table || !Array.isArray(table.columns) || !table.columns.length) return String(raw).trim();
+    if (/^[A-Z]{1,3}$/.test(s)) return s;
+    var mCl = /^([A-Z]{1,3})列$/.exec(s);
+    if (mCl) return mCl[1];
+    var sClean = s.replace(/(?:の列|列|の欄|欄)$/, "").trim();
+    var cols = [];
+    for (var i = 0; i < table.columns.length; i++) {
+      var nm = String((table.columns[i] && table.columns[i].name) || "").trim();
+      if (nm) cols.push(nm);
+    }
+    for (var j = 0; j < cols.length; j++) {
+      var ncn = nfkc(cols[j]).trim();
+      if (ncn === s || ncn === sClean) return cols[j];
+    }
+    var tok = sClean.replace(/(?:別表|別|毎)$/, "").trim();
+    if (tok.length >= 2 && !_COL_TOKEN_STOP_TOP[tok]) {
+      var hits = [];
+      for (var k = 0; k < cols.length; k++) {
+        if (nfkc(cols[k]).indexOf(tok) >= 0) hits.push(cols[k]);
+      }
+      if (hits.length === 1) return hits[0];
+    }
+    return null;
+  }
+
+  function _exprReferencedColsJs(expr, table) {
+    var refs = {};
+    if (!expr) return refs;
+    var s = nfkc(String(expr));
+    var cols = (table && Array.isArray(table.columns)) ? table.columns.slice() : [];
+    cols.sort(function (a, b) { return String((b && b.name) || "").length - String((a && a.name) || "").length; });
+    for (var i = 0; i < cols.length; i++) {
+      var nm = String((cols[i] && cols[i].name) || "").trim();
+      var cl = String((cols[i] && cols[i].col) || "").trim();
+      if (nm && s.indexOf(nm) >= 0) {
+        refs[nm] = true;
+        if (cl) refs[cl] = true;
+        s = s.split(nm).join(" ");
+      }
+    }
+    var reL = /(?<![A-Za-z0-9_$!])([A-Z]{1,3})(?![A-Za-z0-9_(])/g;
+    var m;
+    while ((m = reL.exec(s)) !== null) {
+      var cl2 = m[1];
+      refs[cl2] = true;
+      for (var j = 0; j < cols.length; j++) {
+        if (cols[j] && cols[j].col === cl2 && cols[j].name) refs[String(cols[j].name).trim()] = true;
+      }
+    }
+    return refs;
+  }
+
+  function _validateAndResolveColArgsJs(shelf, op, table, missing) {
+    if (!table || !Array.isArray(table.columns) || !table.columns.length) return;
+    var shName = shelf.name;
+    var addMiss = function (msg) { if (missing.indexOf(msg) < 0) missing.push(msg); };
+    var argsList = shelf.args || [];
+    for (var i = 0; i < argsList.length; i++) {
+      var a = argsList[i], k = a.name, t = a.type;
+      if (!_hasOwn(op, k) || _SKIP_COL_VALIDATE_JS[shName + ":" + k]) continue;
+      if (t === "列") {
+        var raw = op[k];
+        var res = _resolveColRefJs(raw, table);
+        if (res) op[k] = res;
+        else { delete op[k]; addMiss("表に無い列名（" + raw + "）"); }
+      } else if (t === "列[]") {
+        var vals = Array.isArray(op[k]) ? op[k] : [op[k]];
+        var resList = [], bad = [];
+        for (var vi = 0; vi < vals.length; vi++) {
+          var rv = _resolveColRefJs(vals[vi], table);
+          if (rv) { if (resList.indexOf(rv) < 0) resList.push(rv); }
+          else bad.push(String(vals[vi]));
+        }
+        if (bad.length) { delete op[k]; addMiss("表に無い列名（" + bad.join("・") + "）"); }
+        else if (resList.length) op[k] = resList;
+      }
+    }
+    if (shName === "sort" && Array.isArray(op.cols)) {
+      var newScols = [], badS = [];
+      for (var si = 0; si < op.cols.length; si++) {
+        var sp = String(op.cols[si]);
+        var neg = sp.charAt(0) === "-";
+        var body = neg ? sp.slice(1) : sp;
+        var rs = _resolveColRefJs(body, table);
+        if (rs) newScols.push((neg ? "-" : "") + rs);
+        else badS.push(body);
+      }
+      if (badS.length) { delete op.cols; addMiss("表に無い列名（" + badS.join("・") + "）"); }
+      else if (newScols.length) op.cols = newScols;
+    }
+  }
+
   function _colNames(text, table) {
     if (!table || !table.columns) return [];
     var seenSet = {};
@@ -624,9 +739,10 @@ var ComboPlanner = (function () {
     for (var i = 0; i < table.columns.length; i++) {
       var rawNm = table.columns[i] && table.columns[i].name;
       if (rawNm !== null && rawNm !== undefined && String(rawNm).trim()) {
-        if (!seenSet[rawNm]) {
-          seenSet[rawNm] = true;
-          names.push(rawNm);
+        var sNm = String(rawNm).trim();
+        if (!seenSet[sNm]) {
+          seenSet[sNm] = true;
+          names.push(sNm);
         }
       }
     }
@@ -656,6 +772,34 @@ var ComboPlanner = (function () {
           break;
         }
         start = pos + 1;
+      }
+    }
+    var nfkcText = nfkc(text);
+    if (nfkcText.length === taken.length) {
+      var tokRe = /[\u4e00-\u9fff\u30a1-\u30f6A-Za-z0-9]{2,}/g;
+      var tm;
+      while ((tm = tokRe.exec(nfkcText)) !== null) {
+        var ovT = false;
+        for (var tk = tm.index; tk < tm.index + tm[0].length; tk++) {
+          if (taken[tk]) { ovT = true; break; }
+        }
+        if (ovT) continue;
+        var tok = tm[0].replace(/(?:別表|別|毎|列|欄)$/, "");
+        if (tok.length < 2 || _COL_TOKEN_STOP_TOP[tok]) continue;
+        var matched = [];
+        for (var mi = 0; mi < names.length; mi++) {
+          if (nfkc(names[mi]).indexOf(tok) >= 0) matched.push(names[mi]);
+        }
+        if (matched.length === 1) {
+          var already = false;
+          for (var hi0 = 0; hi0 < hits.length; hi0++) {
+            if (hits[hi0][1] === matched[0]) { already = true; break; }
+          }
+          if (!already) {
+            for (var tk2 = tm.index; tk2 < tm.index + tm[0].length; tk2++) taken[tk2] = true;
+            hits.push([tm.index, matched[0]]);
+          }
+        }
       }
     }
     hits.sort(function (a, b) { return a[0] - b[0]; });
@@ -1119,7 +1263,11 @@ var ComboPlanner = (function () {
         }
         if (av) rangeGiven = true;
       } else if (t === "列") {
-        if (colPool.length && !(anyList.indexOf(k) >= 0 && hasAnyFilled())) {
+        if (k === "at" && !arg.req && !/(?:列|欄)[にへ]|の間に/.test(text)) {
+          // 任意 at に計算入力列等を勝手に入れない
+        } else if (shelf.name === "calc.col" && k === "at") {
+          // calc.col の at は専用解析で決める
+        } else if (colPool.length && !(anyList.indexOf(k) >= 0 && hasAnyFilled())) {
           av = colPool.shift();
         }
       } else if (t === "列[]") {
@@ -1388,6 +1536,35 @@ var ComboPlanner = (function () {
           addMiss("value");
         }
       }
+      if (_FORMULA_COL_SHELVES_JS[shN] && opObj.at) {
+        var dstCol = opObj.at;
+        var dstL = _letterOf(tbl, dstCol) || dstCol;
+        var srcRefs = {};
+        if (shN === "calc.col" && opObj.expr) {
+          srcRefs = _exprReferencedColsJs(opObj.expr, tbl);
+        } else {
+          var sKeys = ["col", "col_a", "col_b", "start_col", "end_col"];
+          for (var ski = 0; ski < sKeys.length; ski++) {
+            var sv = opObj[sKeys[ski]];
+            if (sv) {
+              srcRefs[sv] = true;
+              var sl0 = _letterOf(tbl, sv);
+              if (sl0) srcRefs[sl0] = true;
+            }
+          }
+          if (Array.isArray(opObj.cols)) {
+            for (var sci0 = 0; sci0 < opObj.cols.length; sci0++) {
+              var scv = opObj.cols[sci0];
+              srcRefs[scv] = true;
+              var sl1 = _letterOf(tbl, scv);
+              if (sl1) srcRefs[sl1] = true;
+            }
+          }
+        }
+        if (srcRefs[dstCol] || srcRefs[dstL]) {
+          addMiss("入れ先の列「" + dstCol + "」が式の入力列と同じため上書き不可");
+        }
+      }
     }
 
     if (shelf.name === "cf.add" && op.when !== "formula") {
@@ -1643,13 +1820,23 @@ var ComboPlanner = (function () {
       }
       if (!/(?:列|欄)[にへ]/.test(tNfkcAt)) {
         delete op.at;
-      } else if (tblColsSorted.length) {
+      } else if (!_hasOwn(op, "at") || !_resolveColRefJs(op.at, table)) {
+        delete op.at;
         for (var ati = 0; ati < tblColsSorted.length; ati++) {
           var cnAt = tblColsSorted[ati];
           var escAt = nfkc(cnAt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           if (new RegExp(escAt + "の?(?:列|欄)[にへ]").test(tNfkcAt)) {
             op.at = cnAt;
             break;
+          }
+        }
+        if (!_hasOwn(op, "at")) {
+          var mAtCol = /([^\s、,。をにのがとてで]{1,20}?)の?(?:列|欄)[にへ]/.exec(tNfkcAt);
+          if (mAtCol) {
+            var rawAt = mAtCol[1].trim();
+            var resAt = _resolveColRefJs(rawAt, table);
+            if (resAt) op.at = resAt;
+            else if (!/足し|追加|作/.test(tNfkcAt)) op.at = rawAt;
           }
         }
       }
@@ -1664,9 +1851,12 @@ var ComboPlanner = (function () {
           var afterOp = mAfter[1];
           var mDest = /([^\s、,。をの]{1,20}?)(?:の列|列|の欄|欄)?(?:を(?:出し|求め|計算|足し|追加|作|入れ)|に(?:出し|入れ|して))/.exec(afterOp);
           var candNm = mDest ? mDest[1].trim() : "";
-          if (candNm === "数式" || candNm === "式" || candNm === "計算式" || candNm === "計算結果" || candNm === "結果" || candNm === "値" || candNm === "金額") {
+          if (candNm === "数式" || candNm === "式" || candNm === "計算式" || candNm === "計算結果" || candNm === "結果" || candNm === "値") {
             var afterCols = _colNames(afterOp, table);
-            candNm = afterCols.length ? afterCols[afterCols.length - 1] : (candNm === "金額" ? candNm : "");
+            candNm = afterCols.length ? afterCols[afterCols.length - 1] : "";
+          } else if (candNm) {
+            var resDest = _resolveColRefJs(candNm, table);
+            if (resDest && !/足し|追加|作/.test(afterOp)) candNm = resDest;
           }
           if (!candNm) {
             var afterCols2 = _colNames(afterOp, table);
@@ -1674,7 +1864,7 @@ var ComboPlanner = (function () {
           }
           if (candNm) {
             op.name = candNm;
-            if (tblColsSorted.indexOf(candNm) >= 0 && !_hasOwn(op, "at") && !/足し|追加/.test(afterOp)) {
+            if (tblColsSorted.indexOf(candNm) >= 0 && !_hasOwn(op, "at") && !/足し|追加|作/.test(afterOp)) {
               op.at = candNm;
             }
           }
@@ -1883,8 +2073,9 @@ var ComboPlanner = (function () {
     }
 
     var missing = [];
+    _validateAndResolveColArgsJs(shelf, op, table, missing);
     for (var mi = 0; mi < argsList.length; mi++) {
-      if (argsList[mi].req && _isEmptyVal(op[argsList[mi].name])) {
+      if (argsList[mi].req && _isEmptyVal(op[argsList[mi].name]) && missing.indexOf(argsList[mi].name) < 0) {
         missing.push(argsList[mi].name);
       }
     }
