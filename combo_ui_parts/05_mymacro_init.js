@@ -1904,19 +1904,22 @@
     return copyToClipboard(content).then(function() { return "copy"; });
   }
 
+  function setQuickExportImportNote(msg) {
+    if (els.quickNote) els.quickNote.textContent = msg;
+    if (els.settingsMyStatus) els.settingsMyStatus.textContent = msg;
+  }
+
   function exportMyMacros(fmt) {
     var runExport = function() {
       var out = exportMyMacrosData(fmt);
       if (!out.ok) {
-        if (els.quickNote) els.quickNote.textContent = "⚠ " + out.error;
+        setQuickExportImportNote("⚠ " + out.error);
         return;
       }
       downloadOrCopyText(out.filename, out.mime, out.content).then(function(how) {
-        if (els.quickNote) {
-          els.quickNote.textContent = (how === "download" ? "⬇ 書き出しました: " : "📋 コピーしました: ") + out.filename + "（" + out.count + " 件）";
-        }
+        setQuickExportImportNote((how === "download" ? "⬇ 書き出しました: " : "📋 コピーしました: ") + out.filename + "（" + out.count + " 件）");
       }).catch(function(err) {
-        if (els.quickNote) els.quickNote.textContent = "⚠ 書き出し失敗: " + formatError(err);
+        setQuickExportImportNote("⚠ 書き出し失敗: " + formatError(err));
       });
     };
     var map = (state.quick && state.quick.codeCache && state.quick.codeCache.map) || {};
@@ -1995,14 +1998,14 @@
   function importMyMacrosText(rawText) {
     var check = parseImportMyMacros(rawText);
     if (!check.ok) {
-      if (els.quickNote) els.quickNote.textContent = "⚠ 取込中止: " + check.error;
+      setQuickExportImportNote("⚠ 取込中止: " + check.error);
       return;
     }
     var idx = 0;
     var added = [];
     var stepNext = function() {
       if (idx >= check.blocks.length) {
-        if (els.quickNote) els.quickNote.textContent = "⬆ " + added.length + " 件を取り込みました: " + added.join("・");
+        setQuickExportImportNote("⬆ " + added.length + " 件を取り込みました: " + added.join("・"));
         quickClearCodeCache();
         loadQuickList(false);
         return;
@@ -2023,7 +2026,7 @@
           stepNext();
         },
         onError: function(err) {
-          if (els.quickNote) els.quickNote.textContent = "⚠ 取込エラー: " + formatError(err);
+          setQuickExportImportNote("⚠ 取込エラー: " + formatError(err));
         }
       });
     };
@@ -2267,7 +2270,7 @@
       if (!f) return;
       var reader = new FileReader();
       reader.onload = function() { importMyMacrosText(String(reader.result || "")); };
-      reader.onerror = function() { if (els.quickNote) els.quickNote.textContent = "⚠ ファイルを読み込めませんでした"; };
+      reader.onerror = function() { setQuickExportImportNote("⚠ ファイルを読み込めませんでした"); };
       reader.readAsText(f, "utf-8");
     });
   }

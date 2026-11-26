@@ -96,16 +96,8 @@
           <button class="quick-filter-btn" type="button" data-qfilter="shelf">棚</button>
         </div>
         <div id="quickCatBar" class="quick-cat-bar" style="display:none;"></div>
-        <div id="quickTplBar" class="quick-tpl-bar" style="display:none;"></div>
         <div id="quickList" class="hist-list">
           <div class="log-empty">読込中…</div>
-        </div>
-        <div class="quick-tools-row">
-          <button id="btnQuickTpl" class="btn" type="button" title="まとめ棚の定番テンプレートからマイマクロを作成">📦テンプレ</button>
-          <button id="btnQuickExport" class="btn" type="button" title="マイマクロを JSON 形式で書き出す">⬇JSON</button>
-          <button id="btnQuickExportGs" class="btn" type="button" title="マイマクロを .gs 形式で書き出す">⬇.gs</button>
-          <button id="btnQuickImport" class="btn" type="button" title="JSON または .gs ファイルからマイマクロを取り込む">⬆取込</button>
-          <input id="quickImportFile" type="file" accept=".json,.gs,.js,.txt" style="display:none;">
         </div>
         <div class="pane-footer">
           <button id="btnQuickRun" class="btn btn-primary" type="button">実行</button>
@@ -170,6 +162,14 @@
           <label class="conf-label">マイマクロ（全シート共通・GASクイック共通）</label>
           <div id="settingsMyStatus" class="conf-note" style="margin-bottom:4px;">確認中…</div>
           <button id="btnSettingsMyMacro" class="btn" type="button" style="width:100%;">マイマクロを作る</button>
+          <div class="quick-tools-row">
+            <button id="btnQuickTpl" class="btn" type="button" title="まとめ棚の定番テンプレートからマイマクロを作成">📦テンプレ</button>
+            <button id="btnQuickExport" class="btn" type="button" title="マイマクロを JSON 形式で書き出す">⬇JSON</button>
+            <button id="btnQuickExportGs" class="btn" type="button" title="マイマクロを .gs 形式で書き出す">⬇.gs</button>
+            <button id="btnQuickImport" class="btn" type="button" title="JSON または .gs ファイルからマイマクロを取り込む">⬆取込</button>
+            <input id="quickImportFile" type="file" accept=".json,.gs,.js,.txt" style="display:none;">
+          </div>
+          <div id="quickTplBar" class="quick-tpl-bar" style="display:none;margin-top:4px;margin-bottom:0;"></div>
         </div>
         <div class="conf-group">
           <label class="conf-label" for="settingsDefaultTab">起動時に開くタブ</label>

@@ -654,16 +654,8 @@
           <button class="quick-filter-btn" type="button" data-qfilter="shelf">棚</button>
         </div>
         <div id="quickCatBar" class="quick-cat-bar" style="display:none;"></div>
-        <div id="quickTplBar" class="quick-tpl-bar" style="display:none;"></div>
         <div id="quickList" class="hist-list">
           <div class="log-empty">読込中…</div>
-        </div>
-        <div class="quick-tools-row">
-          <button id="btnQuickTpl" class="btn" type="button" title="まとめ棚の定番テンプレートからマイマクロを作成">📦テンプレ</button>
-          <button id="btnQuickExport" class="btn" type="button" title="マイマクロを JSON 形式で書き出す">⬇JSON</button>
-          <button id="btnQuickExportGs" class="btn" type="button" title="マイマクロを .gs 形式で書き出す">⬇.gs</button>
-          <button id="btnQuickImport" class="btn" type="button" title="JSON または .gs ファイルからマイマクロを取り込む">⬆取込</button>
-          <input id="quickImportFile" type="file" accept=".json,.gs,.js,.txt" style="display:none;">
         </div>
         <div class="pane-footer">
           <button id="btnQuickRun" class="btn btn-primary" type="button">実行</button>
@@ -728,6 +720,14 @@
           <label class="conf-label">マイマクロ（全シート共通・GASクイック共通）</label>
           <div id="settingsMyStatus" class="conf-note" style="margin-bottom:4px;">確認中…</div>
           <button id="btnSettingsMyMacro" class="btn" type="button" style="width:100%;">マイマクロを作る</button>
+          <div class="quick-tools-row">
+            <button id="btnQuickTpl" class="btn" type="button" title="まとめ棚の定番テンプレートからマイマクロを作成">📦テンプレ</button>
+            <button id="btnQuickExport" class="btn" type="button" title="マイマクロを JSON 形式で書き出す">⬇JSON</button>
+            <button id="btnQuickExportGs" class="btn" type="button" title="マイマクロを .gs 形式で書き出す">⬇.gs</button>
+            <button id="btnQuickImport" class="btn" type="button" title="JSON または .gs ファイルからマイマクロを取り込む">⬆取込</button>
+            <input id="quickImportFile" type="file" accept=".json,.gs,.js,.txt" style="display:none;">
+          </div>
+          <div id="quickTplBar" class="quick-tpl-bar" style="display:none;margin-top:4px;margin-bottom:0;"></div>
         </div>
         <div class="conf-group">
           <label class="conf-label" for="settingsDefaultTab">起動時に開くタブ</label>
@@ -5835,19 +5835,22 @@
     return copyToClipboard(content).then(function() { return "copy"; });
   }
 
+  function setQuickExportImportNote(msg) {
+    if (els.quickNote) els.quickNote.textContent = msg;
+    if (els.settingsMyStatus) els.settingsMyStatus.textContent = msg;
+  }
+
   function exportMyMacros(fmt) {
     var runExport = function() {
       var out = exportMyMacrosData(fmt);
       if (!out.ok) {
-        if (els.quickNote) els.quickNote.textContent = "⚠ " + out.error;
+        setQuickExportImportNote("⚠ " + out.error);
         return;
       }
       downloadOrCopyText(out.filename, out.mime, out.content).then(function(how) {
-        if (els.quickNote) {
-          els.quickNote.textContent = (how === "download" ? "⬇ 書き出しました: " : "📋 コピーしました: ") + out.filename + "（" + out.count + " 件）";
-        }
+        setQuickExportImportNote((how === "download" ? "⬇ 書き出しました: " : "📋 コピーしました: ") + out.filename + "（" + out.count + " 件）");
       }).catch(function(err) {
-        if (els.quickNote) els.quickNote.textContent = "⚠ 書き出し失敗: " + formatError(err);
+        setQuickExportImportNote("⚠ 書き出し失敗: " + formatError(err));
       });
     };
     var map = (state.quick && state.quick.codeCache && state.quick.codeCache.map) || {};
@@ -5926,14 +5929,14 @@
   function importMyMacrosText(rawText) {
     var check = parseImportMyMacros(rawText);
     if (!check.ok) {
-      if (els.quickNote) els.quickNote.textContent = "⚠ 取込中止: " + check.error;
+      setQuickExportImportNote("⚠ 取込中止: " + check.error);
       return;
     }
     var idx = 0;
     var added = [];
     var stepNext = function() {
       if (idx >= check.blocks.length) {
-        if (els.quickNote) els.quickNote.textContent = "⬆ " + added.length + " 件を取り込みました: " + added.join("・");
+        setQuickExportImportNote("⬆ " + added.length + " 件を取り込みました: " + added.join("・"));
         quickClearCodeCache();
         loadQuickList(false);
         return;
@@ -5954,7 +5957,7 @@
           stepNext();
         },
         onError: function(err) {
-          if (els.quickNote) els.quickNote.textContent = "⚠ 取込エラー: " + formatError(err);
+          setQuickExportImportNote("⚠ 取込エラー: " + formatError(err));
         }
       });
     };
@@ -6198,7 +6201,7 @@
       if (!f) return;
       var reader = new FileReader();
       reader.onload = function() { importMyMacrosText(String(reader.result || "")); };
-      reader.onerror = function() { if (els.quickNote) els.quickNote.textContent = "⚠ ファイルを読み込めませんでした"; };
+      reader.onerror = function() { setQuickExportImportNote("⚠ ファイルを読み込めませんでした"); };
       reader.readAsText(f, "utf-8");
     });
   }
