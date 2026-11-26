@@ -33,10 +33,11 @@ def _build_color_norm_res():
         re.compile(rf"(?<![大小])(文字|フォント)(?:を|は|に)?({alt})"),
         re.compile(rf"(背景|塗り)(?:を|は|に)?({alt})"),
         re.compile(rf"(タイトル|見出し)(?:を|は|に)?({alt})"),
+        re.compile(rf"({alt})(?:に|で)塗"),
     )
 
 
-_FG_NOCOLOR_RE, _BG_NOCOLOR_RE, _TITLE_NOCOLOR_RE = _build_color_norm_res()
+_FG_NOCOLOR_RE, _BG_NOCOLOR_RE, _TITLE_NOCOLOR_RE, _PAINT_COLOR_RE = _build_color_norm_res()
 
 MIN_SCORE = 2          # これ未満の棚は出さない
 WEAK_SCORE = 6         # 1 位がこれ未満なら「近い棚は見つかりません」
@@ -83,6 +84,7 @@ def norm(s, synonyms):
     s = re.sub(r"(^|[^文])字の色", r"\1文字色", s)
     s = _FG_NOCOLOR_RE.sub(r"\1色\2", s)
     s = _BG_NOCOLOR_RE.sub(r"背景色\2", s)
+    s = _PAINT_COLOR_RE.sub(r"背景色\1", s)
     s = _TITLE_NOCOLOR_RE.sub(r"\1文字色\2", s)
     s = re.sub(r"(タイトル|表題|題名)の色", r"\1の文字色", s)
     return s.replace("を", "")

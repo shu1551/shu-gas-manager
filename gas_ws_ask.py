@@ -1043,10 +1043,23 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     scan = re.sub(r"[（(][^）)]*[）)]", " ", scan)  # （）の中（計算式や補足説明など）も列・範囲として読まない
     color_hits = _color_hits(scan)
     scan = _HEX_COLOR_RE.sub(" ", scan)     # #FF6600 等をセル番地や数値として誤読しない
-    sheet_hits = [s for s in sorted((sheets or []), key=lambda x: len(str(x)), reverse=True) if s and nfkc(s) in nfkc(scan)]
-    for sh_nm in sheet_hits:
-        scan = scan.replace(sh_nm, " ")
-        scan = nfkc(scan).replace(nfkc(sh_nm), " ")
+    has_sheet_arg = any(a["type"] == "シート" for a in shelf["args"])
+    sheet_hits = []
+    scan_n_sh = nfkc(scan)
+    for sh_nm in sorted((sheets or []), key=lambda x: len(str(x)), reverse=True):
+        if not sh_nm:
+            continue
+        sn_n = nfkc(str(sh_nm))
+        esc_sn = re.escape(sn_n)
+        explicit_sh_re = re.compile(rf"(?:シート|タブ)\s*の?\s*[「『]?{esc_sn}[」』]?|{esc_sn}\s*の?\s*(?:シート|タブ)")
+        if explicit_sh_re.search(scan_n_sh):
+            sheet_hits.append(sh_nm)
+            scan_n_sh = explicit_sh_re.sub(" ", scan_n_sh)
+            scan = explicit_sh_re.sub(" ", nfkc(scan))
+        elif has_sheet_arg and sn_n in scan_n_sh:
+            sheet_hits.append(sh_nm)
+            scan_n_sh = scan_n_sh.replace(sn_n, " ")
+            scan = nfkc(scan).replace(sn_n, " ")
     names = _col_names(scan, table)
     letters = _col_letters(scan)
     explicit_ranges = _all_explicit_ranges(scan)
@@ -1801,12 +1814,21 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 or re.search(r"(?:全シート|すべてのシート|全てのシート|シート全体|ブック全体).*(?:フォント|書体)", c)
             )
             has_total_row_cue = bool(
-                re.search(r"合計行|(?:一番下|表の下|下に).{0,16}合計|合計を.{0,12}(?:足|追加|入れ|付け)", c)
+                (
+                    ("合計" in c and re.search(r"一番下|最後の行|末尾の行|表の下|下に|合計行|合計欄", c))
+                    or re.search(r"合計を.{0,12}(?:足|追加|入れ|付け)", c)
+                )
                 and not re.search(r"ごと|別に|別シート|小計|平均|最大|最小|ピボット|クロス", c)
             )
             has_stat_row_cue = bool(
-                re.search(r"(?:平均|最大|最小)(?:値)?(?:の?行|を.{0,12}(?:足|追加|入れ|付け))|(?:一番下|表の下|下に).{0,16}(?:平均|最大|最小)", c)
+                re.search(r"平均|最大|最小", c)
+                and re.search(r"一番下|最後の行|末尾の行|表の下|下に|(?:平均|最大|最小)(?:値)?(?:の?行|を.{0,12}(?:足|追加|入れ|付け))", c)
                 and not re.search(r"ごと|別に|別シート|合計|ピボット|クロス", c)
+            )
+            has_paint_fmt_cue = bool(
+                _color_hits(c)
+                and "塗" in c
+                and not re.search(r"条件|以上|以下|未満|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行", c)
             )
             has_row_cf_cond = bool(
                 re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
@@ -1910,6 +1932,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("total")
             elif has_stat_row_cue:
                 _ensure_boost("stat.row")
+            elif has_paint_fmt_cue:
+                _ensure_boost("format")
             elif has_fmt_cue and not re.search(r"分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換|マイナス|赤字|三角|千円|百万", c):
                 _ensure_boost("format")
             elif len(scored) >= 2:

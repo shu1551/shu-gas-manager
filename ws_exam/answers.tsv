@@ -835,7 +835,7 @@ C列の重複を赤く	cf.dup,format,unique.list,validation.clear,width
 1行おきについてる色を外して	banding.remove,banding.add
 金額列をマイナス赤字の表示にして	format.negred,format,number.fix,doc.table.cell,filter.where
 シート全体のフォントをNoto Sans JPに統一して	font.unify,doc.style,format,group.remove,doc.font
-ステータス列が未完了の行を薄い赤で塗って	rows.highlight,cf.add,filter.delete,crosstab,dedupe
+ステータス列が未完了の行を薄い赤で塗って	rows.highlight,format,filter.delete,crosstab,banding.add
 見出しが名前と金額の表を作って	table.new,format,summary,pivot.new,doc.table.cell
 得意先ごとの金額の合計を出して	summary,total,calc.running,doc.table.cell,top.n
 部署別に金額のピボットテーブルを作って	pivot.new,table.new,summary,sort,format
