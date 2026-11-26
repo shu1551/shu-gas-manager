@@ -637,6 +637,77 @@ var ComboPlanner = (function () {
     "lookup.add:val_col": 1, "lookup.add:key_col": 1
   };
 
+  var _ADD_SHELVES_JS = {
+    "banding.add": 1, "filter.on": 1, "cf.add": 1, "cf.dup": 1, "cf.scale": 1, "cf.weekend": 1,
+    "validation.list": 1, "validation.number": 1, "validation.date": 1, "freeze": 1,
+    "note.set": 1, "link.set": 1, "protect.range": 1, "protect.sheet": 1,
+    "group.rows": 1, "group.cols": 1, "chart.new": 1
+  };
+
+  function _cleanValidationItemsJs(text, origQuotesList, curItems) {
+    var stripItem = function (x) {
+      return String(x === null || x === undefined ? "" : x).trim()
+        .replace(/^[「『"“\s]+|[」』"”\s]+$/g, "")
+        .replace(/[「『"“”』」]+/g, "").trim();
+    };
+    var splitChunk = function (chunk) {
+      var s = String(chunk === null || chunk === undefined ? "" : chunk).trim()
+        .replace(/^[「『"“\s]+/, "")
+        .replace(/(?:[」』"”]|の|から|という|で|を|選べる|\s)+$/, "").trim();
+      if (!s) return [];
+      var parts = /[・、,／/]/.test(s) ? s.split(/[・、,／/]/) : (s.indexOf("と") >= 0 ? s.split("と") : [s]);
+      var out = [];
+      for (var i = 0; i < parts.length; i++) {
+        var it = stripItem(parts[i]);
+        if (it) out.push(it);
+      }
+      return out;
+    };
+    if (origQuotesList && origQuotesList.length) {
+      if (origQuotesList.length >= 2) {
+        var c0 = [];
+        for (var qi = 0; qi < origQuotesList.length; qi++) {
+          var qit = stripItem(origQuotesList[qi]);
+          if (qit) c0.push(qit);
+        }
+        if (c0.length) return c0;
+      } else {
+        var c1 = splitChunk(origQuotesList[0]);
+        if (c1.length >= 2) return c1;
+      }
+    }
+    var mList = /(?:に|へ|は)\s*(.+?)\s*(?:の|という|から|で)?(?:選べる)?(?:プルダウン|リスト|選択肢)/.exec(nfkc(text));
+    if (mList) {
+      var c2 = splitChunk(mList[1]);
+      if (c2.length >= 2) return c2;
+    }
+    if (Array.isArray(curItems) && curItems.length) {
+      var c3 = splitChunk(curItems.join("・"));
+      if (c3.length) return c3;
+    }
+    return curItems;
+  }
+
+  function _normalizeCalcExprStrJs(expr, table) {
+    if (!expr) return expr;
+    var s = nfkc(String(expr)).trim()
+      .replace(/×/g, "*").replace(/＊/g, "*")
+      .replace(/÷/g, "/").replace(/／/g, "/")
+      .replace(/＋/g, "+").replace(/[−ー]/g, "-");
+    var parts = s.split(/([*/+\-()])/);
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var st = parts[i].trim();
+      if (!st || st === "*" || st === "/" || st === "+" || st === "-" || st === "(" || st === ")" || /^-?[0-9]+(?:\.[0-9]+)?$/.test(st)) {
+        out.push(st);
+      } else {
+        var res = _resolveColRefJs(st, table);
+        out.push(res || st);
+      }
+    }
+    return out.join("");
+  }
+
   function _resolveColRefJs(raw, table) {
     var s = nfkc(String(raw === null || raw === undefined ? "" : raw)).trim();
     if (!s) return null;
@@ -1011,6 +1082,7 @@ var ComboPlanner = (function () {
 
     var op = { shelf: shelf.name };
     var quotes = _quotes(text);
+    var origQuotesList = quotes.slice();
     var origQuotesMap = {};
     for (var oqi = 0; oqi < quotes.length; oqi++) origQuotesMap[quotes[oqi]] = true;
     var rules = shelf.ask_rules || [];
@@ -1352,6 +1424,15 @@ var ComboPlanner = (function () {
       } else if (!op.number_format && /(?:3桁|桁区切|カンマ)/.test(text)) {
         op.number_format = "#,##0";
       }
+      if (!_hasOwn(op, "size") && !_hasOwn(op, "size_delta") && !/(?:幅|高さ|列幅|行高|行|列)を(?:大きく|小さく)/.test(nfkc(scan))) {
+        var stepSz = /もっと|だいぶ|かなり|ぐっと|大幅に/.test(nfkc(scan)) ? 4 : 2;
+        if (/(?<!より)大きく|拡大して/.test(nfkc(scan))) op.size_delta = stepSz;
+        else if (/(?<!より)小さく|縮小して/.test(nfkc(scan))) op.size_delta = -stepSz;
+      }
+    }
+    if (shelf.name === "validation.list") {
+      var cleanedValItems = _cleanValidationItemsJs(text, origQuotesList, op.items);
+      if (cleanedValItems && cleanedValItems.length) op.items = cleanedValItems;
     }
     var _COL_TOKEN_STOP_JS = {
       "集計": 1, "合計": 1, "平均": 1, "件数": 1, "人数": 1, "グラフ": 1, "ピボット": 1, "クロス": 1, "シート": 1, "別シート": 1,
@@ -1499,9 +1580,12 @@ var ComboPlanner = (function () {
       var hasSizeCue = /(?<!より)(?:大きく|小さく)|文字サイズ|フォントサイズ|(?<![0-9])サイズを(?:変え|上げ|下げ|大きく|小さく|拡大|縮小)|拡大して|縮小して/.test(scanN);
       var isDimSize = /(?:幅|高さ|列幅|行高|行|列)を(?:大きく|小さく)/.test(scanN);
       if (hasSizeCue && (!isDimSize || /文字|フォント/.test(scanN))) {
-        if (!(shN === "width" && !/文字|フォント/.test(scanN)) && (opObj.size === undefined || opObj.size === null)) {
+        if (!(shN === "width" && !/文字|フォント/.test(scanN)) && (opObj.size === undefined || opObj.size === null) && (opObj.size_delta === undefined || opObj.size_delta === null)) {
           addMiss("サイズ（具体的な数値 pt）");
         }
+      }
+      if (_ADD_SHELVES_JS[shN] && /外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア/.test(scanN)) {
+        addMiss("逆の操作（外す・消す・解除）の語が含まれています");
       }
       if (/下線|アンダーライン|取り消し線|打ち消し線|取消線|縦書き|斜め文字|文字を回転|テキストを回転/.test(scanN)) {
         addMiss("未対応の書式指示（下線・取り消し線・回転等）");
@@ -1526,13 +1610,13 @@ var ComboPlanner = (function () {
         if (cHits.length && !opObj.bg && !opObj.color) addMiss("色（color/bg）");
       }
       if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
-        if (/以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではない|でない|空白|空欄/.test(scanN) && !opObj.when) {
+        if (/以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) && !opObj.when) {
           addMiss("条件（when）");
         }
         if (!opObj.when && _isEmptyVal(opObj.equals) && _isEmptyVal(opObj.value)) {
           addMiss("絞り込み条件（equals/when）");
         }
-        if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le") && _isEmptyVal(opObj.value)) {
+        if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "ne") && _isEmptyVal(opObj.value)) {
           addMiss("value");
         }
       }
@@ -1568,6 +1652,11 @@ var ComboPlanner = (function () {
     }
 
     if (shelf.name === "cf.add" && op.when !== "formula") {
+      if (op.when === "ne" && _isEmptyVal(op.value)) {
+        var mCfNe = /(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:になっていない|になってない|ではない|でない|じゃない|以外)/.exec(nfkc(text)) ||
+          /([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)/.exec(nfkc(text));
+        if (mCfNe) op.value = mCfNe[1].trim();
+      }
       if (!_isEmptyVal(op.value)) {
         var normCfV = _normFilterNumJs(op.value);
         if (normCfV !== null && /[%万億,]/.test(nfkc(String(op.value)))) {
@@ -1576,7 +1665,7 @@ var ComboPlanner = (function () {
       }
     }
     if (shelf.name === "cf.add" && op.when !== "formula" && table && table.first_col && table.last_col) {
-      if (/(?:行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|橙|灰|紫|水色|紺|茶|桃))/.test(text)) {
+      if (/(?:行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃)|いない行|ない行)/.test(text)) {
         var spCf = _dataSpan(table);
         var cfR1 = spCf ? spCf[0] : ((table.header_row || 1) + 1);
         var cfR2 = spCf ? spCf[1] : cfR1;
@@ -1594,9 +1683,12 @@ var ComboPlanner = (function () {
           else if (op.when === "le" && numVal !== "") expr = "=$" + refL + cfR1 + "<=" + numVal;
           else if (op.when === "gt" && numVal !== "") expr = "=$" + refL + cfR1 + ">" + numVal;
           else if (op.when === "lt" && numVal !== "") expr = "=$" + refL + cfR1 + "<" + numVal;
-          else if (/マイナス|負の値/.test(text)) expr = "=$" + refL + cfR1 + "<0";
-          else if (/([0-9][0-9,\.]*%?)(?:になってない|ではない)/.test(nfkc(text))) {
-            var mNot = /([0-9][0-9,\.]*%?)(?:になってない|ではない)/.exec(nfkc(text));
+          else if (op.when === "ne" && !_isEmptyVal(rawVCf)) {
+            if (normVCf !== null) expr = "=$" + refL + cfR1 + "<>" + normVCf;
+            else expr = "=$" + refL + cfR1 + "<>\"" + String(rawVCf).replace(/"/g, "\"\"") + "\"";
+          } else if (/マイナス|負の値/.test(text)) expr = "=$" + refL + cfR1 + "<0";
+          else if (/([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)/.test(nfkc(text))) {
+            var mNot = /([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)/.exec(nfkc(text));
             var nvNot = _normFilterNumJs(mNot[1]) || mNot[1];
             expr = "=$" + refL + cfR1 + "<>" + nvNot;
           } else if (op.when === "contains" && !_isEmptyVal(rawVCf)) {
@@ -1844,9 +1936,10 @@ var ComboPlanner = (function () {
         var extExpr = _extractCalcExprJs(text, table);
         if (extExpr) op.expr = extExpr;
       }
+      if (op.expr) op.expr = _normalizeCalcExprStrJs(op.expr, table);
       if (!_hasOwn(op, "name") && _hasOwn(op, "at")) op.name = op.at;
       if (!_hasOwn(op, "name") && op.expr) {
-        var mAfter = /(?:掛け|かけ|足[しす]|た[しす]|引[いけく]|ひ[いけく]|割[っりる]|わ[っりる]|乗算|加算|減算|除算)(?:て|た|算)?\s*(.+)$/.exec(tNfkcAt);
+        var mAfter = /(?:(?:掛け|かけ|足[しす]|た[しす]|引[いけく]|ひ[いけく]|割[っりる]|わ[っりる]|乗算|加算|減算|除算)(?:て|た|算)?|[×*＊÷\/／＋+−\-][^\s、,。をの]{1,20}?で)\s*(.+)$/.exec(tNfkcAt);
         if (mAfter) {
           var afterOp = mAfter[1];
           var mDest = /([^\s、,。をの]{1,20}?)(?:の列|列|の欄|欄)?(?:を(?:出し|求め|計算|足し|追加|作|入れ)|に(?:出し|入れ|して))/.exec(afterOp);
@@ -2027,6 +2120,21 @@ var ComboPlanner = (function () {
       }
       if (_hasOwn(op, "equals")) {
         _cleanFilterEqualsJs(op, text, table, origQuotesMap);
+      }
+      if (op.when === "ne") {
+        delete op.equals;
+        if (_isEmptyVal(op.value)) {
+          var mNe = /(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:以外|ではない|でない|じゃない|になっていない|になってない)/.exec(nfkc(text)) ||
+            /([^\s、。をにのがは]+?)(?:以外|ではない|でない|じゃない|になっていない|になってない)/.exec(nfkc(text));
+          if (mNe) {
+            var rawNe = mNe[1].trim();
+            var normNe = _normFilterNumJs(rawNe);
+            op.value = normNe !== null ? normNe : rawNe;
+          }
+        } else if (/[%万億,]/.test(nfkc(String(op.value)))) {
+          var normNe2 = _normFilterNumJs(op.value);
+          if (normNe2 !== null) op.value = normNe2;
+        }
       }
       if (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le") {
         delete op.equals;
@@ -2520,9 +2628,9 @@ var ComboPlanner = (function () {
       for (var cmi = 0; cmi < scored.length; cmi++) candMap[scored[cmi].shelf.name] = true;
       if (kind !== "doc") {
         var hasFmtCue = /(?:表示形式|曜日|hh:mm|yyyy|mm\/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻|年月日の?形|年月日形式|年月日に|日付の?形)/i.test(c);
-        var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了)/.test(c) ||
+        var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了)/.test(c) ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c);
-        var hasRowCfCue = /(?:行全体|の行|行を|行に)/.test(c) &&
+        var hasRowCfCue = /(?:行全体|の行|行を|行に|いない行|ない行)/.test(c) &&
           hasRowCfCond &&
           !/消|削除|重複|ダブ|固定色/.test(c) &&
           (_colorHits(c).length > 0 || /色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
@@ -2532,11 +2640,11 @@ var ComboPlanner = (function () {
         var hasSummaryCue = /(?:別(?:に|で|の)|ごと(?:に|の))/.test(c) &&
           /集計|合計|平均|件数/.test(c) &&
           !/ピボット|クロス|縦と横|小計|グラフ|並|ソート|抽出/.test(c);
-        var hasCalcCue = /(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|\/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)/.test(nfkc(c)) &&
+        var hasCalcCue = /(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|\/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:\/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)/.test(nfkc(c)) &&
           !/構成比|割合|消費税|税込|税抜|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に/.test(c);
         var hasChartCue = /(?:グラフ|棒グラフ|折れ線|円グラフ|散布図|面グラフ)/.test(c) &&
           !/消|削除|なく|いらない/.test(c);
-        var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|以外|ではない|空白|空欄)/.test(c) ||
+        var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄)/.test(c) ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|もの|データ|人)/.test(c)) &&
           /(?:だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ)/.test(c) &&
           !/(?:消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す)/i.test(c);
@@ -2546,6 +2654,7 @@ var ComboPlanner = (function () {
           !/重複|ダブ|全角|半角|整え|きれい|掃除|トリム|余分な空白|末尾|軽く|下まで|余白/.test(c);
         var hasBorderFmtCue = /罫線|外枠|格子/.test(c) &&
           !/整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線/.test(c);
+        var hasRemoveAct = /外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア|オフ|OFF/.test(c);
 
         var ensureBoost = function (nm) {
           boostName = nm;
@@ -2555,7 +2664,23 @@ var ComboPlanner = (function () {
           }
         };
 
-        if (hasRowCfCue) {
+        if (hasRemoveAct && /1行おき|交互|しましま|縞模様|ストライプ/.test(c)) {
+          ensureBoost("banding.remove");
+        } else if (hasRemoveAct && /条件付き書式|自動でついた色|自動の色/.test(c)) {
+          ensureBoost("cf.clear");
+        } else if (hasRemoveAct && /プルダウン|入力規則/.test(c)) {
+          ensureBoost("validation.clear");
+        } else if (hasRemoveAct && /フィルタ|フィルター|絞り込み|▼/.test(c)) {
+          ensureBoost("filter.off");
+        } else if (hasRemoveAct && /固定|フリーズ|ウィンドウ枠/.test(c)) {
+          ensureBoost("unfreeze");
+        } else if (hasRemoveAct && /保護|ロック/.test(c)) {
+          ensureBoost("protect.remove");
+        } else if (hasRemoveAct && /グループ|折りたた/.test(c)) {
+          ensureBoost("group.remove");
+        } else if (hasRemoveAct && /グラフ|棒グラフ|折れ線|円グラフ/.test(c)) {
+          ensureBoost("chart.delete");
+        } else if (hasRowCfCue) {
           ensureBoost("cf.add");
         } else if (hasChartCue) {
           ensureBoost("chart.new");
@@ -2569,7 +2694,7 @@ var ComboPlanner = (function () {
           ensureBoost("freeze");
         } else if (hasBlankDelCue && (candMap["blank.rows.delete"] || candMap["seiri"])) {
           ensureBoost("blank.rows.delete");
-        } else if (hasBorderFmtCue && candMap["format"]) {
+        } else if (hasBorderFmtCue) {
           ensureBoost("format");
         } else if (hasFmtCue && !/分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換/.test(c) && candMap["format"]) {
           ensureBoost("format");

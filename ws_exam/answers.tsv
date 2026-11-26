@@ -167,7 +167,7 @@ PDF 画像 フォルダごと 移動 ドライブ移動	drive.move,drive.rename,
 ドライブの不要ファイルを消して整理したい	drive.trash,drive.move,drive.list,drive.rename,seiri
 ゴミ箱 ごみ箱 削除 不要ファイル	drive.trash,drive.list,drive.rename,drive.move,export.csv
 A4横・幅1ページに収める印刷設定にして	print.setup,doc.header,export.pdf,doc.pagebreak,format
-A4縦で枠線なしの印刷設定を保存して	print.setup,export.pdf,doc.export.pdf,folder,export.csv
+A4縦で枠線なしの印刷設定を保存して	print.setup,format,export.pdf,doc.export.pdf,folder
 印刷の向きや用紙サイズを設定したい	print.setup,doc.style,filter.on,format,font.unify
 印刷設定 A4横 1ページ 余白	print.setup,doc.header,export.pdf,api,doc.pagebreak
 このシートをA4横のPDFにして保存して	export.pdf,print.setup,doc.export.pdf,export.csv,sheet.snapshot
@@ -195,7 +195,7 @@ Excel出力 エクセル出力 xlsx保存	export.xlsx,export.pdf,export.csv
 数式を保護 数式だけロック 計算式を保護	protect.formulas,calc.col,formula.tovalue,formula.guard,protect.range
 数式セルを保護 計算式をロック 数式保護	protect.formulas,protect.range,calc.col,formula.tovalue,fill.down
 表の見た目を整えて	doc.table.style,tidy,doc.style,seiri,copy.format
-罫線と列幅を揃えて綺麗にして	tidy,width,format
+罫線と列幅を揃えて綺麗にして	tidy,format,width
 この表、見やすくして	tidy
 表 体裁 整形	tidy,doc.style
 全角の数字を半角に直して	seiri,replace,number.fix,text.case,doc.replace
@@ -339,7 +339,7 @@ IDの先頭に0を付けてゼロパディングして	zero.pad,text.affix,doc.m
 中央寄せ 右寄せ 行間 字下げ	doc.align,format,doc.style
 揃え 配置 行間 インデント	doc.align,doc.style,doc.font,format,font.unify
 表の見出し行の背景色をグレーにして	format,doc.table.style,banding.add,bg.clear,rows.highlight
-表の罫線を細い実線にして	doc.table.style,tidy,sheet.gridlines
+表の罫線を細い実線にして	doc.table.style,format,tidy,sheet.gridlines
 表 見た目 罫線 背景色	format,doc.table.style,tidy,doc.style,bg.clear
 文書 表の見た目 表の罫線 背景色	doc.table.style,format,tidy,doc.style,doc.table
 ここで改ページを入れて	doc.pagebreak,write,doc.header,print.setup
@@ -463,7 +463,7 @@ B2に現在時刻のタイムスタンプを入力して	date.today,write,format
 C1に本日の日付と今の日時を入れて	date.today,write,fill.date,date.diff,date.fix
 今日の日付 現在時刻 タイムスタンプ	date.today,format,date.diff,fill.date,sheet.snapshot
 日付列の文字列を日付に変換して	date.fix,number.fix,text.case,doc.replace,formula.tovalue
-金額の大きい順に並べ替えて	sort,sheet.sort,rows.reverse,cols.move,doc.style
+金額の大きい順に並べ替えて	sort,sheet.sort,format,rows.reverse,cols.move
 日付の新しい順にソートして	sort,doc.template,calc.rank,date.parts,date.diff
 売上が高い順に並べて	sort,calc.rank,rows.reverse,sheet.sort,cf.add
 並べ替え 昇順 降順	sort,sheet.sort,cols.move,rows.move
@@ -597,7 +597,7 @@ B2:E5の塗りつぶしを消して	bg.clear,doc.delete,count.if,protect.sheet,c
 グリッド線を非表示にして	sheet.gridlines,print.setup,format,rows.hide,cols.show
 全シートの枠線を非表示にして	sheet.gridlines,format,sheet.show,font.unify,sheet.hide
 目盛り線を表示に戻して	sheet.gridlines,format,filter.off,format.negred,rows.hide
-グリッド線 枠線 目盛り線 表示 非表示	sheet.gridlines,print.setup,rows.show,doc.table.style,format
+グリッド線 枠線 目盛り線 表示 非表示	sheet.gridlines,print.setup,format,rows.show,doc.table.style
 日付列を見て土日の行に自動で色を付けて	cf.weekend,cf.add,format,rows.highlight,cf.dup
 予定表の土曜と日曜の行を土日を色分けして	cf.weekend,doc.table.row,blank.rows.delete,split.rows,stat.row
 カレンダーの色として週末に色を付けて曜日で色分けして	cf.weekend,validation.date,fill.date,format,banding.add
@@ -614,8 +614,8 @@ B2:E5の塗りつぶしを消して	bg.clear,doc.delete,count.if,protect.sheet,c
 未完了の該当行を固定色で塗って目立たせて	rows.highlight,cf.add,freeze,filter.delete,validation.list
 条件の行をハイライト 該当行に色	rows.highlight,cf.dup,cf.add,cf.weekend,filter.where
 条件に合う行 行を固定色で塗 目立たせ	rows.highlight,cf.add,freeze,filter.where,filter.delete
-部署が変わる行の下に区切り線を引いて	borders.group,calc.col,doc.font,split.rows,format
-日付が変わる行の下に二重線の区切り線を引いて	borders.group,calc.col,doc.font,format,split.rows
+部署が変わる行の下に区切り線を引いて	borders.group,doc.font,split.rows,format,doc.append
+日付が変わる行の下に二重線の区切り線を引いて	borders.group,doc.font,format,split.rows,doc.append
 値が変わる行の下に境界線を入れたい	borders.group,total,rows.move,doc.append,doc.insert
 グループ境界 区切り線 切り替わる行	borders.group,group.rows,split.rows,group.cols,group.remove
 タイトルの本当の色を青に変えて	format,doc.font,chart.new,doc.align,doc.replace
@@ -770,7 +770,7 @@ A列とB列の2つの列を比べて差分を判定し突合して	col.compare,c
 B列からD列だけ体裁を整えて	tidy,doc.style,group.cols
 空行を詰めて重複行も消して	seiri,dedupe,blank.rows.delete,cf.dup
 行を消したのでNoを2から付け直して	renumber,replace,rows.delete,doc.table.row,seiri
-金額の大きい順に並べて	sort,rows.reverse,sheet.sort,doc.style,doc.table.cell
+金額の大きい順に並べて	sort,format,rows.reverse,sheet.sort,doc.style
 部署が営業の行だけ見せて	filter.where,filter.extract,count.if,format,borders.group
 金額が10000以上の行だけ絞り込んで	filter.where,calc.if,cf.add,filter.delete,validation.number
 表にフィルタを付けて	filter.on,filter.where,filter.off,format,fill.down

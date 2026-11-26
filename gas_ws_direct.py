@@ -71,8 +71,9 @@ def rgb(val):
     else:
         hx = COLOR_MAP.get(s.lower()) or COLOR_MAP.get(s)
         if not hx:
-            norm = re.sub(r"色$", "", re.sub(r"^薄い", "薄", s))
-            hx = COLOR_MAP.get(norm) or COLOR_MAP.get(re.sub(r"^薄い", "薄", s))
+            s_shade = re.sub(r"^濃い", "濃", re.sub(r"^薄い", "薄", s))
+            norm = re.sub(r"色$", "", s_shade)
+            hx = COLOR_MAP.get(norm) or COLOR_MAP.get(s_shade)
     if not hx:
         raise Skip("知らない色")
     return {"red": int(hx[1:3], 16) / 255, "green": int(hx[3:5], 16) / 255, "blue": int(hx[5:7], 16) / 255}
@@ -492,6 +493,8 @@ class DirectRunner:
                         if c is not None:
                             tf["foregroundColorStyle"] = {"rgbColor": c}
                         fields.append("userEnteredFormat.textFormat.foregroundColorStyle"); did.append("color")
+                    if op.get("size_delta") is not None:
+                        raise Skip("size_delta")
                     if op.get("size") is not None:
                         tf["fontSize"] = int(op["size"]); fields.append("userEnteredFormat.textFormat.fontSize"); did.append("size")
                     if op.get("font") is not None:

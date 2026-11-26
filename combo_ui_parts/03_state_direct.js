@@ -702,6 +702,10 @@
     "薄赤": "#FCE4D6", "薄青": "#D9E1F2", "薄緑": "#E2EFDA", "薄黄": "#FFF2CC",
     "薄灰": "#F2F2F2", "薄灰色": "#F2F2F2", "薄グレー": "#F2F2F2",
     "薄橙": "#FCE5CD", "薄紫": "#EAD1DC",
+    "濃青": "#1F4E79", "濃赤": "#990000", "濃緑": "#274E13", "濃黄": "#BF9000",
+    "濃橙": "#B45F06", "濃紫": "#4C1130", "濃灰": "#434343", "濃灰色": "#434343", "濃グレー": "#434343",
+    "darkblue": "#1F4E79", "darkred": "#990000", "darkgreen": "#274E13", "darkyellow": "#BF9000",
+    "darkorange": "#B45F06", "darkpurple": "#4C1130", "darkgray": "#434343", "darkgrey": "#434343",
     "lightred": "#FCE4D6", "lightgreen": "#E2EFDA", "lightyellow": "#FFF2CC", "lightgray": "#F2F2F2"
   };
   /*__WS_SHARED_COLOR_MAP_END__*/
@@ -719,8 +723,9 @@
     }
     var hex = DIRECT_COLOR_MAP[s] || DIRECT_COLOR_MAP[s.toLowerCase()];
     if (!hex) {
-      var norm = s.replace(/^薄い/, "薄").replace(/色$/, "");
-      hex = DIRECT_COLOR_MAP[norm] || DIRECT_COLOR_MAP[s.replace(/^薄い/, "薄")];
+      var sShade = s.replace(/^薄い/, "薄").replace(/^濃い/, "濃");
+      var norm = sShade.replace(/色$/, "");
+      hex = DIRECT_COLOR_MAP[norm] || DIRECT_COLOR_MAP[sShade];
     }
     if (!hex && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(s)) {
       hex = s.length === 4 ? ("#" + s[1] + s[1] + s[2] + s[2] + s[3] + s[3]) : s;
@@ -1078,6 +1083,7 @@
           fields.push("userEnteredFormat.backgroundColorStyle");
           did.push("bg");
         }
+        if (op.size_delta !== undefined) return null;
         if (op.size !== undefined) {
           textFmt.fontSize = Number(op.size);
           hasTextFmt = true;

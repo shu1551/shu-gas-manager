@@ -35,7 +35,7 @@
 1	部門別に売上を集計して	[{"shelf":"summary","by":"部門","values":["売上金額"]}]
 1	売上金額を部門ごとにグラフにして	[{"shelf":"chart.new","type":"column","range":"B3:B9,G3:G9"}]
 1	進捗率が100%の行を緑色にして	[{"shelf":"cf.add","range":"A4:I9","when":"formula","value":"=$H4=1","bg":"緑"}]
-0	タイトルを赤文字で大きくして	サイズ
+1	タイトルを赤文字で大きくして	[{"shelf":"format","title":true,"color":"赤","size_delta":2}]
 1	見出しを太字にして、文字を白、背景を緑にして	[{"shelf":"format","header":true,"bold":true},{"shelf":"format","header":true,"color":"白"},{"shelf":"format","header":true,"bg":"緑"}]
 1	単価と数量をかけて売上金額を出して	[{"shelf":"calc.col","expr":"単価*数量","name":"売上金額","at":"売上金額"}]
 1	数量に単価をかけた金額を売上金額の列に入れて	[{"shelf":"calc.col","expr":"数量*単価","name":"売上金額","at":"売上金額"}]

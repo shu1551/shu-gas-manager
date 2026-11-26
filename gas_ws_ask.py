@@ -473,6 +473,77 @@ _SKIP_COL_VALIDATE = {
     ("lookup.add", "val_col"), ("lookup.add", "key_col"),
 }
 
+_ADD_SHELVES = {
+    "banding.add", "filter.on", "cf.add", "cf.dup", "cf.scale", "cf.weekend",
+    "validation.list", "validation.number", "validation.date", "freeze",
+    "note.set", "link.set", "protect.range", "protect.sheet",
+    "group.rows", "group.cols", "chart.new",
+}
+
+
+def _clean_validation_items(text, orig_quotes_list, cur_items):
+    """プルダウン候補の並び（「」・、・と区切り）から括弧や助詞を落として綺麗に分割する。"""
+    def _strip_item(x):
+        s = re.sub(r'^[「『"“\s]+|[」』"”\s]+$', "", str(x or "").strip())
+        s = re.sub(r'[「『"“”』」]+', "", s).strip()
+        return s
+
+    def _split_chunk(chunk):
+        s = re.sub(r'^[「『"“\s]+', "", str(chunk or "").strip())
+        s = re.sub(r'(?:[」』"”]|の|から|という|で|を|選べる|\s)+$', "", s).strip()
+        if not s:
+            return []
+        if re.search(r"[・、,／/]", s):
+            parts = re.split(r"[・、,／/]", s)
+        elif "と" in s:
+            parts = s.split("と")
+        else:
+            parts = [s]
+        return [it for it in (_strip_item(p) for p in parts) if it]
+
+    if orig_quotes_list:
+        if len(orig_quotes_list) >= 2:
+            cleaned = [it for it in (_strip_item(q) for q in orig_quotes_list) if it]
+            if cleaned:
+                return cleaned
+        else:
+            cleaned = _split_chunk(orig_quotes_list[0])
+            if len(cleaned) >= 2:
+                return cleaned
+    t_n = nfkc(text)
+    m_list = re.search(
+        r"(?:に|へ|は)\s*(.+?)\s*(?:の|という|から|で)?(?:選べる)?(?:プルダウン|リスト|選択肢)",
+        t_n,
+    )
+    if m_list:
+        cleaned = _split_chunk(m_list.group(1))
+        if len(cleaned) >= 2:
+            return cleaned
+    if isinstance(cur_items, list) and cur_items:
+        joined = "・".join(str(x) for x in cur_items)
+        cleaned = _split_chunk(joined)
+        if cleaned:
+            return cleaned
+    return cur_items
+
+
+def _normalize_calc_expr_str(expr, table):
+    """計算式の全角記号を半角(* / + -)へ統一し、各辺の省略列名も一意解決する。"""
+    if not expr:
+        return expr
+    s = nfkc(str(expr)).strip()
+    s = s.replace("×", "*").replace("＊", "*").replace("÷", "/").replace("／", "/").replace("＋", "+").replace("−", "-").replace("ー", "-")
+    parts = re.split(r"([*/+\-()])", s)
+    out = []
+    for p in parts:
+        st = p.strip()
+        if not st or st in ("*", "/", "+", "-", "(", ")") or re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", st):
+            out.append(st)
+        else:
+            res = _resolve_col_ref(st, table)
+            out.append(res if res else st)
+    return "".join(out)
+
 
 def _expr_referenced_cols(expr, table):
     """計算式文字列の中で参照されている列名・列記号を抽出する。"""
@@ -666,15 +737,19 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
         if msg not in missing:
             missing.append(msg)
 
-    # 1. 文字サイズ変更語があるのに size が未反映
+    # 1. 文字サイズ変更語があるのに size も size_delta も未反映
     has_size_cue = bool(re.search(
         r"(?<!より)(?:大きく|小さく)|文字サイズ|フォントサイズ|(?<![0-9])サイズを(?:変え|上げ|下げ|大きく|小さく|拡大|縮小)|拡大して|縮小して",
         scan_n,
     ))
     is_dim_size = bool(re.search(r"(?:幅|高さ|列幅|行高|行|列)を(?:大きく|小さく)", scan_n))
     if has_size_cue and (not is_dim_size or re.search(r"文字|フォント", scan_n)):
-        if not (sh_name == "width" and not re.search(r"文字|フォント", scan_n)) and op.get("size") is None:
+        if not (sh_name == "width" and not re.search(r"文字|フォント", scan_n)) and op.get("size") is None and op.get("size_delta") is None:
             _add_miss("サイズ（具体的な数値 pt）")
+
+    # 1b. 付ける棚に対して逆の動き（外して・消して・解除・やめて）が含まれていれば誤爆防止で止める
+    if sh_name in _ADD_SHELVES and re.search(r"外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア", scan_n):
+        _add_miss("逆の操作（外す・消す・解除）の語が含まれています")
 
     # 2. 未対応の書式装飾語が残っている
     if re.search(r"下線|アンダーライン|取り消し線|打ち消し線|取消線|縦書き|斜め文字|文字を回転|テキストを回転", scan_n):
@@ -715,11 +790,11 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
 
     # 4. フィルタ系で条件語が落ちている／条件自体が空
     if sh_name in ("filter.where", "filter.delete", "filter.extract"):
-        if re.search(r"以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではない|でない|空白|空欄", scan_n) and not op.get("when"):
+        if re.search(r"以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", scan_n) and not op.get("when"):
             _add_miss("条件（when）")
         if not op.get("when") and op.get("equals") in (None, "") and op.get("value") in (None, ""):
             _add_miss("絞り込み条件（equals/when）")
-        if op.get("when") in ("gt", "ge", "lt", "le") and op.get("value") in (None, ""):
+        if op.get("when") in ("gt", "ge", "lt", "le", "ne") and op.get("value") in (None, ""):
             _add_miss("value")
 
     # 5. 式を入れる棚で入れ先の列(at)が式・計算の入力列と同じなら撃たない（自己上書き・循環参照防止）
@@ -752,6 +827,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     args = {a["name"]: a for a in shelf["args"]}
     op = {"shelf": shelf["name"]}
     quotes = _quotes(text)
+    orig_quotes_list = list(quotes)
     orig_quotes = set(quotes)
     for r in shelf.get("ask_rules") or []:
         a = args[r["arg"]]
@@ -927,13 +1003,29 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op["number_format"] = "0.0%"
         elif not op.get("number_format") and re.search(r"3桁|桁区切|カンマ", text):
             op["number_format"] = "#,##0"
+        if "size" not in op and "size_delta" not in op and not re.search(r"(?:幅|高さ|列幅|行高|行|列)を(?:大きく|小さく)", nfkc(scan)):
+            step_sz = 4 if re.search(r"もっと|だいぶ|かなり|ぐっと|大幅に", nfkc(scan)) else 2
+            if re.search(r"(?<!より)大きく|拡大して", nfkc(scan)):
+                op["size_delta"] = step_sz
+            elif re.search(r"(?<!より)小さく|縮小して", nfkc(scan)):
+                op["size_delta"] = -step_sz
+    if shelf["name"] == "validation.list":
+        cleaned_items = _clean_validation_items(text, orig_quotes_list, op.get("items"))
+        if cleaned_items:
+            op["items"] = cleaned_items
     if shelf["name"] == "cf.add" and op.get("when") != "formula":
+        if op.get("when") == "ne" and op.get("value") in (None, ""):
+            m_cf_ne = re.search(r"(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:になっていない|になってない|ではない|でない|じゃない|以外)", nfkc(text))
+            if not m_cf_ne:
+                m_cf_ne = re.search(r"([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)", nfkc(text))
+            if m_cf_ne:
+                op["value"] = m_cf_ne.group(1).strip()
         if op.get("value") not in (None, ""):
             norm_cf_v = _normalize_filter_number(op["value"])
             if norm_cf_v is not None and re.search(r"[%万億,]", nfkc(str(op["value"]))):
                 op["value"] = norm_cf_v
     if shelf["name"] == "cf.add" and op.get("when") != "formula" and table and table.get("first_col") and table.get("last_col"):
-        if re.search(r"行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|橙|灰|紫|水色|紺|茶|桃)", text):
+        if re.search(r"行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃)|いない行|ない行", text):
             sp_cf = _data_span(table)
             cf_r1 = sp_cf[0] if sp_cf else ((table.get("header_row") or 1) + 1)
             cf_r2 = sp_cf[1] if sp_cf else cf_r1
@@ -956,10 +1048,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     expr = f"=${ref_l}{cf_r1}>{num_val}"
                 elif w == "lt" and num_val != "":
                     expr = f"=${ref_l}{cf_r1}<{num_val}"
+                elif w == "ne" and raw_v_cf not in (None, ""):
+                    if norm_v_cf is not None:
+                        expr = f"=${ref_l}{cf_r1}<>{norm_v_cf}"
+                    else:
+                        escaped_v = str(raw_v_cf).replace('"', '""')
+                        expr = f'=${ref_l}{cf_r1}<>"{escaped_v}"'
                 elif re.search(r"マイナス|負の値", text):
                     expr = f"=${ref_l}{cf_r1}<0"
-                elif re.search(r"([0-9][0-9,\.]*%?)(?:になってない|ではない)", nfkc(text)):
-                    m_not = re.search(r"([0-9][0-9,\.]*%?)(?:になってない|ではない)", nfkc(text))
+                elif re.search(r"([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)", nfkc(text)):
+                    m_not = re.search(r"([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)", nfkc(text))
                     nv_not = _normalize_filter_number(m_not.group(1)) or m_not.group(1)
                     expr = f"=${ref_l}{cf_r1}<>{nv_not}"
                 elif w == "contains" and raw_v_cf not in (None, ""):
@@ -1098,10 +1196,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             ext_expr = _extract_calc_expr(text, table)
             if ext_expr:
                 op["expr"] = ext_expr
+        if op.get("expr"):
+            op["expr"] = _normalize_calc_expr_str(op["expr"], table)
         if "name" not in op and "at" in op:
             op["name"] = op["at"]
         if "name" not in op and op.get("expr"):
-            m_after = re.search(r"(?:掛け|かけ|足[しす]|た[しす]|引[いけく]|ひ[いけく]|割[っりる]|わ[っりる]|乗算|加算|減算|除算)(?:て|た|算)?\s*(.+)$", t_nfkc)
+            m_after = re.search(r"(?:(?:掛け|かけ|足[しす]|た[しす]|引[いけく]|ひ[いけく]|割[っりる]|わ[っりる]|乗算|加算|減算|除算)(?:て|た|算)?|[×*＊÷/／＋+−\-][^\s、,。をの]{1,20}?で)\s*(.+)$", t_nfkc)
             if m_after:
                 after_op = m_after.group(1)
                 m_dest = re.search(r"([^\s、,。をの]{1,20}?)(?:の列|列|の欄|欄)?(?:を(?:出し|求め|計算|足し|追加|作|入れ)|に(?:出し|入れ|して))", after_op)
@@ -1229,6 +1329,20 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     op["equals"] = m_name.group(1).strip()
         if "equals" in op:
             _clean_filter_equals(op, text, table, orig_quotes)
+        if op.get("when") == "ne":
+            op.pop("equals", None)
+            if op.get("value") in (None, ""):
+                m_ne = re.search(r"(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:以外|ではない|でない|じゃない|になっていない|になってない)", nfkc(text))
+                if not m_ne:
+                    m_ne = re.search(r"([^\s、。をにのがは]+?)(?:以外|ではない|でない|じゃない|になっていない|になってない)", nfkc(text))
+                if m_ne:
+                    raw_ne = m_ne.group(1).strip()
+                    norm_ne = _normalize_filter_number(raw_ne)
+                    op["value"] = norm_ne if norm_ne is not None else raw_ne
+            elif op.get("value") not in (None, ""):
+                norm_ne = _normalize_filter_number(op["value"])
+                if norm_ne is not None and re.search(r"[%万億,]", nfkc(str(op["value"]))):
+                    op["value"] = norm_ne
         if op.get("when") in ("gt", "ge", "lt", "le"):
             op.pop("equals", None)
             if "value" not in op:
@@ -1510,11 +1624,11 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         if kind != "doc":
             has_fmt_cue = bool(re.search(r"表示形式|曜日|hh:mm|yyyy|mm/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻|年月日の?形|年月日形式|年月日に|日付の?形", c, re.IGNORECASE))
             has_row_cf_cond = bool(
-                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了", c)
+                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
                 or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
             )
             has_row_cf_cue = bool(
-                re.search(r"行全体|の行|行を|行に", c)
+                re.search(r"行全体|の行|行を|行に|いない行|ない行", c)
                 and has_row_cf_cond
                 and not re.search(r"消|削除|重複|ダブ|固定色", c)
                 and (_color_hits(c) or re.search(r"色[を]?付|色[を]?つ|目立|ハイライト", c))
@@ -1531,7 +1645,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             )
             has_calc_cue = bool(
                 re.search(
-                    r"(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)",
+                    r"(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)",
                     nfkc(c),
                 )
                 and not re.search(r"構成比|割合|消費税|税込|税抜|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に", c)
@@ -1542,7 +1656,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             )
             has_filter_where_cue = bool(
                 (
-                    re.search(r"以上|以下|未満|より大|より小|を超|超え|以外|ではない|空白|空欄", c)
+                    re.search(r"以上|以下|未満|より大|より小|を超|超え|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", c)
                     or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|もの|データ|人)", c)
                 )
                 and re.search(r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
@@ -1560,6 +1674,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 re.search(r"罫線|外枠|格子", c)
                 and not re.search(r"整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線", c)
             )
+            has_remove_act = bool(re.search(r"外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア|オフ|OFF", c))
 
             def _ensure_boost(name):
                 nonlocal boost_name
@@ -1568,7 +1683,23 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                     scored.append((top_base, 999, finder.cat.by_name[name], {}))
                     cand_names.add(name)
 
-            if has_row_cf_cue:
+            if has_remove_act and re.search(r"1行おき|交互|しましま|縞模様|ストライプ", c):
+                _ensure_boost("banding.remove")
+            elif has_remove_act and re.search(r"条件付き書式|自動でついた色|自動の色", c):
+                _ensure_boost("cf.clear")
+            elif has_remove_act and re.search(r"プルダウン|入力規則", c):
+                _ensure_boost("validation.clear")
+            elif has_remove_act and re.search(r"フィルタ|フィルター|絞り込み|▼", c):
+                _ensure_boost("filter.off")
+            elif has_remove_act and re.search(r"固定|フリーズ|ウィンドウ枠", c):
+                _ensure_boost("unfreeze")
+            elif has_remove_act and re.search(r"保護|ロック", c):
+                _ensure_boost("protect.remove")
+            elif has_remove_act and re.search(r"グループ|折りたた", c):
+                _ensure_boost("group.remove")
+            elif has_remove_act and re.search(r"グラフ|棒グラフ|折れ線|円グラフ", c):
+                _ensure_boost("chart.delete")
+            elif has_row_cf_cue:
                 _ensure_boost("cf.add")
             elif has_chart_cue:
                 _ensure_boost("chart.new")
@@ -1582,7 +1713,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("freeze")
             elif has_blank_del_cue and ("blank.rows.delete" in cand_names or "seiri" in cand_names):
                 _ensure_boost("blank.rows.delete")
-            elif has_border_fmt_cue and "format" in cand_names:
+            elif has_border_fmt_cue:
                 _ensure_boost("format")
             elif has_fmt_cue and not re.search(r"分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換", c) and "format" in cand_names:
                 _ensure_boost("format")

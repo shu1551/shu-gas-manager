@@ -1736,15 +1736,17 @@ function rgb_(s) {
     '紺': '#000080', 'ネイビー': '#000080', 'navy': '#000080',
     '茶': '#8B4513', '茶色': '#8B4513', 'brown': '#8B4513',
     '薄赤': '#FCE4D6', '薄青': '#D9E1F2', '薄緑': '#E2EFDA', '薄黄': '#FFF2CC', '薄灰': '#F2F2F2', '薄灰色': '#F2F2F2', '薄グレー': '#F2F2F2', '薄橙': '#FCE5CD', '薄紫': '#EAD1DC',
+    '濃青': '#1F4E79', '濃赤': '#990000', '濃緑': '#274E13', '濃黄': '#BF9000', '濃橙': '#B45F06', '濃紫': '#4C1130', '濃灰': '#434343', '濃灰色': '#434343', '濃グレー': '#434343',
+    'darkblue': '#1F4E79', 'darkred': '#990000', 'darkgreen': '#274E13', 'darkyellow': '#BF9000', 'darkorange': '#B45F06', 'darkpurple': '#4C1130', 'darkgray': '#434343', 'darkgrey': '#434343',
     'lightred': '#FCE4D6', 'lightgreen': '#E2EFDA', 'lightyellow': '#FFF2CC', 'lightgray': '#F2F2F2'
   };
   var k = str.toLowerCase();
   if (map[k] !== undefined) return map[k];
   if (map[str] !== undefined) return map[str];
-  // 「黄色」「薄い灰色」などの表記ゆれを吸収する
-  var norm = str.replace(/^薄い/, '薄').replace(/色$/, '');
+  // 「黄色」「薄い灰色」「濃い青」などの表記ゆれを吸収する
+  var norm = str.replace(/^薄い/, '薄').replace(/^濃い/, '濃').replace(/色$/, '');
   if (map[norm] !== undefined) return map[norm];
-  var norm2 = str.replace(/^薄い/, '薄');
+  var norm2 = str.replace(/^薄い/, '薄').replace(/^濃い/, '濃');
   if (map[norm2] !== undefined) return map[norm2];
   throw new ArgError('知らない色の名前です: 「' + str + '」');
 }
