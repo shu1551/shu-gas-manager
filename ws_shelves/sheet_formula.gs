@@ -6,6 +6,47 @@ function copyHeaderStyle_(sh, headerRow, tmplCol, dstCol, name) {
   dst.setValue(name).setHorizontalAlignment('center');
 }
 
+// フィルタで非表示の行にも確実に数式を書く（Sheets API 経由。使えない環境では setFormulas へフォールバック）
+function setFormulasAllRows_(ctx, sh, startRow, col, formulas) {
+  if (!formulas || !formulas.length) return;
+  var numRows = formulas.length;
+  var numCols = formulas[0].length;
+  var canApi = typeof Sheets !== 'undefined' && Sheets.Spreadsheets &&
+    typeof Sheets.Spreadsheets.batchUpdate === 'function' &&
+    typeof batchRetry_ === 'function';
+  if (canApi) {
+    try {
+      SpreadsheetApp.flush();
+      var rows = formulas.map(function (row) {
+        return {
+          values: row.map(function (v) {
+            var s = String(v == null ? '' : v);
+            if (s.charAt(0) === '=') return { userEnteredValue: { formulaValue: s } };
+            return { userEnteredValue: { stringValue: s } };
+          })
+        };
+      });
+      batchRetry_(ctx.ss, [{
+        updateCells: {
+          range: {
+            sheetId: sh.getSheetId(),
+            startRowIndex: startRow - 1,
+            endRowIndex: startRow - 1 + numRows,
+            startColumnIndex: col - 1,
+            endColumnIndex: col - 1 + numCols
+          },
+          rows: rows,
+          fields: 'userEnteredValue'
+        }
+      }]);
+      return;
+    } catch (eApi) {
+      note_(ctx, 'Sheets API での数式書き込みに失敗したため通常方式へ切替: ' + String(eApi && eApi.message || eApi).slice(0, 80));
+    }
+  }
+  sh.getRange(startRow, col, numRows, numCols).setFormulas(formulas);
+}
+
 // 棚: calc.col
 // 題: 計算の列を足す
 // 分類: 集計
@@ -61,7 +102,7 @@ SHELF['calc.col'] = function (ctx, op) {
     for (var r = t.firstData; r <= t.lastData; r++) {
       formulas.push([makeFormula(r)]);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '計算列「' + op.name + '」を追加');
 };
@@ -99,8 +140,8 @@ SHELF['calc.percent'] = function (ctx, op) {
     for (var r = t.firstData; r <= t.lastData; r++) {
       formulas.push(['=' + colL + r + '/' + sumRef]);
     }
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
     var rg = sh.getRange(t.firstData, atCol, numRows, 1);
-    rg.setFormulas(formulas);
     rg.setNumberFormat('0.0%');
   }
   if (t.totalRow) {
@@ -221,7 +262,7 @@ SHELF['lookup.add'] = function (ctx, op) {
       var myKeyCell = colLetter_(myKey) + r;
       formulas.push(['=XLOOKUP(' + myKeyCell + ',' + keyRange + ',' + valRange + ',"")']);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '「' + srcSh.getName() + '」から「' + name + '」を引いて追加');
 };
@@ -254,8 +295,8 @@ SHELF['calc.diff'] = function (ctx, op) {
       var f = isRate ? ('=(' + la + r + '-' + lb + r + ')/' + lb + r) : ('=' + la + r + '-' + lb + r);
       formulas.push([f]);
     }
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
     var rg = sh.getRange(t.firstData, atCol, numRows, 1);
-    rg.setFormulas(formulas);
     if (isRate) rg.setNumberFormat('0.0%');
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '差・増減列「' + name + '」を追加');
@@ -286,7 +327,7 @@ SHELF['calc.running'] = function (ctx, op) {
     for (var r = t.firstData; r <= t.lastData; r++) {
       formulas.push(['=SUM(' + cl + '$' + t.firstData + ':' + cl + r + ')']);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '累計列「' + name + '」を追加');
 };
@@ -317,7 +358,7 @@ SHELF['calc.rank'] = function (ctx, op) {
     for (var r = t.firstData; r <= t.lastData; r++) {
       formulas.push(['=RANK(' + cl + r + ', ' + ref + ', ' + order + ')']);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '順位列「' + name + '」を追加');
 };
@@ -588,7 +629,7 @@ SHELF['date.parts'] = function (ctx, op) {
         : ('=ROUNDUP(MONTH(' + cellRef + ')/3, 0)');
       formulas.push([f]);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '日付抽出列「' + name + '」を追加');
 };
@@ -621,7 +662,7 @@ SHELF['text.join'] = function (ctx, op) {
       var f = sep ? ('=JOIN("' + sepEsc + '", ' + parts.join(', ') + ')') : ('=CONCATENATE(' + parts.join(', ') + ')');
       formulas.push([f]);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '連結列「' + name + '」を追加');
 };
@@ -765,7 +806,7 @@ SHELF['calc.if'] = function (ctx, op) {
       else cond = ref + '=' + valExpr;
       formulas.push(['=IF(' + cond + ',' + thenExpr + ',' + elseExpr + ')']);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '判定列「' + name + '」を追加');
 };
@@ -811,7 +852,7 @@ SHELF['date.diff'] = function (ctx, op) {
       var blankCheck = el ? ('OR(' + sRef + '="",' + eRef + '="")') : (sRef + '=""');
       formulas.push(['=IF(' + blankCheck + ',"",' + diffExpr + ')']);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '日付差列「' + name + '」を追加');
 };
@@ -1017,8 +1058,8 @@ SHELF['date.age'] = function (ctx, op) {
       var ref = cl + r;
       formulas.push(['=IF(OR(' + ref + '="",' + ref + '>TODAY()),"",DATEDIF(' + ref + ',TODAY(),"' + code + '"))']);
     }
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
     var rg = sh.getRange(t.firstData, atCol, numRows, 1);
-    rg.setFormulas(formulas);
     rg.setNumberFormat(STYLE.numFmt);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', name + 'の列を追加');
@@ -1065,8 +1106,8 @@ SHELF['calc.tax'] = function (ctx, op) {
         : (mode === 'tax' ? (ref + '*' + ratioStr) : (ref + '*(1+' + ratioStr + ')'));
       formulas.push(['=IF(' + ref + '="","",' + roundFn + '(' + expr + ',0))']);
     }
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
     var rg = sh.getRange(t.firstData, atCol, numRows, 1);
-    rg.setFormulas(formulas);
     rg.setNumberFormat(STYLE.numFmt);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', name + '（税率 ' + rateNum + '%）の列を追加');
@@ -1107,7 +1148,7 @@ SHELF['col.compare'] = function (ctx, op) {
     for (var r = t.firstData; r <= t.lastData; r++) {
       formulas.push(['=IF(AND(' + la + r + '="",' + lb + r + '=""),"",IF(' + la + r + '=' + lb + r + ',' + mTxt + ',' + dTxt + '))']);
     }
-    sh.getRange(t.firstData, atCol, numRows, 1).setFormulas(formulas);
+    setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
   chg_(ctx, sh, colLetter_(atCol) + '列', '2列比較結果「' + name + '」を追加');
 };
