@@ -637,6 +637,94 @@ var ComboPlanner = (function () {
     "lookup.add:val_col": 1, "lookup.add:key_col": 1
   };
 
+  var _CMP_VALUE_SHELVES_JS = {
+    "filter.where": 1, "filter.delete": 1, "filter.extract": 1,
+    "cf.add": 1, "calc.if": 1, "rows.highlight": 1
+  };
+  var _PCT_COL_RE_JS = /(?:率|割合|構成比|達成|進捗|%|％)/;
+  var _CALC_VERB_PREFIX_RE_JS = /^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算)(?:の|で))\s*/;
+
+  function _normFilterNumTopJs(val) {
+    if (val === undefined || val === null) return null;
+    var s = nfkc(String(val)).replace(/,/g, "").trim();
+    if (!s) return null;
+    var isPct = s.slice(-1) === "%";
+    if (isPct) s = s.slice(0, -1).trim();
+    var mul = 1;
+    if (s.slice(-1) === "万") { mul = 10000; s = s.slice(0, -1).trim(); }
+    else if (s.slice(-1) === "億") { mul = 100000000; s = s.slice(0, -1).trim(); }
+    if (!s || isNaN(Number(s))) return null;
+    var num = Number(s) * mul;
+    if (isPct) num = num / 100.0;
+    return String(num);
+  }
+
+  function _resolveCmpValueJs(opObj, text) {
+    var w = opObj.when;
+    if (w !== "gt" && w !== "ge" && w !== "lt" && w !== "le" && w !== "eq" && w !== "ne") return;
+    var tN = nfkc(text);
+    var mNum = /(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)/.exec(tN);
+    var raw = opObj.value;
+    if (w === "gt" || w === "ge" || w === "lt" || w === "le") {
+      delete opObj.equals;
+      if (mNum) {
+        var cand = mNum[1].trim();
+        if (_isEmptyVal(raw) || (/[%万億]/.test(cand) && !/[%万億]/.test(nfkc(String(raw))))) {
+          raw = cand;
+        }
+      }
+      var normV = _normFilterNumTopJs(raw);
+      if (normV !== null) opObj.value = normV;
+      else delete opObj.value;
+    } else {
+      if (_isEmptyVal(raw) && w === "ne") {
+        var mNe = /(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:になっていない|になってない|ではない|でない|じゃない|以外)/.exec(tN) ||
+          /([^\s、。をにのがは]+?)(?:になっていない|になってない|ではない|でない|じゃない|以外)/.exec(tN);
+        if (mNe) raw = mNe[1].trim();
+      }
+      if (!_isEmptyVal(raw) && mNum) {
+        var cand2 = mNum[1].trim();
+        if (/[%万億]/.test(cand2) && !/[%万億]/.test(nfkc(String(raw))) && cand2.replace(/[%万億,]/g, "") === nfkc(String(raw)).replace(/,/g, "")) {
+          raw = cand2;
+        }
+      }
+      if (!_isEmptyVal(raw)) {
+        var normV2 = _normFilterNumTopJs(raw);
+        if (normV2 !== null && (w === "ne" || /[%万億,]/.test(nfkc(String(raw))))) opObj.value = normV2;
+        else opObj.value = String(raw).trim();
+      }
+    }
+  }
+
+  function _cleanCalcColNameJs(rawName) {
+    if (!rawName) return null;
+    var s = nfkc(String(rawName)).trim().replace(_CALC_VERB_PREFIX_RE_JS, "");
+    s = s.replace(/^(?:の|で|を|に|へ)+|(?:の列|列|の欄|欄|の)+$/g, "").trim();
+    if (!s || /(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ)(?:た|て)/.test(s)) return null;
+    return s;
+  }
+
+  function _matchRowCondJs(cellVal, when, target) {
+    var w = String(when || "eq").toLowerCase();
+    var blank = cellVal === null || cellVal === undefined || String(cellVal).trim() === "";
+    if (w === "blank") return blank;
+    if (w === "notblank") return !blank;
+    var tgt = (target === null || target === undefined) ? "" : String(target).trim();
+    if (w === "contains") return !blank && String(cellVal).indexOf(tgt) >= 0;
+    var cv = Number(String(cellVal).replace(/,/g, "").trim());
+    var tv = Number(tgt.replace(/,/g, "").trim());
+    if (w === "gt" || w === "ge" || w === "lt" || w === "le") {
+      if (blank || tgt === "" || isNaN(cv) || isNaN(tv)) return false;
+      return w === "gt" ? cv > tv : (w === "ge" ? cv >= tv : (w === "lt" ? cv < tv : cv <= tv));
+    }
+    if (w === "ne") {
+      if (!blank && tgt !== "" && !isNaN(cv) && !isNaN(tv)) return cv !== tv;
+      return (blank ? "" : String(cellVal).trim()) !== tgt;
+    }
+    if (!blank && tgt !== "" && !isNaN(cv) && !isNaN(tv)) return cv === tv;
+    return (blank ? "" : String(cellVal).trim()) === tgt;
+  }
+
   var _ADD_SHELVES_JS = {
     "banding.add": 1, "filter.on": 1, "cf.add": 1, "cf.dup": 1, "cf.scale": 1, "cf.weekend": 1,
     "validation.list": 1, "validation.number": 1, "validation.date": 1, "freeze": 1,
@@ -1693,20 +1781,59 @@ var ComboPlanner = (function () {
           }
         }
       }
-    }
-
-    if (shelf.name === "cf.add" && op.when !== "formula") {
-      if (op.when === "ne" && _isEmptyVal(op.value)) {
-        var mCfNe = /(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:になっていない|になってない|ではない|でない|じゃない|以外)/.exec(nfkc(text)) ||
-          /([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)/.exec(nfkc(text));
-        if (mCfNe) op.value = mCfNe[1].trim();
-      }
-      if (!_isEmptyVal(op.value)) {
-        var normCfV = _normFilterNumJs(op.value);
-        if (normCfV !== null && /[%万億,]/.test(nfkc(String(op.value)))) {
-          op.value = normCfV;
+      // 7. % 列の 1 超え比較防止 ＋ 過半数・全行削除防止
+      if (_CMP_VALUE_SHELVES_JS[shN]) {
+        var cmpCol = opObj.col;
+        var cmpNumStr = null;
+        if (shN === "cf.add" && opObj.when === "formula" && typeof opObj.value === "string") {
+          var mFm = /\$([A-Z]{1,3})[0-9]+\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)/.exec(opObj.value);
+          if (mFm) {
+            var fmColL = mFm[1];
+            cmpNumStr = mFm[2];
+            var fmCols = (tbl && tbl.columns) || [];
+            for (var fmi = 0; fmi < fmCols.length; fmi++) {
+              if (fmCols[fmi] && fmCols[fmi].col === fmColL && fmCols[fmi].name) { cmpCol = fmCols[fmi].name; break; }
+            }
+          }
+        } else if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "eq" || opObj.when === "ne") && !_isEmptyVal(opObj.value)) {
+          cmpNumStr = String(opObj.value).replace(/,/g, "").trim();
+        }
+        if (!cmpCol && shN === "cf.add" && typeof opObj.range === "string" && tbl && tbl.columns) {
+          var mRgC = /^([A-Z]{1,3})[0-9]+:\1[0-9]+$/.exec(opObj.range);
+          if (mRgC) {
+            for (var rgi = 0; rgi < tbl.columns.length; rgi++) {
+              if (tbl.columns[rgi] && tbl.columns[rgi].col === mRgC[1] && tbl.columns[rgi].name) { cmpCol = tbl.columns[rgi].name; break; }
+            }
+          }
+        }
+        if (cmpCol && _PCT_COL_RE_JS.test(String(cmpCol)) && cmpNumStr !== null && cmpNumStr !== "" && !isNaN(Number(cmpNumStr))) {
+          if (Math.abs(Number(cmpNumStr)) > 1.0) {
+            addMiss("%列「" + cmpCol + "」を1を超える値（" + cmpNumStr + "）で比較しているため確認が必要");
+          }
+        }
+        if (shN === "filter.delete" && tbl && Array.isArray(tbl.rows) && tbl.rows.length && opObj.col) {
+          var delCols = tbl.columns || [];
+          var delIdx = -1;
+          for (var dci0 = 0; dci0 < delCols.length; dci0++) {
+            if (delCols[dci0] && (delCols[dci0].name === opObj.col || delCols[dci0].col === opObj.col)) { delIdx = dci0; break; }
+          }
+          if (delIdx >= 0) {
+            var totalR = tbl.rows.length, hitsR = 0;
+            var tgtV = opObj.value !== undefined ? opObj.value : opObj.equals;
+            for (var dri = 0; dri < totalR; dri++) {
+              var rowD = tbl.rows[dri];
+              if (Array.isArray(rowD) && delIdx < rowD.length && _matchRowCondJs(rowD[delIdx], opObj.when || "eq", tgtV)) hitsR++;
+            }
+            if (hitsR > 0 && (hitsR === totalR || hitsR * 2 > totalR)) {
+              addMiss("条件に合う行が過半数（" + hitsR + "/" + totalR + "行）のため確認が必要");
+            }
+          }
         }
       }
+    }
+
+    if (_CMP_VALUE_SHELVES_JS[shelf.name] && op.when !== "formula") {
+      _resolveCmpValueJs(op, text);
     }
     if (shelf.name === "cf.add" && op.when !== "formula" && table && table.first_col && table.last_col) {
       if (/(?:行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃)|いない行|ない行)/.test(text)) {
@@ -1992,6 +2119,11 @@ var ComboPlanner = (function () {
           }
         }
       }
+      if (typeof op.name === "string") {
+        var cleanedCnm = _cleanCalcColNameJs(op.name);
+        if (cleanedCnm) op.name = cleanedCnm;
+        else delete op.name;
+      }
       if (op.expr && op.name) named = true;
     }
 
@@ -2134,31 +2266,8 @@ var ComboPlanner = (function () {
       if (_hasOwn(op, "equals")) {
         _cleanFilterEqualsJs(op, text, table, origQuotesMap);
       }
-      if (op.when === "ne") {
-        delete op.equals;
-        if (_isEmptyVal(op.value)) {
-          var mNe = /(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:以外|ではない|でない|じゃない|になっていない|になってない)/.exec(nfkc(text)) ||
-            /([^\s、。をにのがは]+?)(?:以外|ではない|でない|じゃない|になっていない|になってない)/.exec(nfkc(text));
-          if (mNe) {
-            var rawNe = mNe[1].trim();
-            var normNe = _normFilterNumJs(rawNe);
-            op.value = normNe !== null ? normNe : rawNe;
-          }
-        } else if (/[%万億,]/.test(nfkc(String(op.value)))) {
-          var normNe2 = _normFilterNumJs(op.value);
-          if (normNe2 !== null) op.value = normNe2;
-        }
-      }
-      if (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le") {
-        delete op.equals;
-        if (!_hasOwn(op, "value")) {
-          var mFv = /(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超)/.exec(nfkc(text));
-          if (mFv) op.value = mFv[1];
-        }
-        var normV = _normFilterNumJs(op.value);
-        if (normV !== null) op.value = normV;
-        else delete op.value;
-      }
+      if (op.when === "ne") delete op.equals;
+      _resolveCmpValueJs(op, text);
       if (!_hasOwn(op, "col") && table && table.columns) {
         var cols = [];
         for (var tci = 0; tci < table.columns.length; tci++) {

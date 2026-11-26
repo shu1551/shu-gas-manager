@@ -474,6 +474,108 @@ _SKIP_COL_VALIDATE = {
     ("lookup.add", "val_col"), ("lookup.add", "key_col"),
 }
 
+_CMP_VALUE_SHELVES = {
+    "filter.where", "filter.delete", "filter.extract",
+    "cf.add", "calc.if", "rows.highlight",
+}
+_PCT_COL_RE = re.compile(r"(?:率|割合|構成比|達成|進捗|%|％)")
+_CALC_VERB_PREFIX_RE = re.compile(
+    r"^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算)(?:の|で))\s*"
+)
+
+
+def _resolve_cmp_value(op, text):
+    """比べる棚すべてで共通: 文中から %・万・億 を落とさず比較数値を抽出・正規化する。"""
+    w = op.get("when")
+    if w not in ("gt", "ge", "lt", "le", "eq", "ne"):
+        return
+    t_n = nfkc(text)
+    m_num = re.search(
+        r"(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)",
+        t_n,
+    )
+    raw = op.get("value")
+    if w in ("gt", "ge", "lt", "le"):
+        op.pop("equals", None)
+        if m_num:
+            cand = m_num.group(1).strip()
+            # op["value"] が未設定、または %/万/億 が欠落していた場合は文中の完全表記を優先
+            if raw in (None, "") or (
+                re.search(r"[%万億]", cand) and not re.search(r"[%万億]", nfkc(str(raw)))
+            ):
+                raw = cand
+        norm_v = _normalize_filter_number(raw)
+        if norm_v is not None:
+            op["value"] = norm_v
+        else:
+            op.pop("value", None)
+    else:
+        # eq / ne: 数値(%・万・億含む)なら正規化、文字ならそのまま残す
+        if raw in (None, "") and w == "ne":
+            m_ne = re.search(
+                r"(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:になっていない|になってない|ではない|でない|じゃない|以外)",
+                t_n,
+            )
+            if not m_ne:
+                m_ne = re.search(
+                    r"([^\s、。をにのがは]+?)(?:になっていない|になってない|ではない|でない|じゃない|以外)",
+                    t_n,
+                )
+            if m_ne:
+                raw = m_ne.group(1).strip()
+        if raw not in (None, "") and m_num:
+            cand = m_num.group(1).strip()
+            if re.search(r"[%万億]", cand) and not re.search(r"[%万億]", nfkc(str(raw))) and re.sub(r"[%万億,]", "", cand) == re.sub(r"[,]", "", nfkc(str(raw))):
+                raw = cand
+        if raw not in (None, ""):
+            norm_v = _normalize_filter_number(raw)
+            if norm_v is not None and (w == "ne" or re.search(r"[%万億,]", nfkc(str(raw)))):
+                op["value"] = norm_v
+            else:
+                op["value"] = str(raw).strip()
+
+
+def _clean_calc_col_name(raw_name):
+    """計算列の新列名から直前の動詞（「引いた」「掛けた」等）や余分な助詞を外す。"""
+    if not raw_name:
+        return None
+    s = nfkc(str(raw_name)).strip()
+    s = _CALC_VERB_PREFIX_RE.sub("", s)
+    s = re.sub(r"^(?:の|で|を|に|へ)+|(?:の列|列|の欄|欄|の)+$", "", s).strip()
+    if not s or re.search(r"(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ)(?:た|て)", s):
+        return None
+    return s
+
+
+def _match_row_cond_py(cell_val, when, target):
+    """手元の表データに対する行条件一致判定（過半数削除ガード用）。"""
+    w = str(when or "eq").lower()
+    blank = cell_val is None or str(cell_val).strip() == ""
+    if w == "blank":
+        return blank
+    if w == "notblank":
+        return not blank
+    tgt = "" if target is None else str(target).strip()
+    if w == "contains":
+        return not blank and tgt in str(cell_val)
+    if w in ("gt", "ge", "lt", "le"):
+        try:
+            cv = float(str(cell_val).replace(",", "").strip())
+            tv = float(tgt.replace(",", "").strip())
+        except Exception:
+            return False
+        return (cv > tv) if w == "gt" else ((cv >= tv) if w == "ge" else ((cv < tv) if w == "lt" else cv <= tv))
+    if w == "ne":
+        try:
+            return float(str(cell_val).replace(",", "")) != float(tgt.replace(",", ""))
+        except Exception:
+            return ("" if blank else str(cell_val).strip()) != tgt
+    try:
+        return float(str(cell_val).replace(",", "")) == float(tgt.replace(",", ""))
+    except Exception:
+        return ("" if blank else str(cell_val).strip()) == tgt
+
+
 _ADD_SHELVES = {
     "banding.add", "filter.on", "cf.add", "cf.dup", "cf.scale", "cf.weekend",
     "validation.list", "validation.number", "validation.date", "freeze",
@@ -857,6 +959,48 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
                 if not _is_valid_col_val(st):
                     _add_miss(f"式に表に無い列名（{st}）")
 
+    # 7. % 列（進捗率・達成率等）に対する 1 超え比較の誤爆防止 ＋ 過半数・全行削除の防止
+    if sh_name in _CMP_VALUE_SHELVES:
+        cmp_col = op.get("col")
+        cmp_num_str = None
+        if sh_name == "cf.add" and op.get("when") == "formula" and isinstance(op.get("value"), str):
+            m_fm = re.search(r"\$([A-Z]{1,3})[0-9]+\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)", op["value"])
+            if m_fm:
+                col_l = m_fm.group(1)
+                cmp_num_str = m_fm.group(2)
+                for c_inf in (table or {}).get("columns") or []:
+                    if c_inf.get("col") == col_l and c_inf.get("name"):
+                        cmp_col = c_inf["name"]
+                        break
+        elif op.get("when") in ("gt", "ge", "lt", "le", "eq", "ne") and op.get("value") not in (None, ""):
+            cmp_num_str = str(op["value"]).replace(",", "").strip()
+        if not cmp_col and sh_name == "cf.add" and isinstance(op.get("range"), str) and table:
+            m_rg_c = re.match(r"^([A-Z]{1,3})[0-9]+:\1[0-9]+$", op["range"])
+            if m_rg_c:
+                for c_inf in table.get("columns") or []:
+                    if c_inf.get("col") == m_rg_c.group(1) and c_inf.get("name"):
+                        cmp_col = c_inf["name"]
+                        break
+        if cmp_col and _PCT_COL_RE.search(str(cmp_col)) and cmp_num_str is not None:
+            try:
+                cmp_num = float(cmp_num_str)
+                if abs(cmp_num) > 1.0:
+                    _add_miss(f"%列「{cmp_col}」を1を超える値（{cmp_num_str}）で比較しているため確認が必要")
+            except Exception:
+                pass
+        if sh_name == "filter.delete" and table and isinstance(table.get("rows"), list) and table["rows"] and op.get("col"):
+            cols_l = table.get("columns") or []
+            col_idx = next((idx for idx, c_inf in enumerate(cols_l) if c_inf.get("name") == op["col"] or c_inf.get("col") == op["col"]), -1)
+            if col_idx >= 0:
+                total_r = len(table["rows"])
+                tgt_v = op.get("value") if op.get("value") is not None else op.get("equals")
+                hits_r = sum(
+                    1 for row in table["rows"]
+                    if isinstance(row, (list, tuple)) and col_idx < len(row) and _match_row_cond_py(row[col_idx], op.get("when") or "eq", tgt_v)
+                )
+                if hits_r > 0 and (hits_r == total_r or hits_r * 2 > total_r):
+                    _add_miss(f"条件に合う行が過半数（{hits_r}/{total_r}行）のため確認が必要")
+
 
 # ------------------------------------------------------------------ 1 節 → 1 op
 def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
@@ -1050,17 +1194,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         cleaned_items = _clean_validation_items(text, orig_quotes_list, op.get("items"))
         if cleaned_items:
             op["items"] = cleaned_items
-    if shelf["name"] == "cf.add" and op.get("when") != "formula":
-        if op.get("when") == "ne" and op.get("value") in (None, ""):
-            m_cf_ne = re.search(r"(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:になっていない|になってない|ではない|でない|じゃない|以外)", nfkc(text))
-            if not m_cf_ne:
-                m_cf_ne = re.search(r"([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)", nfkc(text))
-            if m_cf_ne:
-                op["value"] = m_cf_ne.group(1).strip()
-        if op.get("value") not in (None, ""):
-            norm_cf_v = _normalize_filter_number(op["value"])
-            if norm_cf_v is not None and re.search(r"[%万億,]", nfkc(str(op["value"]))):
-                op["value"] = norm_cf_v
+    if shelf["name"] in _CMP_VALUE_SHELVES and op.get("when") != "formula":
+        _resolve_cmp_value(op, text)
     if shelf["name"] == "cf.add" and op.get("when") != "formula" and table and table.get("first_col") and table.get("last_col"):
         if re.search(r"行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃)|いない行|ない行", text):
             sp_cf = _data_span(table)
@@ -1265,6 +1400,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     op["name"] = cand_nm
                     if cand_nm in tbl_cols_sorted and "at" not in op and not re.search(r"足し|追加|作", after_op):
                         op["at"] = cand_nm
+        if "name" in op and isinstance(op["name"], str):
+            cleaned_cnm = _clean_calc_col_name(op["name"])
+            if cleaned_cnm:
+                op["name"] = cleaned_cnm
+            else:
+                op.pop("name", None)
         if op.get("expr") and op.get("name"):
             named = True
     if shelf["name"] in ("summary", "pivot.new"):
@@ -1367,29 +1508,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             _clean_filter_equals(op, text, table, orig_quotes)
         if op.get("when") == "ne":
             op.pop("equals", None)
-            if op.get("value") in (None, ""):
-                m_ne = re.search(r"(?:が|は)[『「]?([^』」\s、。]+?)[』」]?(?:以外|ではない|でない|じゃない|になっていない|になってない)", nfkc(text))
-                if not m_ne:
-                    m_ne = re.search(r"([^\s、。をにのがは]+?)(?:以外|ではない|でない|じゃない|になっていない|になってない)", nfkc(text))
-                if m_ne:
-                    raw_ne = m_ne.group(1).strip()
-                    norm_ne = _normalize_filter_number(raw_ne)
-                    op["value"] = norm_ne if norm_ne is not None else raw_ne
-            elif op.get("value") not in (None, ""):
-                norm_ne = _normalize_filter_number(op["value"])
-                if norm_ne is not None and re.search(r"[%万億,]", nfkc(str(op["value"]))):
-                    op["value"] = norm_ne
-        if op.get("when") in ("gt", "ge", "lt", "le"):
-            op.pop("equals", None)
-            if "value" not in op:
-                m_fv = re.search(r"(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超)", nfkc(text))
-                if m_fv:
-                    op["value"] = m_fv.group(1)
-            norm_v = _normalize_filter_number(op.get("value"))
-            if norm_v is not None:
-                op["value"] = norm_v
-            else:
-                op.pop("value", None)
+        _resolve_cmp_value(op, text)
         if "col" not in op and table:
             cols = [c["name"] for c in table.get("columns", [])]
             eq = op.get("equals", "")
