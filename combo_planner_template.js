@@ -64,8 +64,9 @@ var ComboPlanner = (function () {
     ["赤", "赤"], ["青", "青"], ["緑", "緑"], ["黄", "黄"], ["紫", "紫"], ["黒", "黒"], ["白", "白"]
   ];
   var _COLOR_ALT = _COLORS.map(function (c) { return c[0]; }).join("|") + "|#[0-9a-f]{6}|#[0-9a-f]{3}";
-  var _FG_NOCOLOR_RE_G = new RegExp("(文字|フォント)(?:を|は)?(" + _COLOR_ALT + ")", "g");
-  var _TITLE_NOCOLOR_RE_G = new RegExp("(タイトル|見出し)(を|は)?(" + _COLOR_ALT + ")", "g");
+  var _FG_NOCOLOR_RE_G = new RegExp("(?<![大小])(文字|フォント)(?:を|は|に)?(" + _COLOR_ALT + ")", "g");
+  var _BG_NOCOLOR_RE_G = new RegExp("(背景|塗り)(?:を|は|に)?(" + _COLOR_ALT + ")", "g");
+  var _TITLE_NOCOLOR_RE_G = new RegExp("(タイトル|見出し)(?:を|は|に)?(" + _COLOR_ALT + ")", "g");
   var _HEX_COLOR_RE_G =/(?<![0-9A-Za-z])#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9A-Za-z])/g;
   var _EN_COLOR_RE_G = /(?<![A-Za-z])(lightred|lightgreen|lightyellow|lightgray|lightblue|orange|purple|yellow|green|black|white|brown|navy|pink|gray|grey|cyan|blue|red)(?![A-Za-z])/gi;
 
@@ -96,8 +97,9 @@ var ComboPlanner = (function () {
     if (Array.isArray(rules.colors) && rules.colors.length) {
       _COLORS = rules.colors.map(function (c) { return [String(c[0]), String(c[1])]; });
       _COLOR_ALT = _COLORS.map(function (c) { return c[0]; }).join("|") + "|#[0-9a-f]{6}|#[0-9a-f]{3}";
-      _FG_NOCOLOR_RE_G = new RegExp("(文字|フォント)(?:を|は)?(" + _COLOR_ALT + ")", "g");
-      _TITLE_NOCOLOR_RE_G = new RegExp("(タイトル|見出し)(を|は)?(" + _COLOR_ALT + ")", "g");
+      _FG_NOCOLOR_RE_G = new RegExp("(?<![大小])(文字|フォント)(?:を|は|に)?(" + _COLOR_ALT + ")", "g");
+      _BG_NOCOLOR_RE_G = new RegExp("(背景|塗り)(?:を|は|に)?(" + _COLOR_ALT + ")", "g");
+      _TITLE_NOCOLOR_RE_G = new RegExp("(タイトル|見出し)(?:を|は|に)?(" + _COLOR_ALT + ")", "g");
     }
     if (Array.isArray(rules.fg_color_keys) && rules.fg_color_keys.length) FG_COLOR_KEYS = rules.fg_color_keys.slice();
     if (Array.isArray(rules.bg_color_keys) && rules.bg_color_keys.length) BG_COLOR_KEYS = rules.bg_color_keys.slice();
@@ -153,9 +155,10 @@ var ComboPlanner = (function () {
     out = out.split("本当の色").join("文字色");
     out = out.split("ほんとの色").join("文字色");
     out = out.replace(/(^|[^文])字の色/g, "$1文字色");
-    // 「色」を言わない言い方（「文字を赤」「タイトルを赤に」）も文字色として統一
+    // 「色」を言わない言い方（「文字を赤」「背景を緑」「タイトルを赤に」）も統一
     out = out.replace(_FG_NOCOLOR_RE_G, "$1色$2");
-    out = out.replace(_TITLE_NOCOLOR_RE_G, "$1文字色$3");
+    out = out.replace(_BG_NOCOLOR_RE_G, "背景色$2");
+    out = out.replace(_TITLE_NOCOLOR_RE_G, "$1文字色$2");
     // 「タイトルの色は青」「表題の色を赤に」＝タイトルの文字色
     out = out.replace(/(タイトル|表題|題名)の色/g, "$1の文字色");
     return out.split("を").join("");
@@ -969,7 +972,8 @@ var ComboPlanner = (function () {
       names.length ||
       sheetHits.length ||
       shelf.name === "dedupe" ||
-      shelf.name === "seiri"
+      shelf.name === "seiri" ||
+      shelf.name === "blank.rows.delete"
     );
 
     var anyList = shelf.any || [];
@@ -1191,7 +1195,7 @@ var ComboPlanner = (function () {
         op.number_format = "General";
       } else if (/(?:hh:mm|09:00|時刻.{0,4}2桁|2桁.{0,4}時刻|時分形式)/i.test(text)) {
         op.number_format = "hh:mm";
-      } else if (/(?:yyyy\/mm\/dd|2026\/11\/04|スラッシュ.{0,4}日付|年\/月\/日)/i.test(text)) {
+      } else if (/(?:yyyy\/mm\/dd|2026\/11\/04|スラッシュ.{0,4}日付|年\/月\/日|年月日の?形|年月日形式|年月日に)/i.test(text)) {
         op.number_format = "yyyy/mm/dd";
       } else if (op.number_format === 'm"月"d"日"(ddd)' && /(?:年|yyyy)/i.test(text)) {
         op.number_format = "yyyy/mm/dd(ddd)";
@@ -1574,8 +1578,6 @@ var ComboPlanner = (function () {
     }
     function _extractCalcExprJs(txt, tbl) {
       var src = nfkc(txt);
-      var mPref = /^.*?(?:列|欄)[にへ]\s*/.exec(src);
-      var exprSrc = mPref ? src.slice(mPref[0].length) : src;
       var colNames = [];
       var colsList = (tbl && tbl.columns) || [];
       for (var ci0 = 0; ci0 < colsList.length; ci0++) {
@@ -1583,22 +1585,37 @@ var ComboPlanner = (function () {
         if (nm0 && colNames.indexOf(nm0) < 0) colNames.push(nm0);
       }
       colNames.sort(function (a, b) { return b.length - a.length; });
+      var exprStripped = src;
+      for (var es0 = 0; es0 < colNames.length; es0++) {
+        var escEs = nfkc(colNames[es0]).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        exprStripped = exprStripped.replace(new RegExp(escEs + "の?(?:列|欄)[にへ]", "g"), " ");
+      }
+      var mPref = /^.*?(?:列|欄)[にへ]\s*/.exec(src);
+      var exprPref = mPref ? src.slice(mPref[0].length) : src;
       function _cleanOp(raw) {
         var s = String(raw || "").trim().replace(/^[\s、,。をにで]+|[\s、,。をにで]+$/g, "");
+        if (/^-?[0-9]+(?:\.[0-9]+)?$/.test(s)) return s;
         for (var j0 = 0; j0 < colNames.length; j0++) {
           var cn = colNames[j0];
           if (s === cn || (s.length >= cn.length && s.slice(s.length - cn.length) === cn)) return cn;
         }
         var mL = /^([A-Z]{1,3})列$/.exec(s);
-        return mL ? mL[1] : s;
+        if (mL) return mL[1];
+        var uq = _resolveUniqueColsJs(s, tbl, false, []);
+        if (uq.length === 1) return uq[0];
+        return s;
       }
       var pats = [
-        [/([^\s、,。をにと×*]{1,20})\s*(?:と|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を掛け|のかけ|を乗算|を掛け算)/, "*"],
-        [/([^\s、,。をにと＋+]{1,20})\s*(?:と|＋|\+)\s*([^\s、,。をにと＋+]{1,20})\s*(?:を足し|を加算)/, "+"],
-        [/([^\s、,。をにから−-]{1,20})\s*(?:から|−|-)\s*([^\s、,。をにから−-]{1,20})\s*(?:を引|を差し引|を減算)/, "-"],
-        [/([^\s、,。をに÷/]{1,20})\s*(?:を|÷|\/)\s*([^\s、,。をに÷/]{1,20})\s*(?:で割|で除算)/, "/"]
+        [/([^\s、,。をにと×*]{1,20})\s*(?:と|に|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を)?(?:掛け|かけ|のかけ|乗算|掛け算)/, "*"],
+        [/([^\s、,。をにと＋+]{1,20})\s*(?:と|に|＋|\+)\s*([^\s、,。をにと＋+]{1,20})\s*(?:を)?(?:足[しす]|た[しす]|加算)/, "+"],
+        [/([^\s、,。をにから−-]{1,20})\s*(?:から|−|-)\s*([^\s、,。をにから−-]{1,20})\s*(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)/, "-"],
+        [/([^\s、,。をに÷/]{1,20})\s*(?:を|÷|\/)\s*([^\s、,。をに÷/]{1,20})\s*(?:で)?(?:割[っりる]|わ[っりる]|除算)/, "/"]
       ];
-      var cands = exprSrc !== src ? [exprSrc, src] : [src];
+      var cands = [];
+      var rawCands = [exprStripped, exprPref, src];
+      for (var rc = 0; rc < rawCands.length; rc++) {
+        if (rawCands[rc] && cands.indexOf(rawCands[rc]) < 0) cands.push(rawCands[rc]);
+      }
       for (var ci1 = 0; ci1 < cands.length; ci1++) {
         for (var pi1 = 0; pi1 < pats.length; pi1++) {
           var mm = pats[pi1][0].exec(cands[ci1]);
@@ -1615,21 +1632,24 @@ var ComboPlanner = (function () {
       op.rows = parseInt(table.header_row, 10);
     }
     if (shelf.name === "calc.col") {
-      if (!/(?:列|欄)[にへ]/.test(text)) {
+      var tNfkcAt = nfkc(text);
+      var tblColsSorted = [];
+      if (table && Array.isArray(table.columns)) {
+        for (var tc0 = 0; tc0 < table.columns.length; tc0++) {
+          var tcNm = String((table.columns[tc0] && table.columns[tc0].name) || "").trim();
+          if (tcNm && tblColsSorted.indexOf(tcNm) < 0) tblColsSorted.push(tcNm);
+        }
+        tblColsSorted.sort(function (a, b) { return b.length - a.length; });
+      }
+      if (!/(?:列|欄)[にへ]/.test(tNfkcAt)) {
         delete op.at;
-      } else if (table && Array.isArray(table.columns)) {
-        var tNfkcAt = nfkc(text);
-        var sortedAtCols = table.columns.slice().sort(function (a, b) {
-          return String((b && b.name) || "").length - String((a && a.name) || "").length;
-        });
-        for (var ati = 0; ati < sortedAtCols.length; ati++) {
-          var cnAt = String((sortedAtCols[ati] && sortedAtCols[ati].name) || "").trim();
-          if (cnAt) {
-            var escAt = nfkc(cnAt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            if (new RegExp(escAt + "の?(?:列|欄)[にへ]").test(tNfkcAt)) {
-              op.at = cnAt;
-              break;
-            }
+      } else if (tblColsSorted.length) {
+        for (var ati = 0; ati < tblColsSorted.length; ati++) {
+          var cnAt = tblColsSorted[ati];
+          var escAt = nfkc(cnAt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          if (new RegExp(escAt + "の?(?:列|欄)[にへ]").test(tNfkcAt)) {
+            op.at = cnAt;
+            break;
           }
         }
       }
@@ -1638,11 +1658,56 @@ var ComboPlanner = (function () {
         if (extExpr) op.expr = extExpr;
       }
       if (!_hasOwn(op, "name") && _hasOwn(op, "at")) op.name = op.at;
+      if (!_hasOwn(op, "name") && op.expr) {
+        var mAfter = /(?:掛け|かけ|足[しす]|た[しす]|引[いけく]|ひ[いけく]|割[っりる]|わ[っりる]|乗算|加算|減算|除算)(?:て|た|算)?\s*(.+)$/.exec(tNfkcAt);
+        if (mAfter) {
+          var afterOp = mAfter[1];
+          var mDest = /([^\s、,。をの]{1,20}?)(?:の列|列|の欄|欄)?(?:を(?:出し|求め|計算|足し|追加|作|入れ)|に(?:出し|入れ|して))/.exec(afterOp);
+          var candNm = mDest ? mDest[1].trim() : "";
+          if (candNm === "数式" || candNm === "式" || candNm === "計算式" || candNm === "計算結果" || candNm === "結果" || candNm === "値" || candNm === "金額") {
+            var afterCols = _colNames(afterOp, table);
+            candNm = afterCols.length ? afterCols[afterCols.length - 1] : (candNm === "金額" ? candNm : "");
+          }
+          if (!candNm) {
+            var afterCols2 = _colNames(afterOp, table);
+            if (afterCols2.length) candNm = afterCols2[afterCols2.length - 1];
+          }
+          if (candNm) {
+            op.name = candNm;
+            if (tblColsSorted.indexOf(candNm) >= 0 && !_hasOwn(op, "at") && !/足し|追加/.test(afterOp)) {
+              op.at = candNm;
+            }
+          }
+        }
+      }
       if (op.expr && op.name) named = true;
     }
 
     var extraMissing = [];
     if (shelf.name === "summary" || shelf.name === "pivot.new") {
+      if (table && Array.isArray(table.columns)) {
+        var tblColNms = [];
+        for (var tci0 = 0; tci0 < table.columns.length; tci0++) {
+          var tcn0 = String((table.columns[tci0] && table.columns[tci0].name) || "").trim();
+          if (tcn0 && tblColNms.indexOf(tcn0) < 0) tblColNms.push(tcn0);
+        }
+        tblColNms.sort(function (a, b) { return b.length - a.length; });
+        if (shelf.name === "summary" && typeof op.by === "string" && tblColNms.indexOf(op.by) < 0) {
+          var matchedBy = null;
+          for (var mbi = 0; mbi < tblColNms.length; mbi++) {
+            var cnBy = tblColNms[mbi];
+            if (op.by.length >= cnBy.length && op.by.slice(op.by.length - cnBy.length) === cnBy) {
+              matchedBy = cnBy;
+              break;
+            }
+          }
+          if (!matchedBy) {
+            var uBy = _resolveUniqueColsJs(op.by, table, false, []);
+            if (uBy.length === 1) matchedBy = uBy[0];
+          }
+          if (matchedBy) op.by = matchedBy;
+        }
+      }
       if (shelf.name === "pivot.new" && Array.isArray(op.rows) && Array.isArray(op.cols)) {
         var dedupCols = [];
         for (var dci = 0; dci < op.cols.length; dci++) {
@@ -2257,20 +2322,13 @@ var ComboPlanner = (function () {
         }
       }
 
-      if (!scored.length) {
-        p.reasons.push("「" + c + "」に当たる棚がありません");
-        fatalErr = true;
-        lastIncomplete = null;
-        continue;
-      }
-
-      // 競合する新・既存棚の文脈調停（明示的文脈がある側を優遇）
+      // 型ベースの優先調停（スコア0でも明確な型の依頼を救済する）
       var boostName = "";
-      if (scored.length) {
-        var topBase = scored[0].total;
-        var candMap = {};
-        for (var cmi = 0; cmi < scored.length; cmi++) candMap[scored[cmi].shelf.name] = true;
-        var hasFmtCue = /(?:表示形式|曜日|hh:mm|yyyy|mm\/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻)/i.test(c);
+      var topBase = scored.length ? scored[0].total : WEAK_SCORE;
+      var candMap = {};
+      for (var cmi = 0; cmi < scored.length; cmi++) candMap[scored[cmi].shelf.name] = true;
+      if (kind !== "doc") {
+        var hasFmtCue = /(?:表示形式|曜日|hh:mm|yyyy|mm\/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻|年月日の?形|年月日形式|年月日に|日付の?形)/i.test(c);
         var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了)/.test(c) ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c);
         var hasRowCfCue = /(?:行全体|の行|行を|行に)/.test(c) &&
@@ -2283,22 +2341,49 @@ var ComboPlanner = (function () {
         var hasSummaryCue = /(?:別(?:に|で|の)|ごと(?:に|の))/.test(c) &&
           /集計|合計|平均|件数/.test(c) &&
           !/ピボット|クロス|縦と横|小計|グラフ|並|ソート|抽出/.test(c);
-        if (hasRowCfCue && kind !== "doc") {
-          boostName = "cf.add";
-          if (!candMap["cf.add"] && _byName["cf.add"]) {
-            scored.push({ total: topBase, order: 999, shelf: _byName["cf.add"], detail: {} });
-            candMap["cf.add"] = true;
+        var hasCalcCue = /(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|\/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)/.test(nfkc(c)) &&
+          !/構成比|割合|消費税|税込|税抜|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に/.test(c);
+        var hasChartCue = /(?:グラフ|棒グラフ|折れ線|円グラフ|散布図|面グラフ)/.test(c) &&
+          !/消|削除|なく|いらない/.test(c);
+        var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|以外|ではない|空白|空欄)/.test(c) ||
+          /[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|もの|データ|人)/.test(c)) &&
+          /(?:だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ)/.test(c) &&
+          !/(?:消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す)/i.test(c);
+        var hasFreezeCue = /固定|フリーズ/.test(c) &&
+          !/解除|外|やめ|なく|値|式|数式|絶対参照|固定色|書式|太字|色|背景|罫線|揃え|寄せ/.test(c);
+        var hasBlankDelCue = /空行|空いてる行|空いている行|空白行|空白の行|空き行/.test(c) &&
+          !/重複|ダブ|全角|半角|整え|きれい|掃除|トリム|余分な空白|末尾|軽く|下まで|余白/.test(c);
+        var hasBorderFmtCue = /罫線|外枠|格子/.test(c) &&
+          !/整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線/.test(c);
+
+        var ensureBoost = function (nm) {
+          boostName = nm;
+          if (!candMap[nm] && _byName[nm]) {
+            scored.push({ total: topBase, order: 999, shelf: _byName[nm], detail: {} });
+            candMap[nm] = true;
           }
-        } else if (hasSummaryCue && kind !== "doc") {
-          boostName = "summary";
-          if (!candMap["summary"] && _byName["summary"]) {
-            scored.push({ total: topBase, order: 999, shelf: _byName["summary"], detail: {} });
-            candMap["summary"] = true;
-          }
+        };
+
+        if (hasRowCfCue) {
+          ensureBoost("cf.add");
+        } else if (hasChartCue) {
+          ensureBoost("chart.new");
+        } else if (hasFilterWhereCue) {
+          ensureBoost("filter.where");
+        } else if (hasCalcCue) {
+          ensureBoost("calc.col");
+        } else if (hasSummaryCue) {
+          ensureBoost("summary");
+        } else if (hasFreezeCue) {
+          ensureBoost("freeze");
+        } else if (hasBlankDelCue && (candMap["blank.rows.delete"] || candMap["seiri"])) {
+          ensureBoost("blank.rows.delete");
+        } else if (hasBorderFmtCue && candMap["format"]) {
+          ensureBoost("format");
+        } else if (hasFmtCue && !/分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換/.test(c) && candMap["format"]) {
+          ensureBoost("format");
         } else if (scored.length >= 2) {
-          if (hasFmtCue && candMap["format"] && candMap["date.fix"] && (scored[0].shelf.name === "format" || scored[0].shelf.name === "date.fix")) {
-            boostName = "format";
-          } else if (_colorHits(c).length > 0 && c.indexOf("文字") >= 0 && !/(?:大文字|小文字|全角|半角|UPPER|LOWER|PROPER)/i.test(c) && candMap["format"]) {
+          if (_colorHits(c).length > 0 && c.indexOf("文字") >= 0 && !/(?:大文字|小文字|全角|半角|UPPER|LOWER|PROPER)/i.test(c) && candMap["format"]) {
             boostName = "format";
           } else if (hasRowDelCond && candMap["filter.delete"]) {
             boostName = "filter.delete";
@@ -2351,6 +2436,12 @@ var ComboPlanner = (function () {
             return a.order - b.order;
           });
         }
+      }
+      if (!scored.length) {
+        p.reasons.push("「" + c + "」に当たる棚がありません");
+        fatalErr = true;
+        lastIncomplete = null;
+        continue;
       }
 
       var lead = scored[0].total;

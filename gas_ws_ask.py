@@ -331,33 +331,46 @@ def _cast(a, v):
 
 
 def _extract_calc_expr(text, table):
-    """日本語の四則演算表現（「AとBを掛けた」等）から計算式（A*B 等）を抽出する。"""
+    """日本語の四則演算表現（語順「AとB」「BにAを」、ひらがな・漢字・記号）から計算式（A*B 等）を抽出する。"""
     src = nfkc(text)
-    m_pref = re.search(r"^.*?(?:列|欄)[にへ]\s*", src)
-    expr_src = src[m_pref.end():] if m_pref else src
     col_names = sorted(
         {str(c.get("name") or "").strip() for c in (table or {}).get("columns") or [] if str(c.get("name") or "").strip()},
         key=len,
         reverse=True,
     )
+    # 出し先の「〜の列に/へ」を先頭・末尾とも取り除いた候補文も用意する
+    expr_stripped = src
+    for cn in col_names:
+        expr_stripped = re.sub(re.escape(nfkc(cn)) + r"の?(?:列|欄)[にへ]", " ", expr_stripped)
+    m_pref = re.search(r"^.*?(?:列|欄)[にへ]\s*", src)
+    expr_pref = src[m_pref.end():] if m_pref else src
 
     def _clean_operand(raw):
         s = re.sub(r"^[\s、,。をにで]+|[\s、,。をにで]+$", "", str(raw or "").strip())
+        if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", s):
+            return s
         for cn in col_names:
             if s == cn or s.endswith(cn):
                 return cn
         m_col_l = re.fullmatch(r"([A-Z]{1,3})列", s)
         if m_col_l:
             return m_col_l.group(1)
+        uniq = _resolve_unique_cols(s, table)
+        if len(uniq) == 1:
+            return uniq[0]
         return s
 
     patterns = [
-        (r"([^\s、,。をにと×*]{1,20})\s*(?:と|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を掛け|のかけ|を乗算|を掛け算)", "*"),
-        (r"([^\s、,。をにと＋+]{1,20})\s*(?:と|＋|\+)\s*([^\s、,。をにと＋+]{1,20})\s*(?:を足し|を加算)", "+"),
-        (r"([^\s、,。をにから−-]{1,20})\s*(?:から|−|-)\s*([^\s、,。をにから−-]{1,20})\s*(?:を引|を差し引|を減算)", "-"),
-        (r"([^\s、,。をに÷/]{1,20})\s*(?:を|÷|/)\s*([^\s、,。をに÷/]{1,20})\s*(?:で割|で除算)", "/"),
+        (r"([^\s、,。をにと×*]{1,20})\s*(?:と|に|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を)?(?:掛け|かけ|のかけ|乗算|掛け算)", "*"),
+        (r"([^\s、,。をにと＋+]{1,20})\s*(?:と|に|＋|\+)\s*([^\s、,。をにと＋+]{1,20})\s*(?:を)?(?:足[しす]|た[しす]|加算)", "+"),
+        (r"([^\s、,。をにから−-]{1,20})\s*(?:から|−|-)\s*([^\s、,。をにから−-]{1,20})\s*(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)", "-"),
+        (r"([^\s、,。をに÷/]{1,20})\s*(?:を|÷|/)\s*([^\s、,。をに÷/]{1,20})\s*(?:で)?(?:割[っりる]|わ[っりる]|除算)", "/"),
     ]
-    for cand_src in ([expr_src, src] if expr_src != src else [src]):
+    cands = []
+    for cs in (expr_stripped, expr_pref, src):
+        if cs and cs not in cands:
+            cands.append(cs)
+    for cand_src in cands:
         for pat, sym in patterns:
             m = re.search(pat, cand_src)
             if m:
@@ -626,7 +639,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     has_from_to_ranges = args.get("from", {}).get("type") == "範囲" and args.get("to", {}).get("type") == "範囲"
     rows = _rows_of(scan)
     nums = _numbers(scan)
-    named = bool(explicit_range or rows or letters or names or sheet_hits or shelf["name"] in ("dedupe", "seiri"))
+    named = bool(explicit_range or rows or letters or names or sheet_hits or shelf["name"] in ("dedupe", "seiri", "blank.rows.delete"))
     need = [a["name"] for a in shelf["args"] if a["req"]] + [k for k in shelf["any"]]
     col_pool = list(names) + [x for x in letters if x not in [_letter_of(table, n) for n in names]]
     range_given = False
@@ -743,7 +756,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op["number_format"] = "General"
         elif re.search(r"(?:hh:mm|09:00|時刻.{0,4}2桁|2桁.{0,4}時刻|時分形式)", text, re.IGNORECASE):
             op["number_format"] = "hh:mm"
-        elif re.search(r"(?:yyyy/mm/dd|2026/11/04|スラッシュ.{0,4}日付|年/月/日)", text, re.IGNORECASE):
+        elif re.search(r"(?:yyyy/mm/dd|2026/11/04|スラッシュ.{0,4}日付|年/月/日|年月日の?形|年月日形式|年月日に)", text, re.IGNORECASE):
             op["number_format"] = "yyyy/mm/dd"
         elif op.get("number_format") == 'm"月"d"日"(ddd)' and re.search(r"年|yyyy", text, re.IGNORECASE):
             op["number_format"] = "yyyy/mm/dd(ddd)"
@@ -894,14 +907,18 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     if shelf["name"] == "freeze" and "rows" not in op and table and table.get("header_row") and re.search(r"見出し|ヘッダ", text):
         op["rows"] = int(table["header_row"])
     if shelf["name"] == "calc.col":
-        has_at_cue = bool(re.search(r"(?:列|欄)[にへ]", text))
+        t_nfkc = nfkc(text)
+        tbl_cols_sorted = sorted(
+            [str(c.get("name") or "").strip() for c in (table or {}).get("columns") or [] if str(c.get("name") or "").strip()],
+            key=len,
+            reverse=True,
+        )
+        has_at_cue = bool(re.search(r"(?:列|欄)[にへ]", t_nfkc))
         if not has_at_cue:
             op.pop("at", None)
-        elif table:
-            t_nfkc = nfkc(text)
-            for c_info in sorted((table.get("columns") or []), key=lambda x: len(str(x.get("name") or "")), reverse=True):
-                cn = str(c_info.get("name") or "").strip()
-                if cn and re.search(re.escape(nfkc(cn)) + r"の?(?:列|欄)[にへ]", t_nfkc):
+        elif tbl_cols_sorted:
+            for cn in tbl_cols_sorted:
+                if re.search(re.escape(nfkc(cn)) + r"の?(?:列|欄)[にへ]", t_nfkc):
                     op["at"] = cn
                     break
         if "expr" not in op:
@@ -910,10 +927,41 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 op["expr"] = ext_expr
         if "name" not in op and "at" in op:
             op["name"] = op["at"]
+        if "name" not in op and op.get("expr"):
+            m_after = re.search(r"(?:掛け|かけ|足[しす]|た[しす]|引[いけく]|ひ[いけく]|割[っりる]|わ[っりる]|乗算|加算|減算|除算)(?:て|た|算)?\s*(.+)$", t_nfkc)
+            if m_after:
+                after_op = m_after.group(1)
+                m_dest = re.search(r"([^\s、,。をの]{1,20}?)(?:の列|列|の欄|欄)?(?:を(?:出し|求め|計算|足し|追加|作|入れ)|に(?:出し|入れ|して))", after_op)
+                cand_nm = m_dest.group(1).strip() if m_dest else ""
+                if cand_nm in ("数式", "式", "計算式", "計算結果", "結果", "値", "金額"):
+                    # 一般語の場合は後ろにある既存列名を優先確認
+                    after_cols = _col_names(after_op, table)
+                    cand_nm = after_cols[-1] if after_cols else (cand_nm if cand_nm == "金額" else "")
+                if not cand_nm:
+                    after_cols = _col_names(after_op, table)
+                    if after_cols:
+                        cand_nm = after_cols[-1]
+                if cand_nm:
+                    op["name"] = cand_nm
+                    if cand_nm in tbl_cols_sorted and "at" not in op and not re.search(r"足し|追加", after_op):
+                        op["at"] = cand_nm
         if op.get("expr") and op.get("name"):
             named = True
     extra_missing = []
     if shelf["name"] in ("summary", "pivot.new"):
+        if table and table.get("columns"):
+            tbl_col_nms = sorted(
+                [str(c.get("name") or "").strip() for c in table["columns"] if str(c.get("name") or "").strip()],
+                key=len,
+                reverse=True,
+            )
+            if shelf["name"] == "summary" and isinstance(op.get("by"), str) and op["by"] not in tbl_col_nms:
+                matched_by = next((cn for cn in tbl_col_nms if op["by"].endswith(cn)), None)
+                if not matched_by:
+                    u_by = _resolve_unique_cols(op["by"], table)
+                    matched_by = u_by[0] if len(u_by) == 1 else None
+                if matched_by:
+                    op["by"] = matched_by
         if shelf["name"] == "pivot.new" and isinstance(op.get("rows"), list) and isinstance(op.get("cols"), list):
             dedup_cols = [c for c in op["cols"] if c not in op["rows"]]
             if dedup_cols:
@@ -1274,17 +1322,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                         p.cards.pop()
                     last_incomplete = None
                 continue
-        if not scored:
-            p.reasons.append(f"「{c}」に当たる棚がありません")
-            fatal_err = True
-            last_incomplete = None
-            continue
-        # 競合する新・既存棚の文脈調停
+        # 型ベースの優先調停（スコア0でも明確な型の依頼を救済する）
         boost_name = ""
-        if scored:
-            top_base = scored[0][0]
-            cand_names = {x[2]["name"] for x in scored}
-            has_fmt_cue = bool(re.search(r"表示形式|曜日|hh:mm|yyyy|mm/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻", c, re.IGNORECASE))
+        top_base = scored[0][0] if scored else gas_ws_find.WEAK_SCORE
+        cand_names = {x[2]["name"] for x in scored}
+        if kind != "doc":
+            has_fmt_cue = bool(re.search(r"表示形式|曜日|hh:mm|yyyy|mm/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻|年月日の?形|年月日形式|年月日に|日付の?形", c, re.IGNORECASE))
             has_row_cf_cond = bool(
                 re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了", c)
                 or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
@@ -1305,20 +1348,65 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and re.search(r"集計|合計|平均|件数", c)
                 and not re.search(r"ピボット|クロス|縦と横|小計|グラフ|並|ソート|抽出", c)
             )
-            if has_row_cf_cue and (kind != "doc"):
-                boost_name = "cf.add"
-                if "cf.add" not in cand_names and "cf.add" in finder.cat.by_name:
-                    scored.append((top_base, 999, finder.cat.by_name["cf.add"], {}))
-                    cand_names.add("cf.add")
-            elif has_summary_cue and (kind != "doc"):
-                boost_name = "summary"
-                if "summary" not in cand_names and "summary" in finder.cat.by_name:
-                    scored.append((top_base, 999, finder.cat.by_name["summary"], {}))
-                    cand_names.add("summary")
+            has_calc_cue = bool(
+                re.search(
+                    r"(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)",
+                    nfkc(c),
+                )
+                and not re.search(r"構成比|割合|消費税|税込|税抜|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に", c)
+            )
+            has_chart_cue = bool(
+                re.search(r"グラフ|棒グラフ|折れ線|円グラフ|散布図|面グラフ", c)
+                and not re.search(r"消|削除|なく|いらない", c)
+            )
+            has_filter_where_cue = bool(
+                (
+                    re.search(r"以上|以下|未満|より大|より小|を超|超え|以外|ではない|空白|空欄", c)
+                    or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|もの|データ|人)", c)
+                )
+                and re.search(r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
+                and not re.search(r"消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す", c, re.IGNORECASE)
+            )
+            has_freeze_cue = bool(
+                re.search(r"固定|フリーズ", c)
+                and not re.search(r"解除|外|やめ|なく|値|式|数式|絶対参照|固定色|書式|太字|色|背景|罫線|揃え|寄せ", c)
+            )
+            has_blank_del_cue = bool(
+                re.search(r"空行|空いてる行|空いている行|空白行|空白の行|空き行", c)
+                and not re.search(r"重複|ダブ|全角|半角|整え|きれい|掃除|トリム|余分な空白|末尾|軽く|下まで|余白", c)
+            )
+            has_border_fmt_cue = bool(
+                re.search(r"罫線|外枠|格子", c)
+                and not re.search(r"整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線", c)
+            )
+
+            def _ensure_boost(name):
+                nonlocal boost_name
+                boost_name = name
+                if name not in cand_names and name in finder.cat.by_name:
+                    scored.append((top_base, 999, finder.cat.by_name[name], {}))
+                    cand_names.add(name)
+
+            if has_row_cf_cue:
+                _ensure_boost("cf.add")
+            elif has_chart_cue:
+                _ensure_boost("chart.new")
+            elif has_filter_where_cue:
+                _ensure_boost("filter.where")
+            elif has_calc_cue:
+                _ensure_boost("calc.col")
+            elif has_summary_cue:
+                _ensure_boost("summary")
+            elif has_freeze_cue:
+                _ensure_boost("freeze")
+            elif has_blank_del_cue and ("blank.rows.delete" in cand_names or "seiri" in cand_names):
+                _ensure_boost("blank.rows.delete")
+            elif has_border_fmt_cue and "format" in cand_names:
+                _ensure_boost("format")
+            elif has_fmt_cue and not re.search(r"分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換", c) and "format" in cand_names:
+                _ensure_boost("format")
             elif len(scored) >= 2:
-                if has_fmt_cue and "format" in cand_names and "date.fix" in cand_names and scored[0][2]["name"] in ("format", "date.fix"):
-                    boost_name = "format"
-                elif _color_hits(c) and "文字" in c and not re.search(r"大文字|小文字|全角|半角|UPPER|LOWER|PROPER", c, re.IGNORECASE) and "format" in cand_names:
+                if _color_hits(c) and "文字" in c and not re.search(r"大文字|小文字|全角|半角|UPPER|LOWER|PROPER", c, re.IGNORECASE) and "format" in cand_names:
                     boost_name = "format"
                 elif has_row_del_cond and "filter.delete" in cand_names:
                     boost_name = "filter.delete"
@@ -1361,6 +1449,11 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                     else:
                         new_sc.append(x)
                 scored = sorted(new_sc, key=lambda x: (-x[0], x[1]))
+        if not scored:
+            p.reasons.append(f"「{c}」に当たる棚がありません")
+            fatal_err = True
+            last_incomplete = None
+            continue
 
         # 札の「頼み:」の正規表現が当たった棚は、点が近ければ（EVIDENCE_GAP 以内）その棚を 1 位にする（調停済みならスキップ）
         lead = scored[0][0]

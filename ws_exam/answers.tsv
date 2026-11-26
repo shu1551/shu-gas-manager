@@ -13,11 +13,11 @@ A列とB列入れ替えて	cols.move,transpose,doc.move,width,doc.template
 合計のとこ太字で黄色に	format,calc.running
 他の人が触れないようにして、でもB2:B20だけは打てるように	protect.sheet,count.if,date.fix
 これ見やすくして	tidy
-月ごとの売上の推移を出して	chart.new,calc.percent,calc.rank,doc.from.sheet,calc.diff
+月ごとの売上の推移を出して	chart.new,calc.percent,calc.rank,doc.from.sheet,filter.where
 プルダウンで未着手・進行中・完了を選べるようにして、完了は灰色に	validation.list,validation.clear
 全角の数字を半角に	seiri,text.case,validation.number,number.fix
 空白行を詰めて	seiri,blank.rows.delete
-1行おきに色つけて、ついでにヘッダーは青	banding.add,format,doc.insert,banding.remove,doc.new,doc.section
+1行おきに色つけて、ついでにヘッダーは青	format,banding.add,doc.font,banding.remove,doc.style
 これを PDF にしてメールで送って	export.pdf,doc.export.pdf,dedupe,drive.rename,drive.move
 非表示になってる列ない？あったら出して	cols.show,format,sheet.show,sheet.gridlines,rows.hide
 3行目から5行目を消して	rows.delete,rows.hide,group.rows,group.remove,doc.table.row
@@ -472,8 +472,8 @@ C1に本日の日付と今の日時を入れて	date.today,write,fill.date,date.
 営業だけに絞って	filter.where
 絞り込み フィルタ 表示	filter.where,filter.off,filter.on,fill.down
 表にフィルタを設定して	filter.on,filter.where,filter.off,doc.header,fill.down
-見出しに▼を付けて絞り込めるようにして	filter.on,doc.header,format,doc.table.style,doc.new
-オートフィルタかけといて	filter.on,fill.down,filter.where,filter.off,rows.sample
+見出しに▼を付けて絞り込めるようにして	filter.on,doc.header,format,doc.table.style,filter.where
+オートフィルタかけといて	filter.on,fill.down,filter.where,filter.off,calc.col
 フィルタ 設定 追加	filter.on,filter.where,filter.off,fill.down
 表のフィルタを解除して	filter.off,filter.where,filter.on,doc.table.row,protect.remove
 絞り込みを解除して全部表示に戻して	filter.off,filter.where,format,group.remove,sheet.gridlines
@@ -483,11 +483,11 @@ C1に本日の日付と今の日時を入れて	date.today,write,fill.date,date.
 金額が0以下の行を削除して	filter.delete,filter.where,rows.delete,doc.table.row,dedupe
 状態が不要に一致する行を消して	filter.delete,rows.delete,dedupe,doc.delete,doc.table.row
 条件に合う行を一括削除したい	filter.delete,filter.where,filter.extract,rows.highlight,blank.rows.delete
-部署が営業の行を別シートに抽出して	filter.extract,top.n,filter.where,transpose,rows.sample
+部署が営業の行を別シートに抽出して	filter.extract,filter.where,top.n,transpose,rows.sample
 金額が10000以上の行を別シートへ抽出して	filter.extract,filter.where,rows.sample,top.n,calc.if
-条件に合う行を「抽出」シートに抽出して	filter.extract,top.n,filter.where,filter.delete,rows.highlight
+条件に合う行を「抽出」シートに抽出して	filter.extract,filter.where,top.n,filter.delete,rows.highlight
 条件に合う行を別シートに抽出したい	filter.extract,top.n,filter.where,filter.delete,rows.sample
-表からランダムに10件を抽出してサンプル抽出して	rows.sample,top.n,text.extract,doc.insert,filter.extract
+表からランダムに10件を抽出してサンプル抽出して	rows.sample,top.n,text.extract,doc.insert,filter.where
 データ行から無作為抽出してランダムに行を抜いて	rows.sample,calc.running,calc.rank,rows.reverse,seiri
 ランダム抽出 サンプル抽出 無作為抽出	rows.sample,text.extract
 ランダムに選 ランダム抜き出 件数を抽出	rows.sample,text.extract,unique.list
@@ -555,7 +555,7 @@ D列からF列をグループ化して	group.cols,group.rows,group.remove,border
 グループ 解除 外す	group.remove,banding.remove,borders.group,group.rows,group.cols
 見出しを太字にして背景を青にして	format,doc.font,doc.table.style,bg.clear,sheet.color
 金額の列を桁区切りの書式にして	format,split.col,calc.col,calc.running,calc.tax
-文字を赤くしたいんだけど	doc.font,format
+文字を赤くしたいんだけど	format,doc.font
 書式 太字 色 背景	format,doc.font
 A列の幅を広げて	width,fill.blank,link.clear,cols.move
 列幅を中身に合わせて自動調整して	width,cf.clear
@@ -647,7 +647,7 @@ B2:E5の塗りつぶしを消して	bg.clear,doc.delete,count.if,protect.sheet,c
 D列に利益（売上-費用）の列を足して	calc.col,calc.diff,calc.if,date.diff,calc.percent
 計算列 追加 計算式	calc.col,cols.insert,formula.guard,formula.tovalue,calc.tax
 計算 式 列 追加	calc.col,cols.insert,formula.guard,formula.tovalue,protect.formulas
-売上の構成比を出して	calc.percent,doc.outline,calc.rank,doc.from.sheet,calc.diff
+売上の構成比を出して	calc.percent,doc.outline,calc.rank,doc.from.sheet,filter.where
 売上の構成比の列を足して	calc.percent,calc.col,calc.diff,calc.rank,date.parts
 割合 列 構成比	calc.percent
 構成比 パーセント 列	calc.percent,format
@@ -693,8 +693,8 @@ COUNTIF 条件 件数	count.if,round,calc.if
 ROUND ラウンド 端数処理	round,count.if
 日付から年と月の列を分けて	date.parts,date.age,split.col,calc.diff,date.diff
 日付の列から曜日を取り出して	date.parts,format,date.diff,date.fix,link.extract
-日付 年 月 曜日 分解	date.parts,date.age,format,cf.weekend,fill.date
-日付から年 日付から月 曜日の列	date.parts,date.age,date.diff,format,fill.date
+日付 年 月 曜日 分解	format,date.parts,date.age,cf.weekend,fill.date
+日付から年 日付から月 曜日の列	date.parts,date.age,format,date.diff,fill.date
 姓と名の列を結合して	text.join,format,split.col,col.compare,sheet.merge
 住所の各列を1つにつなげて	text.join,cols.insert
 文字列 結合 列 つなげる	text.join,split.col,text.case,format,date.fix
@@ -704,7 +704,7 @@ ROUND ラウンド 端数処理	round,count.if
 大文字 小文字 変換	text.case,date.fix,number.fix
 半角 全角 統一	text.case,seiri
 金額の上位5件を別シートに抽出して	filter.extract,top.n,rows.sample,unique.list,formula.list
-売上のトップ10だけを抽出して	top.n,filter.extract,rows.sample,calc.percent,calc.rank
+売上のトップ10だけを抽出して	top.n,filter.where,filter.extract,rows.sample,calc.percent
 金額の下位3件をワースト抽出して	top.n,total,text.extract,stat.row,calc.running
 上位抽出 下位抽出 トップ5 ワースト	top.n,text.clean,unique.list,cf.scale,text.extract
 金額が10000以上ならマルにするIF式の判定列を足して	calc.if,cf.add,calc.col,filter.where,calc.tax
@@ -713,7 +713,7 @@ ROUND ラウンド 端数処理	round,count.if
 条件分岐 IF式 判定列を足す	calc.if,col.compare,calc.col,calc.percent,calc.diff
 開始日と終了日の経過日数の列を足して	date.diff,calc.col,date.parts,date.age,calc.diff
 入社日から今日までの経過年数と経過月数の列を足して	date.age,date.diff,calc.col,calc.diff,date.parts
-開始日から完了日までの営業日数と期間の日数を出して	date.diff,filter.extract,find
+開始日から完了日までの営業日数と期間の日数を出して	date.diff,filter.where,filter.extract,find
 経過日数 日数の差 日付の差 営業日数	date.diff,date.parts,date.age,format,date.fix
 得意先列の重複を除いたユニーク一覧を別シートへ作って	unique.list,formula.list,note.list,sheet.split,filter.extract
 部署ごとの重複なしの一覧を種類ごとの件数付きで作って	unique.list,summary,count.if,sheet.split,sheet.toc
@@ -727,7 +727,7 @@ ROUND ラウンド 端数処理	round,count.if
 ブック全体の関数一覧を調べて数式リストを作って	formula.list,unique.list,table.template,sheet.toc,doc.list
 どこに式が入っているか数式をチェックして式を一覧にして	formula.list,cf.add,audit.check,checkbox,checkbox.toggle
 数式一覧 式を一覧 関数一覧	formula.list,cf.list
-生年月日から満年齢を計算して年齢を出して	date.age,calc.diff,date.parts,protect.formulas
+生年月日から満年齢を計算して年齢を出して	date.age,format,calc.diff,date.parts,protect.formulas
 入社日から勤続年数と経過年数を出して	date.age,date.diff
 満年齢を足して 経過年数	date.age,date.diff,calc.col
 年齢 勤続年数 経過月数 計算	date.age,date.diff
@@ -781,7 +781,7 @@ A1からE50にフィルタを設定して	filter.on,filter.where,filter.off,clea
 フィルタを解除して全部表示に戻して	filter.off,format,filter.where,filter.on,sheet.gridlines
 表の途中の空行を一括で詰めて	blank.rows.delete,seiri,filter.delete,rows.trim,replace
 社員コード列を5桁で先頭0埋めして	zero.pad
-データからランダムに10件を抽出して	rows.sample,top.n,calc.running,clear.values,doc.insert
+データからランダムに10件を抽出して	rows.sample,top.n,filter.where,calc.running,clear.values
 担当列のカンマ区切りを縦の行へ展開して	format,split.rows,split.col,doc.pagebreak,cf.weekend
 表の下に平均の行も足して	stat.row,calc.col,total,doc.append,doc.insert
 金額の最大値の行を足して	calc.col,stat.row,rows.insert,total,doc.table.row
@@ -795,7 +795,7 @@ B2:B10で「営業」の件数を数えて	count.if,protect.sheet,copy,copy.valu
 #DIV/0! が出ないようにして	formula.guard
 この列の式を値にして	formula.tovalue,copy.values,calc.diff,number.fix,cols.insert
 金額を千円単位に丸めて	round,format.negred
-日付から曜日の列を作って	date.parts,text.join,date.diff,date.age,format
+日付から曜日の列を作って	date.parts,format,text.join,date.diff,date.age
 姓と名をつないで氏名の列に	text.join,split.col,calc.col,date.fix
 金額が10000以上なら○そうでなければ×の判定列を足して	calc.if,cf.add,calc.col,filter.where,calc.tax
 得意先列の重複を除いた一覧を件数付きで作って	unique.list,summary,cf.dup,sheet.toc,dedupe
@@ -875,7 +875,7 @@ B列を消して	cols.delete
 ウィンドウ枠の固定を解除して	unfreeze,freeze,filter.off,protect.remove,merge.unmerge
 5行目から10行目を隠して	rows.hide,group.rows,group.remove,rows.delete,rows.show
 隠れている5行目を出して	rows.show,rows.delete,rows.move,freeze,rows.hide
-非表示の行を全部出して	rows.show,sheet.show,cols.show,format,doc.heading
+非表示の行を全部出して	rows.show,sheet.show,cols.show,filter.where,format
 C列とD列を隠して	cols.hide,cols.show,width
 非表示になっているC列を出して	cols.show,format,sheet.show,sheet.gridlines,rows.hide
 隠れている列を全部再表示して	cols.show,sheet.show,rows.show,filter.off,formula.guard

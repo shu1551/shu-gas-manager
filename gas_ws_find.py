@@ -7,6 +7,7 @@ gas_ws_find.py - Workspace の棚を「引く」（純 Python・通信なし）
 引き方・点数・しきい値は設計書 第 4 章・第 10 章のとおり。しきい値は下の定数（変えるのは問題集の結果を見て番頭が決める）。
 """
 
+import json
 import re
 import unicodedata
 from datetime import date
@@ -18,6 +19,24 @@ HERE = Path(__file__).resolve().parent
 SYNONYMS_FILE = gas_ws_catalog.SHELF_DIR / "synonyms.txt"
 GUIDE_FILE = gas_ws_catalog.SHELF_DIR / "guide.txt"
 MISSES_FILE = HERE / ".ws_misses.tsv"
+_ASK_RULES_FILE = HERE / "ws_ask_rules.json"
+
+
+def _build_color_norm_res():
+    try:
+        rules = json.loads(_ASK_RULES_FILE.read_text(encoding="utf-8"))
+        words = [re.escape(pair[0]) for pair in rules.get("colors") or [] if pair and pair[0]]
+    except Exception:
+        words = ["薄い灰色", "薄い青", "薄い赤", "薄い緑", "薄い黄", "灰色", "グレー", "オレンジ", "ピンク", "紺", "茶", "赤", "青", "緑", "黄", "紫", "黒", "白"]
+    alt = "|".join(words) + r"|#[0-9a-f]{6}|#[0-9a-f]{3}"
+    return (
+        re.compile(rf"(?<![大小])(文字|フォント)(?:を|は|に)?({alt})"),
+        re.compile(rf"(背景|塗り)(?:を|は|に)?({alt})"),
+        re.compile(rf"(タイトル|見出し)(?:を|は|に)?({alt})"),
+    )
+
+
+_FG_NOCOLOR_RE, _BG_NOCOLOR_RE, _TITLE_NOCOLOR_RE = _build_color_norm_res()
 
 MIN_SCORE = 2          # これ未満の棚は出さない
 WEAK_SCORE = 6         # 1 位がこれ未満なら「近い棚は見つかりません」
@@ -57,10 +76,15 @@ def _base(s):
 
 
 def norm(s, synonyms):
-    """NFKC・小文字・空白除去 → 言い換えの表 → 助詞の「を」を抜く"""
+    """NFKC・小文字・空白除去 → 言い換えの表 → 色表現の統一 → 助詞の「を」を抜く"""
     s = _base(s)
     for a, b in synonyms:
         s = s.replace(a, b)
+    s = re.sub(r"(^|[^文])字の色", r"\1文字色", s)
+    s = _FG_NOCOLOR_RE.sub(r"\1色\2", s)
+    s = _BG_NOCOLOR_RE.sub(r"背景色\2", s)
+    s = _TITLE_NOCOLOR_RE.sub(r"\1文字色\2", s)
+    s = re.sub(r"(タイトル|表題|題名)の色", r"\1の文字色", s)
     return s.replace("を", "")
 
 
