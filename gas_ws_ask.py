@@ -1577,7 +1577,17 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         return p
     q_all = gas_ws_find.norm(ask, finder.syn)
     p.guide = [text for nwords, text in finder._guide_norm if any(nw in q_all for nw in nwords)]
-    cl = clauses(ask) or [nfkc(ask)]
+    raw_cl = clauses(ask) or [nfkc(ask)]
+    cl = []
+    for _c in raw_cl:
+        # 1節に「合計と平均（／最大／最小）」の両方を表の下へ足す頼みがあるときは total + stat.row へ展開
+        _m_ts = re.search(r"合計(?:行)?と(平均|最大値?|最小値?)(?:の?行)?", _c)
+        if _m_ts and re.search(r"一番下|表の下|下に|行を?(?:足|追加|入れ)|足して|追加して|入れて", _c) and not re.search(r"ごと|別に|別シート|小計", _c):
+            _stat_w = _m_ts.group(1)
+            cl.append(_c.replace(_m_ts.group(0), "合計行"))
+            cl.append(_c.replace(_m_ts.group(0), _stat_w + "の行"))
+        else:
+            cl.append(_c)
     fatal_err = False
     if VAGUE.search(nfkc(ask)):
         p.reasons.append("どこを指すかが人にしか分かりません（" + VAGUE.search(nfkc(ask)).group(0) + "）")
@@ -1622,7 +1632,27 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         top_base = scored[0][0] if scored else gas_ws_find.WEAK_SCORE
         cand_names = {x[2]["name"] for x in scored}
         if kind != "doc":
-            has_fmt_cue = bool(re.search(r"表示形式|曜日|hh:mm|yyyy|mm/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻|年月日の?形|年月日形式|年月日に|日付の?形", c, re.IGNORECASE))
+            has_fmt_cue = bool(re.search(r"表示形式|曜日|hh:mm|yyyy|mm/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|円マーク|円表示|¥|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻|年月日の?形|年月日形式|年月日に|日付の?形", c, re.IGNORECASE))
+            has_cols_hide_cue = bool(
+                re.search(r"(?:列|カラム).*(?:非表示|隠|見えなく)", c)
+                and not re.search(r"グリッド線|枠線|目盛り線|シート|タブ|再表示", c)
+            )
+            has_rows_hide_cue = bool(
+                re.search(r"行.*(?:非表示|隠|見えなく)", c)
+                and not re.search(r"グリッド線|枠線|目盛り線|シート|タブ|再表示|消|削除", c)
+            )
+            has_font_unify_cue = bool(
+                re.search(r"(?:フォント|書体).*(?:統一|揃え|そろえ)", c)
+                or re.search(r"(?:全シート|すべてのシート|全てのシート|シート全体|ブック全体).*(?:フォント|書体)", c)
+            )
+            has_total_row_cue = bool(
+                re.search(r"合計行|(?:一番下|表の下|下に).{0,16}合計|合計を.{0,12}(?:足|追加|入れ|付け)", c)
+                and not re.search(r"ごと|別に|別シート|小計|平均|最大|最小|ピボット|クロス", c)
+            )
+            has_stat_row_cue = bool(
+                re.search(r"(?:平均|最大|最小)(?:値)?(?:の?行|を.{0,12}(?:足|追加|入れ|付け))|(?:一番下|表の下|下に).{0,16}(?:平均|最大|最小)", c)
+                and not re.search(r"ごと|別に|別シート|合計|ピボット|クロス", c)
+            )
             has_row_cf_cond = bool(
                 re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
                 or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
@@ -1715,7 +1745,17 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("blank.rows.delete")
             elif has_border_fmt_cue:
                 _ensure_boost("format")
-            elif has_fmt_cue and not re.search(r"分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換", c) and "format" in cand_names:
+            elif has_cols_hide_cue:
+                _ensure_boost("cols.hide")
+            elif has_rows_hide_cue:
+                _ensure_boost("rows.hide")
+            elif has_font_unify_cue:
+                _ensure_boost("font.unify")
+            elif has_total_row_cue:
+                _ensure_boost("total")
+            elif has_stat_row_cue:
+                _ensure_boost("stat.row")
+            elif has_fmt_cue and not re.search(r"分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換|マイナス|赤字|三角|千円|百万", c):
                 _ensure_boost("format")
             elif len(scored) >= 2:
                 if _color_hits(c) and "文字" in c and not re.search(r"大文字|小文字|全角|半角|UPPER|LOWER|PROPER", c, re.IGNORECASE) and "format" in cand_names:

@@ -23,7 +23,7 @@ A列とB列入れ替えて	cols.move,transpose,doc.move,width,doc.template
 3行目から5行目を消して	rows.delete,rows.hide,group.rows,group.remove,doc.table.row
 見積書つくって	doc.new,doc.export.pdf
 集計用のシートを追加して	sheet.add,sheet.show,lookup.add,formula.list,protect.sheet
-空のシートを1枚足して	sheet.add,calc.col,sheet.merge,lookup.add,formula.list
+空のシートを1枚足して	sheet.add,sheet.merge,lookup.add,formula.list,protect.sheet
 新しいタブ欲しいな	sheet.add,sheet.delete,doc.from.sheet,doc.template,sort
 シート 追加 来月分	sheet.add,sheet.copy,doc.from.sheet,doc.copy,filter.extract
 シート1の名前を売上に変更して	sheet.rename,drive.rename,sheet.copy,sheet.color,doc.from.sheet
@@ -275,7 +275,7 @@ IDの先頭に0を付けてゼロパディングして	zero.pad,text.affix,doc.m
 見積書の文章をつくって	doc.new,doc.export.pdf,doc.replace,doc.outline,doc.table.cell
 文書 新規 本文 作成	doc.new,doc.template,doc.export.pdf
 文書の最後に「以上です」と追記して	doc.append,doc.new,doc.replace,doc.section,doc.style
-決定事項の下に「次回は12/2」という項目を足して	doc.append,doc.insert,calc.col,stat.row,total
+決定事項の下に「次回は12/2」という項目を足して	doc.append,doc.insert,stat.row,total,drive.move
 末尾にひとこと足しといて	doc.append,doc.table.row,text.affix,sheet.move
 文書 追記 末尾	doc.append,doc.table.row
 文書の中の山田を山田（総務）に置き換えて	doc.replace,replace,doc.table.cell,formula.tovalue,doc.new
@@ -298,7 +298,7 @@ IDの先頭に0を付けてゼロパディングして	zero.pad,text.affix,doc.m
 文書の見出し一覧を出して	doc.outline,format,doc.style,doc.table.style,doc.new
 文書 目次 章立て 見出し	doc.outline,format,doc.new,doc.section,doc.style
 文書 構成 目次 アウトライン	doc.outline,doc.toc,banding.add,banding.remove,sheet.toc
-決定事項の下に『次回は来週』と1行足して	doc.insert,calc.col,rows.insert,doc.append,stat.row
+決定事項の下に『次回は来週』と1行足して	doc.insert,rows.insert,doc.append,stat.row,total
 参加者の後に『オブザーバー佐藤』を差し込んで	doc.insert,doc.from.sheet,doc.template,rows.insert,cols.insert
 見出し 下 段落 差し込み	format,doc.insert,doc.section,doc.delete,doc.from.sheet
 文書 段落 差し込み 挿入	doc.insert,doc.from.sheet,doc.template,rows.insert,cols.insert
@@ -605,7 +605,7 @@ B2:E5の塗りつぶしを消して	bg.clear,doc.delete,count.if,protect.sheet,c
 金額列をマイナスを赤にする赤字表示に整えて	format.negred,format,doc.table.cell,seiri,filter.where
 損益列の負の数を赤で三角表記にして	format.negred,number.fix
 売上列を千円表示と百万円表示に直して	format.negred,format,replace,doc.replace,seiri
-マイナスを赤 赤字表示 三角表記 千円表示 百万円表示	format.negred
+マイナスを赤 赤字表示 三角表記 千円表示 百万円表示	format.negred,format
 シート全体のフォントをメイリオに統一して	doc.style,font.unify,format,group.remove,note.list
 全シートフォントとして書体を統一してフォントサイズ統一もして	font.unify,format,doc.style,print.setup,doc.font
 フォントを揃え書体を揃えて文字を統一して	font.unify,format,doc.style,doc.font,doc.replace
@@ -621,7 +621,7 @@ B2:E5の塗りつぶしを消して	bg.clear,doc.delete,count.if,protect.sheet,c
 タイトルの本当の色を青に変えて	format,doc.font,chart.new,doc.align,doc.replace
 タイトルの持ちの色を赤に変えて	format,doc.font,chart.new,doc.align,doc.replace
 重複を黄色で印を付けて	cf.dup,format,cf.add,rows.highlight
-表の下に合計行を足して	total,calc.col,rows.insert,stat.row,doc.append
+表の下に合計行を足して	total,rows.insert,stat.row,doc.append,doc.insert
 金額の合計を出して	total,summary,calc.running,top.n,format
 合計も入れといて	total,count.if
 合計 行 集計 追加	total,subtotal,crosstab,summary,sheet.add
@@ -651,7 +651,7 @@ D列に利益（売上-費用）の列を足して	calc.col,calc.diff,calc.if,da
 売上の構成比の列を足して	calc.percent,calc.col,calc.diff,calc.rank,date.parts
 割合 列 構成比	calc.percent
 構成比 パーセント 列	calc.percent,format
-表の下に平均の行を足して	stat.row,calc.col,rows.insert,total,doc.append
+表の下に平均の行を足して	stat.row,rows.insert,total,doc.append,doc.insert
 表の下に最大値と最小値の行を追加して	stat.row,rows.insert,doc.append,doc.table.row,doc.insert
 平均行 追加 下	stat.row,rows.insert,doc.table.row
 平均 最大 最小 行	stat.row
@@ -707,7 +707,7 @@ ROUND ラウンド 端数処理	round,count.if
 売上のトップ10だけを抽出して	top.n,filter.where,filter.extract,rows.sample,calc.percent
 金額の下位3件をワースト抽出して	top.n,total,text.extract,stat.row,calc.running
 上位抽出 下位抽出 トップ5 ワースト	top.n,text.clean,unique.list,cf.scale,text.extract
-金額が10000以上ならマルにするIF式の判定列を足して	calc.if,cf.add,calc.col,filter.where,calc.tax
+金額が10000以上ならマルにするIF式の判定列を足して	calc.if,cf.add,filter.where,calc.tax,filter.delete
 条件分岐のIF文の列を追加して合格判定を出して	calc.if,cols.insert,calc.col,doc.insert,doc.export.pdf
 売上で達成判定を条件で判定する列を足して	calc.if,calc.col,calc.diff,col.compare,cols.insert
 条件分岐 IF式 判定列を足す	calc.if,col.compare,calc.col,calc.percent,calc.diff
@@ -727,12 +727,12 @@ ROUND ラウンド 端数処理	round,count.if
 ブック全体の関数一覧を調べて数式リストを作って	formula.list,unique.list,table.template,sheet.toc,doc.list
 どこに式が入っているか数式をチェックして式を一覧にして	formula.list,cf.add,audit.check,checkbox,checkbox.toggle
 数式一覧 式を一覧 関数一覧	formula.list,cf.list
-生年月日から満年齢を計算して年齢を出して	date.age,format,calc.diff,date.parts,protect.formulas
+生年月日から満年齢を計算して年齢を出して	date.age,format,calc.col,calc.diff,date.parts
 入社日から勤続年数と経過年数を出して	date.age,date.diff
-満年齢を足して 経過年数	date.age,date.diff,calc.col
+満年齢を足して 経過年数	date.age,date.diff
 年齢 勤続年数 経過月数 計算	date.age,date.diff
 金額列から消費税を計算して税込金額の列を足して	calc.tax,calc.col,calc.diff,calc.running,date.parts
-商品価格の税抜価格と本体価格を計算して	calc.tax
+商品価格の税抜価格と本体価格を計算して	calc.tax,calc.col
 税込金額 税抜金額 消費税10	calc.tax,filter.where,top.n,calc.if
 消費税 税額を計算 税率	calc.tax
 予算と実績の2列を比較して値が一致しているか判定して	col.compare,doc.table,sheet.diff
@@ -741,20 +741,20 @@ A列とB列の2つの列を比べて差分を判定し突合して	col.compare,c
 突合 比較結果の列 値が一致	col.compare,formula.tovalue
 棚に無いけど、1 行目のセルを青い背景にして	api,format,doc.table
 見出しと箇条書きの文書を書いて	doc.new,format,write,doc.section,doc.outline
-最後に1行足して	doc.append,calc.col,rows.insert,doc.insert,doc.table.row
+最後に1行足して	doc.append,rows.insert,doc.insert,doc.table.row,stat.row
 山田を山田（総務）に直して	doc.replace,replace,seiri,renumber,number.fix
 「概要」の節を書き直して	doc.section,replace
 文末に2列の表を入れて	doc.table,write,doc.from.sheet,doc.append,cf.weekend
 1つ目の表の2行1列を直して	doc.table,replace,rows.insert,doc.table.cell,doc.table.row
 文書のフォントをMeiryoに	doc.style,format,font.unify,doc.font,doc.new
-決定事項の下に1行足して	doc.insert,calc.col,doc.append,rows.insert,doc.table.row
+決定事項の下に1行足して	doc.insert,doc.append,rows.insert,doc.table.row,stat.row
 担当の欄を佐藤にして	doc.table.cell
 納期と書いてある所はどこ？	write,doc.find
 この行を見出し2にして	doc.heading,format,doc.new,doc.section,doc.style
 出席者を箇条書きにして	doc.list,doc.new
 補足の節を消して	doc.delete
 次回予定を先頭に持ってきて	doc.move,zero.pad,text.affix,sheet.move
-表に1行足して	doc.table.row,calc.col,rows.insert,doc.append,doc.insert
+表に1行足して	doc.table.row,rows.insert,doc.append,doc.insert,stat.row
 締め切りの日付を赤い太字にして	doc.font,format,date.fix,date.diff,borders.group
 題を中央にして	doc.align
 表の見出しに色を付けて	doc.table.style,format,doc.header,sheet.color,doc.style
@@ -783,8 +783,8 @@ A1からE50にフィルタを設定して	filter.on,filter.where,filter.off,clea
 社員コード列を5桁で先頭0埋めして	zero.pad
 データからランダムに10件を抽出して	rows.sample,top.n,filter.where,calc.running,clear.values
 担当列のカンマ区切りを縦の行へ展開して	format,split.rows,split.col,doc.pagebreak,cf.weekend
-表の下に平均の行も足して	stat.row,calc.col,total,doc.append,doc.insert
-金額の最大値の行を足して	calc.col,stat.row,rows.insert,total,doc.table.row
+表の下に平均の行も足して	stat.row,total,doc.append,doc.insert,doc.table.row
+金額の最大値の行を足して	stat.row,rows.insert,total,doc.table.row,calc.col
 売上と原価の差の列を足して	calc.diff,calc.col,date.diff,calc.percent,calc.rank
 今月と前月の差と伸び率の列を足して	calc.diff,calc.col,date.parts,date.diff,calc.percent
 金額の累計を出して	calc.running,total,summary,top.n,format
@@ -797,12 +797,12 @@ B2:B10で「営業」の件数を数えて	count.if,protect.sheet,copy,copy.valu
 金額を千円単位に丸めて	round,format.negred
 日付から曜日の列を作って	date.parts,format,text.join,date.diff,date.age
 姓と名をつないで氏名の列に	text.join,split.col,calc.col,date.fix
-金額が10000以上なら○そうでなければ×の判定列を足して	calc.if,cf.add,calc.col,filter.where,calc.tax
+金額が10000以上なら○そうでなければ×の判定列を足して	calc.if,cf.add,filter.where,calc.tax,filter.delete
 得意先列の重複を除いた一覧を件数付きで作って	unique.list,summary,cf.dup,sheet.toc,dedupe
 部門を行、ステータスを列にしたクロス集計表を作って	crosstab,summary,pivot.new
 生年月日から年齢の列を足して	date.age,calc.col,date.parts,calc.diff,calc.if
 金額列から税込金額の列を足して	calc.tax,calc.col,calc.diff,calc.running,date.parts
-予算と実績を比較して一致判定の列を足して	calc.col,col.compare,calc.if,calc.diff,date.parts
+予算と実績を比較して一致判定の列を足して	col.compare,calc.col,calc.if,calc.diff,date.parts
 C列に未着手、進行中、完了のプルダウンを付けて	validation.list,validation.clear,rows.highlight
 D列には0以上の数字だけ入れられるようにして	validation.number,filter.where,calc.col,doc.from.sheet,seiri
 A列は日付だけ入るようにして	validation.date,validation.number
@@ -866,9 +866,9 @@ A2に公式サイトへのリンクを貼って	link.set,doc.link,drive.share,fo
 数量列の空欄を0で埋めて	blank.fill.zero,fill.blank,link.extract
 表のデータ行を上下逆順にして	rows.reverse,seiri,audit.check,rows.sample,name.add
 フリガナ列をカタカナに統一して	text.kana,font.unify
-3行目の前に2行足して	rows.insert,calc.col,rows.move,doc.table,doc.table.row
+3行目の前に2行足して	rows.insert,rows.move,doc.table,doc.table.row,cols.insert
 5行目を2行目の前に動かして	rows.move,rows.insert,freeze,group.remove,api
-C列の前に列を1つ足して	cols.insert,calc.col,rows.insert,doc.table,calc.diff
+C列の前に列を1つ足して	cols.insert,rows.insert,doc.table,calc.diff,text.affix
 B列を消して	cols.delete
 1行目の見出しを固定して	freeze,format,api,doc.style,doc.outline
 見出し行とA列を固定して	freeze,format,filter.on,doc.new,doc.section
@@ -880,7 +880,7 @@ C列とD列を隠して	cols.hide,cols.show,width
 非表示になっているC列を出して	cols.show,format,sheet.show,sheet.gridlines,rows.hide
 隠れている列を全部再表示して	cols.show,sheet.show,rows.show,filter.off,formula.guard
 5行目から10行目をグループ化して折りたたんで	group.rows,group.remove,group.cols,rows.hide,borders.group
-集計というシートを足して	sheet.add,calc.col,sheet.move,sheet.delete,sheet.hide
+集計というシートを足して	sheet.add,sheet.move,sheet.delete,sheet.hide,sheet.show
 シート1の名前を売上に変えて	sheet.rename,drive.rename,sheet.copy,sheet.color,doc.from.sheet
 集計を先頭に動かして	sheet.move,doc.move,zero.pad,text.affix,rows.move
 集計シートを消して	sheet.delete,sheet.hide,sheet.show,chart.delete,note.clear
