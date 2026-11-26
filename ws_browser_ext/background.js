@@ -3,7 +3,9 @@
 
 const SYNC_URL = "http://127.0.0.1:18765/sync";
 const DIRECT_PING_URL = "http://127.0.0.1:18766/ping";
+const DIRECT_HEALTH_URL = "http://127.0.0.1:18766/health";
 const DIRECT_RESOLVE_URL = "http://127.0.0.1:18766/resolve";
+const DIRECT_RESOLVE_STREAM_URL = "http://127.0.0.1:18766/resolve-stream";
 const DIRECT_RECORDED_URL = "http://127.0.0.1:18766/recorded-macros";
 const NATIVE_HOST_NAME = "com.shu.gas_combo_host";
 
@@ -196,8 +198,12 @@ async function pingDirectLocal(_retried) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 3000);
   try {
-    const res = await fetch(DIRECT_PING_URL, { cache: "no-store", signal: ac.signal });
-    const data = await res.json().catch(() => null);
+    let res = await fetch(DIRECT_HEALTH_URL, { cache: "no-store", signal: ac.signal });
+    let data = await res.json().catch(() => null);
+    if (!data || !data.ok) {
+      res = await fetch(DIRECT_PING_URL, { cache: "no-store", signal: ac.signal });
+      data = await res.json().catch(() => null);
+    }
     if (!data || !data.ok) {
       return { reachable: false, error: "ローカル受け手から正常な応答がありません" };
     }
@@ -215,6 +221,91 @@ async function pingDirectLocal(_retried) {
     clearTimeout(timer);
   }
 }
+
+async function streamResolveViaDirectLocal(port, payload) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 65000);
+  let disconnected = false;
+  try {
+    port.onDisconnect.addListener(() => {
+      disconnected = true;
+      try { ac.abort(); } catch (_e) {}
+    });
+  } catch (_e) {}
+
+  const post = (m) => {
+    if (disconnected) return;
+    try { port.postMessage(m); } catch (_e) { disconnected = true; }
+  };
+
+  try {
+    const res = await fetch(DIRECT_RESOLVE_STREAM_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+      cache: "no-store",
+      signal: ac.signal,
+    });
+    const ct = String((res.headers && res.headers.get("content-type")) || "").toLowerCase();
+    if (res.ok && res.body && typeof res.body.getReader === "function" && ct.indexOf("ndjson") >= 0) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let doneResult = null;
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev = null;
+          try { ev = JSON.parse(line); } catch (_e) {}
+          if (!ev) continue;
+          if (ev.type === "done" && ev.result) {
+            doneResult = ev.result;
+          } else {
+            post({ type: "progress", event: ev });
+          }
+        }
+      }
+      if (buf.trim()) {
+        try {
+          const lastEv = JSON.parse(buf.trim());
+          if (lastEv && lastEv.type === "done" && lastEv.result) doneResult = lastEv.result;
+          else if (lastEv) post({ type: "progress", event: lastEv });
+        } catch (_e) {}
+      }
+      if (doneResult) {
+        post({ type: "done", reachable: true, data: doneResult });
+        return;
+      }
+    }
+    // 非対応または旧受け手の場合は通常の /resolve へ自動フォールバック
+    const fb = await resolveViaDirectLocal(payload || {});
+    post(Object.assign({ type: "done" }, fb));
+  } catch (e) {
+    if (e && e.name === "AbortError" && !disconnected) {
+      post({ type: "done", reachable: true, ok: false, error: "ローカル AI が時間切れになりました (65秒)" });
+      return;
+    }
+    const fb = await resolveViaDirectLocal(payload || {});
+    post(Object.assign({ type: "done" }, fb));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (!port || port.name !== "GAS_COMBO_DIRECT_STREAM") return;
+  port.onMessage.addListener((msg) => {
+    if (msg && msg.type === "START") {
+      streamResolveViaDirectLocal(port, msg.payload || {});
+    }
+  });
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "GAS_COMBO_SYNC" && msg.payload) {

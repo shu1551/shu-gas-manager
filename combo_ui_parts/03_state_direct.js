@@ -96,6 +96,7 @@
     chkBackup: document.getElementById("chkBackup"),
     chkAiAuto: document.getElementById("chkAiAuto"),
     chkSync: document.getElementById("chkSync"),
+    healthBadge: document.getElementById("healthBadge"),
     statusLabel: document.getElementById("statusLabel"),
     targetNameLabel: document.getElementById("targetNameLabel"),
     sheetSelect: document.getElementById("sheetSelect"),
@@ -103,7 +104,13 @@
     btnRefresh: document.getElementById("btnRefresh"),
     quickFilterBar: document.getElementById("quickFilterBar"),
     quickCatBar: document.getElementById("quickCatBar"),
+    quickTplBar: document.getElementById("quickTplBar"),
     quickList: document.getElementById("quickList"),
+    btnQuickTpl: document.getElementById("btnQuickTpl"),
+    btnQuickExport: document.getElementById("btnQuickExport"),
+    btnQuickExportGs: document.getElementById("btnQuickExportGs"),
+    btnQuickImport: document.getElementById("btnQuickImport"),
+    quickImportFile: document.getElementById("quickImportFile"),
     btnQuickRun: document.getElementById("btnQuickRun"),
     btnQuickAdd: document.getElementById("btnQuickAdd"),
     btnQuickEdit: document.getElementById("btnQuickEdit"),
@@ -162,11 +169,13 @@
     btnQuickRevert: document.getElementById("btnQuickRevert"),
     quickEditCode: document.getElementById("quickEditCode"),
     quickEditStatus: document.getElementById("quickEditStatus"),
+    quickDryRunBar: document.getElementById("quickDryRunBar"),
     quickEditPromptRow: document.getElementById("quickEditPromptRow"),
     btnQuickEditPrompt: document.getElementById("btnQuickEditPrompt"),
     btnQuickImportRec: document.getElementById("btnQuickImportRec"),
     btnQuickEditCopy: document.getElementById("btnQuickEditCopy"),
     btnQuickEditPaste: document.getElementById("btnQuickEditPaste"),
+    btnQuickDryRun: document.getElementById("btnQuickDryRun"),
     btnQuickEditSave: document.getElementById("btnQuickEditSave"),
     btnQuickEditDelete: document.getElementById("btnQuickEditDelete")
   };
@@ -546,6 +555,7 @@
       els.cfgAiModel.value = state.config.aiModel;
     }
     updateApiKeyPlaceholder();
+    if (typeof refreshHealthBadge === "function") refreshHealthBadge();
   }
 
   // 連携方式に合うモデルだけを出す（Gemini の鍵 → Gemini のモデル・それ以外 → Claude のモデル）

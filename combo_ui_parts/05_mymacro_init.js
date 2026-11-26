@@ -1329,6 +1329,19 @@
             goBtn.addEventListener("click", function() { setQuickModalTab("code"); });
             card.appendChild(goBtn);
           }
+          if (m.retryApi) {
+            (function(retryInfo) {
+              var rBtn = document.createElement("button");
+              rBtn.type = "button";
+              rBtn.className = "retry-api-btn";
+              rBtn.textContent = "🔑 API 鍵で再試行";
+              rBtn.addEventListener("click", function() {
+                rBtn.disabled = true;
+                retryWithApiKeyInQuickModal(retryInfo);
+              });
+              card.appendChild(rBtn);
+            })(m.retryApi);
+          }
           logEl.appendChild(card);
         }
       }
@@ -1380,6 +1393,8 @@
     if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = false;
     if (els.quickEditCode && els.quickEditCode.style) els.quickEditCode.style.borderColor = "#94a3b8";
     if (els.quickCodeBadge && els.quickCodeBadge.style) els.quickCodeBadge.style.display = "none";
+    if (els.quickDryRunBar) { els.quickDryRunBar.style.display = "none"; els.quickDryRunBar.innerHTML = ""; }
+    if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = false;
     quickEditState = { mode: "edit", name: "", myUrl: "", delArmed: false, origCode: "", pendingReqId: "", activeTab: "code", chatHistory: [], codeUpdated: false };
     resetQuickDeleteBtn();
   }
@@ -1611,24 +1626,26 @@
       els.quickEditStatus.textContent = "✨ AI に送信しています…";
     }
 
-    var runGasQuickAiSave = function() {
+    var runGasQuickAiSave = function(forceAiModeOpt) {
+      var reqPayload = {
+        mode: aiMode,
+        previewOnly: true,
+        name: targetNm,
+        code: codeToSend,
+        prompt: prompt,
+        history: historyPayload,
+        targetId: state.target.id || "",
+        sheet: state.curSheet || "",
+        selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : "",
+        table: state.table,
+        sheets: state.sheets || [],
+        myId: state.quick.myId || "",
+        myStamp: state.quick.myStamp || ""
+      };
+      if (forceAiModeOpt) reqPayload.forceAiMode = forceAiModeOpt;
       runServerAction({
         fnName: "comboQuickAiSave",
-        payload: {
-          mode: aiMode,
-          previewOnly: true,
-          name: targetNm,
-          code: codeToSend,
-          prompt: prompt,
-          history: historyPayload,
-          targetId: state.target.id || "",
-          sheet: state.curSheet || "",
-          selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : "",
-          table: state.table,
-          sheets: state.sheets || [],
-          myId: state.quick.myId || "",
-          myStamp: state.quick.myStamp || ""
-        },
+        payload: reqPayload,
         label: aiMode === "edit" ? ("✨ AI相談/修正: " + targetNm) : "✨ AI作成/相談",
         statusText: aiMode === "edit" ? ("AI が「" + targetNm + "」を検討中…") : "AI が考えています…",
         switchToChat: false,
@@ -1687,6 +1704,13 @@
       });
     };
 
+    var makeRetryApiInfo = function() {
+      if (!(state.config && (state.config.hasGeminiKey || state.config.hasClaudeKey || state.config.hasApiKey))) return null;
+      var fm = state.config.hasGeminiKey ? "api_gemini" : (state.config.hasClaudeKey ? "api_claude" : "");
+      if (!fm) return null;
+      return { forceAiMode: fm, prompt: prompt, aiMode: aiMode, targetNm: targetNm, codeToSend: codeToSend, historyPayload: historyPayload, origCodeSnapshot: origCodeSnapshot };
+    };
+
     var dispatchAiSave = function() {
       if (canUseDirectLocalAi()) {
         var existingNames = (state.quick && Array.isArray(state.quick.my))
@@ -1696,6 +1720,7 @@
         if (els.quickEditStatus) els.quickEditStatus.textContent = "✨ ローカル AI に直接問い合わせています…";
         requestDirectAi({
           kind: "mymacro",
+          stream: true,
           mode: aiMode,
           previewOnly: true,
           targetName: targetNm,
@@ -1716,7 +1741,7 @@
           if (r && r.inExtension && !r.reachable) {
             var connErr = "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください";
             dropPendingQuickChat();
-            quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + connErr });
+            quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + connErr, retryApi: makeRetryApiInfo() });
             renderQuickChat();
             if (els.btnQuickAiSubmit) {
               els.btnQuickAiSubmit.disabled = false;
@@ -1741,7 +1766,7 @@
           }
           var errTxt = String(d.error || r.error || "AI 処理に失敗しました");
           dropPendingQuickChat();
-          quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + errTxt });
+          quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + errTxt, retryApi: makeRetryApiInfo() });
           renderQuickChat();
           if (els.btnQuickAiSubmit) {
             els.btnQuickAiSubmit.disabled = false;
@@ -1749,6 +1774,18 @@
           }
           syncQuickSaveBtnState();
           if (els.quickEditStatus) els.quickEditStatus.textContent = "AI エラー: " + errTxt;
+        }, function(ev) {
+          if (!ev) return;
+          var txtProg = ev.message || (ev.text ? String(ev.text).slice(0, 140) : "");
+          if (!txtProg) return;
+          for (var pi = quickEditState.chatHistory.length - 1; pi >= 0; pi--) {
+            if (quickEditState.chatHistory[pi] && quickEditState.chatHistory[pi].role === "pending") {
+              quickEditState.chatHistory[pi].text = "✨ " + txtProg;
+              break;
+            }
+          }
+          renderQuickChat();
+          if (els.quickEditStatus) els.quickEditStatus.textContent = "✨ " + txtProg;
         });
         return;
       }
@@ -1763,6 +1800,318 @@
     } else {
       dispatchAiSave();
     }
+  }
+
+  function retryWithApiKeyInQuickModal(retryInfo) {
+    if (!retryInfo || !retryInfo.forceAiMode || state.busy) return;
+    quickEditState.chatHistory.push({ role: "pending", text: "🔑 API 鍵で再試行しています…" });
+    renderQuickChat();
+    if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = true;
+    runServerAction({
+      fnName: "comboQuickAiSave",
+      payload: {
+        mode: retryInfo.aiMode || "add",
+        previewOnly: true,
+        forceAiMode: retryInfo.forceAiMode,
+        name: retryInfo.targetNm || "",
+        code: retryInfo.codeToSend || "",
+        prompt: retryInfo.prompt || "",
+        history: retryInfo.historyPayload || [],
+        targetId: state.target.id || "",
+        sheet: state.curSheet || "",
+        selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : "",
+        table: state.table,
+        sheets: state.sheets || [],
+        myId: state.quick.myId || "",
+        myStamp: state.quick.myStamp || ""
+      },
+      label: "🔑 API鍵フォールバック",
+      statusText: "API 鍵で再実行中…",
+      switchToChat: false,
+      onSuccess: function(res) {
+        if (res && res.action === "reply") { applyQuickAiReplyResult(res); return; }
+        if (res && res.previewOnly && res.code) { applyQuickAiPreviewResult(res); return; }
+        dropPendingQuickChat();
+        renderQuickChat();
+        if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = false;
+        syncQuickSaveBtnState();
+      },
+      onError: function(err) {
+        dropPendingQuickChat();
+        quickEditState.chatHistory.push({ role: "err", text: "API 鍵フォールバック失敗: " + formatError(err) });
+        renderQuickChat();
+        if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = false;
+        syncQuickSaveBtnState();
+      }
+    });
+  }
+
+  var QUICK_MY_TEMPLATES = [
+    {
+      name: "名簿クレンジング",
+      desc: "余分な空白・重複を除き、表全体を整えます",
+      code: "// 余分な空白・重複を除き、表全体を整えます\n// 棚: 名簿クレンジング, 名簿整理\nfunction 名簿クレンジング() {\n  return shelf([\n    { shelf: \"clean\" },\n    { shelf: \"dedupe\" },\n    { shelf: \"seiri\" }\n  ]);\n}"
+    },
+    {
+      name: "請求書フォーマットチェック",
+      desc: "請求書の整形・マイナス赤字・合計行・見出し固定をまとめて適用します",
+      code: "// 請求書の整形・マイナス赤字・合計行・見出し固定をまとめて適用します\n// 棚: 請求書チェック, 請求書整形\nfunction 請求書フォーマットチェック() {\n  return shelf([\n    { shelf: \"seiri\" },\n    { shelf: \"format.negred\" },\n    { shelf: \"total\" },\n    { shelf: \"freeze\", rows: 1 }\n  ]);\n}"
+    },
+    {
+      name: "部署別集計と区切り線",
+      desc: "部署で並べ替え、部署が変わる行に区切り線を引き、合計行を出します",
+      code: "// 部署で並べ替え、部署が変わる行に区切り線を引き、合計行を出します\n// 棚: 部署別集計, 部署区切り線\nfunction 部署別集計と区切り線() {\n  return shelf([\n    { shelf: \"sort\", by: \"部署\", order: \"asc\" },\n    { shelf: \"borders.group\", col: \"部署\" },\n    { shelf: \"total\" }\n  ]);\n}"
+    }
+  ];
+
+  function exportMyMacrosData(fmt) {
+    var map = (state.quick && state.quick.codeCache && state.quick.codeCache.map) || {};
+    var names = Object.keys(map).filter(function(k) { return typeof map[k] === "string" && map[k].trim(); });
+    if (!names.length) return { ok: false, error: "書き出せるマイマクロのコードがまだ読み込まれていません" };
+    if (fmt === "gs") {
+      var gs = names.map(function(n) { return String(map[n]).trim(); }).join("\n\n");
+      return { ok: true, count: names.length, filename: "gascombo_mymacros.gs", mime: "text/plain;charset=utf-8", content: gs };
+    }
+    var payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      macros: names.map(function(n) { return { name: n, code: String(map[n]).trim() }; })
+    };
+    return {
+      ok: true,
+      count: names.length,
+      filename: "gascombo_mymacros.json",
+      mime: "application/json;charset=utf-8",
+      content: JSON.stringify(payload, null, 2)
+    };
+  }
+
+  function downloadOrCopyText(filename, mime, content) {
+    try {
+      if (typeof Blob !== "undefined" && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+        var blob = new Blob([content], { type: mime || "text/plain;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { try { URL.revokeObjectURL(url); } catch (_e) {} }, 1000);
+        return Promise.resolve("download");
+      }
+    } catch (_eDl) {}
+    return copyToClipboard(content).then(function() { return "copy"; });
+  }
+
+  function exportMyMacros(fmt) {
+    var runExport = function() {
+      var out = exportMyMacrosData(fmt);
+      if (!out.ok) {
+        if (els.quickNote) els.quickNote.textContent = "⚠ " + out.error;
+        return;
+      }
+      downloadOrCopyText(out.filename, out.mime, out.content).then(function(how) {
+        if (els.quickNote) {
+          els.quickNote.textContent = (how === "download" ? "⬇ 書き出しました: " : "📋 コピーしました: ") + out.filename + "（" + out.count + " 件）";
+        }
+      }).catch(function(err) {
+        if (els.quickNote) els.quickNote.textContent = "⚠ 書き出し失敗: " + formatError(err);
+      });
+    };
+    var map = (state.quick && state.quick.codeCache && state.quick.codeCache.map) || {};
+    if (!Object.keys(map).length && hasGasBridge()) {
+      callGas("comboQuickList", { targetId: state.target.id || "", force: true, wantCodes: true, clientStamp: "" }, function(res) {
+        if (res && res.ok) applyQuickListRes(res);
+        runExport();
+      }, function() { runExport(); });
+      return;
+    }
+    runExport();
+  }
+
+  function parseImportMyMacros(rawText, existingNamesList) {
+    var txt = String(rawText || "").trim();
+    if (!txt) return { ok: false, error: "取込データが空です" };
+    var blocks = [];
+    if (txt.charAt(0) === "{" || txt.charAt(0) === "[") {
+      try {
+        var parsed = JSON.parse(txt);
+        var arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.macros) ? parsed.macros : null);
+        if (!arr) return { ok: false, error: "JSON は配列または { macros: [...] } 形式にしてください" };
+        for (var i = 0; i < arr.length; i++) {
+          var item = arr[i];
+          if (typeof item === "string" && item.trim()) blocks.push(stripCodeFence(item));
+          else if (item && typeof item.code === "string" && item.code.trim()) blocks.push(stripCodeFence(item.code));
+        }
+      } catch (eJ) {
+        return { ok: false, error: "JSON 解析エラー: " + String((eJ && eJ.message) || eJ) };
+      }
+    } else {
+      blocks = [stripCodeFence(txt)];
+    }
+    if (!blocks.length) return { ok: false, error: "取り込めるコードが見つかりません" };
+
+    var existingSet = {};
+    var curList = Array.isArray(existingNamesList) ? existingNamesList : ((state.quick && state.quick.my) || []).map(function(x) { return x && x.name; });
+    for (var ei = 0; ei < curList.length; ei++) {
+      if (curList[ei]) existingSet[String(curList[ei])] = true;
+    }
+
+    var seenInImport = {};
+    var validBlocks = [];
+    var allNames = [];
+    for (var bi = 0; bi < blocks.length; bi++) {
+      var code = String(blocks[bi] || "").replace(/\r\n/g, "\n").trim();
+      if (!code) continue;
+      try {
+        new Function(code);
+      } catch (eSyn) {
+        return { ok: false, error: "構文エラー: " + String((eSyn && eSyn.message) || eSyn) };
+      }
+      var fnMatches = [];
+      var reFn = /(?:^|\n)function\s+([^\s(]+)\s*\(/g;
+      var mFn;
+      while ((mFn = reFn.exec(code)) !== null) {
+        if (!/_$/.test(mFn[1])) fnMatches.push(mFn[1]);
+      }
+      if (!fnMatches.length) {
+        return { ok: false, error: "トップレベル関数（function 名前() { ... }、末尾 _ なし）が見つかりません" };
+      }
+      for (var fi = 0; fi < fnMatches.length; fi++) {
+        var fnNm = fnMatches[fi];
+        if (existingSet[fnNm] || seenInImport[fnNm]) {
+          return { ok: false, error: "名前が重複しています: 「" + fnNm + "」" };
+        }
+        seenInImport[fnNm] = true;
+        allNames.push(fnNm);
+      }
+      validBlocks.push(code);
+    }
+    if (!validBlocks.length) return { ok: false, error: "有効な関数がありません" };
+    return { ok: true, blocks: validBlocks, names: allNames };
+  }
+
+  function importMyMacrosText(rawText) {
+    var check = parseImportMyMacros(rawText);
+    if (!check.ok) {
+      if (els.quickNote) els.quickNote.textContent = "⚠ 取込中止: " + check.error;
+      return;
+    }
+    var idx = 0;
+    var added = [];
+    var stepNext = function() {
+      if (idx >= check.blocks.length) {
+        if (els.quickNote) els.quickNote.textContent = "⬆ " + added.length + " 件を取り込みました: " + added.join("・");
+        quickClearCodeCache();
+        loadQuickList(false);
+        return;
+      }
+      var blockCode = check.blocks[idx++];
+      runServerAction({
+        fnName: "comboQuickAddFn",
+        payload: { code: blockCode },
+        label: "⬆ 取込 (" + idx + "/" + check.blocks.length + ")",
+        statusText: "マイマクロを取り込み中…",
+        switchToChat: false,
+        onSuccess: function(res) {
+          if (res && res.myId) state.quick.myId = res.myId;
+          if (res && res.myUrl) state.quick.myUrl = res.myUrl;
+          if (res && res.myStamp) state.quick.myStamp = res.myStamp;
+          if (res && Array.isArray(res.names)) added = added.concat(res.names);
+          quickRememberLocal();
+          stepNext();
+        },
+        onError: function(err) {
+          if (els.quickNote) els.quickNote.textContent = "⚠ 取込エラー: " + formatError(err);
+        }
+      });
+    };
+    stepNext();
+  }
+
+  function toggleQuickTplBar() {
+    if (!els.quickTplBar) return;
+    var showing = els.quickTplBar.style.display !== "none";
+    if (showing) {
+      els.quickTplBar.style.display = "none";
+      return;
+    }
+    els.quickTplBar.innerHTML = "";
+    QUICK_MY_TEMPLATES.forEach(function(tpl) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "quick-chat-chip";
+      b.textContent = "📦 " + tpl.name;
+      b.title = tpl.desc;
+      b.addEventListener("click", function() {
+        els.quickTplBar.style.display = "none";
+        openQuickAddModal(false);
+        if (els.quickEditTitle) els.quickEditTitle.textContent = "📦 テンプレート: " + tpl.name;
+        if (els.quickEditCode) els.quickEditCode.value = tpl.code;
+        syncQuickSaveBtnState();
+        if (els.quickEditStatus) els.quickEditStatus.textContent = "テンプレートを展開しました。「▶試実行」または「決定して保存」を押してください";
+      });
+      els.quickTplBar.appendChild(b);
+    });
+    els.quickTplBar.style.display = "flex";
+  }
+
+  function dryRunQuickEditCode() {
+    if (state.busy) return;
+    var code = els.quickEditCode ? String(els.quickEditCode.value || "").trim() : "";
+    if (!code) {
+      if (els.quickEditStatus) els.quickEditStatus.textContent = "試実行するコードがありません";
+      return;
+    }
+    try {
+      new Function(code);
+    } catch (eSyn) {
+      if (els.quickEditStatus) els.quickEditStatus.textContent = "⚠ 構文エラー: " + String((eSyn && eSyn.message) || eSyn);
+      return;
+    }
+    if (els.quickDryRunBar) { els.quickDryRunBar.style.display = "none"; els.quickDryRunBar.innerHTML = ""; }
+    if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = true;
+    if (els.quickEditStatus) els.quickEditStatus.textContent = "▶ 控えを取って試実行しています…";
+    runServerAction({
+      fnName: "comboQuickRun",
+      payload: {
+        dryRunCode: code,
+        backup: true,
+        targetId: state.target.id || "",
+        sheet: state.curSheet || "",
+        selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : ""
+      },
+      label: "▶ 試実行 (ドライラン)",
+      statusText: "試実行中…",
+      switchToChat: false,
+      onSuccess: function(res) {
+        if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = false;
+        if (els.quickEditStatus) els.quickEditStatus.textContent = (res && res.text) || "▶ 試実行が完了しました";
+        if (els.quickDryRunBar) {
+          els.quickDryRunBar.innerHTML = "";
+          var span = document.createElement("span");
+          span.textContent = (res && res.snapped) ? "✓ 控え付きで試実行しました（元に戻せます）" : "✓ 試実行が完了しました";
+          var uBtn = document.createElement("button");
+          uBtn.type = "button";
+          uBtn.className = "btn";
+          uBtn.style.padding = "2px 8px";
+          uBtn.textContent = "↶ 試実行を取り消す";
+          uBtn.addEventListener("click", function() {
+            uBtn.disabled = true;
+            onUndo();
+            els.quickDryRunBar.style.display = "none";
+          });
+          els.quickDryRunBar.appendChild(span);
+          els.quickDryRunBar.appendChild(uBtn);
+          els.quickDryRunBar.style.display = "flex";
+        }
+      },
+      onError: function(err) {
+        if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = false;
+        if (els.quickEditStatus) els.quickEditStatus.textContent = "⚠ 試実行エラー: " + formatError(err);
+      }
+    });
   }
 
   function startPolishRecordedMacro(macroItem) {
@@ -1905,6 +2254,24 @@
   if (els.btnQuickAi) {
     els.btnQuickAi.addEventListener("click", function() { openQuickAddModal(true); });
   }
+  if (els.btnQuickTpl) els.btnQuickTpl.addEventListener("click", toggleQuickTplBar);
+  if (els.btnQuickExport) els.btnQuickExport.addEventListener("click", function() { exportMyMacros("json"); });
+  if (els.btnQuickExportGs) els.btnQuickExportGs.addEventListener("click", function() { exportMyMacros("gs"); });
+  if (els.btnQuickImport && els.quickImportFile) {
+    els.btnQuickImport.addEventListener("click", function() {
+      els.quickImportFile.value = "";
+      els.quickImportFile.click();
+    });
+    els.quickImportFile.addEventListener("change", function() {
+      var f = els.quickImportFile.files && els.quickImportFile.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function() { importMyMacrosText(String(reader.result || "")); };
+      reader.onerror = function() { if (els.quickNote) els.quickNote.textContent = "⚠ ファイルを読み込めませんでした"; };
+      reader.readAsText(f, "utf-8");
+    });
+  }
+  if (els.btnQuickDryRun) els.btnQuickDryRun.addEventListener("click", dryRunQuickEditCode);
   if (els.btnQuickAiSubmit) {
     els.btnQuickAiSubmit.addEventListener("click", submitQuickAi);
   }
@@ -2324,7 +2691,10 @@
       quickRunItem: quickRunItem,
       applyQuickListRes: applyQuickListRes,
       handlePostboxDone: handlePostboxDone,
-      submitQuickAi: submitQuickAi
+      submitQuickAi: submitQuickAi,
+      QUICK_MY_TEMPLATES: QUICK_MY_TEMPLATES,
+      exportMyMacrosData: exportMyMacrosData,
+      parseImportMyMacros: parseImportMyMacros
     };
   }
 })();

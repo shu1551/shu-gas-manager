@@ -542,6 +542,9 @@ function comboRunAsk(req) {
   }
 
   var cfg = comboGetRawConfig_();
+  if (req.forceAiMode === 'api_gemini' || req.forceAiMode === 'api_claude') {
+    cfg = Object.assign({}, cfg, { aiMode: req.forceAiMode });
+  }
   var hasApiKey = (cfg.aiMode === 'api_gemini' || cfg.aiMode === 'api_claude') && !!comboResolveApiKey_(cfg);
   if (hasApiKey) {
     try {

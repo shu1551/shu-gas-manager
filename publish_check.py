@@ -25,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 # GitHub に公開する正本ファイル一覧（ホワイトリスト）
 PUBLIC_FILES = [
     ".gitignore",
+    ".github/workflows/ci.yml",
     "LICENSE",
     "README.md",
     "SKILL.md",
@@ -105,6 +106,7 @@ PUBLIC_FILES = [
     "test_gas_ws_parity.py",
     "test_gas_ws_direct_extra.py",
     "test_gas_ws_doc_combo.py",
+    "test_gas_ws_phase4.py",
     "ws_window.py",
     "ws_window_ai.py",
     "native_host.py",
@@ -177,12 +179,12 @@ def main():
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {"queue", "combo_ui_parts", "combo_server_parts", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
+    allowed_local = set(PUBLIC_FILES) | {".github", "queue", "combo_ui_parts", "combo_server_parts", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
                                                   # 公開しない物（試験の道具・試験場の記録・手元の記録）。公開物に入らないことは、ホワイトリストと上の禁止パターンで見る
                                                   "ws_exam", "ws_shelves", "ws_trial", "gas_ws_ai.py", "gas_ws_coverage.py", "gas_ws_exam.py", "gas_ws_judge.py", "gas_ws_props.py", "gas_ws_sealreport.py", "gas_ws_shot.py", "gas_ws_tables.py", "gas_ws_trial.py",
                                                   "test_gas_ws_167.py", "test_gas_ws_ai.py", "test_gas_ws_coverage.py", "test_gas_ws_exam.py", "test_gas_ws_judge_extra.py", "test_gas_ws_lane.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_shot_sealed.py", "test_gas_ws_speed.py", "test_gas_ws_trial.py", "test_gas_ws_undo_side.py",
                                                   ".ws_engine_all.gs", ".ws_trial.json", ".ws_api_uses.tsv", ".ws_misses.tsv", ".ws_ledger.json",
-                                                  ".combo_engine_state.json", ".combo_watch.log", ".ws_recent_targets.json", ".ws_window_ver.txt", ".ws_direct_fp.json", ".native_host.bat", ".native_host_manifest.json", ".combo_bridge_token", "ws_browser_ext"}
+                                                  ".combo_engine_state.json", ".combo_watch.log", ".combo_watch.pid", ".ws_recent_targets.json", ".ws_window_ver.txt", ".ws_direct_fp.json", ".native_host.bat", ".native_host_manifest.json", ".combo_bridge_token", "ws_browser_ext"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")

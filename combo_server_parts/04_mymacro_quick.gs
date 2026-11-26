@@ -858,27 +858,42 @@ function quickMakeSsProxy_(ss, sheetName, selA1) {
   return { spreadsheetApp: ssAppProxy, ss: ssProxy, sheet: shProxy, toasts: toasts };
 }
 
-/** マイマクロの 1 本を実行する（WebApp 環境でも対象シート＋選択セル Proxy で動作）。 */
+/** マイマクロの 1 本または下書きコードを実行する（WebApp 環境でも対象シート＋選択セル Proxy で動作）。 */
 function comboQuickRun(req) {
   var t0 = Date.now();
   req = req || {};
+  var dryCode = typeof req.dryRunCode === 'string' ? req.dryRunCode.replace(/\r\n/g, '\n').trim() : '';
+  var isDryRun = !!dryCode;
   var name = String(req.name || '');
-  var backupOn = req.backup === undefined ? true : !!req.backup;
+  var backupOn = isDryRun ? true : (req.backup === undefined ? true : !!req.backup);
   if (req.src === 'sheet') {
     return { ok: false, error: 'GASコンボ（ブラウザ連動）ではシート組込マクロは対象外です' };
   }
   try {
-    var reqId = String(req.myId || '').trim();
-    var reqStamp = String(req.myStamp || '').trim();
-    var meta = reqId ? { id: reqId, stamp: reqStamp || quickMyStamp_(reqId) } : quickMyFind_(true);
-    if (!meta || !meta.id) meta = quickMyFind_(true);
-    if (!meta || !meta.id) return { ok: false, error: 'マイマクロがまだありません。一覧の「＋追加」や「マイマクロを作る」を押してください' };
-    var id = meta.id;
-    var src = quickMySourceCached_(id, meta.stamp || undefined, true);
-    var listM = quickMyListCached_(id, meta.stamp || undefined);
-    var hit = listM.filter(function (f) { return f.name === name; })[0];
-    if (!hit) hit = quickParseFns_(src).filter(function (f) { return f.name === name; })[0];
-    if (!hit) return { ok: false, error: 'マイマクロに「' + name + '」が見つかりません（一覧を更新してください）' };
+    var src = '';
+    var meta = { id: '', stamp: '' };
+    var hit = null;
+    if (isDryRun) {
+      src = dryCode;
+      var parsedDry = quickParseFns_(src);
+      if (!parsedDry.length) {
+        return { ok: false, dryRun: true, error: '試実行する関数定義（function 名前() { ... }、末尾 _ なし）が見つかりません', gasMs: Date.now() - t0 };
+      }
+      hit = parsedDry[0];
+      name = hit.name;
+    } else {
+      var reqId = String(req.myId || '').trim();
+      var reqStamp = String(req.myStamp || '').trim();
+      meta = reqId ? { id: reqId, stamp: reqStamp || quickMyStamp_(reqId) } : quickMyFind_(true);
+      if (!meta || !meta.id) meta = quickMyFind_(true);
+      if (!meta || !meta.id) return { ok: false, error: 'マイマクロがまだありません。一覧の「＋追加」や「マイマクロを作る」を押してください' };
+      var id = meta.id;
+      src = quickMySourceCached_(id, meta.stamp || undefined, true);
+      var listM = quickMyListCached_(id, meta.stamp || undefined);
+      hit = listM.filter(function (f) { return f.name === name; })[0];
+      if (!hit) hit = quickParseFns_(src).filter(function (f) { return f.name === name; })[0];
+      if (!hit) return { ok: false, error: 'マイマクロに「' + name + '」が見つかりません（一覧を更新してください）' };
+    }
     var ss = comboOpenSs_(req);
     var selInfo = comboGetSelectionInfo_(ss, req);
     var sh = sheetOf_(ss, selInfo.sheet, '');
@@ -915,12 +930,12 @@ function comboQuickRun(req) {
     try {
       mod = new Function('SpreadsheetApp', 'shelf', src + '\nreturn {' + JSON.stringify(name) + ': ' + name + '};')(px.spreadsheetApp, shelfFn);
     } catch (eComp) {
-      return { ok: false, error: quickFormatMyErr_(name, eComp, true), gasMs: Date.now() - t0 };
+      return { ok: false, dryRun: isDryRun, error: quickFormatMyErr_(name, eComp, true), gasMs: Date.now() - t0 };
     }
-    var noBkM = !!hit.noBackup;
+    var noBkM = isDryRun ? false : !!hit.noBackup;
     var snapped = false;
     if (backupOn && !noBkM) {
-      snapped = comboQuickSnapForSs_(ss, sh, name);
+      snapped = comboQuickSnapForSs_(ss, sh, isDryRun ? ('試実行:' + name) : name);
     } else {
       comboFastUndoClearLocal_(ss, null, true);
     }
@@ -935,13 +950,15 @@ function comboQuickRun(req) {
     }
     return {
       ok: true,
+      dryRun: isDryRun,
+      name: name,
       snapped: snapped,
-      myStamp: meta.stamp,
-      text: name + ' を実行しました' + (msgParts.length ? '（' + msgParts.join(' / ') + '）' : '') + quickUndoNote_(snapped, backupOn, noBkM),
+      myStamp: meta.stamp || '',
+      text: (isDryRun ? ('▶ 試実行完了: ' + name) : (name + ' を実行しました')) + (msgParts.length ? '（' + msgParts.join(' / ') + '）' : '') + quickUndoNote_(snapped, backupOn, noBkM),
       gasMs: Date.now() - t0
     };
   } catch (e) {
-    return { ok: false, error: quickFormatMyErr_(name, e, false), gasMs: Date.now() - t0 };
+    return { ok: false, dryRun: isDryRun, error: quickFormatMyErr_(name, e, false), gasMs: Date.now() - t0 };
   }
 }
 
@@ -1478,6 +1495,9 @@ function comboQuickAiSave(req) {
     }
 
     var cfg = comboGetRawConfig_();
+    if (req.forceAiMode === 'api_gemini' || req.forceAiMode === 'api_claude') {
+      cfg = Object.assign({}, cfg, { aiMode: req.forceAiMode });
+    }
     var effMode = cfg.aiMode || 'postbox';
     var previewOnly = !!req.previewOnly;
     var history = Array.isArray(req.history)

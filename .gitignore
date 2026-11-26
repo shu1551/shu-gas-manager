@@ -63,3 +63,4 @@ ws_browser_ext/combo_window.json
 .native_host.bat
 .native_host_manifest.json
 .combo_bridge_token
+.combo_watch.pid

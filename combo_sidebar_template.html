@@ -544,6 +544,16 @@
   .quick-chat-chips { display: flex; flex-wrap: wrap; gap: 4px; flex-shrink: 0; }
   .quick-chat-chip { font-size: 10.5px; padding: 2px 7px; border-radius: 10px; border: 1px solid #c7d2fe; background: #eef2ff; color: #1e1b4b; cursor: pointer; }
   .quick-chat-chip:hover { background: #dbeafe; border-color: #93c5fd; }
+  .health-badge { flex-shrink: 0; border-radius: 10px; border: 1px solid #cbd5e1; padding: 1px 6px; font-size: 10px; font-weight: 700; cursor: pointer; line-height: 1.3; white-space: nowrap; }
+  .health-badge.is-green { background: #dcfce7; border-color: #86efac; color: #166534; }
+  .health-badge.is-yellow { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
+  .health-badge.is-gray { background: #f1f5f9; border-color: #cbd5e1; color: #475569; }
+  .retry-api-btn { margin-top: 4px; padding: 2px 8px; font-size: 10.5px; border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; border-radius: 3px; cursor: pointer; font-weight: 700; }
+  .retry-api-btn:hover { background: #fef3c7; }
+  .quick-tools-row { display: flex; gap: 3px; flex-shrink: 0; margin-top: 3px; }
+  .quick-tools-row .btn { flex: 1; padding: 2px 4px; font-size: 10px; }
+  .quick-tpl-bar { display: flex; flex-wrap: wrap; gap: 3px; padding: 4px; margin-bottom: 4px; border: 1px solid #c7d2fe; border-radius: 3px; background: #eef2ff; flex-shrink: 0; }
+  .quick-dryrun-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; border: 1px solid #86efac; border-radius: 4px; background: #ecfdf5; color: #14532d; font-size: 11px; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -566,6 +576,7 @@
     <label class="chk-label"><input type="checkbox" id="chkBackup">控え</label>
     <label class="chk-label"><input type="checkbox" id="chkAiAuto" checked>AI自動</label>
     <label class="chk-label"><input type="checkbox" id="chkSync" checked>連動</label>
+    <button id="healthBadge" class="health-badge is-gray" type="button" title="AI接続状態（クリックで再確認）">● 確認中</button>
     <span id="statusLabel" class="status-label">表示中: 自動</span>
   </div>
 
@@ -643,8 +654,16 @@
           <button class="quick-filter-btn" type="button" data-qfilter="shelf">棚</button>
         </div>
         <div id="quickCatBar" class="quick-cat-bar" style="display:none;"></div>
+        <div id="quickTplBar" class="quick-tpl-bar" style="display:none;"></div>
         <div id="quickList" class="hist-list">
           <div class="log-empty">読込中…</div>
+        </div>
+        <div class="quick-tools-row">
+          <button id="btnQuickTpl" class="btn" type="button" title="まとめ棚の定番テンプレートからマイマクロを作成">📦テンプレ</button>
+          <button id="btnQuickExport" class="btn" type="button" title="マイマクロを JSON 形式で書き出す">⬇JSON</button>
+          <button id="btnQuickExportGs" class="btn" type="button" title="マイマクロを .gs 形式で書き出す">⬇.gs</button>
+          <button id="btnQuickImport" class="btn" type="button" title="JSON または .gs ファイルからマイマクロを取り込む">⬆取込</button>
+          <input id="quickImportFile" type="file" accept=".json,.gs,.js,.txt" style="display:none;">
         </div>
         <div class="pane-footer">
           <button id="btnQuickRun" class="btn btn-primary" type="button">実行</button>
@@ -788,8 +807,10 @@
   <div id="quickEditPromptRow" style="display:none;flex-shrink:0;">
     <button id="btnQuickEditPrompt" class="btn" type="button" style="width:100%;">AI に頼む型（プロンプト）をコピー</button>
   </div>
+  <div id="quickDryRunBar" class="quick-dryrun-bar" style="display:none;"></div>
   <div id="quickEditStatus" style="font-size:11px;line-height:1.35;color:#334155;min-height:15px;max-height:48px;overflow-y:auto;flex-shrink:0;word-break:break-word;"></div>
   <div style="display:flex;gap:6px;flex-shrink:0;">
+    <button id="btnQuickDryRun" class="btn" type="button" style="padding:5px 8px;font-size:12px;" title="保存せずに控え付きで試し実行します">▶試実行</button>
     <button id="btnQuickEditSave" class="btn btn-primary" type="button" style="flex:1;padding:5px 8px;font-size:12.5px;">決定して保存</button>
     <button id="btnQuickEditDelete" class="btn" type="button" style="display:none;color:#dc2626;border-color:#fca5a5;">削除</button>
   </div>
@@ -899,6 +920,7 @@
     chkBackup: document.getElementById("chkBackup"),
     chkAiAuto: document.getElementById("chkAiAuto"),
     chkSync: document.getElementById("chkSync"),
+    healthBadge: document.getElementById("healthBadge"),
     statusLabel: document.getElementById("statusLabel"),
     targetNameLabel: document.getElementById("targetNameLabel"),
     sheetSelect: document.getElementById("sheetSelect"),
@@ -906,7 +928,13 @@
     btnRefresh: document.getElementById("btnRefresh"),
     quickFilterBar: document.getElementById("quickFilterBar"),
     quickCatBar: document.getElementById("quickCatBar"),
+    quickTplBar: document.getElementById("quickTplBar"),
     quickList: document.getElementById("quickList"),
+    btnQuickTpl: document.getElementById("btnQuickTpl"),
+    btnQuickExport: document.getElementById("btnQuickExport"),
+    btnQuickExportGs: document.getElementById("btnQuickExportGs"),
+    btnQuickImport: document.getElementById("btnQuickImport"),
+    quickImportFile: document.getElementById("quickImportFile"),
     btnQuickRun: document.getElementById("btnQuickRun"),
     btnQuickAdd: document.getElementById("btnQuickAdd"),
     btnQuickEdit: document.getElementById("btnQuickEdit"),
@@ -965,11 +993,13 @@
     btnQuickRevert: document.getElementById("btnQuickRevert"),
     quickEditCode: document.getElementById("quickEditCode"),
     quickEditStatus: document.getElementById("quickEditStatus"),
+    quickDryRunBar: document.getElementById("quickDryRunBar"),
     quickEditPromptRow: document.getElementById("quickEditPromptRow"),
     btnQuickEditPrompt: document.getElementById("btnQuickEditPrompt"),
     btnQuickImportRec: document.getElementById("btnQuickImportRec"),
     btnQuickEditCopy: document.getElementById("btnQuickEditCopy"),
     btnQuickEditPaste: document.getElementById("btnQuickEditPaste"),
+    btnQuickDryRun: document.getElementById("btnQuickDryRun"),
     btnQuickEditSave: document.getElementById("btnQuickEditSave"),
     btnQuickEditDelete: document.getElementById("btnQuickEditDelete")
   };
@@ -1349,6 +1379,7 @@
       els.cfgAiModel.value = state.config.aiModel;
     }
     updateApiKeyPlaceholder();
+    if (typeof refreshHealthBadge === "function") refreshHealthBadge();
   }
 
   // 連携方式に合うモデルだけを出す（Gemini の鍵 → Gemini のモデル・それ以外 → Claude のモデル）
@@ -3018,7 +3049,7 @@
     return (els.cfgAiModel && els.cfgAiModel.value) || (state.config && state.config.aiModel) || "";
   }
 
-  function requestDirectAi(payload, done) {
+  function requestDirectAi(payload, done, onProgress) {
     if (!canUseDirectLocalAi()) {
       done({ reachable: false });
       return;
@@ -3044,6 +3075,12 @@
         resTimer = setTimeout(function() {
           finish({ reachable: true, ok: false, error: "ローカル AI が時間切れになりました" });
         }, 70000);
+        return;
+      }
+      if (d.type === "GAS_COMBO_DIRECT_AI_PROGRESS") {
+        if (typeof onProgress === "function") {
+          try { onProgress(d.event || {}); } catch (_eP) {}
+        }
         return;
       }
       if (d.type === "GAS_COMBO_DIRECT_AI_DONE") {
@@ -3147,6 +3184,28 @@
         switchToChat: true
       });
     };
+    var appendApiRetryLog = function(head, errMsg) {
+      var entry = appendLog(els.chatLog, "is-err", head, errMsg);
+      if (state.config && (state.config.hasGeminiKey || state.config.hasClaudeKey || state.config.hasApiKey)) {
+        var forceMode = state.config.hasGeminiKey ? "api_gemini" : (state.config.hasClaudeKey ? "api_claude" : "");
+        if (!forceMode) return;
+        var retryBtn = document.createElement("button");
+        retryBtn.type = "button";
+        retryBtn.className = "retry-api-btn";
+        retryBtn.textContent = "🔑 API 鍵で再試行";
+        retryBtn.addEventListener("click", function() {
+          retryBtn.disabled = true;
+          runServerAction({
+            fnName: "comboRunAsk",
+            payload: Object.assign({}, payload, { forceAiMode: forceMode }),
+            label: txt + "（API鍵フォールバック）",
+            statusText: "API 鍵で再実行中…",
+            switchToChat: true
+          });
+        });
+        entry.appendChild(retryBtn);
+      }
+    };
     var runAiAskDirectOrGas = function() {
       if (fireOps || !aiAuto || !canUseDirectLocalAi()) {
         runViaGasAsk();
@@ -3155,6 +3214,7 @@
       setBusy(true, "✨ ローカル AI に直接確認中…");
       requestDirectAi({
         kind: "ops",
+        stream: true,
         ask: txt,
         ssId: state.target.id || "",
         ssName: state.target.name || "",
@@ -3167,7 +3227,7 @@
         setBusy(false);
         if (r && r.inExtension && !r.reachable) {
           switchTab("chat");
-          appendLog(els.chatLog, "is-err", "⚠ ローカル直結に接続できません: " + txt, "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください");
+          appendApiRetryLog("⚠ ローカル直結に接続できません: " + txt, "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください");
           return;
         }
         if (!r || !r.reachable) {
@@ -3186,7 +3246,9 @@
           return;
         }
         switchTab("chat");
-        appendLog(els.chatLog, "is-err", "⚠ AI エラー: " + txt, String(d.error || r.error || "AI 処理に失敗しました"));
+        appendApiRetryLog("⚠ AI エラー: " + txt, String(d.error || r.error || "AI 処理に失敗しました"));
+      }, function(ev) {
+        if (ev && ev.message) setBusy(true, "✨ " + String(ev.message));
       });
     };
     if (suggestOps) {
@@ -3454,6 +3516,42 @@
     }
   }
 
+  function updateHealthBadge(kind, text, tip) {
+    if (!els.healthBadge) return;
+    els.healthBadge.className = "health-badge " + (kind === "green" ? "is-green" : (kind === "yellow" ? "is-yellow" : "is-gray"));
+    els.healthBadge.textContent = text;
+    if (tip !== undefined) els.healthBadge.title = tip;
+  }
+
+  function refreshHealthBadge() {
+    var mode = (els.cfgAiMode && els.cfgAiMode.value) || (state.config && state.config.aiMode) || "postbox";
+    if (mode !== "postbox") {
+      updateHealthBadge("gray", "● API鍵", "API鍵モード（" + mode + "）。クリックで再確認");
+      return;
+    }
+    if (typeof window === "undefined" || !window.top || window.top === window) {
+      updateHealthBadge("gray", "● 待機", "拡張サイドバー外・API/郵便受け待機中");
+      return;
+    }
+    updateHealthBadge("gray", "● 確認中", "ローカル直結の状態を確認しています…");
+    var t0 = performance.now();
+    requestDirectPing(function(r) {
+      var ms = Math.max(1, Math.round(performance.now() - t0));
+      if (r && r.reachable && r.data && r.data.ok) {
+        var info = [];
+        if (r.data.pid) info.push("PID: " + r.data.pid);
+        if (r.data.version) info.push("ver: " + r.data.version);
+        if (typeof r.data.uptimeSec === "number") info.push("稼働: " + r.data.uptimeSec + "s");
+        if (typeof r.data.lastAiMs === "number") info.push("前回AI: " + r.data.lastAiMs + "ms");
+        updateHealthBadge("green", "● 直結 " + ms + "ms", "ローカル直結 稼働中（クリックで再確認）\n" + info.join(" / "));
+      } else if (r && r.inExtension) {
+        updateHealthBadge("yellow", "● 未接続", "ローカル受け手（127.0.0.1:18766）に接続できません: " + String(r.error || "停止中"));
+      } else {
+        updateHealthBadge("gray", "● 郵便受", "Chrome拡張外のため郵便受けまたはAPI鍵で動作（クリックで再確認）");
+      }
+    });
+  }
+
   function onCheckPostbox() {
     if (state.polling) return;
     state.polling = true;
@@ -3464,13 +3562,17 @@
       var ms = (performance.now() - t0).toFixed(0);
       if (r && r.reachable && r.data && r.data.ok) {
         var pid = r.data.pid ? ("PID: " + r.data.pid + " / ") : "";
+        var ver = r.data.version ? ("v" + r.data.version + " / ") : "";
         els.postboxStatusLabel.textContent = r.recovered
-          ? ("✅ ローカル直結 OK（自動起動で復旧 / " + pid + ms + "ms）")
-          : ("✅ ローカル直結 OK（稼働中 / " + pid + ms + "ms）");
+          ? ("✅ ローカル直結 OK（自動起動で復旧 / " + ver + pid + ms + "ms）")
+          : ("✅ ローカル直結 OK（稼働中 / " + ver + pid + ms + "ms）");
+        updateHealthBadge("green", "● 直結 " + ms + "ms", els.postboxStatusLabel.textContent);
       } else if (r && r.inExtension) {
         els.postboxStatusLabel.textContent = "⚠ ローカル受け手（127.0.0.1:18766）に接続できません: " + String(r.error || "受け手未起動");
+        updateHealthBadge("yellow", "● 未接続", els.postboxStatusLabel.textContent);
       } else {
         els.postboxStatusLabel.textContent = "⚠ Chrome 拡張機能（GASコンボ ブラウザ連動）が未読み込みまたは未更新です";
+        updateHealthBadge("gray", "● 拡張なし", els.postboxStatusLabel.textContent);
       }
     });
   }
@@ -3809,6 +3911,7 @@
   els.cfgAiModel.addEventListener("change", autoSaveAiChoice_);
   els.btnSaveConfig.addEventListener("click", onSaveConfig);
   els.btnCheckPostbox.addEventListener("click", onCheckPostbox);
+  if (els.healthBadge) els.healthBadge.addEventListener("click", refreshHealthBadge);
 
   els.btnNewTalk.addEventListener("click", function() {
     els.askInput.value = "";
@@ -5157,6 +5260,19 @@
             goBtn.addEventListener("click", function() { setQuickModalTab("code"); });
             card.appendChild(goBtn);
           }
+          if (m.retryApi) {
+            (function(retryInfo) {
+              var rBtn = document.createElement("button");
+              rBtn.type = "button";
+              rBtn.className = "retry-api-btn";
+              rBtn.textContent = "🔑 API 鍵で再試行";
+              rBtn.addEventListener("click", function() {
+                rBtn.disabled = true;
+                retryWithApiKeyInQuickModal(retryInfo);
+              });
+              card.appendChild(rBtn);
+            })(m.retryApi);
+          }
           logEl.appendChild(card);
         }
       }
@@ -5208,6 +5324,8 @@
     if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = false;
     if (els.quickEditCode && els.quickEditCode.style) els.quickEditCode.style.borderColor = "#94a3b8";
     if (els.quickCodeBadge && els.quickCodeBadge.style) els.quickCodeBadge.style.display = "none";
+    if (els.quickDryRunBar) { els.quickDryRunBar.style.display = "none"; els.quickDryRunBar.innerHTML = ""; }
+    if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = false;
     quickEditState = { mode: "edit", name: "", myUrl: "", delArmed: false, origCode: "", pendingReqId: "", activeTab: "code", chatHistory: [], codeUpdated: false };
     resetQuickDeleteBtn();
   }
@@ -5439,24 +5557,26 @@
       els.quickEditStatus.textContent = "✨ AI に送信しています…";
     }
 
-    var runGasQuickAiSave = function() {
+    var runGasQuickAiSave = function(forceAiModeOpt) {
+      var reqPayload = {
+        mode: aiMode,
+        previewOnly: true,
+        name: targetNm,
+        code: codeToSend,
+        prompt: prompt,
+        history: historyPayload,
+        targetId: state.target.id || "",
+        sheet: state.curSheet || "",
+        selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : "",
+        table: state.table,
+        sheets: state.sheets || [],
+        myId: state.quick.myId || "",
+        myStamp: state.quick.myStamp || ""
+      };
+      if (forceAiModeOpt) reqPayload.forceAiMode = forceAiModeOpt;
       runServerAction({
         fnName: "comboQuickAiSave",
-        payload: {
-          mode: aiMode,
-          previewOnly: true,
-          name: targetNm,
-          code: codeToSend,
-          prompt: prompt,
-          history: historyPayload,
-          targetId: state.target.id || "",
-          sheet: state.curSheet || "",
-          selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : "",
-          table: state.table,
-          sheets: state.sheets || [],
-          myId: state.quick.myId || "",
-          myStamp: state.quick.myStamp || ""
-        },
+        payload: reqPayload,
         label: aiMode === "edit" ? ("✨ AI相談/修正: " + targetNm) : "✨ AI作成/相談",
         statusText: aiMode === "edit" ? ("AI が「" + targetNm + "」を検討中…") : "AI が考えています…",
         switchToChat: false,
@@ -5515,6 +5635,13 @@
       });
     };
 
+    var makeRetryApiInfo = function() {
+      if (!(state.config && (state.config.hasGeminiKey || state.config.hasClaudeKey || state.config.hasApiKey))) return null;
+      var fm = state.config.hasGeminiKey ? "api_gemini" : (state.config.hasClaudeKey ? "api_claude" : "");
+      if (!fm) return null;
+      return { forceAiMode: fm, prompt: prompt, aiMode: aiMode, targetNm: targetNm, codeToSend: codeToSend, historyPayload: historyPayload, origCodeSnapshot: origCodeSnapshot };
+    };
+
     var dispatchAiSave = function() {
       if (canUseDirectLocalAi()) {
         var existingNames = (state.quick && Array.isArray(state.quick.my))
@@ -5524,6 +5651,7 @@
         if (els.quickEditStatus) els.quickEditStatus.textContent = "✨ ローカル AI に直接問い合わせています…";
         requestDirectAi({
           kind: "mymacro",
+          stream: true,
           mode: aiMode,
           previewOnly: true,
           targetName: targetNm,
@@ -5544,7 +5672,7 @@
           if (r && r.inExtension && !r.reachable) {
             var connErr = "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください";
             dropPendingQuickChat();
-            quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + connErr });
+            quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + connErr, retryApi: makeRetryApiInfo() });
             renderQuickChat();
             if (els.btnQuickAiSubmit) {
               els.btnQuickAiSubmit.disabled = false;
@@ -5569,7 +5697,7 @@
           }
           var errTxt = String(d.error || r.error || "AI 処理に失敗しました");
           dropPendingQuickChat();
-          quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + errTxt });
+          quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + errTxt, retryApi: makeRetryApiInfo() });
           renderQuickChat();
           if (els.btnQuickAiSubmit) {
             els.btnQuickAiSubmit.disabled = false;
@@ -5577,6 +5705,18 @@
           }
           syncQuickSaveBtnState();
           if (els.quickEditStatus) els.quickEditStatus.textContent = "AI エラー: " + errTxt;
+        }, function(ev) {
+          if (!ev) return;
+          var txtProg = ev.message || (ev.text ? String(ev.text).slice(0, 140) : "");
+          if (!txtProg) return;
+          for (var pi = quickEditState.chatHistory.length - 1; pi >= 0; pi--) {
+            if (quickEditState.chatHistory[pi] && quickEditState.chatHistory[pi].role === "pending") {
+              quickEditState.chatHistory[pi].text = "✨ " + txtProg;
+              break;
+            }
+          }
+          renderQuickChat();
+          if (els.quickEditStatus) els.quickEditStatus.textContent = "✨ " + txtProg;
         });
         return;
       }
@@ -5591,6 +5731,318 @@
     } else {
       dispatchAiSave();
     }
+  }
+
+  function retryWithApiKeyInQuickModal(retryInfo) {
+    if (!retryInfo || !retryInfo.forceAiMode || state.busy) return;
+    quickEditState.chatHistory.push({ role: "pending", text: "🔑 API 鍵で再試行しています…" });
+    renderQuickChat();
+    if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = true;
+    runServerAction({
+      fnName: "comboQuickAiSave",
+      payload: {
+        mode: retryInfo.aiMode || "add",
+        previewOnly: true,
+        forceAiMode: retryInfo.forceAiMode,
+        name: retryInfo.targetNm || "",
+        code: retryInfo.codeToSend || "",
+        prompt: retryInfo.prompt || "",
+        history: retryInfo.historyPayload || [],
+        targetId: state.target.id || "",
+        sheet: state.curSheet || "",
+        selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : "",
+        table: state.table,
+        sheets: state.sheets || [],
+        myId: state.quick.myId || "",
+        myStamp: state.quick.myStamp || ""
+      },
+      label: "🔑 API鍵フォールバック",
+      statusText: "API 鍵で再実行中…",
+      switchToChat: false,
+      onSuccess: function(res) {
+        if (res && res.action === "reply") { applyQuickAiReplyResult(res); return; }
+        if (res && res.previewOnly && res.code) { applyQuickAiPreviewResult(res); return; }
+        dropPendingQuickChat();
+        renderQuickChat();
+        if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = false;
+        syncQuickSaveBtnState();
+      },
+      onError: function(err) {
+        dropPendingQuickChat();
+        quickEditState.chatHistory.push({ role: "err", text: "API 鍵フォールバック失敗: " + formatError(err) });
+        renderQuickChat();
+        if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = false;
+        syncQuickSaveBtnState();
+      }
+    });
+  }
+
+  var QUICK_MY_TEMPLATES = [
+    {
+      name: "名簿クレンジング",
+      desc: "余分な空白・重複を除き、表全体を整えます",
+      code: "// 余分な空白・重複を除き、表全体を整えます\n// 棚: 名簿クレンジング, 名簿整理\nfunction 名簿クレンジング() {\n  return shelf([\n    { shelf: \"clean\" },\n    { shelf: \"dedupe\" },\n    { shelf: \"seiri\" }\n  ]);\n}"
+    },
+    {
+      name: "請求書フォーマットチェック",
+      desc: "請求書の整形・マイナス赤字・合計行・見出し固定をまとめて適用します",
+      code: "// 請求書の整形・マイナス赤字・合計行・見出し固定をまとめて適用します\n// 棚: 請求書チェック, 請求書整形\nfunction 請求書フォーマットチェック() {\n  return shelf([\n    { shelf: \"seiri\" },\n    { shelf: \"format.negred\" },\n    { shelf: \"total\" },\n    { shelf: \"freeze\", rows: 1 }\n  ]);\n}"
+    },
+    {
+      name: "部署別集計と区切り線",
+      desc: "部署で並べ替え、部署が変わる行に区切り線を引き、合計行を出します",
+      code: "// 部署で並べ替え、部署が変わる行に区切り線を引き、合計行を出します\n// 棚: 部署別集計, 部署区切り線\nfunction 部署別集計と区切り線() {\n  return shelf([\n    { shelf: \"sort\", by: \"部署\", order: \"asc\" },\n    { shelf: \"borders.group\", col: \"部署\" },\n    { shelf: \"total\" }\n  ]);\n}"
+    }
+  ];
+
+  function exportMyMacrosData(fmt) {
+    var map = (state.quick && state.quick.codeCache && state.quick.codeCache.map) || {};
+    var names = Object.keys(map).filter(function(k) { return typeof map[k] === "string" && map[k].trim(); });
+    if (!names.length) return { ok: false, error: "書き出せるマイマクロのコードがまだ読み込まれていません" };
+    if (fmt === "gs") {
+      var gs = names.map(function(n) { return String(map[n]).trim(); }).join("\n\n");
+      return { ok: true, count: names.length, filename: "gascombo_mymacros.gs", mime: "text/plain;charset=utf-8", content: gs };
+    }
+    var payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      macros: names.map(function(n) { return { name: n, code: String(map[n]).trim() }; })
+    };
+    return {
+      ok: true,
+      count: names.length,
+      filename: "gascombo_mymacros.json",
+      mime: "application/json;charset=utf-8",
+      content: JSON.stringify(payload, null, 2)
+    };
+  }
+
+  function downloadOrCopyText(filename, mime, content) {
+    try {
+      if (typeof Blob !== "undefined" && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+        var blob = new Blob([content], { type: mime || "text/plain;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { try { URL.revokeObjectURL(url); } catch (_e) {} }, 1000);
+        return Promise.resolve("download");
+      }
+    } catch (_eDl) {}
+    return copyToClipboard(content).then(function() { return "copy"; });
+  }
+
+  function exportMyMacros(fmt) {
+    var runExport = function() {
+      var out = exportMyMacrosData(fmt);
+      if (!out.ok) {
+        if (els.quickNote) els.quickNote.textContent = "⚠ " + out.error;
+        return;
+      }
+      downloadOrCopyText(out.filename, out.mime, out.content).then(function(how) {
+        if (els.quickNote) {
+          els.quickNote.textContent = (how === "download" ? "⬇ 書き出しました: " : "📋 コピーしました: ") + out.filename + "（" + out.count + " 件）";
+        }
+      }).catch(function(err) {
+        if (els.quickNote) els.quickNote.textContent = "⚠ 書き出し失敗: " + formatError(err);
+      });
+    };
+    var map = (state.quick && state.quick.codeCache && state.quick.codeCache.map) || {};
+    if (!Object.keys(map).length && hasGasBridge()) {
+      callGas("comboQuickList", { targetId: state.target.id || "", force: true, wantCodes: true, clientStamp: "" }, function(res) {
+        if (res && res.ok) applyQuickListRes(res);
+        runExport();
+      }, function() { runExport(); });
+      return;
+    }
+    runExport();
+  }
+
+  function parseImportMyMacros(rawText, existingNamesList) {
+    var txt = String(rawText || "").trim();
+    if (!txt) return { ok: false, error: "取込データが空です" };
+    var blocks = [];
+    if (txt.charAt(0) === "{" || txt.charAt(0) === "[") {
+      try {
+        var parsed = JSON.parse(txt);
+        var arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.macros) ? parsed.macros : null);
+        if (!arr) return { ok: false, error: "JSON は配列または { macros: [...] } 形式にしてください" };
+        for (var i = 0; i < arr.length; i++) {
+          var item = arr[i];
+          if (typeof item === "string" && item.trim()) blocks.push(stripCodeFence(item));
+          else if (item && typeof item.code === "string" && item.code.trim()) blocks.push(stripCodeFence(item.code));
+        }
+      } catch (eJ) {
+        return { ok: false, error: "JSON 解析エラー: " + String((eJ && eJ.message) || eJ) };
+      }
+    } else {
+      blocks = [stripCodeFence(txt)];
+    }
+    if (!blocks.length) return { ok: false, error: "取り込めるコードが見つかりません" };
+
+    var existingSet = {};
+    var curList = Array.isArray(existingNamesList) ? existingNamesList : ((state.quick && state.quick.my) || []).map(function(x) { return x && x.name; });
+    for (var ei = 0; ei < curList.length; ei++) {
+      if (curList[ei]) existingSet[String(curList[ei])] = true;
+    }
+
+    var seenInImport = {};
+    var validBlocks = [];
+    var allNames = [];
+    for (var bi = 0; bi < blocks.length; bi++) {
+      var code = String(blocks[bi] || "").replace(/\r\n/g, "\n").trim();
+      if (!code) continue;
+      try {
+        new Function(code);
+      } catch (eSyn) {
+        return { ok: false, error: "構文エラー: " + String((eSyn && eSyn.message) || eSyn) };
+      }
+      var fnMatches = [];
+      var reFn = /(?:^|\n)function\s+([^\s(]+)\s*\(/g;
+      var mFn;
+      while ((mFn = reFn.exec(code)) !== null) {
+        if (!/_$/.test(mFn[1])) fnMatches.push(mFn[1]);
+      }
+      if (!fnMatches.length) {
+        return { ok: false, error: "トップレベル関数（function 名前() { ... }、末尾 _ なし）が見つかりません" };
+      }
+      for (var fi = 0; fi < fnMatches.length; fi++) {
+        var fnNm = fnMatches[fi];
+        if (existingSet[fnNm] || seenInImport[fnNm]) {
+          return { ok: false, error: "名前が重複しています: 「" + fnNm + "」" };
+        }
+        seenInImport[fnNm] = true;
+        allNames.push(fnNm);
+      }
+      validBlocks.push(code);
+    }
+    if (!validBlocks.length) return { ok: false, error: "有効な関数がありません" };
+    return { ok: true, blocks: validBlocks, names: allNames };
+  }
+
+  function importMyMacrosText(rawText) {
+    var check = parseImportMyMacros(rawText);
+    if (!check.ok) {
+      if (els.quickNote) els.quickNote.textContent = "⚠ 取込中止: " + check.error;
+      return;
+    }
+    var idx = 0;
+    var added = [];
+    var stepNext = function() {
+      if (idx >= check.blocks.length) {
+        if (els.quickNote) els.quickNote.textContent = "⬆ " + added.length + " 件を取り込みました: " + added.join("・");
+        quickClearCodeCache();
+        loadQuickList(false);
+        return;
+      }
+      var blockCode = check.blocks[idx++];
+      runServerAction({
+        fnName: "comboQuickAddFn",
+        payload: { code: blockCode },
+        label: "⬆ 取込 (" + idx + "/" + check.blocks.length + ")",
+        statusText: "マイマクロを取り込み中…",
+        switchToChat: false,
+        onSuccess: function(res) {
+          if (res && res.myId) state.quick.myId = res.myId;
+          if (res && res.myUrl) state.quick.myUrl = res.myUrl;
+          if (res && res.myStamp) state.quick.myStamp = res.myStamp;
+          if (res && Array.isArray(res.names)) added = added.concat(res.names);
+          quickRememberLocal();
+          stepNext();
+        },
+        onError: function(err) {
+          if (els.quickNote) els.quickNote.textContent = "⚠ 取込エラー: " + formatError(err);
+        }
+      });
+    };
+    stepNext();
+  }
+
+  function toggleQuickTplBar() {
+    if (!els.quickTplBar) return;
+    var showing = els.quickTplBar.style.display !== "none";
+    if (showing) {
+      els.quickTplBar.style.display = "none";
+      return;
+    }
+    els.quickTplBar.innerHTML = "";
+    QUICK_MY_TEMPLATES.forEach(function(tpl) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "quick-chat-chip";
+      b.textContent = "📦 " + tpl.name;
+      b.title = tpl.desc;
+      b.addEventListener("click", function() {
+        els.quickTplBar.style.display = "none";
+        openQuickAddModal(false);
+        if (els.quickEditTitle) els.quickEditTitle.textContent = "📦 テンプレート: " + tpl.name;
+        if (els.quickEditCode) els.quickEditCode.value = tpl.code;
+        syncQuickSaveBtnState();
+        if (els.quickEditStatus) els.quickEditStatus.textContent = "テンプレートを展開しました。「▶試実行」または「決定して保存」を押してください";
+      });
+      els.quickTplBar.appendChild(b);
+    });
+    els.quickTplBar.style.display = "flex";
+  }
+
+  function dryRunQuickEditCode() {
+    if (state.busy) return;
+    var code = els.quickEditCode ? String(els.quickEditCode.value || "").trim() : "";
+    if (!code) {
+      if (els.quickEditStatus) els.quickEditStatus.textContent = "試実行するコードがありません";
+      return;
+    }
+    try {
+      new Function(code);
+    } catch (eSyn) {
+      if (els.quickEditStatus) els.quickEditStatus.textContent = "⚠ 構文エラー: " + String((eSyn && eSyn.message) || eSyn);
+      return;
+    }
+    if (els.quickDryRunBar) { els.quickDryRunBar.style.display = "none"; els.quickDryRunBar.innerHTML = ""; }
+    if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = true;
+    if (els.quickEditStatus) els.quickEditStatus.textContent = "▶ 控えを取って試実行しています…";
+    runServerAction({
+      fnName: "comboQuickRun",
+      payload: {
+        dryRunCode: code,
+        backup: true,
+        targetId: state.target.id || "",
+        sheet: state.curSheet || "",
+        selection: (els.chkSync && els.chkSync.checked) ? (state.selection || "") : ""
+      },
+      label: "▶ 試実行 (ドライラン)",
+      statusText: "試実行中…",
+      switchToChat: false,
+      onSuccess: function(res) {
+        if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = false;
+        if (els.quickEditStatus) els.quickEditStatus.textContent = (res && res.text) || "▶ 試実行が完了しました";
+        if (els.quickDryRunBar) {
+          els.quickDryRunBar.innerHTML = "";
+          var span = document.createElement("span");
+          span.textContent = (res && res.snapped) ? "✓ 控え付きで試実行しました（元に戻せます）" : "✓ 試実行が完了しました";
+          var uBtn = document.createElement("button");
+          uBtn.type = "button";
+          uBtn.className = "btn";
+          uBtn.style.padding = "2px 8px";
+          uBtn.textContent = "↶ 試実行を取り消す";
+          uBtn.addEventListener("click", function() {
+            uBtn.disabled = true;
+            onUndo();
+            els.quickDryRunBar.style.display = "none";
+          });
+          els.quickDryRunBar.appendChild(span);
+          els.quickDryRunBar.appendChild(uBtn);
+          els.quickDryRunBar.style.display = "flex";
+        }
+      },
+      onError: function(err) {
+        if (els.btnQuickDryRun) els.btnQuickDryRun.disabled = false;
+        if (els.quickEditStatus) els.quickEditStatus.textContent = "⚠ 試実行エラー: " + formatError(err);
+      }
+    });
   }
 
   function startPolishRecordedMacro(macroItem) {
@@ -5733,6 +6185,24 @@
   if (els.btnQuickAi) {
     els.btnQuickAi.addEventListener("click", function() { openQuickAddModal(true); });
   }
+  if (els.btnQuickTpl) els.btnQuickTpl.addEventListener("click", toggleQuickTplBar);
+  if (els.btnQuickExport) els.btnQuickExport.addEventListener("click", function() { exportMyMacros("json"); });
+  if (els.btnQuickExportGs) els.btnQuickExportGs.addEventListener("click", function() { exportMyMacros("gs"); });
+  if (els.btnQuickImport && els.quickImportFile) {
+    els.btnQuickImport.addEventListener("click", function() {
+      els.quickImportFile.value = "";
+      els.quickImportFile.click();
+    });
+    els.quickImportFile.addEventListener("change", function() {
+      var f = els.quickImportFile.files && els.quickImportFile.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function() { importMyMacrosText(String(reader.result || "")); };
+      reader.onerror = function() { if (els.quickNote) els.quickNote.textContent = "⚠ ファイルを読み込めませんでした"; };
+      reader.readAsText(f, "utf-8");
+    });
+  }
+  if (els.btnQuickDryRun) els.btnQuickDryRun.addEventListener("click", dryRunQuickEditCode);
   if (els.btnQuickAiSubmit) {
     els.btnQuickAiSubmit.addEventListener("click", submitQuickAi);
   }
@@ -6152,7 +6622,10 @@
       quickRunItem: quickRunItem,
       applyQuickListRes: applyQuickListRes,
       handlePostboxDone: handlePostboxDone,
-      submitQuickAi: submitQuickAi
+      submitQuickAi: submitQuickAi,
+      QUICK_MY_TEMPLATES: QUICK_MY_TEMPLATES,
+      exportMyMacrosData: exportMyMacrosData,
+      parseImportMyMacros: parseImportMyMacros
     };
   }
 })();

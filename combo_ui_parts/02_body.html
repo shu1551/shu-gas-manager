@@ -18,6 +18,7 @@
     <label class="chk-label"><input type="checkbox" id="chkBackup">控え</label>
     <label class="chk-label"><input type="checkbox" id="chkAiAuto" checked>AI自動</label>
     <label class="chk-label"><input type="checkbox" id="chkSync" checked>連動</label>
+    <button id="healthBadge" class="health-badge is-gray" type="button" title="AI接続状態（クリックで再確認）">● 確認中</button>
     <span id="statusLabel" class="status-label">表示中: 自動</span>
   </div>
 
@@ -95,8 +96,16 @@
           <button class="quick-filter-btn" type="button" data-qfilter="shelf">棚</button>
         </div>
         <div id="quickCatBar" class="quick-cat-bar" style="display:none;"></div>
+        <div id="quickTplBar" class="quick-tpl-bar" style="display:none;"></div>
         <div id="quickList" class="hist-list">
           <div class="log-empty">読込中…</div>
+        </div>
+        <div class="quick-tools-row">
+          <button id="btnQuickTpl" class="btn" type="button" title="まとめ棚の定番テンプレートからマイマクロを作成">📦テンプレ</button>
+          <button id="btnQuickExport" class="btn" type="button" title="マイマクロを JSON 形式で書き出す">⬇JSON</button>
+          <button id="btnQuickExportGs" class="btn" type="button" title="マイマクロを .gs 形式で書き出す">⬇.gs</button>
+          <button id="btnQuickImport" class="btn" type="button" title="JSON または .gs ファイルからマイマクロを取り込む">⬆取込</button>
+          <input id="quickImportFile" type="file" accept=".json,.gs,.js,.txt" style="display:none;">
         </div>
         <div class="pane-footer">
           <button id="btnQuickRun" class="btn btn-primary" type="button">実行</button>
@@ -240,8 +249,10 @@
   <div id="quickEditPromptRow" style="display:none;flex-shrink:0;">
     <button id="btnQuickEditPrompt" class="btn" type="button" style="width:100%;">AI に頼む型（プロンプト）をコピー</button>
   </div>
+  <div id="quickDryRunBar" class="quick-dryrun-bar" style="display:none;"></div>
   <div id="quickEditStatus" style="font-size:11px;line-height:1.35;color:#334155;min-height:15px;max-height:48px;overflow-y:auto;flex-shrink:0;word-break:break-word;"></div>
   <div style="display:flex;gap:6px;flex-shrink:0;">
+    <button id="btnQuickDryRun" class="btn" type="button" style="padding:5px 8px;font-size:12px;" title="保存せずに控え付きで試し実行します">▶試実行</button>
     <button id="btnQuickEditSave" class="btn btn-primary" type="button" style="flex:1;padding:5px 8px;font-size:12.5px;">決定して保存</button>
     <button id="btnQuickEditDelete" class="btn" type="button" style="display:none;color:#dc2626;border-color:#fca5a5;">削除</button>
   </div>

@@ -152,7 +152,7 @@
     return (els.cfgAiModel && els.cfgAiModel.value) || (state.config && state.config.aiModel) || "";
   }
 
-  function requestDirectAi(payload, done) {
+  function requestDirectAi(payload, done, onProgress) {
     if (!canUseDirectLocalAi()) {
       done({ reachable: false });
       return;
@@ -178,6 +178,12 @@
         resTimer = setTimeout(function() {
           finish({ reachable: true, ok: false, error: "ローカル AI が時間切れになりました" });
         }, 70000);
+        return;
+      }
+      if (d.type === "GAS_COMBO_DIRECT_AI_PROGRESS") {
+        if (typeof onProgress === "function") {
+          try { onProgress(d.event || {}); } catch (_eP) {}
+        }
         return;
       }
       if (d.type === "GAS_COMBO_DIRECT_AI_DONE") {
@@ -281,6 +287,28 @@
         switchToChat: true
       });
     };
+    var appendApiRetryLog = function(head, errMsg) {
+      var entry = appendLog(els.chatLog, "is-err", head, errMsg);
+      if (state.config && (state.config.hasGeminiKey || state.config.hasClaudeKey || state.config.hasApiKey)) {
+        var forceMode = state.config.hasGeminiKey ? "api_gemini" : (state.config.hasClaudeKey ? "api_claude" : "");
+        if (!forceMode) return;
+        var retryBtn = document.createElement("button");
+        retryBtn.type = "button";
+        retryBtn.className = "retry-api-btn";
+        retryBtn.textContent = "🔑 API 鍵で再試行";
+        retryBtn.addEventListener("click", function() {
+          retryBtn.disabled = true;
+          runServerAction({
+            fnName: "comboRunAsk",
+            payload: Object.assign({}, payload, { forceAiMode: forceMode }),
+            label: txt + "（API鍵フォールバック）",
+            statusText: "API 鍵で再実行中…",
+            switchToChat: true
+          });
+        });
+        entry.appendChild(retryBtn);
+      }
+    };
     var runAiAskDirectOrGas = function() {
       if (fireOps || !aiAuto || !canUseDirectLocalAi()) {
         runViaGasAsk();
@@ -289,6 +317,7 @@
       setBusy(true, "✨ ローカル AI に直接確認中…");
       requestDirectAi({
         kind: "ops",
+        stream: true,
         ask: txt,
         ssId: state.target.id || "",
         ssName: state.target.name || "",
@@ -301,7 +330,7 @@
         setBusy(false);
         if (r && r.inExtension && !r.reachable) {
           switchTab("chat");
-          appendLog(els.chatLog, "is-err", "⚠ ローカル直結に接続できません: " + txt, "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください");
+          appendApiRetryLog("⚠ ローカル直結に接続できません: " + txt, "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください");
           return;
         }
         if (!r || !r.reachable) {
@@ -320,7 +349,9 @@
           return;
         }
         switchTab("chat");
-        appendLog(els.chatLog, "is-err", "⚠ AI エラー: " + txt, String(d.error || r.error || "AI 処理に失敗しました"));
+        appendApiRetryLog("⚠ AI エラー: " + txt, String(d.error || r.error || "AI 処理に失敗しました"));
+      }, function(ev) {
+        if (ev && ev.message) setBusy(true, "✨ " + String(ev.message));
       });
     };
     if (suggestOps) {
@@ -588,6 +619,42 @@
     }
   }
 
+  function updateHealthBadge(kind, text, tip) {
+    if (!els.healthBadge) return;
+    els.healthBadge.className = "health-badge " + (kind === "green" ? "is-green" : (kind === "yellow" ? "is-yellow" : "is-gray"));
+    els.healthBadge.textContent = text;
+    if (tip !== undefined) els.healthBadge.title = tip;
+  }
+
+  function refreshHealthBadge() {
+    var mode = (els.cfgAiMode && els.cfgAiMode.value) || (state.config && state.config.aiMode) || "postbox";
+    if (mode !== "postbox") {
+      updateHealthBadge("gray", "● API鍵", "API鍵モード（" + mode + "）。クリックで再確認");
+      return;
+    }
+    if (typeof window === "undefined" || !window.top || window.top === window) {
+      updateHealthBadge("gray", "● 待機", "拡張サイドバー外・API/郵便受け待機中");
+      return;
+    }
+    updateHealthBadge("gray", "● 確認中", "ローカル直結の状態を確認しています…");
+    var t0 = performance.now();
+    requestDirectPing(function(r) {
+      var ms = Math.max(1, Math.round(performance.now() - t0));
+      if (r && r.reachable && r.data && r.data.ok) {
+        var info = [];
+        if (r.data.pid) info.push("PID: " + r.data.pid);
+        if (r.data.version) info.push("ver: " + r.data.version);
+        if (typeof r.data.uptimeSec === "number") info.push("稼働: " + r.data.uptimeSec + "s");
+        if (typeof r.data.lastAiMs === "number") info.push("前回AI: " + r.data.lastAiMs + "ms");
+        updateHealthBadge("green", "● 直結 " + ms + "ms", "ローカル直結 稼働中（クリックで再確認）\n" + info.join(" / "));
+      } else if (r && r.inExtension) {
+        updateHealthBadge("yellow", "● 未接続", "ローカル受け手（127.0.0.1:18766）に接続できません: " + String(r.error || "停止中"));
+      } else {
+        updateHealthBadge("gray", "● 郵便受", "Chrome拡張外のため郵便受けまたはAPI鍵で動作（クリックで再確認）");
+      }
+    });
+  }
+
   function onCheckPostbox() {
     if (state.polling) return;
     state.polling = true;
@@ -598,13 +665,17 @@
       var ms = (performance.now() - t0).toFixed(0);
       if (r && r.reachable && r.data && r.data.ok) {
         var pid = r.data.pid ? ("PID: " + r.data.pid + " / ") : "";
+        var ver = r.data.version ? ("v" + r.data.version + " / ") : "";
         els.postboxStatusLabel.textContent = r.recovered
-          ? ("✅ ローカル直結 OK（自動起動で復旧 / " + pid + ms + "ms）")
-          : ("✅ ローカル直結 OK（稼働中 / " + pid + ms + "ms）");
+          ? ("✅ ローカル直結 OK（自動起動で復旧 / " + ver + pid + ms + "ms）")
+          : ("✅ ローカル直結 OK（稼働中 / " + ver + pid + ms + "ms）");
+        updateHealthBadge("green", "● 直結 " + ms + "ms", els.postboxStatusLabel.textContent);
       } else if (r && r.inExtension) {
         els.postboxStatusLabel.textContent = "⚠ ローカル受け手（127.0.0.1:18766）に接続できません: " + String(r.error || "受け手未起動");
+        updateHealthBadge("yellow", "● 未接続", els.postboxStatusLabel.textContent);
       } else {
         els.postboxStatusLabel.textContent = "⚠ Chrome 拡張機能（GASコンボ ブラウザ連動）が未読み込みまたは未更新です";
+        updateHealthBadge("gray", "● 拡張なし", els.postboxStatusLabel.textContent);
       }
     });
   }
@@ -943,6 +1014,7 @@
   els.cfgAiModel.addEventListener("change", autoSaveAiChoice_);
   els.btnSaveConfig.addEventListener("click", onSaveConfig);
   els.btnCheckPostbox.addEventListener("click", onCheckPostbox);
+  if (els.healthBadge) els.healthBadge.addEventListener("click", refreshHealthBadge);
 
   els.btnNewTalk.addEventListener("click", function() {
     els.askInput.value = "";

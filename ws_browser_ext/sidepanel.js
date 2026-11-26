@@ -106,11 +106,42 @@ window.addEventListener("message", async (ev) => {
   }
   if (d.type === "GAS_COMBO_DIRECT_AI") {
     const reqId = String(d.reqId || "");
+    const payload = d.payload || {};
     const replyDone = (obj) => {
       try { ev.source.postMessage(Object.assign({ type: "GAS_COMBO_DIRECT_AI_DONE", reqId, inExtension: true }, obj), targetOrigin); } catch (_e) {}
     };
+    const replyProgress = (eventObj) => {
+      try { ev.source.postMessage({ type: "GAS_COMBO_DIRECT_AI_PROGRESS", reqId, inExtension: true, event: eventObj }, targetOrigin); } catch (_e) {}
+    };
     try { ev.source.postMessage({ type: "GAS_COMBO_DIRECT_AI_ACK", reqId }, targetOrigin); } catch (_e) {}
-    chrome.runtime.sendMessage({ type: "GAS_COMBO_DIRECT_AI_BG", payload: d.payload || {} }, (resp) => {
+    if (payload.stream === true && typeof chrome.runtime.connect === "function") {
+      let finished = false;
+      try {
+        const port = chrome.runtime.connect({ name: "GAS_COMBO_DIRECT_STREAM" });
+        port.onMessage.addListener((m) => {
+          if (!m || finished) return;
+          if (m.type === "progress") {
+            replyProgress(m.event || {});
+          } else if (m.type === "done") {
+            finished = true;
+            try { port.disconnect(); } catch (_e) {}
+            replyDone(m);
+          }
+        });
+        port.onDisconnect.addListener(() => {
+          if (!finished) {
+            finished = true;
+            const errMsg = (chrome.runtime.lastError && chrome.runtime.lastError.message) || "ストリーミング接続が切断されました";
+            replyDone({ reachable: false, error: String(errMsg) });
+          }
+        });
+        port.postMessage({ type: "START", payload });
+        return;
+      } catch (_eConn) {
+        if (finished) return;
+      }
+    }
+    chrome.runtime.sendMessage({ type: "GAS_COMBO_DIRECT_AI_BG", payload }, (resp) => {
       if (chrome.runtime.lastError) {
         replyDone({ reachable: false, error: String(chrome.runtime.lastError.message || "extension_error") });
         return;

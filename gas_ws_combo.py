@@ -1440,8 +1440,27 @@ class ComboPostboxWatcher:
         self._mymacro_session = None
         self._finder = None
         self._last_http_at = 0.0
+        self._started_at = time.time()
+        self._last_ai_ms = None
+        self._last_error = ""
+        self._direct_only = bool(direct_only)
         import threading as _th
         self._ai_lock = _th.Lock()
+
+    def get_health(self):
+        """直結受け手のヘルス情報（稼働時間・直近AI所要時間・バージョン等）を返す。"""
+        return {
+            "ok": True,
+            "pid": os.getpid(),
+            "startedAt": int(self._started_at),
+            "uptimeSec": round(max(0.0, time.time() - self._started_at), 1),
+            "directOnly": bool(self._direct_only),
+            "backend": str(self.backend or "auto"),
+            "model": str(self.model or "auto"),
+            "lastAiMs": self._last_ai_ms,
+            "lastError": self._last_error,
+            "version": COMBO_WATCH_VERSION,
+        }
 
     @staticmethod
     def _ts_now():
@@ -1910,14 +1929,23 @@ class ComboPostboxWatcher:
             }
         return {"ok": True, "direct": True, "scriptId": script_id, "macros": macros}
 
-    def resolve_direct(self, item):
+    def resolve_direct(self, item, on_event=None):
         """Chrome 拡張からの直結リクエスト（127.0.0.1 /resolve）を処理して返す。"""
+        def _emit(ev):
+            if callable(on_event):
+                try:
+                    on_event(ev)
+                except Exception:
+                    pass
+
         t0 = time.perf_counter()
+        _emit({"type": "status", "message": "ローカル AI に問い合わせ中…"})
         with self._ai_lock:
             payload = self.resolve_item(item)
         if item.get("kind") != "mymacro" and payload.get("action") == "ops":
             val_ops = self._validate_ops_local(payload.get("ops"))
             if not val_ops.get("ok"):
+                _emit({"type": "status", "message": "検証エラーを検出・AI に修正依頼中…"})
                 retry_item = dict(
                     item,
                     ask=str(item.get("ask") or "")
@@ -1936,6 +1964,7 @@ class ComboPostboxWatcher:
             existing_names = item.get("existingNames") or []
             val = self._validate_mymacro_code_local(mode, payload.get("code") or "", existing_names)
             if not val.get("ok") and val.get("retryable"):
+                _emit({"type": "status", "message": "検証エラーを検出・AI に修正依頼中…"})
                 retry_item = dict(
                     item,
                     ask=str(item.get("ask") or "")
@@ -1974,6 +2003,8 @@ class ComboPostboxWatcher:
                 elif act == "mymacro":
                     note_s = f"（{res.get('note')}）" if res.get("note") else ""
                     res["text"] = f"✨ コード案ができました（{res.get('name') or ''}）。「決定して保存」で登録されます{note_s}"
+        self._last_ai_ms = ai_ms
+        self._last_error = "" if res.get("ok") else str(res.get("error") or "")
         print(
             f"[{self._ts_now()}][direct] kind={item.get('kind') or 'ops'} "
             f"model={item.get('aiModel') or self.model or 'auto'} action={act} ai={ai_ms}ms ok={res.get('ok')}"
@@ -2048,15 +2079,25 @@ class ComboPostboxWatcher:
             results.append({"reqId": item.get("reqId"), "payload": payload, "deliver": deliv, "timing": timing})
         return results
 
-    def watch(self, max_loops=None, idle_interval=15.0, direct_only=False):
+    def watch(self, max_loops=None, idle_interval=15.0, direct_only=False, port=None, pid_path=None):
         """継続監視・直結サーバー。direct_only=True のときは GAS 郵便受けポーリングを行わず /resolve のみ待つ。
         /stop を受けると安全に終了し、新コードへの再起動に備える。"""
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        listen_port = COMBO_WATCH_PORT if port is None else int(port)
+        pid_file = Path(pid_path) if pid_path else WATCH_PID_PATH
+        self._direct_only = bool(direct_only)
+        self._started_at = time.time()
         # 窓なし（pythonw）で起きたときは標準出力が無い＝書き先を手元のログにする（無いと途中で黙って止まる）
         if sys.stdout is None or sys.stderr is None or Path(sys.executable).name.lower() == "pythonw.exe":
             _log = _open_watch_log()
             sys.stdout = sys.stderr = _log
+
+        already, active_pid = _is_watch_running(pid_file, listen_port)
+        if already:
+            print(f"[{self._ts_now()}][postbox] 受け手は既に稼働中です pid={active_pid} (127.0.0.1:{listen_port})")
+            return
+
         kick = threading.Event()
         stop_ev = threading.Event()
         watcher = self
@@ -2073,8 +2114,7 @@ class ComboPostboxWatcher:
                 sfs = str(self.headers.get("Sec-Fetch-Site") or "").strip().lower()
                 return sfs in ("", "none")
 
-            def _reply(self, data=None, code=200):
-                self.send_response(code)
+            def _send_cors(self):
                 o = str(self.headers.get("Origin") or "").strip()
                 if o and o == allowed_ext_origin:
                     self.send_header("Access-Control-Allow-Origin", o)
@@ -2082,6 +2122,10 @@ class ComboPostboxWatcher:
                     self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                     self.send_header("Access-Control-Allow-Headers", "Content-Type")
                     self.send_header("Access-Control-Allow-Private-Network", "true")
+
+            def _reply(self, data=None, code=200):
+                self.send_response(code)
+                self._send_cors()
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 body = data if data is not None else {"ok": True, "pid": os.getpid()}
@@ -2104,6 +2148,8 @@ class ComboPostboxWatcher:
                 elif self.path.startswith("/kick"):
                     kick.set()
                     self._reply()
+                elif self.path.startswith("/health"):
+                    self._reply(watcher.get_health())
                 elif self.path.startswith("/ping"):
                     self._reply({"ok": True, "pid": os.getpid(), "direct": True, "directOnly": bool(direct_only)})
                 else:
@@ -2113,7 +2159,7 @@ class ComboPostboxWatcher:
                 if not self._origin_ok():
                     self._reply({"ok": False, "error": "origin not allowed"}, code=403)
                     return
-                if self.path.startswith("/resolve") or self.path.startswith("/recorded-macros"):
+                if self.path.startswith("/resolve-stream") or self.path.startswith("/resolve") or self.path.startswith("/recorded-macros"):
                     try:
                         raw_len = self.headers.get("Content-Length") or "0"
                         length = int(raw_len)
@@ -2130,6 +2176,31 @@ class ComboPostboxWatcher:
                         return
                     if not isinstance(item, dict):
                         self._reply({"ok": False, "direct": True, "error": "リクエストは JSON オブジェクトである必要があります"}, code=400)
+                        return
+                    if self.path.startswith("/resolve-stream"):
+                        self.send_response(200)
+                        self._send_cors()
+                        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+
+                        def _emit_ndjson(ev_obj):
+                            try:
+                                line = (json.dumps(ev_obj, ensure_ascii=False) + "\n").encode("utf-8")
+                                self.wfile.write(line)
+                                self.wfile.flush()
+                            except Exception:
+                                pass
+
+                        _emit_ndjson({"type": "status", "message": "ローカル AI が考えています…"})
+                        try:
+                            res = watcher.resolve_direct(item, on_event=_emit_ndjson)
+                            preview = str(res.get("message") or res.get("text") or res.get("note") or "").strip()
+                            if preview:
+                                _emit_ndjson({"type": "delta", "text": preview})
+                            _emit_ndjson({"type": "done", "result": res})
+                        except Exception as e:
+                            _emit_ndjson({"type": "done", "result": {"ok": False, "direct": True, "action": "error", "error": str(e)}})
                         return
                     try:
                         if self.path.startswith("/recorded-macros"):
@@ -2148,14 +2219,18 @@ class ComboPostboxWatcher:
         try:
             class _Srv(ThreadingHTTPServer):
                 allow_reuse_address = False   # Windows では True だと同じ口に 2 つ目も入れてしまう＝受け手が 2 つ動く
-            srv = _Srv(("127.0.0.1", COMBO_WATCH_PORT), _H)
+            srv = _Srv(("127.0.0.1", listen_port), _H)
         except OSError:
-            print(f"[{self._ts_now()}][postbox] 受け手はもう動いています（127.0.0.1:{COMBO_WATCH_PORT}）")
+            print(f"[{self._ts_now()}][postbox] 受け手はもう動いています（127.0.0.1:{listen_port}）")
             return
+        try:
+            pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        except Exception:
+            pass
         if direct_only:
-            print(f"[{self._ts_now()}][direct] 直結専用サーバー起動 pid={os.getpid()} port={COMBO_WATCH_PORT} (郵便受けポーリング停止)")
+            print(f"[{self._ts_now()}][direct] 直結専用サーバー起動 pid={os.getpid()} port={listen_port} (郵便受けポーリング停止)")
         else:
-            print(f"[{self._ts_now()}][postbox] 監視開始 pid={os.getpid()} idle={idle_interval}s")
+            print(f"[{self._ts_now()}][postbox] 監視開始 pid={os.getpid()} port={listen_port} idle={idle_interval}s")
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         loops = 0
         consec_err = 0
@@ -2213,6 +2288,11 @@ class ComboPostboxWatcher:
                 srv.server_close()
             except Exception:
                 pass
+            try:
+                if pid_file.is_file() and pid_file.read_text(encoding="utf-8", errors="ignore").strip() == str(os.getpid()):
+                    pid_file.unlink()
+            except Exception:
+                pass
             if self._ai_runner is not None:
                 self._ai_runner.close()
             if self._mymacro_session is not None:
@@ -2236,8 +2316,36 @@ def _open_watch_log(log_path=None, max_bytes=512 * 1024, keep_bytes=128 * 1024):
 
 
 COMBO_WATCH_PORT = 18766
+COMBO_WATCH_VERSION = "4.0"
+WATCH_PID_PATH = HERE / ".combo_watch.pid"
 NATIVE_HOST_NAME = "com.shu.gas_combo_host"
 EXT_FIXED_ID = "mbkcmenmaeaiemdppphmbokhbfckpjhm"
+
+
+def _is_watch_running(pid_path=None, port=None):
+    """PID ファイルと /ping でローカル受け手の実生存を確認する。古い PID ファイルは掃除する。"""
+    import urllib.request
+    p = Path(pid_path) if pid_path else WATCH_PID_PATH
+    listen_port = COMBO_WATCH_PORT if port is None else int(port)
+    pid_val = None
+    if p.is_file():
+        try:
+            pid_val = int(p.read_text(encoding="utf-8", errors="ignore").strip())
+        except Exception:
+            pid_val = None
+    try:
+        raw = urllib.request.urlopen(f"http://127.0.0.1:{listen_port}/ping", timeout=0.35).read().decode("utf-8", "ignore")
+        info = json.loads(raw or "{}")
+        if isinstance(info, dict) and info.get("ok"):
+            return True, info.get("pid") or pid_val
+    except Exception:
+        pass
+    if p.is_file():
+        try:
+            p.unlink()
+        except Exception:
+            pass
+    return False, None
 
 
 BRIDGE_TOKEN_PATH = HERE / ".combo_bridge_token"
