@@ -19,9 +19,22 @@
         if (!res || res.ok === false) {
           var errMsg = (res && (res.text || res.error)) || "実行に失敗しました";
           if (res && res.needs_ok && errMsg.indexOf("確認なし") === -1) {
-            errMsg += "\n（「確認なし」にチェックを入れて再実行してください）";
+            errMsg += "\n（下の「確認して実行」ボタン、または設定の確認なしONで実行できます）";
           }
-          recordExecution(false, opts.label, errMsg, wallMs, res && res.gasMs, opts.onError ? switchChat : true);
+          var errEntry = recordExecution(false, opts.label, errMsg, wallMs, res && res.gasMs, opts.onError ? switchChat : true);
+          if (res && res.needs_ok && errEntry) {
+            var okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "confirm-ok-btn";
+            okBtn.textContent = "⚠ 確認して実行";
+            okBtn.addEventListener("click", function() {
+              okBtn.disabled = true;
+              runServerAction(Object.assign({}, opts, {
+                payload: Object.assign({}, opts.payload || {}, { ok: true })
+              }));
+            });
+            errEntry.appendChild(okBtn);
+          }
           if (opts.onError) opts.onError(errMsg);
           return;
         }
@@ -886,8 +899,17 @@
   els.settingsSheetSelect.addEventListener("change", function() {
     onLook(els.settingsSheetSelect.value);
   });
-  els.btnLook.addEventListener("click", function() { onLook(); });
-  els.btnRefresh.addEventListener("click", function() { onInit(true); });
+  if (els.btnLook) els.btnLook.addEventListener("click", function() { onLook(); });
+  if (els.btnRefresh) els.btnRefresh.addEventListener("click", function() { onInit(true); });
+
+  if (els.chatSubBar) {
+    var cSubBtns = els.chatSubBar.querySelectorAll(".chat-sub-btn");
+    for (var cs = 0; cs < cSubBtns.length; cs++) {
+      cSubBtns[cs].addEventListener("click", function() {
+        setChatSubTab(this.getAttribute("data-csub") || "log");
+      });
+    }
+  }
 
   var tabBtns = document.querySelectorAll(".tab-btn");
   for (var t = 0; t < tabBtns.length; t++) {
@@ -1020,11 +1042,12 @@
     els.askInput.value = "";
     updatePreview();
     clearLogBox(els.chatLog, "実行結果がここに表示されます。");
+    setChatSubTab("log");
     switchTab("auto");
     els.askInput.focus();
   });
   els.btnUndo.addEventListener("click", onUndo);
-  els.btnReload.addEventListener("click", function() { onInit(true); });
+  if (els.btnReload) els.btnReload.addEventListener("click", function() { onInit(true); });
 
   document.addEventListener("visibilitychange", function() {
     if (!document.hidden && Object.keys(state.pendingPostboxIds).length > 0) {

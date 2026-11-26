@@ -165,8 +165,9 @@
   .option-row {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     flex-wrap: nowrap;
-    gap: 3px 6px;
+    gap: 6px;
     flex-shrink: 0;
     font-size: 12px;
     color: #000000;
@@ -212,7 +213,7 @@
     padding: 3px 4px;
   }
   .target-name {
-    max-width: 76px;
+    max-width: 108px;
     font-size: 12.5px;
     font-weight: 700;
     color: #000000;
@@ -247,7 +248,7 @@
   }
   .tab-bar {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 2px;
     flex-shrink: 0;
     margin-bottom: -1px;
@@ -258,8 +259,8 @@
     border-bottom: 1px solid var(--border);
     background: #e4e7ec;
     border-radius: 3px 3px 0 0;
-    padding: 2px 2px; line-height: 1.2;
-    font-size: 11.2px;
+    padding: 4px 2px; line-height: 1.2;
+    font-size: 11.5px;
     font-weight: 600;
     color: #000000;
     cursor: pointer;
@@ -478,7 +479,7 @@
   /* ---- 下部固定バー ---- */
   .bottom-bar {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 2fr 1fr;
     gap: 4px;
     flex-shrink: 0;
   }
@@ -554,6 +555,15 @@
   .quick-tools-row .btn { flex: 1; padding: 2px 4px; font-size: 10px; }
   .quick-tpl-bar { display: flex; flex-wrap: wrap; gap: 3px; padding: 4px; margin-bottom: 4px; border: 1px solid #c7d2fe; border-radius: 3px; background: #eef2ff; flex-shrink: 0; }
   .quick-dryrun-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; border: 1px solid #86efac; border-radius: 4px; background: #ecfdf5; color: #14532d; font-size: 11px; flex-shrink: 0; }
+  .chat-sub-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-bottom: 5px; flex-shrink: 0; }
+  .chat-sub-btn { padding: 3px 4px; font-size: 11px; border: 1px solid var(--border); border-radius: 3px; background: #f4f5f7; color: #000000; cursor: pointer; text-align: center; white-space: nowrap; font-weight: 600; }
+  .chat-sub-btn:hover { background: #e8eef6; }
+  .chat-sub-btn.active { background: var(--accent); border-color: var(--accent-hover); color: #ffffff; font-weight: 700; }
+  .chat-sub-pane { display: none; flex: 1; min-height: 0; flex-direction: column; overflow: hidden; }
+  .chat-sub-pane.active { display: flex; }
+  .conf-chk-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 6px; font-size: 11.5px; background: #f8f9fb; border: 1px solid var(--border-soft); border-radius: 2px; padding: 5px 6px; }
+  .confirm-ok-btn { margin-top: 4px; margin-right: 4px; padding: 3px 9px; font-size: 11px; border: 1px solid #dc2626; background: #fef2f2; color: #991b1b; border-radius: 3px; cursor: pointer; font-weight: 700; }
+  .confirm-ok-btn:hover { background: #fee2e2; }
 </style>
 </head>
 <body>
@@ -572,10 +582,6 @@
 
   <!-- オプション行 -->
   <div class="option-row">
-    <label class="chk-label"><input type="checkbox" id="chkOk">確認なし</label>
-    <label class="chk-label"><input type="checkbox" id="chkBackup">控え</label>
-    <label class="chk-label"><input type="checkbox" id="chkAiAuto" checked>AI自動</label>
-    <label class="chk-label"><input type="checkbox" id="chkSync" checked>連動</label>
     <button id="healthBadge" class="health-badge is-gray" type="button" title="AI接続状態（クリックで再確認）">● 確認中</button>
     <span id="statusLabel" class="status-label">表示中: 自動</span>
   </div>
@@ -584,18 +590,15 @@
   <div class="target-bar">
     <span id="targetNameLabel" class="target-name" title="対象スプレッドシート">読込中…</span>
     <select id="sheetSelect" class="sheet-select" title="シート切替"></select>
-    <button id="btnLook" class="btn" type="button">読込</button>
-    <button id="btnRefresh" class="btn" type="button">更新</button>
+    <button id="btnRefresh" class="btn" type="button" title="シート・表情報を再読込">↻</button>
   </div>
 
-  <!-- 6タブ -->
+  <!-- 4タブ -->
   <div class="tabs-wrap">
     <div class="tab-bar" role="tablist">
       <button class="tab-btn active" type="button" data-tab="auto">自動</button>
       <button class="tab-btn" type="button" data-tab="list">一覧</button>
       <button class="tab-btn" type="button" data-tab="chat">会話</button>
-      <button class="tab-btn" type="button" data-tab="hist">履歴</button>
-      <button class="tab-btn" type="button" data-tab="trace">経過</button>
       <button class="tab-btn" type="button" data-tab="conf">設定</button>
     </div>
 
@@ -667,43 +670,46 @@
         <div id="quickNote" class="quick-note"></div>
       </div>
 
-      <!-- 会話タブ -->
+      <!-- 会話タブ（結果 / 履歴 / 経過） -->
       <div id="pane-chat" class="tab-pane">
-        <div id="chatLog" class="log-box">
-          <div class="log-empty">実行結果がここに表示されます。</div>
+        <div id="chatSubBar" class="chat-sub-bar">
+          <button class="chat-sub-btn active" type="button" data-csub="log">結果</button>
+          <button class="chat-sub-btn" type="button" data-csub="hist">履歴</button>
+          <button class="chat-sub-btn" type="button" data-csub="trace">経過</button>
         </div>
-        <div class="pane-footer">
-          <button id="btnAgain" class="btn" type="button">もう一度</button>
-          <button id="btnGoChanged" class="btn" type="button">直した所</button>
-          <button id="btnCopyLog" class="btn" type="button">会話をコピー</button>
-          <button id="btnClearLog" class="btn" type="button">会話消去</button>
-        </div>
-      </div>
-
-      <!-- 履歴タブ -->
-      <div id="pane-hist" class="tab-pane">
-        <div id="histList" class="hist-list">
-          <div class="log-empty">実行した指示の履歴はまだありません。</div>
-        </div>
-        <div id="saveStepsBar" class="save-steps-bar" style="display:none;">
-          <div id="saveStepsInfo" class="save-steps-info"></div>
-          <div class="save-steps-row">
-            <input id="saveStepsName" class="save-steps-input" type="text" placeholder="手順マクロ名を入力">
-            <button id="btnSaveStepsOk" class="btn btn-primary" type="button">保存</button>
-            <button id="btnSaveStepsCancel" class="btn" type="button">やめる</button>
+        <div id="chatSub-log" class="chat-sub-pane active">
+          <div id="chatLog" class="log-box">
+            <div class="log-empty">実行結果がここに表示されます。</div>
+          </div>
+          <div class="pane-footer">
+            <button id="btnAgain" class="btn" type="button">もう一度</button>
+            <button id="btnGoChanged" class="btn" type="button">直した所</button>
+            <button id="btnCopyLog" class="btn" type="button">会話をコピー</button>
+            <button id="btnClearLog" class="btn" type="button">会話消去</button>
           </div>
         </div>
-        <div class="pane-footer">
-          <button id="btnUseHist" class="btn" type="button">入力欄へ</button>
-          <button id="btnSaveSteps" class="btn" type="button" title="チェックした履歴（または選択中の履歴）を⚡手順マクロとしてマイマクロへ保存">⚡手順化</button>
-          <button id="btnRerunHist" class="btn btn-primary" type="button">再実行</button>
+        <div id="chatSub-hist" class="chat-sub-pane">
+          <div id="histList" class="hist-list">
+            <div class="log-empty">実行した指示の履歴はまだありません。</div>
+          </div>
+          <div id="saveStepsBar" class="save-steps-bar" style="display:none;">
+            <div id="saveStepsInfo" class="save-steps-info"></div>
+            <div class="save-steps-row">
+              <input id="saveStepsName" class="save-steps-input" type="text" placeholder="手順マクロ名を入力">
+              <button id="btnSaveStepsOk" class="btn btn-primary" type="button">保存</button>
+              <button id="btnSaveStepsCancel" class="btn" type="button">やめる</button>
+            </div>
+          </div>
+          <div class="pane-footer">
+            <button id="btnUseHist" class="btn" type="button">入力欄へ</button>
+            <button id="btnSaveSteps" class="btn" type="button" title="チェックした履歴（または選択中の履歴）を⚡手順マクロとしてマイマクロへ保存">⚡手順化</button>
+            <button id="btnRerunHist" class="btn btn-primary" type="button">再実行</button>
+          </div>
         </div>
-      </div>
-
-      <!-- 経過タブ -->
-      <div id="pane-trace" class="tab-pane">
-        <div id="traceLog" class="log-box">
-          <div class="log-empty">実行時間の内訳がここに記録されます。</div>
+        <div id="chatSub-trace" class="chat-sub-pane">
+          <div id="traceLog" class="log-box">
+            <div class="log-empty">実行時間の内訳がここに記録されます。</div>
+          </div>
         </div>
       </div>
 
@@ -715,6 +721,15 @@
         </div>
         <div class="conf-group">
           <div id="settingsInfoLabel" class="conf-note">対象: 未読込</div>
+        </div>
+        <div class="conf-group">
+          <label class="conf-label">動作オプション</label>
+          <div class="conf-chk-grid">
+            <label class="chk-label"><input type="checkbox" id="chkOk">確認なしで実行</label>
+            <label class="chk-label"><input type="checkbox" id="chkBackup">実行前に控え</label>
+            <label class="chk-label"><input type="checkbox" id="chkAiAuto" checked>AIで自動解釈</label>
+            <label class="chk-label"><input type="checkbox" id="chkSync" checked>選択範囲と連動</label>
+          </div>
         </div>
         <div class="conf-group">
           <label class="conf-label">マイマクロ（全シート共通・GASクイック共通）</label>
@@ -769,9 +784,8 @@
 
   <!-- 下部固定バー -->
   <div class="bottom-bar">
+    <button id="btnUndo" class="btn" type="button">↶ 直前を取り消す</button>
     <button id="btnNewTalk" class="btn" type="button">新しい話</button>
-    <button id="btnUndo" class="btn" type="button">直前を取り消す</button>
-    <button id="btnReload" class="btn" type="button">再読込</button>
   </div>
 </div>
 
@@ -949,6 +963,7 @@
     previewLabel: document.getElementById("previewLabel"),
     infoLabel: document.getElementById("infoLabel"),
     chatLog: document.getElementById("chatLog"),
+    chatSubBar: document.getElementById("chatSubBar"),
     btnClearLog: document.getElementById("btnClearLog"),
     btnCopyLog: document.getElementById("btnCopyLog"),
     btnAgain: document.getElementById("btnAgain"),
@@ -1071,19 +1086,40 @@
     }
   }
 
+  function setChatSubTab(subKey) {
+    var k = (subKey === "hist" || subKey === "trace") ? subKey : "log";
+    state._chatSub = k;
+    var subBtns = document.querySelectorAll(".chat-sub-btn");
+    for (var i = 0; i < subBtns.length; i++) {
+      subBtns[i].classList.toggle("active", subBtns[i].getAttribute("data-csub") === k);
+    }
+    var subPanes = document.querySelectorAll(".chat-sub-pane");
+    for (var j = 0; j < subPanes.length; j++) {
+      subPanes[j].classList.toggle("active", subPanes[j].id === "chatSub-" + k);
+    }
+    if (!state.busy && state.activeTab === "chat") {
+      setStatus("表示中: " + (k === "hist" ? "履歴" : (k === "trace" ? "経過" : "会話")), false);
+    }
+  }
+
   function switchTab(tabKey) {
     if (!TAB_NAMES[tabKey]) tabKey = "auto";
-    state.activeTab = tabKey;
+    var domTab = (tabKey === "hist" || tabKey === "trace") ? "chat" : tabKey;
+    state.activeTab = domTab;
     var btns = document.querySelectorAll(".tab-btn");
     for (var i = 0; i < btns.length; i++) {
-      btns[i].classList.toggle("active", btns[i].getAttribute("data-tab") === tabKey);
+      btns[i].classList.toggle("active", btns[i].getAttribute("data-tab") === domTab);
     }
     var panes = document.querySelectorAll(".tab-pane");
     for (var j = 0; j < panes.length; j++) {
-      panes[j].classList.toggle("active", panes[j].id === "pane-" + tabKey);
+      panes[j].classList.toggle("active", panes[j].id === "pane-" + domTab);
     }
-    if (!state.busy) {
-      setStatus("表示中: " + TAB_NAMES[tabKey], false);
+    if (tabKey === "hist" || tabKey === "trace") {
+      setChatSubTab(tabKey);
+    } else if (domTab === "chat") {
+      setChatSubTab(state._chatSub || "log");
+    } else if (!state.busy) {
+      setStatus("表示中: " + TAB_NAMES[domTab], false);
     }
   }
 
@@ -1478,13 +1514,15 @@
     var prefix = ok ? "✓" : "✗";
     var cls = ok ? "is-ok" : "is-err";
     var body = (bodyText ? bodyText.replace(/\s+$/, "") + "\n" : "") + "(" + timing + ")";
-    appendLog(els.chatLog, cls, "[" + prefix + "] " + label, body);
+    var entry = appendLog(els.chatLog, cls, "[" + prefix + "] " + label, body);
     var mChg = ok && bodyText ? String(bodyText).match(/直した所:\s*(\S+)/) : null;
     if (mChg) state.lastChanged = mChg[1].replace(/[／,、]+$/, "");
     appendLog(els.traceLog, cls, "[" + prefix + " " + label + "] " + timing, "");
     if (!ok || switchToChat) {
+      setChatSubTab("log");
       switchTab("chat");
     }
+    return entry;
   }
 
   // ---- 直接 Sheets API 高速実行エンジン（GAS起動ゼロ・0.4秒級） ----
@@ -2916,9 +2954,22 @@
         if (!res || res.ok === false) {
           var errMsg = (res && (res.text || res.error)) || "実行に失敗しました";
           if (res && res.needs_ok && errMsg.indexOf("確認なし") === -1) {
-            errMsg += "\n（「確認なし」にチェックを入れて再実行してください）";
+            errMsg += "\n（下の「確認して実行」ボタン、または設定の確認なしONで実行できます）";
           }
-          recordExecution(false, opts.label, errMsg, wallMs, res && res.gasMs, opts.onError ? switchChat : true);
+          var errEntry = recordExecution(false, opts.label, errMsg, wallMs, res && res.gasMs, opts.onError ? switchChat : true);
+          if (res && res.needs_ok && errEntry) {
+            var okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "confirm-ok-btn";
+            okBtn.textContent = "⚠ 確認して実行";
+            okBtn.addEventListener("click", function() {
+              okBtn.disabled = true;
+              runServerAction(Object.assign({}, opts, {
+                payload: Object.assign({}, opts.payload || {}, { ok: true })
+              }));
+            });
+            errEntry.appendChild(okBtn);
+          }
           if (opts.onError) opts.onError(errMsg);
           return;
         }
@@ -3783,8 +3834,17 @@
   els.settingsSheetSelect.addEventListener("change", function() {
     onLook(els.settingsSheetSelect.value);
   });
-  els.btnLook.addEventListener("click", function() { onLook(); });
-  els.btnRefresh.addEventListener("click", function() { onInit(true); });
+  if (els.btnLook) els.btnLook.addEventListener("click", function() { onLook(); });
+  if (els.btnRefresh) els.btnRefresh.addEventListener("click", function() { onInit(true); });
+
+  if (els.chatSubBar) {
+    var cSubBtns = els.chatSubBar.querySelectorAll(".chat-sub-btn");
+    for (var cs = 0; cs < cSubBtns.length; cs++) {
+      cSubBtns[cs].addEventListener("click", function() {
+        setChatSubTab(this.getAttribute("data-csub") || "log");
+      });
+    }
+  }
 
   var tabBtns = document.querySelectorAll(".tab-btn");
   for (var t = 0; t < tabBtns.length; t++) {
@@ -3917,11 +3977,12 @@
     els.askInput.value = "";
     updatePreview();
     clearLogBox(els.chatLog, "実行結果がここに表示されます。");
+    setChatSubTab("log");
     switchTab("auto");
     els.askInput.focus();
   });
   els.btnUndo.addEventListener("click", onUndo);
-  els.btnReload.addEventListener("click", function() { onInit(true); });
+  if (els.btnReload) els.btnReload.addEventListener("click", function() { onInit(true); });
 
   document.addEventListener("visibilitychange", function() {
     if (!document.hidden && Object.keys(state.pendingPostboxIds).length > 0) {

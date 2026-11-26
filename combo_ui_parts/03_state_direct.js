@@ -125,6 +125,7 @@
     previewLabel: document.getElementById("previewLabel"),
     infoLabel: document.getElementById("infoLabel"),
     chatLog: document.getElementById("chatLog"),
+    chatSubBar: document.getElementById("chatSubBar"),
     btnClearLog: document.getElementById("btnClearLog"),
     btnCopyLog: document.getElementById("btnCopyLog"),
     btnAgain: document.getElementById("btnAgain"),
@@ -247,19 +248,40 @@
     }
   }
 
+  function setChatSubTab(subKey) {
+    var k = (subKey === "hist" || subKey === "trace") ? subKey : "log";
+    state._chatSub = k;
+    var subBtns = document.querySelectorAll(".chat-sub-btn");
+    for (var i = 0; i < subBtns.length; i++) {
+      subBtns[i].classList.toggle("active", subBtns[i].getAttribute("data-csub") === k);
+    }
+    var subPanes = document.querySelectorAll(".chat-sub-pane");
+    for (var j = 0; j < subPanes.length; j++) {
+      subPanes[j].classList.toggle("active", subPanes[j].id === "chatSub-" + k);
+    }
+    if (!state.busy && state.activeTab === "chat") {
+      setStatus("表示中: " + (k === "hist" ? "履歴" : (k === "trace" ? "経過" : "会話")), false);
+    }
+  }
+
   function switchTab(tabKey) {
     if (!TAB_NAMES[tabKey]) tabKey = "auto";
-    state.activeTab = tabKey;
+    var domTab = (tabKey === "hist" || tabKey === "trace") ? "chat" : tabKey;
+    state.activeTab = domTab;
     var btns = document.querySelectorAll(".tab-btn");
     for (var i = 0; i < btns.length; i++) {
-      btns[i].classList.toggle("active", btns[i].getAttribute("data-tab") === tabKey);
+      btns[i].classList.toggle("active", btns[i].getAttribute("data-tab") === domTab);
     }
     var panes = document.querySelectorAll(".tab-pane");
     for (var j = 0; j < panes.length; j++) {
-      panes[j].classList.toggle("active", panes[j].id === "pane-" + tabKey);
+      panes[j].classList.toggle("active", panes[j].id === "pane-" + domTab);
     }
-    if (!state.busy) {
-      setStatus("表示中: " + TAB_NAMES[tabKey], false);
+    if (tabKey === "hist" || tabKey === "trace") {
+      setChatSubTab(tabKey);
+    } else if (domTab === "chat") {
+      setChatSubTab(state._chatSub || "log");
+    } else if (!state.busy) {
+      setStatus("表示中: " + TAB_NAMES[domTab], false);
     }
   }
 
@@ -654,13 +676,15 @@
     var prefix = ok ? "✓" : "✗";
     var cls = ok ? "is-ok" : "is-err";
     var body = (bodyText ? bodyText.replace(/\s+$/, "") + "\n" : "") + "(" + timing + ")";
-    appendLog(els.chatLog, cls, "[" + prefix + "] " + label, body);
+    var entry = appendLog(els.chatLog, cls, "[" + prefix + "] " + label, body);
     var mChg = ok && bodyText ? String(bodyText).match(/直した所:\s*(\S+)/) : null;
     if (mChg) state.lastChanged = mChg[1].replace(/[／,、]+$/, "");
     appendLog(els.traceLog, cls, "[" + prefix + " " + label + "] " + timing, "");
     if (!ok || switchToChat) {
+      setChatSubTab("log");
       switchTab("chat");
     }
+    return entry;
   }
 
   // ---- 直接 Sheets API 高速実行エンジン（GAS起動ゼロ・0.4秒級） ----

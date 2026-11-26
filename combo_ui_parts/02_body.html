@@ -14,10 +14,6 @@
 
   <!-- オプション行 -->
   <div class="option-row">
-    <label class="chk-label"><input type="checkbox" id="chkOk">確認なし</label>
-    <label class="chk-label"><input type="checkbox" id="chkBackup">控え</label>
-    <label class="chk-label"><input type="checkbox" id="chkAiAuto" checked>AI自動</label>
-    <label class="chk-label"><input type="checkbox" id="chkSync" checked>連動</label>
     <button id="healthBadge" class="health-badge is-gray" type="button" title="AI接続状態（クリックで再確認）">● 確認中</button>
     <span id="statusLabel" class="status-label">表示中: 自動</span>
   </div>
@@ -26,18 +22,15 @@
   <div class="target-bar">
     <span id="targetNameLabel" class="target-name" title="対象スプレッドシート">読込中…</span>
     <select id="sheetSelect" class="sheet-select" title="シート切替"></select>
-    <button id="btnLook" class="btn" type="button">読込</button>
-    <button id="btnRefresh" class="btn" type="button">更新</button>
+    <button id="btnRefresh" class="btn" type="button" title="シート・表情報を再読込">↻</button>
   </div>
 
-  <!-- 6タブ -->
+  <!-- 4タブ -->
   <div class="tabs-wrap">
     <div class="tab-bar" role="tablist">
       <button class="tab-btn active" type="button" data-tab="auto">自動</button>
       <button class="tab-btn" type="button" data-tab="list">一覧</button>
       <button class="tab-btn" type="button" data-tab="chat">会話</button>
-      <button class="tab-btn" type="button" data-tab="hist">履歴</button>
-      <button class="tab-btn" type="button" data-tab="trace">経過</button>
       <button class="tab-btn" type="button" data-tab="conf">設定</button>
     </div>
 
@@ -109,43 +102,46 @@
         <div id="quickNote" class="quick-note"></div>
       </div>
 
-      <!-- 会話タブ -->
+      <!-- 会話タブ（結果 / 履歴 / 経過） -->
       <div id="pane-chat" class="tab-pane">
-        <div id="chatLog" class="log-box">
-          <div class="log-empty">実行結果がここに表示されます。</div>
+        <div id="chatSubBar" class="chat-sub-bar">
+          <button class="chat-sub-btn active" type="button" data-csub="log">結果</button>
+          <button class="chat-sub-btn" type="button" data-csub="hist">履歴</button>
+          <button class="chat-sub-btn" type="button" data-csub="trace">経過</button>
         </div>
-        <div class="pane-footer">
-          <button id="btnAgain" class="btn" type="button">もう一度</button>
-          <button id="btnGoChanged" class="btn" type="button">直した所</button>
-          <button id="btnCopyLog" class="btn" type="button">会話をコピー</button>
-          <button id="btnClearLog" class="btn" type="button">会話消去</button>
-        </div>
-      </div>
-
-      <!-- 履歴タブ -->
-      <div id="pane-hist" class="tab-pane">
-        <div id="histList" class="hist-list">
-          <div class="log-empty">実行した指示の履歴はまだありません。</div>
-        </div>
-        <div id="saveStepsBar" class="save-steps-bar" style="display:none;">
-          <div id="saveStepsInfo" class="save-steps-info"></div>
-          <div class="save-steps-row">
-            <input id="saveStepsName" class="save-steps-input" type="text" placeholder="手順マクロ名を入力">
-            <button id="btnSaveStepsOk" class="btn btn-primary" type="button">保存</button>
-            <button id="btnSaveStepsCancel" class="btn" type="button">やめる</button>
+        <div id="chatSub-log" class="chat-sub-pane active">
+          <div id="chatLog" class="log-box">
+            <div class="log-empty">実行結果がここに表示されます。</div>
+          </div>
+          <div class="pane-footer">
+            <button id="btnAgain" class="btn" type="button">もう一度</button>
+            <button id="btnGoChanged" class="btn" type="button">直した所</button>
+            <button id="btnCopyLog" class="btn" type="button">会話をコピー</button>
+            <button id="btnClearLog" class="btn" type="button">会話消去</button>
           </div>
         </div>
-        <div class="pane-footer">
-          <button id="btnUseHist" class="btn" type="button">入力欄へ</button>
-          <button id="btnSaveSteps" class="btn" type="button" title="チェックした履歴（または選択中の履歴）を⚡手順マクロとしてマイマクロへ保存">⚡手順化</button>
-          <button id="btnRerunHist" class="btn btn-primary" type="button">再実行</button>
+        <div id="chatSub-hist" class="chat-sub-pane">
+          <div id="histList" class="hist-list">
+            <div class="log-empty">実行した指示の履歴はまだありません。</div>
+          </div>
+          <div id="saveStepsBar" class="save-steps-bar" style="display:none;">
+            <div id="saveStepsInfo" class="save-steps-info"></div>
+            <div class="save-steps-row">
+              <input id="saveStepsName" class="save-steps-input" type="text" placeholder="手順マクロ名を入力">
+              <button id="btnSaveStepsOk" class="btn btn-primary" type="button">保存</button>
+              <button id="btnSaveStepsCancel" class="btn" type="button">やめる</button>
+            </div>
+          </div>
+          <div class="pane-footer">
+            <button id="btnUseHist" class="btn" type="button">入力欄へ</button>
+            <button id="btnSaveSteps" class="btn" type="button" title="チェックした履歴（または選択中の履歴）を⚡手順マクロとしてマイマクロへ保存">⚡手順化</button>
+            <button id="btnRerunHist" class="btn btn-primary" type="button">再実行</button>
+          </div>
         </div>
-      </div>
-
-      <!-- 経過タブ -->
-      <div id="pane-trace" class="tab-pane">
-        <div id="traceLog" class="log-box">
-          <div class="log-empty">実行時間の内訳がここに記録されます。</div>
+        <div id="chatSub-trace" class="chat-sub-pane">
+          <div id="traceLog" class="log-box">
+            <div class="log-empty">実行時間の内訳がここに記録されます。</div>
+          </div>
         </div>
       </div>
 
@@ -157,6 +153,15 @@
         </div>
         <div class="conf-group">
           <div id="settingsInfoLabel" class="conf-note">対象: 未読込</div>
+        </div>
+        <div class="conf-group">
+          <label class="conf-label">動作オプション</label>
+          <div class="conf-chk-grid">
+            <label class="chk-label"><input type="checkbox" id="chkOk">確認なしで実行</label>
+            <label class="chk-label"><input type="checkbox" id="chkBackup">実行前に控え</label>
+            <label class="chk-label"><input type="checkbox" id="chkAiAuto" checked>AIで自動解釈</label>
+            <label class="chk-label"><input type="checkbox" id="chkSync" checked>選択範囲と連動</label>
+          </div>
         </div>
         <div class="conf-group">
           <label class="conf-label">マイマクロ（全シート共通・GASクイック共通）</label>
@@ -211,9 +216,8 @@
 
   <!-- 下部固定バー -->
   <div class="bottom-bar">
+    <button id="btnUndo" class="btn" type="button">↶ 直前を取り消す</button>
     <button id="btnNewTalk" class="btn" type="button">新しい話</button>
-    <button id="btnUndo" class="btn" type="button">直前を取り消す</button>
-    <button id="btnReload" class="btn" type="button">再読込</button>
   </div>
 </div>
 
