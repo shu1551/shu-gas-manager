@@ -70,3 +70,11 @@
 1	全シートのフォントをメイリオに統一して	[{"shelf":"font.unify","font":"メイリオ","all_sheets":true}]
 1	売上の合計と平均を一番下に足して	[{"shelf":"total","cols":["売上金額"]},{"shelf":"stat.row","stat":"average","cols":["売上金額"]}]
 1	単価の列に円マークを付けて	[{"shelf":"format","range":"F4:F9","number_format":"¥#,##0"}]
+# 第4ラウンド外れ＋番頭検算の外れケース
+1	進捗率が50%未満の行を削除して	[{"shelf":"filter.delete","col":"進捗率","when":"lt","value":"0.5","ok":true}]
+0	進捗率が50未満の行を削除して	%列
+1	売上から単価を引いた差額の列を作って	[{"shelf":"calc.col","name":"差額","expr":"売上金額-単価"}]
+1	担当ごとの売上をグラフにして	[{"shelf":"chart.new","type":"column","range":"C3:C9,G3:G9"}]
+1	部門ごとに売上金額を合計して	[{"shelf":"summary","by":"部門","values":["売上金額"]}]
+1	金額の合計を一番下に出して	[{"shelf":"total","cols":["売上金額"]}]
+1	単価の列を薄い青で塗って	[{"shelf":"format","range":"F4:F9","bg":"薄青"}]
