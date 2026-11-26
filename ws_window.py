@@ -83,6 +83,11 @@ def _start_browser_sync_server(ui_queue):
                 data = json.loads(raw)
                 if isinstance(data, dict) and data.get("id"):
                     ui_queue.put(("browser_sync", data, "", 0.0))
+                    try:
+                        import gas_ws_browser
+                        gas_ws_browser.save_browser_active(data, source="ws-window")
+                    except Exception:
+                        pass
                 self._send_json(200, {"ok": True})
             except Exception as e:
                 self._send_json(400, {"ok": False, "error": str(e)})

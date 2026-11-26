@@ -84,6 +84,10 @@ PUBLIC_FILES = [
     # GASコンボ（シートのサイドバー・つなぎコード・ライブラリの元）と Python の操作窓・ブラウザ連動の拡張
     "gas_ws_combo.py",
     "gas_ws_direct.py",
+    "gas_ws_browser.py",
+    "test_gas_ws_browser.py",
+    "test_gas_ws_realworld.py",
+    "ws_exam/ask_realworld.tsv",
     "build_combo_templates.py",
     "ws_shared_defs.json",
     "combo_server_template.gs",
@@ -184,7 +188,7 @@ def main():
                                                   "ws_exam", "ws_shelves", "ws_trial", "gas_ws_ai.py", "gas_ws_coverage.py", "gas_ws_exam.py", "gas_ws_judge.py", "gas_ws_props.py", "gas_ws_sealreport.py", "gas_ws_shot.py", "gas_ws_tables.py", "gas_ws_trial.py",
                                                   "test_gas_ws_167.py", "test_gas_ws_ai.py", "test_gas_ws_coverage.py", "test_gas_ws_exam.py", "test_gas_ws_judge_extra.py", "test_gas_ws_lane.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_shot_sealed.py", "test_gas_ws_speed.py", "test_gas_ws_trial.py", "test_gas_ws_undo_side.py",
                                                   ".ws_engine_all.gs", ".ws_trial.json", ".ws_api_uses.tsv", ".ws_misses.tsv", ".ws_ledger.json",
-                                                  ".combo_engine_state.json", ".combo_watch.log", ".combo_watch.pid", ".ws_recent_targets.json", ".ws_window_ver.txt", ".ws_direct_fp.json", ".native_host.bat", ".native_host_manifest.json", ".combo_bridge_token", "ws_browser_ext"}
+                                                  ".combo_engine_state.json", ".combo_watch.log", ".combo_watch.pid", ".ws_recent_targets.json", ".ws_window_ver.txt", ".ws_direct_fp.json", ".native_host.bat", ".native_host_manifest.json", ".combo_bridge_token", "ws_browser_ext", "gas_combo_ext", ".ws_browser_active.json", ".ws_ask_misses.tsv"}
     for item in HERE.iterdir():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")

@@ -2,6 +2,8 @@
 // Content Script から受け取った選択セル・シート・ファイル情報をローカルの GASコンボ (127.0.0.1:18765) へ送信する
 
 const SYNC_URL = "http://127.0.0.1:18765/sync";
+const DIRECT_SYNC_URL = "http://127.0.0.1:18766/sync";
+const MCP_SYNC_URL = "http://127.0.0.1:18767/sync";
 const DIRECT_PING_URL = "http://127.0.0.1:18766/ping";
 const DIRECT_HEALTH_URL = "http://127.0.0.1:18766/health";
 const DIRECT_RESOLVE_URL = "http://127.0.0.1:18766/resolve";
@@ -37,9 +39,16 @@ function ensureLocalWatcherRunning() {
 
 // スプレッドシートID と Apps Script エディタの scriptId の自動紐付け
 const SHEET_URL_RE = /docs\.google\.com\/spreadsheets\/d\/([\w-]{20,})/;
+const DOC_URL_RE = /docs\.google\.com\/document\/d\/([\w-]{20,})/;
 const SCRIPT_URL_RE = /script\.google\.com\/(?:u\/\d+\/)?(?:home\/projects|d)\/([A-Za-z0-9_-]{20,})/;
 
-async function recordTabContextUrl(url) {
+function _stripDocsTitleSuffix(title) {
+  return String(title || "")
+    .replace(/\s*-\s*Google\s*(スプレッドシート|ドキュメント|Sheets|Docs)\s*$/i, "")
+    .trim();
+}
+
+async function recordTabContextUrl(url, title) {
   const u = String(url || "");
   if (!u) return;
   const sm = u.match(SHEET_URL_RE);
@@ -47,6 +56,31 @@ async function recordTabContextUrl(url) {
     try {
       await chrome.storage.local.set({ lastSheetId: sm[1] });
     } catch (_e) {}
+    const mg = u.match(/[#?&]gid=([0-9]+)/);
+    postToGasCombo({
+      id: sm[1],
+      kind: "sheet",
+      url: u,
+      gid: mg ? mg[1] : "",
+      name: _stripDocsTitleSuffix(title),
+      partial: true,
+      force: true,
+      ts: Date.now() / 1000,
+    });
+    return;
+  }
+  const dm = u.match(DOC_URL_RE);
+  if (dm) {
+    postToGasCombo({
+      id: dm[1],
+      kind: "doc",
+      url: u,
+      gid: "",
+      name: _stripDocsTitleSuffix(title),
+      partial: true,
+      force: true,
+      ts: Date.now() / 1000,
+    });
     return;
   }
   const gm = u.match(SCRIPT_URL_RE);
@@ -149,17 +183,18 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 async function postToGasCombo(payload) {
-  try {
-    const res = await fetch(SYNC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    return res.ok;
-  } catch (_err) {
-    // GASコンボ窓が起動していない場合は静かに無視する
-    return false;
-  }
+  const body = JSON.stringify(payload);
+  const targets = [SYNC_URL, MCP_SYNC_URL, DIRECT_SYNC_URL];
+  const results = await Promise.allSettled(
+    targets.map((url) =>
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      })
+    )
+  );
+  return results.some((r) => r.status === "fulfilled" && r.value && r.value.ok);
 }
 
 async function resolveViaDirectLocal(payload, _retried) {
@@ -347,7 +382,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   try {
     chrome.tabs.get(activeInfo.tabId, (tab) => {
       void chrome.runtime.lastError;
-      if (tab && tab.url) recordTabContextUrl(tab.url);
+      if (tab && tab.url) recordTabContextUrl(tab.url, tab.title);
     });
     chrome.tabs.sendMessage(activeInfo.tabId, { type: "GAS_COMBO_PING" }, () => {
       // 対象外のタブ（Google以外のページ等）で発生する lastError を握りつぶす
@@ -360,7 +395,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   const url = (changeInfo && changeInfo.url) || (tab && tab.url);
-  if (url) recordTabContextUrl(url);
+  if (url && (!tab || tab.active)) recordTabContextUrl(url, (tab && tab.title) || "");
 });
 
 // ---------------------------------------------------------------- サイドパネルで GASコンボを開く

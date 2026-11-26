@@ -24,9 +24,12 @@ gas_local_extras.py
 # 開発指示書・作業レポート（内部専用・公開厳禁）
 queue/
 .ws_state.json
+.ws_browser_active.json
+.ws_browser_active.json.*.tmp
 .ws_ledger.json
 .ws_engine_all.gs
 .ws_misses.tsv
+.ws_ask_misses.tsv
 .ws_trial.json
 ws_trial/
 ws_trial/runs/
@@ -64,3 +67,4 @@ ws_browser_ext/combo_window.json
 .native_host_manifest.json
 .combo_bridge_token
 .combo_watch.pid
+gas_combo_ext/

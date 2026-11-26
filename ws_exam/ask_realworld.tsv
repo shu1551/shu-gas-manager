@@ -1,0 +1,32 @@
+# 実戦シナリオ回帰テスト（外れが見つかったら 1 行足す）
+# 形式: fire(1/0) <TAB> 頼み文 <TAB> 期待ops(JSON配列・部分一致。fire=0 のときは省略可)
+1	タイトルを太字で青い背景、白文字にして	[{"shelf":"format","title":true,"bold":true,"bg":"青"},{"shelf":"format","title":true,"color":"白"}]
+1	見出しを太字で紺色の背景、白文字、中央揃えにして	[{"shelf":"format","header":true,"bold":true,"bg":"紺"},{"shelf":"format","header":true,"color":"白"},{"shelf":"format","header":true,"align":"center"}]
+1	売上金額の列を円マーク付きの桁区切りにして	[{"shelf":"format","range":"G4:G9","number_format":"¥#,##0"}]
+1	進捗率の列をパーセント表示にして	[{"shelf":"format","range":"H4:H9","number_format":"0.0%"}]
+1	売上金額列をマイナス赤字の三角表記にして	[{"shelf":"format.negred","col":"売上金額","triangle":true}]
+1	表に罫線を引いて	[{"shelf":"format","borders":true,"range":"A3:I9"}]
+1	表を1行おきに薄い青にして	[{"shelf":"banding.add","theme":"blue"}]
+1	見出し行を固定して	[{"shelf":"freeze","rows":3}]
+1	グリッド線を非表示にして	[{"shelf":"sheet.gridlines","show":false}]
+1	全列の幅を中身に合わせて	[{"shelf":"width","auto":["A","B","C","D","E","F","G","H","I"]}]
+1	売上金額の列に数量と単価を掛けた数式を入れて	[{"shelf":"calc.col","at":"売上金額","name":"売上金額","expr":"数量*単価"}]
+1	一番下に数量と売上金額の合計行を入れて	[{"shelf":"total","cols":["数量","売上金額"]}]
+1	売上金額が500000以上のセルを薄い赤にして	[{"shelf":"cf.add","range":"G4:G9","when":"ge","value":"500000","bg":"薄赤"}]
+1	部門が変わる行の下に区切り線を引いて	[{"shelf":"borders.group","col":"部門"}]
+1	タイトルのフォントの色を黄色に変えて	[{"shelf":"format","title":true,"color":"黄"}]
+1	部門ごと、同じ部門の中は売上金額の高い順に並べ替えて	[{"shelf":"sort","cols":["部門","-売上金額"]}]
+1	進捗率が100%未満の行だけフィルタで表示して	[{"shelf":"filter.where","col":"進捗率","when":"lt","value":"1"}]
+1	部門ごとの売上金額の合計を別シートにまとめて	[{"shelf":"summary","by":"部門","values":["売上金額"]}]
+# 言い換え・一般化と意地悪（誤爆防止）ケース
+1	タイトルを赤文字にして	[{"shelf":"format","title":true,"color":"赤"}]
+1	見出しを薄い灰色の背景、黒文字にして	[{"shelf":"format","header":true,"bg":"薄灰"},{"shelf":"format","header":true,"color":"黒"}]
+1	数量と単価を掛けて売上金額の列に数式を入れて	[{"shelf":"calc.col","at":"売上金額","name":"売上金額","expr":"数量*単価"}]
+1	売上金額から単価を引いた差額の列を足して	[{"shelf":"calc.col","expr":"売上金額-単価"}]
+1	売上金額を数量で割った平均単価の列を足して	[{"shelf":"calc.col","expr":"売上金額/数量"}]
+1	進捗率が50%以上の行だけ絞り込んで	[{"shelf":"filter.where","col":"進捗率","when":"ge","value":"0.5"}]
+1	売上金額が10万を超える行だけ表示して	[{"shelf":"filter.where","col":"売上金額","when":"gt","value":"100000"}]
+1	部門ごとの件数を集計して	[{"shelf":"summary","by":"部門","func":"count"}]
+0	進捗率が未定未満の行だけフィルタで表示して	value
+0	いらない列を消して	
+0	適当に整えて	

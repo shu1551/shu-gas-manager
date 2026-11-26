@@ -2159,7 +2159,7 @@ class ComboPostboxWatcher:
                 if not self._origin_ok():
                     self._reply({"ok": False, "error": "origin not allowed"}, code=403)
                     return
-                if self.path.startswith("/resolve-stream") or self.path.startswith("/resolve") or self.path.startswith("/recorded-macros"):
+                if self.path.startswith("/sync") or self.path.startswith("/resolve-stream") or self.path.startswith("/resolve") or self.path.startswith("/recorded-macros"):
                     try:
                         raw_len = self.headers.get("Content-Length") or "0"
                         length = int(raw_len)
@@ -2176,6 +2176,14 @@ class ComboPostboxWatcher:
                         return
                     if not isinstance(item, dict):
                         self._reply({"ok": False, "direct": True, "error": "リクエストは JSON オブジェクトである必要があります"}, code=400)
+                        return
+                    if self.path.startswith("/sync"):
+                        try:
+                            import gas_ws_browser
+                            gas_ws_browser.save_browser_active(item, source="combo-watch")
+                        except Exception:
+                            pass
+                        self._reply({"ok": True}, code=200)
                         return
                     if self.path.startswith("/resolve-stream"):
                         self.send_response(200)

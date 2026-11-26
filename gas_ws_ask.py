@@ -11,12 +11,16 @@ ws_find の当て（gas_ws_find.Finder）で節ごとに棚を 1 本に決め、
 """
 
 import json
+import os
 import re
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 
 import gas_ws_catalog
 import gas_ws_find
+
+ASK_MISSES_FILE = Path(__file__).resolve().parent / ".ws_ask_misses.tsv"
 
 _RULES_PATH = Path(__file__).resolve().parent / "ws_ask_rules.json"
 
@@ -326,6 +330,72 @@ def _cast(a, v):
     return v
 
 
+def _extract_calc_expr(text, table):
+    """日本語の四則演算表現（「AとBを掛けた」等）から計算式（A*B 等）を抽出する。"""
+    src = nfkc(text)
+    m_pref = re.search(r"^.*?(?:列|欄)[にへ]\s*", src)
+    expr_src = src[m_pref.end():] if m_pref else src
+    col_names = sorted(
+        {str(c.get("name") or "").strip() for c in (table or {}).get("columns") or [] if str(c.get("name") or "").strip()},
+        key=len,
+        reverse=True,
+    )
+
+    def _clean_operand(raw):
+        s = re.sub(r"^[\s、,。をにで]+|[\s、,。をにで]+$", "", str(raw or "").strip())
+        for cn in col_names:
+            if s == cn or s.endswith(cn):
+                return cn
+        m_col_l = re.fullmatch(r"([A-Z]{1,3})列", s)
+        if m_col_l:
+            return m_col_l.group(1)
+        return s
+
+    patterns = [
+        (r"([^\s、,。をにと×*]{1,20})\s*(?:と|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を掛け|のかけ|を乗算|を掛け算)", "*"),
+        (r"([^\s、,。をにと＋+]{1,20})\s*(?:と|＋|\+)\s*([^\s、,。をにと＋+]{1,20})\s*(?:を足し|を加算)", "+"),
+        (r"([^\s、,。をにから−-]{1,20})\s*(?:から|−|-)\s*([^\s、,。をにから−-]{1,20})\s*(?:を引|を差し引|を減算)", "-"),
+        (r"([^\s、,。をに÷/]{1,20})\s*(?:を|÷|/)\s*([^\s、,。をに÷/]{1,20})\s*(?:で割|で除算)", "/"),
+    ]
+    for cand_src in ([expr_src, src] if expr_src != src else [src]):
+        for pat, sym in patterns:
+            m = re.search(pat, cand_src)
+            if m:
+                a = _clean_operand(m.group(1))
+                b = _clean_operand(m.group(2))
+                if a and b:
+                    return f"{a}{sym}{b}"
+    return None
+
+
+def _normalize_filter_number(val):
+    """比較フィルタの数値を正規化する（%→小数、万/億→乗算、カンマ除去）。数値化できなければ None。"""
+    if val is None:
+        return None
+    s = nfkc(str(val)).replace(",", "").strip()
+    if not s:
+        return None
+    is_pct = s.endswith("%")
+    if is_pct:
+        s = s[:-1].strip()
+    mul = 1
+    if s.endswith("万"):
+        mul = 10000
+        s = s[:-1].strip()
+    elif s.endswith("億"):
+        mul = 100000000
+        s = s[:-1].strip()
+    try:
+        num = float(s) * mul
+    except Exception:
+        return None
+    if is_pct:
+        num = num / 100.0
+    if num.is_integer():
+        return str(int(num))
+    return f"{num:.10g}"
+
+
 # ------------------------------------------------------------------ 1 節 → 1 op
 def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     """棚 1 本と節 1 つから op を組む。返り値 (op, 足りない引数の名前のリスト, 頼みに名指しの場所があったか)"""
@@ -617,6 +687,33 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             if num_cols:
                 op["col"] = num_cols[0]
                 named = True
+    if shelf["name"] == "freeze" and "rows" not in op and table and table.get("header_row") and re.search(r"見出し|ヘッダ", text):
+        op["rows"] = int(table["header_row"])
+    if shelf["name"] == "calc.col":
+        has_at_cue = bool(re.search(r"(?:列|欄)[にへ]", text))
+        if not has_at_cue:
+            op.pop("at", None)
+        elif table:
+            t_nfkc = nfkc(text)
+            for c_info in sorted((table.get("columns") or []), key=lambda x: len(str(x.get("name") or "")), reverse=True):
+                cn = str(c_info.get("name") or "").strip()
+                if cn and re.search(re.escape(nfkc(cn)) + r"の?(?:列|欄)[にへ]", t_nfkc):
+                    op["at"] = cn
+                    break
+        if "expr" not in op:
+            ext_expr = _extract_calc_expr(text, table)
+            if ext_expr:
+                op["expr"] = ext_expr
+        if "name" not in op and "at" in op:
+            op["name"] = op["at"]
+        if op.get("expr") and op.get("name"):
+            named = True
+    if shelf["name"] == "summary" and "by" in op and op.get("func") != "count" and isinstance(op.get("values"), list):
+        filtered_vals = [v for v in op["values"] if v != op["by"]]
+        if filtered_vals:
+            op["values"] = filtered_vals
+        else:
+            op.pop("values", None)
     if shelf["name"] in ("filter.where", "filter.delete", "filter.extract"):
         if shelf["name"] == "filter.extract" and op.get("into") == "別":
             op.pop("into", None)
@@ -624,11 +721,23 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             if re.search(r"以上|以下|未満|より|超|を含|含む|以外|ではな|でない|空白|空欄", op["equals"]):
                 op.pop("equals", None)
         if shelf["name"] == "filter.where":
-            m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip())
+            has_cmp_cue = ("when" in op) or bool(re.search(r"以上|以下|未満|より|を超?|を含|含む|以外|ではな|でない|空白|空欄", text))
+            m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip()) if not has_cmp_cue else None
             if m_name:
                 op["equals"] = m_name.group(1).strip()
             elif "equals" in op and isinstance(op["equals"], str):
                 op["equals"] = re.sub(r"(?:さん|様)$", "", op["equals"]).strip()
+        if op.get("when") in ("gt", "ge", "lt", "le"):
+            op.pop("equals", None)
+            if "value" not in op:
+                m_fv = re.search(r"(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超)", nfkc(text))
+                if m_fv:
+                    op["value"] = m_fv.group(1)
+            norm_v = _normalize_filter_number(op.get("value"))
+            if norm_v is not None:
+                op["value"] = norm_v
+            else:
+                op.pop("value", None)
         if "col" not in op and table:
             cols = [c["name"] for c in table.get("columns", [])]
             eq = op.get("equals", "")
@@ -642,9 +751,19 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     op["col"] = text_cols[0]
         if shelf["name"] == "filter.delete" and op.get("col") and (op.get("when") or op.get("equals") is not None or op.get("value") is not None):
             named = True
-    if shelf["name"] == "width" and "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
-        op["auto"] = [op.pop("col")]
+    if shelf["name"] == "width":
+        if "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
+            op["auto"] = [op.pop("col")]
+        elif not any(k in op for k in ("auto", "cols", "col", "rows")) and not op.get("all_sheets") and re.search(r"(?:自動|中身に合|オートフィット|ちょうどよく|見切れ)", text):
+            if table and table.get("columns"):
+                cols_auto = [c["col"] for c in table["columns"] if c.get("col")]
+                if cols_auto:
+                    op["auto"] = cols_auto
+                    named = True
     missing = [k for k in (a["name"] for a in shelf["args"] if a["req"]) if op.get(k) in (None, "", [])]
+    if shelf["name"] in ("filter.where", "filter.delete", "filter.extract") and op.get("when") in ("gt", "ge", "lt", "le") and op.get("value") in (None, ""):
+        if "value" not in missing:
+            missing.append("value")
     if shelf["any"] and not any(op.get(k) not in (None, "", []) for k in shelf["any"]):
         missing.append("・".join(shelf["any"]) + " のどれか")
     what = [a["name"] for a in shelf["args"] if not a["req"] and a["type"] not in _LOCATOR_TYPES and a["name"] not in shelf["any"]]
@@ -900,6 +1019,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             )
             if has_fmt_cue and "format" in cand_names and "date.fix" in cand_names and scored[0][2]["name"] in ("format", "date.fix"):
                 boost_name = "format"
+            elif _color_hits(c) and "文字" in c and not re.search(r"大文字|小文字|全角|半角|UPPER|LOWER|PROPER", c, re.IGNORECASE) and "format" in cand_names:
+                boost_name = "format"
             elif has_row_cf_cue and "cf.add" in cand_names:
                 boost_name = "cf.add"
             elif has_row_del_cond and "filter.delete" in cand_names:
@@ -1080,3 +1201,32 @@ def table_line(table):
     s = f"表: {table.get('first_col')}〜{table.get('last_col')} 列・見出し {table.get('header_row')} 行目・明細 {table.get('data')} 行目"
     s += f"・合計行 {table['total_row']} 行目" if table.get("total_row") else "・合計行なし"
     return s
+
+
+def log_ask_miss(ask, plan, source="mcp", path=None):
+    """ws_do(ask=...) が fire=False になった頼みを .ws_ask_misses.tsv へ自動記録する。"""
+    if os.environ.get("WS_NO_MISS_LOG") == "1":
+        return
+    clean_ask = " ".join(str(ask or "").split())
+    if len(clean_ask) < 2:
+        return
+    p = Path(path) if path else ASK_MISSES_FILE
+    reason = " / ".join(plan.reasons) if getattr(plan, "reasons", None) else ("不足: " + ", ".join(getattr(plan, "missing", []) or []))
+    reason = " ".join(reason.split()) or "不明"
+    missing_s = " ".join(", ".join(getattr(plan, "missing", []) or []).split())
+    ops_list = getattr(plan, "ops", None) or []
+    ops_s = json.dumps(ops_list, ensure_ascii=False, separators=(",", ":")) if ops_list else ""
+    try:
+        if p.exists():
+            lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if lines:
+                last_parts = lines[-1].split("\t")
+                if len(last_parts) >= 4 and last_parts[1] == source and last_parts[2] == clean_ask and last_parts[3] == reason:
+                    return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = f"{ts}\t{source}\t{clean_ask}\t{reason}\t{missing_s}\t{ops_s}\n"
+        with p.open("a", encoding="utf-8") as f:
+            f.write(row)
+    except OSError:
+        pass

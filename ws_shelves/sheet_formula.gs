@@ -27,9 +27,12 @@ SHELF['calc.col'] = function (ctx, op) {
   var sortedHdrs = hdrs.slice().sort(function (a, b) { return b.length - a.length; });
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
-    sh.insertColumnsBefore(atCol, 1);
-    if (_TBL_CACHE) _TBL_CACHE = null;
-    t = needTable_(sh); // テーブル再取得
+    var existingHdr = String(hdrs[atCol - t.firstCol] || '').trim();
+    if (existingHdr !== String(op.name || '').trim()) {
+      sh.insertColumnsBefore(atCol, 1);
+      if (_TBL_CACHE) _TBL_CACHE = null;
+      t = needTable_(sh); // テーブル再取得
+    }
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
 

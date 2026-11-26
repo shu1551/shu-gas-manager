@@ -64,7 +64,7 @@ Google Apps Script (GAS) および Google スプレッドシート／ドキュ�
 | **GAS 1号機** | `patch_function` | `(project, filename, func_name, target, replacement, deploy=False)` で構文検査付きピンポイント置換 |
 | **GAS 1号機** | `deploy` | `(project, description, deployment_id=...)` で本番 Web アプリを更新デプロイ |
 | **GAS 1号機** | `reload_tools` | 常駐 MCP サーバーのコードをメモリ上で再読込 |
-| **Workspace 2号機** | `ws_look` | **状態確認＋棚引き** (`target="", sheet="", range="", image=False, ask=""`) |
+| **Workspace 2号機** | `ws_look` | **状態確認＋棚引き** (`target="", sheet="", range="", image=False, ask=""`)。`target="browser"` でブラウザ強制取得、`"recent"` で最近開いた一覧 |
 | **Workspace 2号機** | `ws_find` | **棚札の検索 (通信なし)** (`ask="", kind="sheet"|"doc"`) |
 | **Workspace 2号機** | `ws_do` | **作成・修正の実行** (`ask="", ops="", target="", ok=False`)。まず `ask` に頼み文そのままを渡す |
 | **Workspace 2号機** | `ws_undo` | **直前・過去へ巻き戻し** (`to="", list=False, ok=False`) |
@@ -81,6 +81,7 @@ Google Apps Script (GAS) および Google スプレッドシート／ドキュ�
 | **別名・環境点検** | `gas('alias <名> <id>')` / `gas('aliases')` / `gas('setup --open')` | コンテナバインド紐付け・認証点検 |
 | **GASコンボ＆マイマクロ** | `gas('combo addon')` / `gas('combo template')` / `gas('combo quick <id> list|run <名>')` | 配備・マイマクロ一覧/実行・言い方登録 (`combo phrase`) |
 | **Workspace 棚育成・検査** | `gas('ws-check')` / `gas('ws-misses [limit]')` | 全 177 棚の札/ガード検査・外れ/api逃げ集計 |
+| **ブラウザ連動・最近一覧** | `gas('ws-active [--recent]')` / `gas('ws-recent [limit]')` | 拡張・ウィンドウ検知の診断、Drive の最近開いたファイル一覧 |
 
 #### Workspace 最速 1 発直撃ルール（長考・無駄な往復の禁止）
 1. **スキーマ `.json` の読み込み省略**: 上表の通り引数は確定しているため、`ws_look.json` や `ws_do.json` を `read_file` せず初手から直接 `call_mcp_tool` を呼び出します。
@@ -88,6 +89,7 @@ Google Apps Script (GAS) および Google スプレッドシート／ドキュ�
 3. **`ws_do` は考え込まず 1 発で棚にかける**:
    - `ws_do(ask="ユーザーの頼みの文そのまま")` で撃つ際、AI が勝手に括弧 `（A1）` 等の余計な語を足して文を改変しないでください。
    - 書式変更（`format` 棚）など型が自明な操作は、`ops='[{"shelf":"format","title":true,"color":"青"}]'` または `ask` で即座に 1 発実行し、成功後に確認の `ws_look` は撃たずに即答してください。
+4. **シート名の確認だけは ws-active を使う**: 開いているシート名・URL・選択セルの確認だけなら通信不要の `gas('ws-active')` を優先し、表構造や中身確認が必要なときだけ `ws_look` を呼び出します。
 
 ## 5. 道具の使い分け指針
 

@@ -94,7 +94,7 @@ def reload_tools() -> str:
     if "gas_local_extras" in sys.modules:
         import gas_local_extras
         importlib.reload(gas_local_extras)
-    for _mod_name in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_ws_direct", "gas_workspace", "gas_ws_combo"):
+    for _mod_name in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_ws_direct", "gas_ws_browser", "gas_workspace", "gas_ws_combo"):
         if _mod_name in sys.modules:
             importlib.reload(sys.modules[_mod_name])
 
@@ -1945,6 +1945,10 @@ def _split_gas_command(command: str) -> list:
 @safe_tool
 def gas(command: str) -> str:
     """GAS 統合コマンド窓口（'files <p>', 'outline <p>', 'diagnose <p>', 'grep <p> <pat>', 'get <p> <f>', 'batch', 'push', 'pull', 'combo ...', 'help'）。"""
+    return _gas_dispatch(command)
+
+
+def _gas_dispatch(command: str) -> str:
     if not command or not command.strip():
         return "コマンドを指定してください。'help' で一覧を表示します。"
 
@@ -1986,6 +1990,8 @@ def gas(command: str) -> str:
             "  combo <template|addon|connect|install|quick|...> - GASコンボ配備・実行・マイマクロ\n"
             "  ws-check                          - Workspace棚（ws_shelves）の札・ガード整合性検査\n"
             "  ws-misses [limit]                 - Workspace棚の外れ(.ws_misses.tsv)とapi逃げ(.ws_api_uses.tsv)集計\n"
+            "  ws-active [--recent]              - ブラウザ連動・今開いているスプレッドシート/文書の検知状態確認\n"
+            "  ws-recent [limit]                 - Driveで最近開いたスプレッドシート・文書一覧\n"
             "  sync <project> [--force]          - デスクトップ常駐型ハイブリッド同期\n"
             "  reload                            - 常駐MCPサーバーのホットリロード\n"
             "  py-outline <file>                 - Pythonコード内関数一覧取得\n"
@@ -2836,13 +2842,52 @@ def gas(command: str) -> str:
                 lines.append(f"  - {k}: {cnt} 回{ex_s}")
         else:
             lines.append("\n[.ws_api_uses.tsv] 記録はまだありません。")
+        ask_misses_p = SCRIPT_DIR / ".ws_ask_misses.tsv"
+        if ask_misses_p.exists():
+            raw_am = [ln.split("\t") for ln in ask_misses_p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            r_counts = {}
+            for r in raw_am:
+                rs = r[3] if len(r) > 3 else ""
+                if rs:
+                    r_counts[rs] = r_counts.get(rs, 0) + 1
+            lines.append(f"\n[.ws_ask_misses.tsv] ws_do(ask) 外れ記録: {len(raw_am)} 件")
+            for r in raw_am[-limit:][::-1]:
+                dt = r[0] if len(r) > 0 else ""
+                src_s = r[1] if len(r) > 1 else ""
+                ask_s = r[2] if len(r) > 2 else ""
+                rs = r[3] if len(r) > 3 else ""
+                lines.append(f"  - [{dt}][{src_s}] {ask_s} -> {rs}")
+        else:
+            lines.append("\n[.ws_ask_misses.tsv] 記録はまだありません。")
         if suggest_mode:
             import gas_ws_check
             sugs = gas_ws_check.suggest_misses(limit=limit)
             lines.append(f"\n[TSV回帰テスト雛形提案] 未解決候補 {len(sugs)} 件:")
             for s in sugs:
                 lines.append(f"  {s['tsv']}  # 現1位: {s['top']} ({s['score']}点)")
+            if ask_misses_p.exists():
+                seen_am = set()
+                am_sugs = []
+                for r in reversed([ln.split("\t") for ln in ask_misses_p.read_text(encoding="utf-8").splitlines() if ln.strip()]):
+                    ask_s = r[2].strip() if len(r) > 2 else ""
+                    if ask_s and ask_s not in seen_am:
+                        seen_am.add(ask_s)
+                        am_sugs.append((ask_s, r[3] if len(r) > 3 else ""))
+                    if len(am_sugs) >= limit:
+                        break
+                if am_sugs:
+                    lines.append(f"\n[実戦テスト候補 (.ws_ask_misses.tsv)] {len(am_sugs)} 件:")
+                    for ask_s, rs in am_sugs:
+                        lines.append(f"  - {ask_s}  # {rs}")
         return "\n".join(lines)
+
+    if sub in ("ws-active", "ws_active", "ws-now", "ws_now"):
+        return get_ws().inspect_active_target(include_recent="--recent" in parts)
+
+    if sub in ("ws-recent", "ws_recent"):
+        num_parts = [p for p in parts[1:] if p.isdigit()]
+        limit = int(num_parts[0]) if num_parts else 10
+        return get_ws().format_recent_files(limit=limit)
 
     return f"不明なコマンドです: '{sub}'。'help' で使い方を確認してください。"
 
@@ -2910,12 +2955,21 @@ def py_patch_function(
 _ws = None
 
 def get_ws():
+    return _get_ws()
+
+
+def _get_ws():
     global _ws
     if _ws is None:
         if os.environ.get("WS_SANDBOX") == "1":
             import gas_ws_ai
             _ws = gas_ws_ai.make_sandbox_ws(client=get_client())
         else:
+            try:
+                import gas_ws_browser
+                gas_ws_browser.start_mcp_sync_server()
+            except Exception:
+                pass
             import gas_workspace
             _ws = gas_workspace.WorkspaceManager(client=get_client())
     return _ws
@@ -2931,8 +2985,8 @@ def _ws_run(fn, **kw):
 @mcp.tool()
 @safe_tool
 def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False, ask: str = "") -> str:
-    """スプレッドシート・文書を見て今の相手として覚える（表の形・見出し）。target=URL・ID・名前（空なら今の相手）。相手が決まっていれば ws_do(ask) は look なしで撃てる。
-    中身を読むときは range="A1:Z30" を最初から渡し 1 回で済む。image=True は見た目の確認を頼まれたときだけ（ws_do 成功後に確認の ws_look は撃たない）。"""
+    """スプレッドシート・文書を見て今の相手として覚える（表の形・見出し）。target=URL・ID・名前・"browser"（ブラウザ強制取得）・"recent"（最近開いた一覧）・空（ブラウザ自動連動または今の相手）。
+    相手が決まっていれば ws_do(ask) は look なしで撃てる。中身を読むときは range="A1:Z30" を最初から渡し 1 回で済む。image=True は見た目の確認を頼まれたときだけ（ws_do 成功後に確認の ws_look は撃たない）。"""
     return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image, ask=ask)
 
 @mcp.tool()
@@ -2982,6 +3036,11 @@ elif os.environ.get("GAS_MCP_ALL_TOOLS", "").strip().lower() not in ("1", "true"
 
 if __name__ == "__main__":
     if os.environ.get("WS_SANDBOX", "").strip() != "1":
+        try:
+            import gas_ws_browser as _gwb
+            _gwb.start_mcp_sync_server()
+        except Exception:
+            pass
         try:
             import gas_ws_combo as _gwc
             _gwc.repair_local_bindings_if_stale()

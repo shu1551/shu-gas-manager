@@ -1031,3 +1031,460 @@ class DirectRunner:
         if item.get("shape", True):      # 値やシート名を戻したときだけ、表の形を見直す（書式だけなら形は変わらない）
             st.pop("table_cache", None)
         return {"ok": True}
+
+    # ------------------------------------------------------------ ws_look 直接の道
+    def look(self, st, tgt, sheet="", range_str=""):
+        """Sheets API を直接叩いて actLook_ 互換の結果を返す。非対応時は None を返しエンジンへフォールバック。"""
+        if tgt.get("kind") != "sheet" or not tgt.get("id") or st.get("direct_off"):
+            return None
+        sid = tgt["id"]
+        range_str = str(range_str or "").strip()
+        try:
+            parsed_range = parse_a1(range_str) if range_str else None
+            # トークンを先に確定させて後続の並列呼び出しでの二重取得を防ぐ
+            self._token(st)
+            meta_fields = (
+                "spreadsheetId,properties(title),spreadsheetUrl,namedRanges,"
+                "sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),"
+                "basicFilter,bandedRanges(range),protectedRanges(range,warningOnly),"
+                "rowGroups,columnGroups,charts(spec(title,basicChart(chartType),pieChart(legendPosition))))"
+            )
+            meta_resp = self._call(st, "GET", SHEETS + sid, params={"fields": meta_fields})
+            sheets_meta = meta_resp.get("sheets") or []
+            if not sheets_meta or len(sheets_meta) >= 16:
+                raise Skip("シート数制限")
+
+            req_sheet = str(sheet or "").strip()
+            if req_sheet:
+                sh_meta = next((s for s in sheets_meta if (s.get("properties") or {}).get("title") == req_sheet), None)
+                if not sh_meta:
+                    raise Skip("シートが見つからない")
+            else:
+                sh_meta = sheets_meta[0]
+
+            sh_props = sh_meta.get("properties") or {}
+            sh_name = sh_props.get("title") or ""
+            gp = sh_props.get("gridProperties") or {}
+            grid_r = int(gp.get("rowCount") or 1000)
+            grid_c = int(gp.get("columnCount") or 26)
+            max_r = min(max(grid_r, 1), 2000)
+            max_c = min(max(grid_c, 1), 60)
+            if parsed_range and (parsed_range[2] > max_r or parsed_range[3] > max_c):
+                raise Skip("範囲が上限超え")
+
+            detail_fields = (
+                "sheets(properties(sheetId,title),"
+                "data(startRow,startColumn,rowMetadata(hiddenByUser),columnMetadata(hiddenByUser),"
+                "rowData(values(formattedValue,effectiveValue,userEnteredValue,"
+                "effectiveFormat(numberFormat(type)),dataValidation))))"
+            )
+            target_range = f"{q(sh_name)}!A1:{col_letter(max_c)}{max_r}"
+            other_names = [
+                (s.get("properties") or {}).get("title") or ""
+                for s in sheets_meta
+                if (s.get("properties") or {}).get("title") != sh_name
+            ]
+
+            def _fetch_detail():
+                return self._call(st, "GET", SHEETS + sid, params=[("ranges", target_range), ("fields", detail_fields)])
+
+            def _fetch_others():
+                return self._call(
+                    st,
+                    "GET",
+                    SHEETS + sid + "/values:batchGet",
+                    params=[("ranges", q(n)) for n in other_names] + [("valueRenderOption", "UNFORMATTED_VALUE")],
+                )
+
+            if other_names:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    f1 = ex.submit(_fetch_detail)
+                    f2 = ex.submit(_fetch_others)
+                    detail_resp = f1.result()
+                    others_resp = f2.result()
+            else:
+                detail_resp = _fetch_detail()
+                others_resp = None
+
+            d_sh = (detail_resp.get("sheets") or [{}])[0]
+            grid_data = (d_sh.get("data") or [{}])[0]
+            row_data = grid_data.get("rowData") or []
+            last_r, last_c = _measure_row_data(row_data)
+            if (last_r >= 2000 and grid_r > 2000) or (last_c >= 60 and grid_c > 60):
+                raise Skip("データが大きすぎる")
+
+            other_dims = {}
+            if others_resp:
+                vrs = others_resp.get("valueRanges") or []
+                for idx, o_name in enumerate(other_names):
+                    vals = vrs[idx].get("values") or [] if idx < len(vrs) else []
+                    o_r = len(vals)
+                    o_c = max((len(r) for r in vals), default=0)
+                    other_dims[o_name] = (o_r, o_c)
+
+            sheets_out = []
+            for s in sheets_meta:
+                nm = (s.get("properties") or {}).get("title") or ""
+                if nm == sh_name:
+                    sheets_out.append({"name": nm, "rows": last_r, "cols": last_c})
+                else:
+                    o_r, o_c = other_dims.get(nm, (0, 0))
+                    sheets_out.append({"name": nm, "rows": o_r, "cols": o_c})
+
+            title = (meta_resp.get("properties") or {}).get("title") or tgt.get("name") or ""
+            url = meta_resp.get("spreadsheetUrl") or f"https://docs.google.com/spreadsheets/d/{sid}/edit"
+            out = {
+                "ok": True,
+                "target": {"id": sid, "name": title, "kind": "sheet", "url": url, "sheet": sh_name},
+                "sheets": sheets_out,
+                "direct": True,
+            }
+            tb = _find_table_direct(row_data)
+            if tb:
+                out["table"] = tb
+            side = _build_side_direct(meta_resp, sh_meta, grid_data)
+            if side:
+                out["side"] = side
+            if parsed_range:
+                rr1, cc1, rr2, cc2 = parsed_range
+                out_vals, out_forms = _extract_range_direct(row_data, rr1, cc1, rr2, cc2)
+                out["range"] = range_str
+                out["values"] = out_vals
+                out["formulas"] = out_forms
+            return out
+        except (Skip, DirectError) as e:
+            st["direct_last_look_skip"] = str(e)[:200]
+            return None
+        except Exception as e:
+            st["direct_last_look_skip"] = f"{type(e).__name__}: {e}"[:200]
+            return None
+
+
+_CHART_NAMES = {
+    "COLUMN": "縦棒",
+    "BAR": "横棒",
+    "LINE": "折れ線",
+    "PIE": "円",
+    "AREA": "面",
+    "SCATTER": "散布図",
+    "COMBO": "複合",
+    "STEPPED_AREA": "階段面",
+}
+
+
+def _grid_a1(g):
+    if not g:
+        return ""
+    r0 = g.get("startRowIndex") or 0
+    c0 = g.get("startColumnIndex") or 0
+    if all(g.get(k) is None for k in ("startRowIndex", "endRowIndex", "startColumnIndex", "endColumnIndex")):
+        return "シート全体"
+    a = col_letter(c0 + 1) + str(r0 + 1)
+    r1 = g.get("endRowIndex")
+    c1 = g.get("endColumnIndex")
+    if r1 is None and c1 is None:
+        return a
+    if (r1 is None or r1 == r0 + 1) and (c1 is None or c1 == c0 + 1):
+        return a
+    return a + ":" + (col_letter(c1) if c1 is not None else "") + (str(r1) if r1 is not None else "")
+
+
+def _num_runs(idx0):
+    out, s, prev = [], -1, -2
+    for i in idx0:
+        if i == prev + 1:
+            prev = i
+            continue
+        if s >= 0:
+            out.append(str(s + 1) if s == prev else f"{s + 1}-{prev + 1}")
+        s = prev = i
+    if s >= 0:
+        out.append(str(s + 1) if s == prev else f"{s + 1}-{prev + 1}")
+    return out
+
+
+def _col_runs(idx0):
+    return [re.sub(r"\d+", lambda m: col_letter(int(m.group(0))), x) for x in _num_runs(idx0)]
+
+
+def _cap_list(arr, n):
+    return arr[:n] + [f"ほか {len(arr) - n}"] if len(arr) > n else list(arr)
+
+
+def _validation_label(v):
+    c = (v or {}).get("condition") or {}
+    vals = [x.get("userEnteredValue") or "" for x in (c.get("values") or [])]
+    ctype = str(c.get("type") or "")
+    if ctype == "ONE_OF_LIST":
+        return "プルダウン（" + "/".join(vals[:4]) + ("…" if len(vals) > 4 else "") + "）"
+    if ctype == "ONE_OF_RANGE":
+        return "プルダウン（範囲 " + re.sub(r"^=", "", str(vals[0] if vals else "")) + "）"
+    if ctype == "BOOLEAN":
+        return "チェックボックス"
+    if ctype.startswith("NUMBER_"):
+        return "数値の入力規則"
+    if ctype.startswith("DATE_"):
+        return "日付の入力規則"
+    return ctype or "入力規則"
+
+
+def _cell_is_blank(cell):
+    if not isinstance(cell, dict) or not cell:
+        return True
+    fv = cell.get("formattedValue")
+    if fv is not None and str(fv).strip() != "":
+        return False
+    ev = cell.get("effectiveValue") or {}
+    if not ev:
+        return True
+    for k in ("stringValue", "numberValue", "boolValue", "errorValue"):
+        if k in ev:
+            if k == "stringValue" and str(ev[k]).strip() == "":
+                return True
+            return False
+    return True
+
+
+def _cell_text(cell):
+    if not isinstance(cell, dict):
+        return ""
+    if cell.get("formattedValue") is not None:
+        return str(cell["formattedValue"])
+    ev = cell.get("effectiveValue") or {}
+    for k in ("stringValue", "numberValue", "boolValue"):
+        if k in ev:
+            x = ev[k]
+            if k == "numberValue" and isinstance(x, float) and x.is_integer():
+                x = int(x)
+            return str(x)
+    return ""
+
+
+def _cell_is_number(cell):
+    if not isinstance(cell, dict):
+        return False
+    ev = cell.get("effectiveValue") or {}
+    if ev.get("numberValue") is None:
+        return False
+    nf_type = (((cell.get("effectiveFormat") or {}).get("numberFormat") or {}).get("type") or "").upper()
+    return nf_type not in ("DATE", "DATE_TIME", "TIME")
+
+
+def _measure_row_data(row_data):
+    last_r, last_c = 0, 0
+    for r_idx, row in enumerate(row_data, 1):
+        vals = (row or {}).get("values") or []
+        row_last_c = 0
+        for c_idx, cell in enumerate(vals, 1):
+            if not _cell_is_blank(cell):
+                row_last_c = c_idx
+        if row_last_c > 0:
+            last_r = r_idx
+            if row_last_c > last_c:
+                last_c = row_last_c
+    return last_r, last_c
+
+
+def _find_table_direct(row_data):
+    if not row_data:
+        return None
+    grid_rows = [(r or {}).get("values") or [] for r in row_data]
+    lr, lc = _measure_row_data(row_data)
+    if lr < 1 or lc < 1:
+        return None
+
+    def _non_empty_count(row_cells):
+        return sum(1 for cell in row_cells if not _cell_is_blank(cell))
+
+    def _cell_at(r0, c0):
+        row = grid_rows[r0] if r0 < len(grid_rows) else []
+        return row[c0] if c0 < len(row) else {}
+
+    h = -1
+    for r in range(lr):
+        if _non_empty_count(grid_rows[r]) >= 2:
+            h = r
+            break
+    for _ in range(10):
+        if h < 0:
+            break
+        nx = h + 1
+        while nx < lr and _non_empty_count(grid_rows[nx]) == 0:
+            nx += 1
+        if nx < lr and _non_empty_count(grid_rows[nx]) >= 2 * _non_empty_count(grid_rows[h]):
+            h = nx
+        else:
+            break
+    if h < 0:
+        return None
+
+    hdr = grid_rows[h]
+    fc, lcol = -1, -1
+    for c in range(len(hdr)):
+        if not _cell_is_blank(hdr[c]):
+            if fc < 0:
+                fc = c
+            lcol = c
+    if fc < 0:
+        return None
+
+    last = h
+    for r2 in range(h + 1, lr):
+        row = grid_rows[r2]
+        if any(not _cell_is_blank(_cell_at(r2, cc)) for cc in range(fc, lcol + 1)):
+            last = r2
+
+    header_row = h + 1
+    first_col = fc + 1
+    last_col = lcol + 1
+    first_data = h + 2
+    last_data = last + 1
+    total_row = None
+
+    if last > h:
+        first_txt = ""
+        for fcx in range(fc, lcol + 1):
+            c_obj = _cell_at(last, fcx)
+            if not _cell_is_blank(c_obj):
+                first_txt = _cell_text(c_obj)
+                break
+        if re.match(r"^(合計|総計|小計|計|total|sum)", first_txt.strip(), re.I):
+            total_row = last + 1
+            last_data = last
+
+    columns = []
+    for ci in range(first_col, last_col + 1):
+        name = _cell_text(_cell_at(h, ci - 1))
+        n_num, tot = 0, 0
+        for rr in range(first_data, last_data + 1):
+            c_obj = _cell_at(rr - 1, ci - 1)
+            if _cell_is_blank(c_obj):
+                continue
+            tot += 1
+            if _cell_is_number(c_obj):
+                n_num += 1
+        columns.append({
+            "col": col_letter(ci),
+            "name": name,
+            "number": (tot > 0 and n_num / tot > 0.5),
+        })
+
+    return {
+        "header_row": header_row,
+        "first_col": col_letter(first_col),
+        "last_col": col_letter(last_col),
+        "data": f"{first_data}-{last_data}",
+        "total_row": total_row,
+        "columns": columns,
+    }
+
+
+def _build_side_direct(meta_resp, sh_meta, grid_data):
+    lines = []
+    row_data = (grid_data or {}).get("rowData") or []
+    if row_data:
+        by_sig = {}
+        for r_idx, row in enumerate(row_data):
+            for c_idx, cell in enumerate((row or {}).get("values") or []):
+                dv = (cell or {}).get("dataValidation")
+                if dv:
+                    k = _validation_label(dv)
+                    by_sig.setdefault(k, []).append((r_idx, c_idx))
+        vparts = []
+        for k, coords in by_sig.items():
+            cols = {}
+            for rc in coords:
+                cols.setdefault(rc[1], []).append(rc[0])
+            runs_by_key = {}
+            for c in sorted(cols.keys()):
+                for rr in _num_runs(cols[c]):
+                    m = rr.split("-")
+                    runs_by_key.setdefault(rr, {"r": m, "cols": []})["cols"].append(c)
+            for o in runs_by_key.values():
+                cs = o["cols"]
+                st_c = pv_c = cs[0]
+                for i in range(1, len(cs) + 1):
+                    if i < len(cs) and cs[i] == pv_c + 1:
+                        pv_c = cs[i]
+                        continue
+                    a_cell = col_letter(st_c + 1) + o["r"][0]
+                    b_cell = col_letter(pv_c + 1) + (o["r"][1] if len(o["r"]) > 1 else o["r"][0])
+                    vparts.append((a_cell if a_cell == b_cell else f"{a_cell}:{b_cell}") + f" {k}")
+                    if i < len(cs):
+                        st_c = pv_c = cs[i]
+        if vparts:
+            lines.append("入力規則: " + "、".join(_cap_list(vparts, 4)))
+
+    banded = (sh_meta or {}).get("bandedRanges") or []
+    if banded:
+        lines.append("交互の色: " + "、".join(_cap_list([_grid_a1(b.get("range")) for b in banded], 3)))
+
+    prot = [
+        _grid_a1(p.get("range")) + ("（警告のみ）" if p.get("warningOnly") else "")
+        for p in ((sh_meta or {}).get("protectedRanges") or [])
+    ]
+    if prot:
+        lines.append("保護: " + "、".join(_cap_list(prot, 3)))
+
+    bf = (sh_meta or {}).get("basicFilter")
+    if bf:
+        cr = [col_letter(int(k) + 1) for k in (bf.get("criteria") or {}).keys()]
+        lines.append("フィルタ: " + _grid_a1(bf.get("range")) + (f"（{'・'.join(cr)} 列で絞り込み中）" if cr else ""))
+
+    if grid_data:
+        hr = [i for i, m in enumerate(grid_data.get("rowMetadata") or []) if m and m.get("hiddenByUser")]
+        hc = [i for i, m in enumerate(grid_data.get("columnMetadata") or []) if m and m.get("hiddenByUser")]
+        hp = []
+        if hr:
+            hp.append("隠した行: " + "、".join(_cap_list(_num_runs(hr), 4)))
+        if hc:
+            hp.append("隠した列: " + "、".join(_cap_list(_col_runs(hc), 4)))
+        if hp:
+            lines.append(" ／ ".join(hp))
+
+    gp = []
+    for g in (sh_meta or {}).get("rowGroups") or []:
+        rng = g.get("range") or {}
+        gp.append(
+            f"行 {(rng.get('startIndex') or 0) + 1}-{rng.get('endIndex')}（深さ{g.get('depth')}"
+            + ("・畳んである" if g.get("collapsed") else "")
+            + "）"
+        )
+    for g in (sh_meta or {}).get("columnGroups") or []:
+        rng = g.get("range") or {}
+        gp.append(
+            f"列 {col_letter((rng.get('startIndex') or 0) + 1)}-{col_letter(rng.get('endIndex'))}（深さ{g.get('depth')}"
+            + ("・畳んである" if g.get("collapsed") else "")
+            + "）"
+        )
+    if gp:
+        lines.append("グループ: " + "、".join(_cap_list(gp, 3)))
+
+    nm = [f"{n.get('name')}={_grid_a1(n.get('range'))}" for n in ((meta_resp or {}).get("namedRanges") or [])]
+    if nm:
+        lines.append("名前付き範囲: " + "、".join(_cap_list(nm, 4)))
+
+    ch = []
+    for c in (sh_meta or {}).get("charts") or []:
+        s = c.get("spec") or {}
+        ty = (s.get("basicChart") or {}).get("chartType") or ("PIE" if s.get("pieChart") else "")
+        ch.append((_CHART_NAMES.get(ty) or ty or "グラフ") + (f"（{s.get('title')}）" if s.get("title") else ""))
+    if ch:
+        lines.append("グラフ: " + "、".join(_cap_list(ch, 3)))
+    return lines
+
+
+def _extract_range_direct(row_data, rr1, cc1, rr2, cc2):
+    out_vals, out_forms = [], []
+    for r in range(rr1 - 1, rr2):
+        row_cells = (row_data[r].get("values") or []) if r < len(row_data) else []
+        v_row, f_row = [], []
+        for c in range(cc1 - 1, cc2):
+            cell = row_cells[c] if c < len(row_cells) else {}
+            v_row.append(str(cell.get("formattedValue") or "") if isinstance(cell, dict) else "")
+            uev = (cell.get("userEnteredValue") or {}) if isinstance(cell, dict) else {}
+            f_row.append(str(uev.get("formulaValue") or ""))
+        out_vals.append(v_row)
+        out_forms.append(f_row)
+    return out_vals, out_forms

@@ -1365,10 +1365,110 @@ var ComboPlanner = (function () {
         }
       }
     }
-    if (shelf.name === "width" && _hasOwn(op, "col") && !_hasOwn(op, "width") && !_hasOwn(op, "auto") &&
-        /(?:自動|中身に合|オートフィット)/.test(text)) {
-      op.auto = [op.col];
-      delete op.col;
+    function _extractCalcExprJs(txt, tbl) {
+      var src = nfkc(txt);
+      var mPref = /^.*?(?:列|欄)[にへ]\s*/.exec(src);
+      var exprSrc = mPref ? src.slice(mPref[0].length) : src;
+      var colNames = [];
+      var colsList = (tbl && tbl.columns) || [];
+      for (var ci0 = 0; ci0 < colsList.length; ci0++) {
+        var nm0 = String((colsList[ci0] && colsList[ci0].name) || "").trim();
+        if (nm0 && colNames.indexOf(nm0) < 0) colNames.push(nm0);
+      }
+      colNames.sort(function (a, b) { return b.length - a.length; });
+      function _cleanOp(raw) {
+        var s = String(raw || "").trim().replace(/^[\s、,。をにで]+|[\s、,。をにで]+$/g, "");
+        for (var j0 = 0; j0 < colNames.length; j0++) {
+          var cn = colNames[j0];
+          if (s === cn || (s.length >= cn.length && s.slice(s.length - cn.length) === cn)) return cn;
+        }
+        var mL = /^([A-Z]{1,3})列$/.exec(s);
+        return mL ? mL[1] : s;
+      }
+      var pats = [
+        [/([^\s、,。をにと×*]{1,20})\s*(?:と|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を掛け|のかけ|を乗算|を掛け算)/, "*"],
+        [/([^\s、,。をにと＋+]{1,20})\s*(?:と|＋|\+)\s*([^\s、,。をにと＋+]{1,20})\s*(?:を足し|を加算)/, "+"],
+        [/([^\s、,。をにから−-]{1,20})\s*(?:から|−|-)\s*([^\s、,。をにから−-]{1,20})\s*(?:を引|を差し引|を減算)/, "-"],
+        [/([^\s、,。をに÷/]{1,20})\s*(?:を|÷|\/)\s*([^\s、,。をに÷/]{1,20})\s*(?:で割|で除算)/, "/"]
+      ];
+      var cands = exprSrc !== src ? [exprSrc, src] : [src];
+      for (var ci1 = 0; ci1 < cands.length; ci1++) {
+        for (var pi1 = 0; pi1 < pats.length; pi1++) {
+          var mm = pats[pi1][0].exec(cands[ci1]);
+          if (mm) {
+            var a = _cleanOp(mm[1]), b = _cleanOp(mm[2]);
+            if (a && b) return a + pats[pi1][1] + b;
+          }
+        }
+      }
+      return null;
+    }
+
+    function _normFilterNumJs(val) {
+      if (val === undefined || val === null) return null;
+      var s = nfkc(String(val)).replace(/,/g, "").trim();
+      if (!s) return null;
+      var isPct = s.slice(-1) === "%";
+      if (isPct) s = s.slice(0, -1).trim();
+      var mul = 1;
+      if (s.slice(-1) === "万") { mul = 10000; s = s.slice(0, -1).trim(); }
+      else if (s.slice(-1) === "億") { mul = 100000000; s = s.slice(0, -1).trim(); }
+      if (!s || isNaN(Number(s))) return null;
+      var num = Number(s) * mul;
+      if (isPct) num = num / 100.0;
+      return String(num);
+    }
+
+    if (shelf.name === "freeze" && !_hasOwn(op, "rows") && table && table.header_row && /見出し|ヘッダ/.test(text)) {
+      op.rows = parseInt(table.header_row, 10);
+    }
+    if (shelf.name === "calc.col") {
+      if (!/(?:列|欄)[にへ]/.test(text)) {
+        delete op.at;
+      } else if (table && Array.isArray(table.columns)) {
+        var tNfkcAt = nfkc(text);
+        var sortedAtCols = table.columns.slice().sort(function (a, b) {
+          return String((b && b.name) || "").length - String((a && a.name) || "").length;
+        });
+        for (var ati = 0; ati < sortedAtCols.length; ati++) {
+          var cnAt = String((sortedAtCols[ati] && sortedAtCols[ati].name) || "").trim();
+          if (cnAt) {
+            var escAt = nfkc(cnAt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            if (new RegExp(escAt + "の?(?:列|欄)[にへ]").test(tNfkcAt)) {
+              op.at = cnAt;
+              break;
+            }
+          }
+        }
+      }
+      if (!_hasOwn(op, "expr")) {
+        var extExpr = _extractCalcExprJs(text, table);
+        if (extExpr) op.expr = extExpr;
+      }
+      if (!_hasOwn(op, "name") && _hasOwn(op, "at")) op.name = op.at;
+      if (op.expr && op.name) named = true;
+    }
+    if (shelf.name === "summary" && _hasOwn(op, "by") && op.func !== "count" && Array.isArray(op.values)) {
+      var fvList = [];
+      for (var svi = 0; svi < op.values.length; svi++) {
+        if (op.values[svi] !== op.by) fvList.push(op.values[svi]);
+      }
+      if (fvList.length) op.values = fvList;
+      else delete op.values;
+    }
+    if (shelf.name === "width") {
+      if (_hasOwn(op, "col") && !_hasOwn(op, "width") && !_hasOwn(op, "auto") && /(?:自動|中身に合|オートフィット)/.test(text)) {
+        op.auto = [op.col];
+        delete op.col;
+      } else if (!_hasOwn(op, "auto") && !_hasOwn(op, "cols") && !_hasOwn(op, "col") && !_hasOwn(op, "rows") && !op.all_sheets && /(?:自動|中身に合|オートフィット|ちょうどよく|見切れ)/.test(text)) {
+        if (table && Array.isArray(table.columns)) {
+          var colsAuto = [];
+          for (var wci = 0; wci < table.columns.length; wci++) {
+            if (table.columns[wci].col) colsAuto.push(table.columns[wci].col);
+          }
+          if (colsAuto.length) { op.auto = colsAuto; named = true; }
+        }
+      }
     }
 
     if (shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") {
@@ -1379,12 +1479,23 @@ var ComboPlanner = (function () {
         }
       }
       if (shelf.name === "filter.where") {
-        var mName = /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim());
+        var hasCmpCue = _hasOwn(op, "when") || /以上|以下|未満|より|を超?|を含|含む|以外|ではな|でない|空白|空欄/.test(text);
+        var mName = !hasCmpCue ? /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim()) : null;
         if (mName) {
           op.equals = mName[1].trim();
         } else if (_hasOwn(op, "equals") && typeof op.equals === "string") {
           op.equals = op.equals.replace(/(?:さん|様)$/, "").trim();
         }
+      }
+      if (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le") {
+        delete op.equals;
+        if (!_hasOwn(op, "value")) {
+          var mFv = /(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超)/.exec(nfkc(text));
+          if (mFv) op.value = mFv[1];
+        }
+        var normV = _normFilterNumJs(op.value);
+        if (normV !== null) op.value = normV;
+        else delete op.value;
       }
       if (!_hasOwn(op, "col") && table && table.columns) {
         var cols = [];
@@ -1425,6 +1536,10 @@ var ComboPlanner = (function () {
       if (argsList[mi].req && _isEmptyVal(op[argsList[mi].name])) {
         missing.push(argsList[mi].name);
       }
+    }
+    if ((shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") &&
+        (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le") && _isEmptyVal(op.value)) {
+      if (missing.indexOf("value") < 0) missing.push("value");
     }
     if (anyList.length && !hasAnyFilled()) {
       missing.push(anyList.join("・") + " のどれか");
@@ -1877,6 +1992,8 @@ var ComboPlanner = (function () {
           /(?:以上|以下|未満|より大きい|より小さい|を超え|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) &&
           /消|削除/.test(c);
         if (hasFmtCue && candMap["format"] && candMap["date.fix"] && (scored[0].shelf.name === "format" || scored[0].shelf.name === "date.fix")) {
+          boostName = "format";
+        } else if (_colorHits(c).length > 0 && c.indexOf("文字") >= 0 && !/(?:大文字|小文字|全角|半角|UPPER|LOWER|PROPER)/i.test(c) && candMap["format"]) {
           boostName = "format";
         } else if (hasRowCfCue && candMap["cf.add"]) {
           boostName = "cf.add";

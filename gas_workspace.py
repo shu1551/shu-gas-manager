@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import gas_ws_api
+import gas_ws_browser
 import gas_ws_catalog
 import gas_ws_find
 
@@ -135,16 +136,27 @@ def _digest(*parts):
     return h.hexdigest()[:16]
 
 
+BROWSER_TARGET_ALIASES = ("browser", "now", "active", "今", "ブラウザ")
+RECENT_TARGET_ALIASES = ("recent", "最近")
+
+
 class WorkspaceManager:
-    def __init__(self, client=None, state_path=None, engine_path=None, shelf_dir=None):
+    def __init__(self, client=None, state_path=None, engine_path=None, shelf_dir=None, browser_detect=None):
         self._client = client
         self.state_path = Path(state_path) if state_path else HERE / ".ws_state.json"
+        self.browser_active_path = self.state_path.parent / ".ws_browser_active.json"
+        self.browser_detect = (
+            (state_path is None and os.environ.get("WS_NO_BROWSER_DETECT", "").strip().lower() not in ("1", "true", "yes"))
+            if browser_detect is None
+            else bool(browser_detect)
+        )
         self.engine_path = Path(engine_path) if engine_path else ENGINE_COMMON
         self.shelf_dir = Path(shelf_dir) if shelf_dir else (self.engine_path.parent / "ws_shelves")
         self.catalog = CATALOG if self.shelf_dir.resolve() == SHELF_DIR.resolve() else gas_ws_catalog.load(self.shelf_dir)
         self.finder = gas_ws_find.Finder(self.catalog, synonyms=gas_ws_find.load_synonyms(self.shelf_dir / "synonyms.txt"),
                                          guide=gas_ws_find.load_guide(self.shelf_dir / "guide.txt"))
         self.misses_path = HERE / ".ws_misses.tsv"      # 弱かった頼み（git に入れない）
+        self.ask_misses_path = self.state_path.parent / ".ws_ask_misses.tsv"   # ws_do(ask) の外れ記録（git に入れない）
         self.api_uses_path = gas_ws_api.USES_FILE        # 撃った api の型の記録（git に入れない）
         self.engine_title = ENGINE_TITLE      # エンジンの GAS プロジェクトの名前（別のエンジンを使う道具が差し替える）
         self.extra_texts = []                 # 共通部・棚のあとに足すファイル [(名前, 本文)]（別のエンジンの入口など）
@@ -377,11 +389,187 @@ class WorkspaceManager:
     def _ops_need_target(cls, ops):
         return any(cls._op_needs_target(o) for o in ops)
 
+    # ------------------------------------------------------------ ブラウザ連動・最近開いたファイル
+    def recent_files(self, limit=10, kind=None):
+        """Drive API から最近開いた（または更新された）スプレッドシート・文書を取得する。"""
+        mimes = [MIME_SHEET, MIME_DOC] if not kind else [MIME_SHEET if kind == "sheet" else MIME_DOC]
+        mq = " or ".join(f"mimeType='{m}'" for m in mimes)
+        q = f"({mq}) and trashed=false"
+        fields = "files(id,name,mimeType,modifiedTime,viewedByMeTime,webViewLink)"
+        for order_by in ("viewedByMeTime desc, modifiedTime desc", "modifiedTime desc"):
+            r = self.client._request_with_retry(
+                "GET",
+                "https://www.googleapis.com/drive/v3/files",
+                headers=self.client._headers(),
+                params={"q": q, "fields": fields, "pageSize": max(1, min(int(limit or 10), 30)), "orderBy": order_by},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                files = r.json().get("files", [])
+                out = []
+                for f in files:
+                    out.append({
+                        "id": f.get("id", ""),
+                        "name": f.get("name", ""),
+                        "kind": self._kind_of_mime(f.get("mimeType")),
+                        "viewedByMeTime": f.get("viewedByMeTime", ""),
+                        "modifiedTime": f.get("modifiedTime", ""),
+                        "url": f.get("webViewLink", ""),
+                    })
+                return out
+        raise WorkspaceError("Drive の最近開いたファイル一覧の取得に失敗しました。")
+
+    def format_recent_files(self, limit=10, kind=None):
+        """最近開いたスプレッドシート・文書の一覧を整形して返す。"""
+        items = self.recent_files(limit=limit, kind=kind)
+        if not items:
+            return "最近開いたスプレッドシート・文書が見つかりませんでした。"
+        lines = [f"=== 最近開いたスプレッドシート・文書 ({len(items)}件) ==="]
+        for i, it in enumerate(items, 1):
+            k_lbl = "スプレッドシート" if it["kind"] == "sheet" else "文書"
+            ts = (it.get("viewedByMeTime") or it.get("modifiedTime") or "")[:16].replace("T", " ")
+            lines.append(f"{i}. {it['name']}（{k_lbl}・{ts or '日時不明'}）")
+            lines.append(f"   {it['url'] or ('https://docs.google.com/spreadsheets/d/' + it['id'] + '/edit')}")
+        return "\n".join(lines)
+
+    def _detect_from_extension(self, max_age_sec=None):
+        import gas_ws_browser
+        kwargs = {"path": self.browser_active_path}
+        if max_age_sec is not None:
+            kwargs["max_age_sec"] = max_age_sec
+        return gas_ws_browser.load_browser_active(**kwargs)
+
+    def _detect_from_windows(self):
+        import gas_ws_browser
+        return gas_ws_browser.detect_window_targets()
+
+    def _resolve_browser_target(self, st, kind=None, force=False):
+        """1. Chrome 拡張同期 → 2. Windows ウィンドウタイトル の順で現在開いている相手を解決する。"""
+        cur = st.get("target") or {}
+        ext = self._detect_from_extension()
+        if ext and (not kind or ext.get("kind") == kind):
+            ext_changed = float(ext.get("changed_at") or 0.0)
+            set_at = float(st.get("target_set_at") or 0.0)
+            if force or not cur.get("id") or ext_changed > set_at:
+                out = {
+                    "id": ext["id"],
+                    "kind": ext.get("kind") or "sheet",
+                    "name": ext.get("name") or "",
+                    "url": ext.get("url") or "",
+                    "_source": "browser_ext",
+                }
+                if ext.get("sheet"):
+                    out["sheet"] = ext["sheet"]
+                if ext.get("selection"):
+                    out["_selection"] = ext["selection"]
+                return out
+            # 拡張が新鮮な状態かつ target_set_at の方が新しい＝人が明示指定した別ファイル作業中
+            return None
+
+        if not (self.browser_detect or force):
+            return None
+
+        win_list = self._detect_from_windows()
+        picked = None
+        for w in win_list:
+            if not kind or w.get("kind") == kind:
+                picked = w
+                break
+        if not picked:
+            return None
+        if not force and cur.get("id") and picked["window_title"] == st.get("last_window_title"):
+            return None
+        try:
+            found = self._search_name(picked["name"], picked["kind"])
+        except WorkspaceError:
+            if force or not cur.get("id"):
+                raise
+            return None
+        found["_source"] = "window_title"
+        found["_window_title"] = picked["window_title"]
+        return found
+
+    def inspect_active_target(self, include_recent=False):
+        """ブラウザ連動の現在状態（拡張機能・ウィンドウ検知・記憶中の相手・Drive最近）を診断レポートで返す。"""
+        st = self._load()
+        cur = st.get("target") or {}
+        ext = self._detect_from_extension()
+        wins = self._detect_from_windows()
+
+        lines = ["=== gas-manager ブラウザ連動・相手検知状態 ==="]
+        if ext:
+            k_lbl = "スプレッドシート" if ext.get("kind") == "sheet" else "文書"
+            sel_s = f"・選択 {ext['selection']}" if ext.get("selection") else ""
+            sh_s = f" › {ext['sheet']}" if ext.get("sheet") else ""
+            lines.append(f"1. Chrome拡張（即時同期・{ext.get('source', 'ext')} / {ext.get('age_sec', 0)}秒前）:")
+            lines.append(f"   {ext.get('name') or '(名前未取得)'}{sh_s}（{k_lbl}{sel_s}）")
+            lines.append(f"   ID: {ext['id']}  URL: {ext.get('url', '')}")
+        else:
+            lines.append("1. Chrome拡張（即時同期）: 未受信（または期限切れ）")
+
+        if wins:
+            lines.append(f"2. Windowsウィンドウ検知 ({len(wins)}件・手前順):")
+            for w in wins[:5]:
+                k_lbl = "シート" if w["kind"] == "sheet" else "文書"
+                lines.append(f"   - [{k_lbl}] {w['name']}  ({w['window_title']})")
+        else:
+            lines.append("2. Windowsウィンドウ検知: 開いている Google シート/文書は見つかりません")
+
+        if cur.get("id"):
+            sh_s = f" › {cur['sheet']}" if cur.get("sheet") else ""
+            lines.append(f"3. 記憶中の相手 (.ws_state.json): {cur.get('name') or cur['id']}{sh_s}")
+            if cur.get("url"):
+                lines.append(f"   {cur['url']}")
+        else:
+            lines.append("3. 記憶中の相手 (.ws_state.json): なし")
+
+        if include_recent or (not ext and not wins):
+            try:
+                rec = self.recent_files(limit=5)
+                if rec:
+                    lines.append("4. Drive 最近開いたファイル (上位5件):")
+                    for r in rec:
+                        k_lbl = "シート" if r["kind"] == "sheet" else "文書"
+                        ts = (r.get("viewedByMeTime") or r.get("modifiedTime") or "")[:16].replace("T", " ")
+                        lines.append(f"   - [{k_lbl}] {r['name']} ({ts})  ID: {r['id']}")
+            except Exception as e:
+                lines.append(f"4. Drive 最近開いたファイル: 取得失敗 ({e})")
+
+        diag = gas_ws_browser.diagnose_browser_sync()
+        mcp_lbl = "稼働" if diag["mcp_sync_ok"] else "停止"
+        watch_lbl = "稼働" if diag["watch_ok"] else "停止"
+        lines.append(f"5. 受信口: MCP({diag['mcp_port']})={mcp_lbl} / 直結watch({diag['watch_port']})={watch_lbl}")
+        if (not ext) or diag["hints"]:
+            for h in diag["hints"]:
+                lines.append(f"   診断ヒント: {h}")
+        return "\n".join(lines)
+
     # ------------------------------------------------------------ 相手を決める
     def resolve_target(self, target, kind, st):
         target = (target or "").strip()
         cur = st.get("target") or {}
+        if target.lower() in BROWSER_TARGET_ALIASES:
+            bt = self._resolve_browser_target(st, kind=kind, force=True)
+            if bt:
+                return bt, False
+            hint = ""
+            try:
+                rec = self.recent_files(limit=5, kind=kind)
+                if rec:
+                    hint = "\n最近開いたファイル:\n" + "\n".join(
+                        f"  - {r['name']} ({r['id']})" for r in rec
+                    )
+            except Exception:
+                pass
+            raise WorkspaceError(
+                "ブラウザで開いているスプレッドシート・文書を検知できませんでした。"
+                "Chrome で対象タブを開くか、URL・ID・名前を target に指定してください。" + hint
+            )
         if not target:
+            if self.browser_active_path.exists() or self.browser_detect:
+                bt = self._resolve_browser_target(st, kind=kind, force=False)
+                if bt:
+                    return bt, False
             if not cur.get("id"):
                 raise WorkspaceError("今の相手が決まっていません。target に URL・ID・名前、または \"new:名前\"（新規）を渡してください。")
             return dict(cur), False
@@ -484,6 +672,12 @@ class WorkspaceManager:
             out_lines.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
             return "\n".join(out_lines)
         tgt, is_new = self.resolve_target(target, None, st)
+        if tgt.get("_window_title"):
+            st["last_window_title"] = tgt["_window_title"]
+            self._save(st)
+        elif (target or "").strip() and (target or "").strip().lower() not in BROWSER_TARGET_ALIASES:
+            st["target_set_at"] = time.time()
+            self._save(st)
         kind = tgt.get("kind") or ""
         if not kind and tgt.get("id"):
             kind = self._kind_of_mime(self._drive_meta(tgt["id"])["mimeType"]) or ""
@@ -525,6 +719,7 @@ class WorkspaceManager:
                 p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=cur_sh, last_scope=ls)
                 tim.lap("当て")
             if not p.fire:
+                gas_ws_ask.log_ask_miss(ask, p, source="mcp", path=self.ask_misses_path)
                 return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
             # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
@@ -618,6 +813,10 @@ class WorkspaceManager:
         need_tgt = bool((target or "").strip()) or self._ops_need_target(remote_ops)
         if need_tgt:
             tgt, is_new = self.resolve_target(target, kind, st)
+            if tgt.get("_window_title"):
+                st["last_window_title"] = tgt["_window_title"]
+            elif (target or "").strip() and (target or "").strip().lower() not in BROWSER_TARGET_ALIASES:
+                st["target_set_at"] = time.time()
             tim.lap("相手")
             if tgt.get("kind") and tgt["kind"] != kind:
                 raise WorkspaceError("今の相手は" + ("文書" if tgt["kind"] == "doc" else "スプレッドシート")
@@ -822,6 +1021,8 @@ class WorkspaceManager:
         return self.finder.ask(ask, k, log_to=self.misses_path)
 
     def look(self, target="", sheet="", range="", image=False, ask=""):
+        if (target or "").strip().lower() in RECENT_TARGET_ALIASES:
+            return self.format_recent_files()
         if not ask:
             return self._look_image(target, sheet, range, image)
         try:
@@ -849,6 +1050,12 @@ class WorkspaceManager:
     def _look(self, target="", sheet="", range=""):
         st = self._load()
         tgt, is_new = self.resolve_target(target, None, st)
+        if tgt.get("_window_title"):
+            st["last_window_title"] = tgt["_window_title"]
+            self._save(st)
+        elif (target or "").strip() and (target or "").strip().lower() not in BROWSER_TARGET_ALIASES:
+            st["target_set_at"] = time.time()
+            self._save(st)
         if is_new:
             raise WorkspaceError("ws_look には new: は使えません（まだ無いファイルは見られません）。")
         cur = st.get("target") or {}
@@ -856,16 +1063,36 @@ class WorkspaceManager:
         if not body_target.get("kind"):
             meta = self._drive_meta(tgt["id"])
             body_target["kind"] = self._kind_of_mime(meta["mimeType"])
-        res = self._post({"action": "look", "target": body_target, "sheet": sheet or tgt.get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else ""), "range": range})
+        want_sheet = sheet or tgt.get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else "")
+        res = None
+        if body_target.get("kind") == "sheet" and not st.get("direct_off"):
+            import gas_ws_direct
+            res = gas_ws_direct.DirectRunner(self).look(st, body_target, sheet=want_sheet, range_str=range)
+        if res is None:
+            res = self._post({"action": "look", "target": body_target, "sheet": want_sheet, "range": range})
         if not res.get("ok"):
             raise WorkspaceError(res.get("error") or "見られませんでした")
         t = res["target"]
+        st_mem = st
         st = self._load()
+        for k in ("direct_token", "direct_off", "direct_last_look_skip", "engine_sid", "engine_url", "engine_deploy_id", "engine_ver"):
+            if k in st_mem:
+                st[k] = st_mem[k]
         st["target"] = {k: t[k] for k in ("id", "name", "kind", "url", "sheet") if t.get(k)}
+        if tgt.get("_window_title"):
+            st["last_window_title"] = tgt["_window_title"]
+        elif (target or "").strip() and (target or "").strip().lower() not in BROWSER_TARGET_ALIASES:
+            st["target_set_at"] = time.time()
         if t.get("kind") == "sheet":
             self._remember_table(st, st["target"], res.get("table"), res.get("sheets"))
         self._save(st)
-        return self.format_look(res)
+        out = self.format_look(res)
+        if t.get("kind") == "sheet" and self.browser_active_path.exists():
+            ext = self._detect_from_extension()
+            if ext and ext.get("id") == t.get("id") and ext.get("selection"):
+                if not ext.get("sheet") or ext.get("sheet") == t.get("sheet"):
+                    out += f"\n選択セル: {ext['selection']}"
+        return out
 
     @staticmethod
     def format_look(res):
