@@ -51,3 +51,22 @@
 1	列幅を全部自動調整して	[{"shelf":"width","auto":["A","B","C","D","E","F","G","H","I"]}]
 1	備考の列を消して	[{"shelf":"cols.delete","cols":["備考"],"ok":true}]
 1	売上金額の大きい順に並べて	[{"shelf":"sort","col":"売上金額","desc":true}]
+# 第3ラウンド外れ＋番頭指摘の回帰ケース
+1	数量と単価を掛けた結果を金額の列に出して	[{"shelf":"calc.col","at":"売上金額","name":"売上金額","expr":"数量*単価"}]
+0	数量の列に数量と単価を掛けた数式を入れて	上書き不可
+1	金額が10万円以下の行だけ残して	[{"shelf":"filter.where","col":"売上金額","when":"le","value":"100000"}]
+0	存在しない列が10万円以下の行だけ残して	表に無い列名
+1	担当者別の売上を棒グラフにして	[{"shelf":"chart.new","type":"column","range":"C3:C9,G3:G9"}]
+1	売上金額を3桁区切りに	[{"shelf":"format","range":"G4:G9","number_format":"#,##0"}]
+1	表の1行おきのしましまを外して	[{"shelf":"banding.remove"}]
+1	部門の列に「第一営業部・第二営業部・DX推進部」のプルダウンを作って	[{"shelf":"validation.list","range":"B4:B9","items":["第一営業部","第二営業部","DX推進部"]}]
+1	部門の列に営業と開発と総務のプルダウンを作って	[{"shelf":"validation.list","range":"B4:B9","items":["営業","開発","総務"]}]
+1	見出しを濃い青にして	[{"shelf":"format","header":true,"bg":"濃青"}]
+1	担当者が佐藤以外の行だけ表示して	[{"shelf":"filter.where","col":"担当者","when":"ne","value":"佐藤"}]
+1	進捗率が100%になっていない行を黄色くして	[{"shelf":"cf.add","range":"A4:I9","when":"formula","value":"=$H4<>1","bg":"黄"}]
+1	単価×数量で売上金額を計算して	[{"shelf":"calc.col","at":"売上金額","name":"売上金額","expr":"単価*数量"}]
+1	罫線を全部に引いて	[{"shelf":"format","borders":true,"range":"A3:I9"}]
+1	備考の列を非表示にして	[{"shelf":"cols.hide","cols":["備考"]}]
+1	全シートのフォントをメイリオに統一して	[{"shelf":"font.unify","font":"メイリオ","all_sheets":true}]
+1	売上の合計と平均を一番下に足して	[{"shelf":"total","cols":["売上金額"]},{"shelf":"stat.row","stat":"average","cols":["売上金額"]}]
+1	単価の列に円マークを付けて	[{"shelf":"format","range":"F4:F9","number_format":"¥#,##0"}]
