@@ -936,9 +936,12 @@ var ComboPlanner = (function () {
   }
 
   function _letterOf(table, name) {
+    var res = _resolveColRefJs(name, table);
+    if (!res) return null;
+    if (/^[A-Z]{1,3}$/.test(res)) return res;
     if (!table || !table.columns) return null;
     for (var i = 0; i < table.columns.length; i++) {
-      if (table.columns[i] && table.columns[i].name === name) {
+      if (table.columns[i] && table.columns[i].name === res) {
         return table.columns[i].col || null;
       }
     }
@@ -1451,9 +1454,11 @@ var ComboPlanner = (function () {
     }
 
     function _isNumberColJs(tbl, colRef) {
+      var res = _resolveColRefJs(colRef, tbl);
+      if (!res) return false;
       var cols = (tbl && tbl.columns) || [];
       for (var i = 0; i < cols.length; i++) {
-        if (cols[i] && (cols[i].name === colRef || cols[i].col === colRef)) return !!cols[i].number;
+        if (cols[i] && (cols[i].name === res || cols[i].col === res)) return !!cols[i].number;
       }
       return false;
     }
@@ -1539,14 +1544,7 @@ var ComboPlanner = (function () {
         var mGa = /^([^\s、。]+?)(?:列)?(?:が|は)(.+)$/.exec(eqS);
         if (mGa) {
           var lhs = mGa[1].trim(), rhs = mGa[2].trim();
-          var resCol = null;
-          if (colsAll.indexOf(lhs) >= 0) resCol = lhs;
-          else if (opObj.col && (lhs === opObj.col || (lhs.length >= String(opObj.col).length && lhs.slice(lhs.length - String(opObj.col).length) === String(opObj.col)))) {
-            resCol = opObj.col;
-          } else {
-            var uq = _resolveUniqueColsJs(lhs, tbl, false, []);
-            if (uq.length === 1) resCol = uq[0];
-          }
+          var resCol = _resolveColRefJs(lhs, tbl);
           if (resCol && rhs) {
             if (!_hasOwn(opObj, "col")) opObj.col = resCol;
             eqS = rhs;
@@ -1647,6 +1645,52 @@ var ComboPlanner = (function () {
         }
         if (srcRefs[dstCol] || srcRefs[dstL]) {
           addMiss("入れ先の列「" + dstCol + "」が式の入力列と同じため上書き不可");
+        }
+      }
+      // 6. 最終防波堤: 組んだ op の列引数・式に表に無い列名が残っていれば撃たない
+      if (tbl && Array.isArray(tbl.columns) && tbl.columns.length) {
+        var validNames = {}, validLetters = {};
+        for (var vi0 = 0; vi0 < tbl.columns.length; vi0++) {
+          var vnm = String((tbl.columns[vi0] && tbl.columns[vi0].name) || "").trim();
+          var vcl = String((tbl.columns[vi0] && tbl.columns[vi0].col) || "").trim();
+          if (vnm) validNames[vnm] = true;
+          if (vcl) validLetters[vcl] = true;
+        }
+        var isValidColVal = function (v, allowAnyLetter) {
+          var sv = nfkc(String(v === null || v === undefined ? "" : v)).trim();
+          if (!sv) return false;
+          if (validNames[sv] || validLetters[sv]) return true;
+          if (allowAnyLetter && /^[A-Z]{1,3}$/.test(sv)) return true;
+          return false;
+        };
+        var shArgs = shObj.args || [];
+        for (var ai3 = 0; ai3 < shArgs.length; ai3++) {
+          var ak = shArgs[ai3].name, at = shArgs[ai3].type;
+          if (!_hasOwn(opObj, ak) || _SKIP_COL_VALIDATE_JS[shN + ":" + ak]) continue;
+          var allowLet = (ak === "at" || ak === "from" || ak === "to");
+          if (at === "列") {
+            if (!isValidColVal(opObj[ak], allowLet)) addMiss("表に無い列名（" + opObj[ak] + "）");
+          } else if (at === "列[]") {
+            var arrV = Array.isArray(opObj[ak]) ? opObj[ak] : [opObj[ak]];
+            for (var avi = 0; avi < arrV.length; avi++) {
+              if (!isValidColVal(arrV[avi], allowLet)) addMiss("表に無い列名（" + arrV[avi] + "）");
+            }
+          }
+        }
+        if (shN === "sort" && Array.isArray(opObj.cols)) {
+          for (var si3 = 0; si3 < opObj.cols.length; si3++) {
+            var sSpec = String(opObj.cols[si3]);
+            var sBody = sSpec.charAt(0) === "-" ? sSpec.slice(1) : sSpec;
+            if (!isValidColVal(sBody, false)) addMiss("表に無い列名（" + sBody + "）");
+          }
+        }
+        if (shN === "calc.col" && opObj.expr) {
+          var eToks = nfkc(String(opObj.expr)).split(/[*/+\-()]/);
+          for (var eti = 0; eti < eToks.length; eti++) {
+            var stE = eToks[eti].trim();
+            if (!stE || /^-?[0-9]+(?:\.[0-9]+)?$/.test(stE)) continue;
+            if (!isValidColVal(stE, false)) addMiss("式に表に無い列名（" + stE + "）");
+          }
         }
       }
     }
@@ -1769,35 +1813,25 @@ var ComboPlanner = (function () {
         op.all_sheets = true;
       }
     }
+    var extraMissing = [];
     if (shelf.name === "sort") {
       var sortPairs = [];
       var nfkcTxt = nfkc(text);
       var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)/);
       if (mGrp) {
         var rawGrp = mGrp[1].trim();
-        var mappedGrp = rawGrp;
-        if (table && Array.isArray(table.columns)) {
-          for (var gci = 0; gci < table.columns.length; gci++) {
-            if (table.columns[gci] && table.columns[gci].name === rawGrp) {
-              mappedGrp = table.columns[gci].name;
-              break;
-            }
-          }
-        }
-        sortPairs.push(mappedGrp);
+        var mappedGrp = _resolveColRefJs(rawGrp, table);
+        if (mappedGrp) sortPairs.push(mappedGrp);
+        else extraMissing.push("表に無い列名（" + rawGrp + "）");
       }
       var sortReG = /(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のは]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順|若い順))/g;
       var sm;
       while ((sm = sortReG.exec(nfkcTxt)) !== null) {
         var rawColS = sm[1].trim();
-        var mappedColS = rawColS;
-        if (table && Array.isArray(table.columns)) {
-          for (var sci = 0; sci < table.columns.length; sci++) {
-            if (table.columns[sci] && table.columns[sci].name === rawColS) {
-              mappedColS = table.columns[sci].name;
-              break;
-            }
-          }
+        var mappedColS = _resolveColRefJs(rawColS, table);
+        if (!mappedColS) {
+          extraMissing.push("表に無い列名（" + rawColS + "）");
+          continue;
         }
         var specS = (sm[2] ? "-" : "") + mappedColS;
         if (sortPairs.indexOf(specS) < 0 && sortPairs.indexOf(mappedColS) < 0) {
@@ -1863,16 +1897,11 @@ var ComboPlanner = (function () {
       var exprPref = mPref ? src.slice(mPref[0].length) : src;
       function _cleanOp(raw) {
         var s = String(raw || "").trim().replace(/^[\s、,。をにで]+|[\s、,。をにで]+$/g, "");
+        if (!s) return null;
         if (/^-?[0-9]+(?:\.[0-9]+)?$/.test(s)) return s;
-        for (var j0 = 0; j0 < colNames.length; j0++) {
-          var cn = colNames[j0];
-          if (s === cn || (s.length >= cn.length && s.slice(s.length - cn.length) === cn)) return cn;
-        }
-        var mL = /^([A-Z]{1,3})列$/.exec(s);
-        if (mL) return mL[1];
-        var uq = _resolveUniqueColsJs(s, tbl, false, []);
-        if (uq.length === 1) return uq[0];
-        return s;
+        var res = _resolveColRefJs(s, tbl);
+        if (res) return res;
+        return (tbl && Array.isArray(tbl.columns) && tbl.columns.length) ? null : s;
       }
       var pats = [
         [/([^\s、,。をにと×*]{1,20})\s*(?:と|に|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を)?(?:掛け|かけ|のかけ|乗算|掛け算)/, "*"],
@@ -1966,29 +1995,13 @@ var ComboPlanner = (function () {
       if (op.expr && op.name) named = true;
     }
 
-    var extraMissing = [];
     if (shelf.name === "summary" || shelf.name === "pivot.new") {
-      if (table && Array.isArray(table.columns)) {
-        var tblColNms = [];
-        for (var tci0 = 0; tci0 < table.columns.length; tci0++) {
-          var tcn0 = String((table.columns[tci0] && table.columns[tci0].name) || "").trim();
-          if (tcn0 && tblColNms.indexOf(tcn0) < 0) tblColNms.push(tcn0);
-        }
-        tblColNms.sort(function (a, b) { return b.length - a.length; });
-        if (shelf.name === "summary" && typeof op.by === "string" && tblColNms.indexOf(op.by) < 0) {
-          var matchedBy = null;
-          for (var mbi = 0; mbi < tblColNms.length; mbi++) {
-            var cnBy = tblColNms[mbi];
-            if (op.by.length >= cnBy.length && op.by.slice(op.by.length - cnBy.length) === cnBy) {
-              matchedBy = cnBy;
-              break;
-            }
-          }
-          if (!matchedBy) {
-            var uBy = _resolveUniqueColsJs(op.by, table, false, []);
-            if (uBy.length === 1) matchedBy = uBy[0];
-          }
-          if (matchedBy) op.by = matchedBy;
+      if (shelf.name === "summary" && typeof op.by === "string") {
+        var resBy = _resolveColRefJs(op.by, table);
+        if (resBy) op.by = resBy;
+        else {
+          extraMissing.push("表に無い列名（" + op.by + "）");
+          delete op.by;
         }
       }
       if (shelf.name === "pivot.new" && Array.isArray(op.rows) && Array.isArray(op.cols)) {

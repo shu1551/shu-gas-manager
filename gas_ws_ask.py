@@ -290,8 +290,13 @@ def _col_range(table, letters):
 
 
 def _letter_of(table, name):
+    res = _resolve_col_ref(name, table)
+    if not res:
+        return None
+    if re.fullmatch(r"[A-Z]{1,3}", res):
+        return res
     for c in (table or {}).get("columns") or []:
-        if c.get("name") == name:
+        if c.get("name") == res:
             return c.get("col")
     return None
 
@@ -389,18 +394,14 @@ def _extract_calc_expr(text, table):
 
     def _clean_operand(raw):
         s = re.sub(r"^[\s、,。をにで]+|[\s、,。をにで]+$", "", str(raw or "").strip())
+        if not s:
+            return None
         if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", s):
             return s
-        for cn in col_names:
-            if s == cn or s.endswith(cn):
-                return cn
-        m_col_l = re.fullmatch(r"([A-Z]{1,3})列", s)
-        if m_col_l:
-            return m_col_l.group(1)
-        uniq = _resolve_unique_cols(s, table)
-        if len(uniq) == 1:
-            return uniq[0]
-        return s
+        res = _resolve_col_ref(s, table)
+        if res:
+            return res
+        return None if (table and table.get("columns")) else s
 
     patterns = [
         (r"([^\s、,。をにと×*]{1,20})\s*(?:と|に|×|\*)\s*([^\s、,。をにと×*]{1,20})\s*(?:を)?(?:掛け|かけ|のかけ|乗算|掛け算)", "*"),
@@ -631,8 +632,11 @@ def _has_number_meta(table):
 
 
 def _is_number_col(table, col_ref):
+    res = _resolve_col_ref(col_ref, table)
+    if not res:
+        return False
     for c in (table or {}).get("columns") or []:
-        if c.get("name") == col_ref or c.get("col") == col_ref:
+        if c.get("name") == res or c.get("col") == res:
             return bool(c.get("number"))
     return False
 
@@ -694,15 +698,7 @@ def _clean_filter_equals(op, text, table, quoted_vals):
         m_ga = re.match(r"^([^\s、。]+?)(?:列)?(?:が|は)(.+)$", eq_s)
         if m_ga:
             lhs, rhs = m_ga.group(1).strip(), m_ga.group(2).strip()
-            resolved_col = None
-            if lhs in cols_all:
-                resolved_col = lhs
-            elif op.get("col") and (lhs == op["col"] or lhs.endswith(str(op["col"]))):
-                resolved_col = op["col"]
-            else:
-                uniq = _resolve_unique_cols(lhs, table)
-                if len(uniq) == 1:
-                    resolved_col = uniq[0]
+            resolved_col = _resolve_col_ref(lhs, table)
             if resolved_col and rhs:
                 if "col" not in op:
                     op["col"] = resolved_col
@@ -819,6 +815,47 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
                         src_refs.add(sl)
         if dst_col in src_refs or dst_l in src_refs:
             _add_miss(f"入れ先の列「{dst_col}」が式の入力列と同じため上書き不可")
+
+    # 6. 最終防波堤: 組んだ op の列引数（col・at・by・values・cols 等）や式に表に無い列名が残っていれば撃たない
+    if table and table.get("columns"):
+        valid_names = {str(c.get("name") or "").strip() for c in table["columns"] if str(c.get("name") or "").strip()}
+        valid_letters = {str(c.get("col") or "").strip() for c in table["columns"] if str(c.get("col") or "").strip()}
+
+        def _is_valid_col_val(v, allow_any_letter=False):
+            sv = nfkc(str(v or "")).strip()
+            if not sv:
+                return False
+            if sv in valid_names or sv in valid_letters:
+                return True
+            if allow_any_letter and re.fullmatch(r"[A-Z]{1,3}", sv):
+                return True
+            return False
+
+        for a in shelf["args"]:
+            k, t = a["name"], a["type"]
+            if k not in op or (sh_name, k) in _SKIP_COL_VALIDATE:
+                continue
+            allow_let = k in ("at", "from", "to")
+            if t == "列":
+                if not _is_valid_col_val(op[k], allow_any_letter=allow_let):
+                    _add_miss(f"表に無い列名（{op[k]}）")
+            elif t == "列[]":
+                vals = op[k] if isinstance(op[k], list) else [op[k]]
+                for v in vals:
+                    if not _is_valid_col_val(v, allow_any_letter=allow_let):
+                        _add_miss(f"表に無い列名（{v}）")
+        if sh_name == "sort" and isinstance(op.get("cols"), list):
+            for spec in op["cols"]:
+                body = str(spec)[1:] if str(spec).startswith("-") else str(spec)
+                if not _is_valid_col_val(body):
+                    _add_miss(f"表に無い列名（{body}）")
+        if sh_name == "calc.col" and op.get("expr"):
+            for tok in re.split(r"[*/+\-()]", nfkc(str(op["expr"]))):
+                st = tok.strip()
+                if not st or re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", st):
+                    continue
+                if not _is_valid_col_val(st):
+                    _add_miss(f"式に表に無い列名（{st}）")
 
 
 # ------------------------------------------------------------------ 1 節 → 1 op
@@ -1125,22 +1162,28 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 op["find"] = clean_find
         if re.search(r"全シート|すべてのシート|全てのシート|ブック全体", text):
             op["all_sheets"] = True
+    extra_missing = []
     if shelf["name"] == "sort":
         sort_pairs = []
         nfkc_t = nfkc(text)
-        cols_meta = (table or {}).get("columns", [])
         # 「部署ごと、同部署内は社員番号の昇順」「部署ごとにかためて…社員番号の若い順」の 1 列目（ごと）を拾う
         m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)", nfkc_t)
         if m_grp:
             raw_g = m_grp.group(1).strip()
-            col_g = next((c["name"] for c in cols_meta if c["name"] == raw_g), raw_g)
-            sort_pairs.append(col_g)
+            col_g = _resolve_col_ref(raw_g, table)
+            if col_g:
+                sort_pairs.append(col_g)
+            else:
+                extra_missing.append(f"表に無い列名（{raw_g}）")
         for sm in re.finditer(
             r"(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のは]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順|若い順))",
             nfkc_t,
         ):
             raw_c = sm.group(1).strip()
-            col_c = next((c["name"] for c in cols_meta if c["name"] == raw_c), raw_c)
+            col_c = _resolve_col_ref(raw_c, table)
+            if not col_c:
+                extra_missing.append(f"表に無い列名（{raw_c}）")
+                continue
             is_desc = bool(sm.group(2))
             spec = ("-" if is_desc else "") + col_c
             if spec not in sort_pairs and col_c not in sort_pairs:
@@ -1224,21 +1267,14 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         op["at"] = cand_nm
         if op.get("expr") and op.get("name"):
             named = True
-    extra_missing = []
     if shelf["name"] in ("summary", "pivot.new"):
-        if table and table.get("columns"):
-            tbl_col_nms = sorted(
-                [str(c.get("name") or "").strip() for c in table["columns"] if str(c.get("name") or "").strip()],
-                key=len,
-                reverse=True,
-            )
-            if shelf["name"] == "summary" and isinstance(op.get("by"), str) and op["by"] not in tbl_col_nms:
-                matched_by = next((cn for cn in tbl_col_nms if op["by"].endswith(cn)), None)
-                if not matched_by:
-                    u_by = _resolve_unique_cols(op["by"], table)
-                    matched_by = u_by[0] if len(u_by) == 1 else None
-                if matched_by:
-                    op["by"] = matched_by
+        if shelf["name"] == "summary" and isinstance(op.get("by"), str):
+            res_by = _resolve_col_ref(op["by"], table)
+            if res_by:
+                op["by"] = res_by
+            else:
+                extra_missing.append(f"表に無い列名（{op['by']}）")
+                op.pop("by", None)
         if shelf["name"] == "pivot.new" and isinstance(op.get("rows"), list) and isinstance(op.get("cols"), list):
             dedup_cols = [c for c in op["cols"] if c not in op["rows"]]
             if dedup_cols:
