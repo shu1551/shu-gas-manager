@@ -6,15 +6,24 @@
  */
 function onHome(e) { return comboAddonCard_(e, ''); }
 
-// 今開いているスプレッドシート（e.sheets に id/title があれば重い SpreadsheetApp 呼び出しを省く）
+// 今開いているスプレッドシートまたはドキュメント（e.sheets / e.docs に id/title があれば重い呼び出しを省く）
 function comboAddonTarget_(e) {
   var s = (e && e.sheets) || {};
-  if (s.id && s.title) return { id: s.id, title: s.title };
+  if (s.id && s.title) return { id: s.id, title: s.title, kind: 'sheet' };
+  var d = (e && e.docs) || {};
+  if (d.id && d.title) return { id: d.id, title: d.title, kind: 'doc' };
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (ss) return { id: ss.getId(), title: ss.getName(), _ss: ss };
+    if (ss) return { id: ss.getId(), title: ss.getName(), kind: 'sheet', _ss: ss };
   } catch (err) {}
-  if (s.id) return { id: s.id, title: s.title || '' };
+  try {
+    if (typeof DocumentApp !== 'undefined' && typeof DocumentApp.getActiveDocument === 'function') {
+      var doc = DocumentApp.getActiveDocument();
+      if (doc) return { id: doc.getId(), title: doc.getName(), kind: 'doc', _doc: doc };
+    }
+  } catch (errD) {}
+  if (s.id) return { id: s.id, title: s.title || '', kind: 'sheet' };
+  if (d.id) return { id: d.id, title: d.title || '', kind: 'doc' };
   return {};
 }
 
@@ -29,6 +38,10 @@ var COMBO_ADDON_KEEPS_SHAPE = /^(format|width|bg\.clear|banding\.|cf\.|freeze|un
 var COMBO_ADDON_LEARNED_CACHE_KEY = 'addon_learned_v1';
 function comboAddonKey_(tg, sheetName) { return 'addon_tbl:' + tg.id + ':' + sheetName; }
 function comboAddonInit_(tg, optCache, optHitRaw, optSheetName) {
+  if (tg && tg.kind === 'doc') {
+    var initDoc = {lib_symbol}.comboInit({ targetId: tg.id, kind: 'doc' });
+    return { target: initDoc.target || { id: tg.id, name: tg.title, kind: 'doc' }, table: null, sheets: [], outline: initDoc.outline || [] };
+  }
   var sheetName = optSheetName || '';
   if (!sheetName) {
     try { sheetName = (tg._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName(); } catch (e0) {}
@@ -56,12 +69,13 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
   var tg = optTg || comboAddonTarget_(e);
   var sec = CardService.newCardSection();
   if (!tg.id) {
-    sec.addWidget(CardService.newTextParagraph().setText('このスプレッドシートで使うには、1 回だけ許可が要ります。'));
-    sec.addWidget(CardService.newTextButton().setText('このシートで使う')
+    sec.addWidget(CardService.newTextParagraph().setText('このファイルで使うには、1 回だけ許可が要ります。'));
+    sec.addWidget(CardService.newTextButton().setText('このファイルで使う')
       .setOnClickAction(CardService.newAction().setFunctionName('onAddonGrant')));
   } else {
+    var ph = tg.kind === 'doc' ? '頼み（例: 見出し一覧を見せて / 目次を入れて）' : '頼み（例: タイトルの文字の色を赤に）';
     // 1 行の入力欄。Enter（音声入力の終わりの Enter も）で確定したら、そのまま実行する
-    sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle('頼み（例: タイトルの文字の色を赤に）').setMultiline(false)
+    sec.addWidget(CardService.newTextInput().setFieldName('ask').setTitle(ph).setMultiline(false)
       .setOnChangeAction(CardService.newAction().setFunctionName('onAddonRun')));
     // 実行・戻す・操作窓を横 1 行にまとめる
     var btnRow = CardService.newButtonSet()
@@ -84,13 +98,23 @@ function comboAddonCard_(e, msg, suggestBtn, optTg) {
       return CardService.newTextButton().setText(label)
         .setOnClickAction(CardService.newAction().setFunctionName('onAddonQuick').setParameters({ action: act }));
     };
-    var qSec = CardService.newCardSection()
-      .addWidget(qBtn('【一発整形】データ整理＋表整形', 'seiri'))
-      .addWidget(CardService.newButtonSet()
-        .addButton(qBtn('幅自動', 'autoWidth'))
-        .addButton(qBtn('重複消', 'dedupe'))
-        .addButton(qBtn('罫線', 'borders')));
-    builder.addSection(qSec);
+    if (tg.kind === 'doc') {
+      var qSecDoc = CardService.newCardSection()
+        .addWidget(CardService.newButtonSet()
+          .addButton(qBtn('章立て', 'docOutline'))
+          .addButton(qBtn('目次挿入', 'docToc'))
+          .addButton(qBtn('表装飾', 'docTableStyle'))
+          .addButton(qBtn('ページ番号', 'docHeader')));
+      builder.addSection(qSecDoc);
+    } else {
+      var qSec = CardService.newCardSection()
+        .addWidget(qBtn('【一発整形】データ整理＋表整形', 'seiri'))
+        .addWidget(CardService.newButtonSet()
+          .addButton(qBtn('幅自動', 'autoWidth'))
+          .addButton(qBtn('重複消', 'dedupe'))
+          .addButton(qBtn('罫線', 'borders')));
+      builder.addSection(qSec);
+    }
   }
   return builder.build();
 }
@@ -132,7 +156,7 @@ function onAddonAcceptSuggest(e) {
     tg = comboAddonTarget_(e);
     var init = comboAddonInit_(tg, cache);
     var curSheet = init.target && init.target.sheet;
-    res = {lib_symbol}.comboRunAsk({ ops: sg.ops, fastUndo: true, targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: init.table, sheets: init.sheets });
+    res = {lib_symbol}.comboRunAsk({ ops: sg.ops, fastUndo: true, kind: tg.kind || 'sheet', targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: init.table, sheets: init.sheets });
     if (res && res.ok !== false) {
       {lib_symbol}.comboLearn({ ask: sg.ask, ops: sg.ops, key: ComboPlanner.learnKey(sg.ask) });
       try { if (cache) cache.remove(COMBO_ADDON_LEARNED_CACHE_KEY); } catch (eLC) {}
@@ -170,13 +194,16 @@ function onAddonRun(e) {
   if (!String(ask).trim()) return comboAddonReply_(e, '');
   try {
     tg = comboAddonTarget_(e);
+    var tgKind = tg.kind || 'sheet';
     var tA = Date.now();
     var sheetName = '';
-    try { sheetName = (tg._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName(); } catch (eS) {}
+    if (tgKind !== 'doc') {
+      try { sheetName = (tg._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName(); } catch (eS) {}
+    }
     // UserCache を getAll 1 往復でまとめて引く（二重送信チェック・表キャッシュ・学習済み言い方）
     var cache = null, bag = {};
     var dedupKey = 'addon_last_ask';
-    var tblKey = sheetName ? comboAddonKey_(tg, sheetName) : '';
+    var tblKey = (tgKind !== 'doc' && sheetName) ? comboAddonKey_(tg, sheetName) : '';
     try {
       cache = CacheService.getUserCache();
       var keys = [dedupKey, COMBO_ADDON_LEARNED_CACHE_KEY];
@@ -193,7 +220,7 @@ function onAddonRun(e) {
     var tB = Date.now();
     var curSheet = (init.target && init.target.sheet) || sheetName;
     comboAddonLoadLearned_(cache, bag[COMBO_ADDON_LEARNED_CACHE_KEY]);
-    var p = ComboPlanner.plan(ask, 'sheet', init.table, init.sheets, curSheet, null);
+    var p = ComboPlanner.plan(ask, tgKind, init.table, init.sheets, curSheet, null);
     var tC = Date.now();
     if (!(p && p.fire) && p && p.suggest && p.suggest.length) {
       try { if (cache) cache.put(COMBO_ADDON_SUGGEST_KEY, JSON.stringify({ ask: ask, ops: p.suggest }), 600); } catch (eS2) {}
@@ -201,12 +228,12 @@ function onAddonRun(e) {
         '\nこれを撃ちますか？（［はい］で撃って、この言い方を覚えます）\n' + comboAddonSecs_(t0), true, tg);
     }
     if (p && p.fire && p.ops && p.ops.length) {
-      res = {lib_symbol}.comboRunAsk({ ops: p.ops, fastUndo: true, targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: init.table, sheets: init.sheets });
+      res = {lib_symbol}.comboRunAsk({ ops: p.ops, fastUndo: true, kind: tgKind, targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: init.table, sheets: init.sheets });
     } else {
-      res = {lib_symbol}.comboRunAsk({ ask: ask, fastUndo: true, targetId: tg.id, targetName: tg.title, sheet: curSheet });   // 棚に当たらなければいつもの道（AI・郵便受け）
+      res = {lib_symbol}.comboRunAsk({ ask: ask, fastUndo: true, kind: tgKind, targetId: tg.id, targetName: tg.title, sheet: curSheet });   // 棚に当たらなければいつもの道（AI・郵便受け）
     }
-    var keepsShape = !!(p && p.fire && p.ops && p.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); }));
-    if (!keepsShape) comboAddonForget_(tg, curSheet);
+    var keepsShape = tgKind !== 'doc' && !!(p && p.fire && p.ops && p.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); }));
+    if (!keepsShape && tgKind !== 'doc') comboAddonForget_(tg, curSheet);
   } catch (err) {
     res = { ok: false, error: String(err && err.message || err) };
   }
@@ -217,8 +244,8 @@ function onAddonUndo(e) {
   var t0 = Date.now(), res, tgU = null;
   try {
     tgU = comboAddonTarget_(e);
-    res = {lib_symbol}.comboUndo({ targetId: tgU.id });
-    if (res && res.ok && !res.fast) {
+    res = {lib_symbol}.comboUndo({ targetId: tgU.id, kind: tgU.kind || 'sheet' });
+    if (res && res.ok && !res.fast && tgU.kind !== 'doc') {
       try { comboAddonForget_(tgU, (tgU._ss || SpreadsheetApp.getActiveSpreadsheet()).getActiveSheet().getName()); } catch (eF) {}
     }
   }
@@ -232,6 +259,16 @@ function onAddonQuick(e) {
   if (!act) return comboAddonReply_(e, '');
   try {
     tg = comboAddonTarget_(e);
+    if (tg.kind === 'doc') {
+      var docOps = null;
+      if (act === 'docOutline') docOps = [{ shelf: 'doc.outline' }];
+      else if (act === 'docToc') docOps = [{ shelf: 'doc.toc' }];
+      else if (act === 'docTableStyle') docOps = [{ shelf: 'doc.table.style' }];
+      else if (act === 'docHeader') docOps = [{ shelf: 'doc.header', page_number: true }];
+      if (!docOps) return comboAddonReply_(e, '✗ 未対応のボタンです\n' + comboAddonSecs_(t0), false, tg);
+      res = {lib_symbol}.comboRunAsk({ ops: docOps, kind: 'doc', targetId: tg.id, targetName: tg.title });
+      return comboAddonReply_(e, comboAddonShortMsg_(res, t0), false, tg);
+    }
     var ss = tg._ss || SpreadsheetApp.getActiveSpreadsheet();
     var sh = ss.getActiveSheet();
     var curSheet = sh.getName();
@@ -309,28 +346,41 @@ function onAddonQuick(e) {
 // カードはボタンのたびに描き直されて入力欄のカーソルが消える。操作窓はカーソルが残るので、音声入力→Enter を続けられる。
 // 直結の道（Sheets API を画面から直接叩く 0.3〜0.6 秒）もそのまま使える。シートにコードは入れない。
 var COMBO_ADDON_TARGET_PROP = 'ADDON_TARGET';
+var COMBO_ADDON_KIND_PROP = 'ADDON_TARGET_KIND';
 
 // 窓の番地は、最新のコードで動くテスト用の番地（HEAD の /dev）。py gas.py combo addon が書き込む
 var COMBO_ADDON_WINDOW_BASE = '{webapp_url}';
-function comboAddonWindowUrl_(id) {
+function comboAddonWindowUrl_(id, kind) {
   var base = COMBO_ADDON_WINDOW_BASE;
   if (!base || base.indexOf('{') === 0) { try { base = ScriptApp.getService().getUrl() || ''; } catch (e) {} }
-  return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'id=' + encodeURIComponent(id || '');
+  var q = 'id=' + encodeURIComponent(id || '');
+  if (kind) q += '&kind=' + encodeURIComponent(kind);
+  return base + (base.indexOf('?') >= 0 ? '&' : '?') + q;
 }
 
 function onAddonOpenWindow(e) {
   var tg = comboAddonTarget_(e);
-  try { PropertiesService.getUserProperties().setProperty(COMBO_ADDON_TARGET_PROP, tg.id || ''); } catch (err) {}
+  try {
+    var up = PropertiesService.getUserProperties();
+    up.setProperty(COMBO_ADDON_TARGET_PROP, tg.id || '');
+    up.setProperty(COMBO_ADDON_KIND_PROP, tg.kind || 'sheet');
+  } catch (err) {}
   return CardService.newActionResponseBuilder()
-    .setOpenLink(CardService.newOpenLink().setUrl(comboAddonWindowUrl_(tg.id))
+    .setOpenLink(CardService.newOpenLink().setUrl(comboAddonWindowUrl_(tg.id, tg.kind || 'sheet'))
       .setOpenAs(CardService.OpenAs.OVERLAY).setOnClose(CardService.OnClose.NOTHING))
     .build();
 }
 
 function doGet(e) {
   var id = e && e.parameter && e.parameter.id;
-  if (id) { try { PropertiesService.getUserProperties().setProperty(COMBO_ADDON_TARGET_PROP, id); } catch (err) {} }
-  else { try { id = PropertiesService.getUserProperties().getProperty(COMBO_ADDON_TARGET_PROP) || ''; } catch (err2) {} }
+  var kind = e && e.parameter && e.parameter.kind;
+  try {
+    var up = PropertiesService.getUserProperties();
+    if (id) up.setProperty(COMBO_ADDON_TARGET_PROP, id);
+    else id = up.getProperty(COMBO_ADDON_TARGET_PROP) || '';
+    if (kind) up.setProperty(COMBO_ADDON_KIND_PROP, kind);
+    else kind = up.getProperty(COMBO_ADDON_KIND_PROP) || 'sheet';
+  } catch (err) {}
   // アドオンの操作窓も Chrome のサイドパネルも等倍（z=1）で同じ見た目にする
   var z = Number((e && e.parameter && e.parameter.z) || 1) || 1;
   var out = {lib_symbol}.createComboSidebarHtml();
@@ -367,9 +417,17 @@ function doGet(e) {
 // 操作窓から呼ばれる入口。相手のシートは、窓を開いたときに覚えた物
 function comboAddonReq_(req) {
   req = req || {};
-  if (!req.targetId) {
-    try { var id = PropertiesService.getUserProperties().getProperty(COMBO_ADDON_TARGET_PROP); if (id) req.targetId = id; } catch (e) {}
-  }
+  try {
+    var up = PropertiesService.getUserProperties();
+    if (!req.targetId) {
+      var id = up.getProperty(COMBO_ADDON_TARGET_PROP);
+      if (id) req.targetId = id;
+    }
+    if (!req.kind) {
+      var k = up.getProperty(COMBO_ADDON_KIND_PROP);
+      if (k) req.kind = k;
+    }
+  } catch (e) {}
   return req;
 }
 function comboInit(req) { return {lib_symbol}.comboInit(comboAddonReq_(req)); }

@@ -103,6 +103,8 @@ PUBLIC_FILES = [
     "combo_addon_template.gs",
     "test_gas_ws_combo.py",
     "test_gas_ws_parity.py",
+    "test_gas_ws_direct_extra.py",
+    "test_gas_ws_doc_combo.py",
     "ws_window.py",
     "ws_window_ai.py",
     "native_host.py",

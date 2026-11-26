@@ -363,6 +363,7 @@ function comboRunAsk(req) {
       ok: !!req.ok,
       backup: !!req.backup,
       fastUndo: req.fastUndo,
+      kind: req.kind,
       sheet: req.sheet,
       selection: req.selection,
       table: req.table,
@@ -380,6 +381,51 @@ function comboRunAsk(req) {
 
   if (!askText) {
     return { ok: false, error: '依頼文が空です', text: '依頼文が空です', gasMs: Date.now() - t0 };
+  }
+
+  if (comboIsDocReq_(req)) {
+    var doc;
+    try {
+      doc = comboOpenDoc_(req);
+    } catch (errOpenDoc) {
+      return { ok: false, error: String(errOpenDoc && errOpenDoc.message || errOpenDoc), text: 'エラー: ' + String(errOpenDoc && errOpenDoc.message || errOpenDoc), gasMs: Date.now() - t0 };
+    }
+    var docId = doc.getId();
+    var docName = req.targetName || doc.getName();
+    if (typeof ComboPlanner !== 'undefined' && typeof ComboPlanner.plan === 'function') {
+      if (typeof ComboPlanner.setLearned === 'function') ComboPlanner.setLearned(comboGetLearned().learned);
+      var docPlan = ComboPlanner.plan(askText, 'doc', null, [], '', null);
+      if (docPlan && docPlan.fire && docPlan.ops && docPlan.ops.length) {
+        var docHit = comboRunOps({
+          kind: 'doc',
+          ops: docPlan.ops,
+          ok: !!req.ok,
+          backup: !!req.backup,
+          targetId: docId,
+          targetName: docName,
+          _doc: doc
+        });
+        if (docHit.ok) {
+          docHit.source = 'shelf';
+          docHit.text = '[棚ヒット] ' + comboFormatOpsShort_(docPlan.ops) + '\n' + docHit.text;
+        }
+        docHit.gasMs = Date.now() - t0;
+        return docHit;
+      }
+      return {
+        ok: false,
+        unfired: true,
+        plan: docPlan,
+        text: comboRenderUnfired_(docPlan),
+        gasMs: Date.now() - t0
+      };
+    }
+    return {
+      ok: false,
+      unfired: true,
+      text: '撃っていません: 棚に一発で当てはまらない文書指示です',
+      gasMs: Date.now() - t0
+    };
   }
 
   var ss;
@@ -606,6 +652,27 @@ function comboUndo(req) {
   var t0 = Date.now();
   req = req || {};
   try {
+    if (comboIsDocReq_(req)) {
+      var docU = comboOpenDoc_(req);
+      var resDoc = actUndo_({
+        target_id: docU.getId(),
+        ok: !!req.ok,
+        to: req.to ? String(req.to) : ''
+      });
+      var td = resDoc.target || {};
+      if (resDoc.ok) {
+        resDoc.text = [
+          '対象: [文書] ' + (td.name || docU.getName()),
+          '戻した: #' + resDoc.undone + '（' + (resDoc.what || '') + '）を取り消しました',
+          '控え #' + resDoc.backup + '（もう一度 戻す で元に戻せます）'
+        ].join('\n');
+      } else {
+        resDoc.text = (resDoc.needs_ok ? '止めました: ' : '戻せませんでした: ') + (resDoc.error || '');
+      }
+      resDoc.oauthToken = comboGetOAuthToken_();
+      resDoc.gasMs = Date.now() - t0;
+      return resDoc;
+    }
     var ss = comboOpenSs_(req);
     if (!req.to) {
       var cUndo = comboCache_();

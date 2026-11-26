@@ -1294,19 +1294,139 @@
         if (!wDid.length) return null;
         changed.push(sheetName + "!" + wDid.join("・") + " 幅・高さを変更");
         whatList.push("width");
+      } else if (op.shelf === "format.negred") {
+        var nrUnit = String(op.unit || "none").toLowerCase();
+        var nrBase = nrUnit === "yen" ? "¥#,##0" : nrUnit === "thousand" ? "#,##0," : nrUnit === "million" ? "#,##0,," : "#,##0";
+        var nrNeg = (op.triangle ? '"▲"' : "-") + nrBase;
+        var nrFmt = nrBase + ";[Red]" + nrNeg;
+        var nrRanges = [];
+        if (op.col) {
+          var nrColL = resolveColLetterFromTable(op.col);
+          if (!nrColL || !state.table || !state.table.data) return null;
+          var nrDm = String(state.table.data).match(/^([0-9]+)-([0-9]+)$/);
+          if (!nrDm) return null;
+          nrRanges.push(nrColL + nrDm[1] + ":" + nrColL + (state.table.total_row || nrDm[2]));
+        } else if (op.range) {
+          nrRanges.push(String(op.range).trim());
+        } else if (state.table && Array.isArray(state.table.columns) && state.table.data) {
+          var nrDm2 = String(state.table.data).match(/^([0-9]+)-([0-9]+)$/);
+          if (!nrDm2) return null;
+          var nrEnd = state.table.total_row || nrDm2[2];
+          for (var nci = 0; nci < state.table.columns.length; nci++) {
+            var nCol = state.table.columns[nci];
+            if (nCol && nCol.number && !/^(?:no\.?|番号|項番|id)$/i.test(String(nCol.name || "").trim())) {
+              nrRanges.push(nCol.col + nrDm2[1] + ":" + nCol.col + nrEnd);
+            }
+          }
+        }
+        if (!nrRanges.length) return null;
+        var snapNr = state.sheetSnapshot[sheetName];
+        for (var nri = 0; nri < nrRanges.length; nri++) {
+          var nrRg = parseSimpleA1Range(nrRanges[nri], sheetId);
+          if (!nrRg || !snapNr || !snapNr.cells || nrRg.r2 > maxRow0 || nrRg.c2 > maxCol0) return null;
+          requests.push({
+            repeatCell: {
+              range: nrRg.gridRange,
+              cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: nrFmt } } },
+              fields: "userEnteredFormat.numberFormat"
+            }
+          });
+          var nrUndoRows = [];
+          for (var nur = nrRg.r1; nur <= nrRg.r2; nur++) {
+            var nrUV = [];
+            for (var nuc = nrRg.c1; nuc <= nrRg.c2; nuc++) {
+              var npf = (snapNr.cells[nur] && snapNr.cells[nur][nuc]) || {};
+              nrUV.push({ userEnteredFormat: npf.numberFormat ? { numberFormat: JSON.parse(JSON.stringify(npf.numberFormat)) } : {} });
+            }
+            nrUndoRows.push({ values: nrUV });
+          }
+          undoRequests.unshift({ updateCells: { range: nrRg.gridRange, rows: nrUndoRows, fields: "userEnteredFormat.numberFormat" } });
+        }
+        changed.push(sheetName + "!" + nrRanges.join("・") + " 数値表示(" + nrFmt + ")");
+        whatList.push("format.negred");
+      } else if (op.shelf === "font.unify") {
+        if (op.all_sheets || !state.table || !state.table.last_col || !state.table.data) return null;
+        var fuDm = String(state.table.data).match(/^([0-9]+)-([0-9]+)$/);
+        if (!fuDm) return null;
+        var fuEndR = Number(state.table.total_row || fuDm[2]);
+        var fuA1 = "A1:" + state.table.last_col + fuEndR;
+        var fuRg = parseSimpleA1Range(fuA1, sheetId);
+        var snapFu = state.sheetSnapshot[sheetName];
+        if (!fuRg || !snapFu || !snapFu.cells || fuRg.r2 > maxRow0 || fuRg.c2 > maxCol0) return null;
+        var fuFont = String(op.font || "Noto Sans JP").trim() || "Noto Sans JP";
+        var fuSz = op.size !== undefined ? Number(op.size) : 0;
+        var fuTf = { fontFamily: fuFont };
+        var fuFields = ["userEnteredFormat.textFormat.fontFamily"];
+        if (fuSz > 0) {
+          fuTf.fontSize = fuSz;
+          fuFields.push("userEnteredFormat.textFormat.fontSize");
+        }
+        requests.push({ repeatCell: { range: fuRg.gridRange, cell: { userEnteredFormat: { textFormat: fuTf } }, fields: fuFields.join(",") } });
+        var fuUndoRows = [];
+        for (var fur = fuRg.r1; fur <= fuRg.r2; fur++) {
+          var fuUV = [];
+          for (var fuc = fuRg.c1; fuc <= fuRg.c2; fuc++) {
+            var fpf = (snapFu.cells[fur] && snapFu.cells[fur][fuc]) || {};
+            fuUV.push({ userEnteredFormat: fpf.textFormat ? { textFormat: JSON.parse(JSON.stringify(fpf.textFormat)) } : {} });
+          }
+          fuUndoRows.push({ values: fuUV });
+        }
+        undoRequests.unshift({ updateCells: { range: fuRg.gridRange, rows: fuUndoRows, fields: fuFields.join(",") } });
+        changed.push(sheetName + "! フォント「" + fuFont + "」に統一");
+        whatList.push("font.unify");
       } else if (op.shelf === "clear.format" || op.shelf === "clear.values" || op.shelf === "clear.all") {
         if (op.shelf !== "clear.format" && (!els.chkOk || !els.chkOk.checked)) return null;
         if (op.shelf === "clear.values" && op.only === "constants") return null;
         var clRg = parseSimpleA1Range(String(op.range || ""), sheetId);
         if (!clRg) return null;
+        var snapCl = state.sheetSnapshot[sheetName];
+        var canSnapCl = !!(snapCl && snapCl.cells && clRg.r2 <= maxRow0 && clRg.c2 <= maxCol0);
         if (op.shelf === "clear.format") {
           requests.push({ repeatCell: { range: clRg.gridRange, cell: {}, fields: "userEnteredFormat" } });
+          if (canSnapCl) {
+            var cfUndoRows = [];
+            for (var cfr = clRg.r1; cfr <= clRg.r2; cfr++) {
+              var cfUV = [];
+              for (var cfc = clRg.c1; cfc <= clRg.c2; cfc++) {
+                cfUV.push({ userEnteredFormat: JSON.parse(JSON.stringify((snapCl.cells[cfr] && snapCl.cells[cfr][cfc]) || {})) });
+              }
+              cfUndoRows.push({ values: cfUV });
+            }
+            undoRequests.unshift({ updateCells: { range: clRg.gridRange, rows: cfUndoRows, fields: "userEnteredFormat" } });
+          }
           changed.push(sheetName + "!" + clRg.a1 + " 書式クリア");
         } else if (op.shelf === "clear.values") {
           requests.push({ updateCells: { range: clRg.gridRange, fields: "userEnteredValue" } });
+          if (canSnapCl && snapCl.vals) {
+            var cvUndoRows = [];
+            for (var cvr = clRg.r1; cvr <= clRg.r2; cvr++) {
+              var cvUV = [];
+              for (var cvc = clRg.c1; cvc <= clRg.c2; cvc++) {
+                var oldVal = snapCl.vals[num0ToCol(cvc) + (cvr + 1)];
+                cvUV.push(oldVal ? { userEnteredValue: oldVal } : {});
+              }
+              cvUndoRows.push({ values: cvUV });
+            }
+            undoRequests.unshift({ updateCells: { range: clRg.gridRange, rows: cvUndoRows, fields: "userEnteredValue" } });
+          }
           changed.push(sheetName + "!" + clRg.a1 + " 値クリア");
         } else {
           requests.push({ updateCells: { range: clRg.gridRange, fields: "userEnteredValue,userEnteredFormat" } });
+          if (canSnapCl && snapCl.vals) {
+            var caUndoRows = [];
+            for (var car = clRg.r1; car <= clRg.r2; car++) {
+              var caUV = [];
+              for (var cac = clRg.c1; cac <= clRg.c2; cac++) {
+                var oldAv = snapCl.vals[num0ToCol(cac) + (car + 1)];
+                var oldAf = JSON.parse(JSON.stringify((snapCl.cells[car] && snapCl.cells[car][cac]) || {}));
+                var caObj = { userEnteredFormat: oldAf };
+                if (oldAv) caObj.userEnteredValue = oldAv;
+                caUV.push(caObj);
+              }
+              caUndoRows.push({ values: caUV });
+            }
+            undoRequests.unshift({ updateCells: { range: clRg.gridRange, rows: caUndoRows, fields: "userEnteredValue,userEnteredFormat" } });
+          }
           changed.push(sheetName + "!" + clRg.a1 + " すべてクリア");
         }
         whatList.push(op.shelf);
@@ -1370,8 +1490,47 @@
             sortSpecs: [{ dimensionIndex: sortColIdx, sortOrder: op.desc ? "DESCENDING" : "ASCENDING" }]
           }
         });
+        var snapS = state.sheetSnapshot[sheetName];
+        if (snapS && snapS.vals && snapS.cells && sRg.r2 <= maxRow0 && sRg.c2 <= maxCol0) {
+          var sUndoRows = [];
+          for (var sr = sRg.r1; sr <= sRg.r2; sr++) {
+            var sUV = [];
+            for (var sc = sRg.c1; sc <= sRg.c2; sc++) {
+              var oldSv = snapS.vals[num0ToCol(sc) + (sr + 1)];
+              var oldSf = JSON.parse(JSON.stringify((snapS.cells[sr] && snapS.cells[sr][sc]) || {}));
+              var cellObj = { userEnteredFormat: oldSf };
+              if (oldSv) cellObj.userEnteredValue = oldSv;
+              sUV.push(cellObj);
+            }
+            sUndoRows.push({ values: sUV });
+          }
+          undoRequests.unshift({ updateCells: { range: sRg.gridRange, rows: sUndoRows, fields: "userEnteredValue,userEnteredFormat" } });
+        }
         changed.push(sheetName + "!" + sRg.a1 + " " + op.col + "列で" + (op.desc ? "降順" : "昇順") + "並べ替え");
         whatList.push("sort");
+      } else if (op.shelf === "rows.insert" || op.shelf === "cols.insert") {
+        var isColIns = op.shelf === "cols.insert";
+        if (op.at === undefined || op.at === null || op.at === "") return null;
+        var insCnt = parseInt(op.count || 1, 10);
+        if (!insCnt || insCnt < 1 || insCnt > 50) return null;
+        var insIdx0 = isColIns ? colToNum0(resolveColLetterFromTable(op.at)) : (parseInt(op.at, 10) - 1);
+        if (isNaN(insIdx0) || insIdx0 < 0) return null;
+        var insDim = isColIns ? "COLUMNS" : "ROWS";
+        requests.push({
+          insertDimension: {
+            range: { sheetId: sheetId, dimension: insDim, startIndex: insIdx0, endIndex: insIdx0 + insCnt },
+            inheritFromBefore: insIdx0 > 0
+          }
+        });
+        undoRequests.unshift({
+          deleteDimension: {
+            range: { sheetId: sheetId, dimension: insDim, startIndex: insIdx0, endIndex: insIdx0 + insCnt }
+          }
+        });
+        snapshotMutators.push(function() { prefetchSheetSnapshot(sheetName); });
+        undoSnapshotMutators.push(function() { prefetchSheetSnapshot(sheetName); });
+        changed.push(sheetName + "!" + op.at + (isColIns ? "列" : "行目") + "の前に " + insCnt + (isColIns ? " 列" : " 行") + "挿入");
+        whatList.push(op.shelf);
       } else if (op.shelf === "banding.add" || op.shelf === "banding.remove") {
         var bSnap = state.sheetSnapshot[sheetName];
         if (!bSnap || !Array.isArray(bSnap.bandedRangeIds)) return null;

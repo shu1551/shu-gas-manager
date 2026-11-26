@@ -27,7 +27,8 @@ _FP_LOCK = threading.Lock()
 SHEETS = "https://sheets.googleapis.com/v4/spreadsheets/"
 TOKEN_LIFE = 45 * 60          # GAS の鍵はおよそ 1 時間。余裕を見て 45 分で取り直す
 LEDGER_KEEP = 30
-DIRECT_SHELVES = {"format", "bg.clear", "freeze", "unfreeze", "width", "write",
+DIRECT_SHELVES = {"format", "format.negred", "font.unify", "bg.clear", "freeze", "unfreeze", "width", "write",
+                  "clear.values", "clear.format", "sort", "rows.insert", "cols.insert", "cf.clear",
                   "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "sheet.gridlines",
                   "filter.on", "filter.off", "rows.hide", "rows.show", "cols.hide", "cols.show",
                   "note.set", "note.clear"}
@@ -173,6 +174,7 @@ class Snapshot:
         for sh in data.get("sheets") or []:
             p = sh.get("properties") or {}
             ent = self.sheets.setdefault(p.get("title"), {"props": p, "filter": sh.get("basicFilter"), "merges": sh.get("merges") or [],
+                                                          "cf_rules": sh.get("conditionalFormats") or [],
                                                           "cells": {}, "colpx": {}, "rowpx": {}, "colhid": {}, "rowhid": {}})
             for d in sh.get("data") or []:
                 r0, c0 = d.get("startRow", 0), d.get("startColumn", 0)
@@ -243,7 +245,7 @@ class DirectRunner:
 
     def _get(self, st, sid, ranges, extra_fields=""):
         fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),"
-                  "basicFilter,merges,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,note,effectiveValue(errorValue))),"
+                  "basicFilter,merges,conditionalFormats,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,note,effectiveValue(errorValue))),"
                   "columnMetadata(pixelSize,hiddenByUser),rowMetadata(pixelSize,hiddenByUser)))")
         params = [("ranges", r) for r in ranges] + [("fields", fields)]
         return Snapshot(self._call(st, "GET", SHEETS + sid, params=params))
@@ -322,6 +324,67 @@ class DirectRunner:
                     ranges.add(f"{q(sh)}!A1:{tb['last_col']}{tb['header_row'] - 1}")
                 else:
                     ranges.add(f"{q(sh)}!{a1(*pl)}")
+            elif s == "format.negred":
+                if op.get("col") or op.get("range"):
+                    pl = self._place(op, tb)
+                    ranges.add(f"{q(sh)}!{a1(*pl)}")
+                elif tb:
+                    f, l = self._table_rows(tb)
+                    r_end = tb.get("total_row") or l
+                    for c_info in tb.get("columns") or []:
+                        if c_info.get("number") and not re.fullmatch(r"no\.?|番号|項番|id", str(c_info.get("name") or "").strip(), re.IGNORECASE):
+                            ci = col_num(c_info["col"])
+                            ranges.add(f"{q(sh)}!{a1(f, ci, r_end, ci)}")
+                else:
+                    raise Skip("対象範囲が分からない")
+            elif s == "font.unify":
+                if op.get("all_sheets") or not tb:
+                    raise Skip("all_sheets または表無しはエンジンの道へ")
+                _, l = self._table_rows(tb)
+                r_end = tb.get("total_row") or l
+                if r_end * col_num(tb["last_col"]) > 1000:
+                    raise Skip("範囲が広いのでエンジンの道へ")
+                ranges.add(f"{q(sh)}!A1:{tb['last_col']}{r_end}")
+            elif s == "clear.values":
+                if not op.get("ok") or op.get("only") == "constants" or not op.get("range"):
+                    raise Skip("確認・指定条件のためエンジンの道へ")
+                r1, c1, r2, c2 = parse_a1(op["range"])
+                if (r2 - r1 + 1) * (c2 - c1 + 1) > 400:
+                    raise Skip("範囲が広いのでエンジンの道へ")
+                if tb:
+                    f, l = self._table_rows(tb)
+                    tr_end = tb.get("total_row") or l
+                    fc_n, lc_n = col_num(tb["first_col"]), col_num(tb["last_col"])
+                    if r1 < tb["header_row"] or r2 > tr_end or c1 < fc_n or c2 > lc_n:
+                        raise Skip("表外の広い削除はエンジンの道へ")
+                    data_rows = max(1, l - f + 1)
+                    if r2 >= f and (min(r2, l) - max(r1, f) + 1) > data_rows / 2:
+                        raise Skip("明細の半分超の削除はエンジンの道へ")
+                ranges.add(f"{q(sh)}!{a1(r1, c1, r2, c2)}")
+            elif s == "clear.format":
+                if not op.get("range"):
+                    raise Skip("range が要る")
+                r1, c1, r2, c2 = parse_a1(op["range"])
+                if (r2 - r1 + 1) * (c2 - c1 + 1) > 400:
+                    raise Skip("範囲が広いのでエンジンの道へ")
+                ranges.add(f"{q(sh)}!{a1(r1, c1, r2, c2)}")
+            elif s == "sort":
+                if op.get("where") or op.get("filter") or not tb:
+                    raise Skip("where/filter/表無しはエンジンの道へ")
+                if not (op.get("cols") or op.get("col")):
+                    raise Skip("列が要る")
+                f, l = self._table_rows(tb)
+                if l - f + 1 > 500:
+                    raise Skip("行数が多いためエンジンの道へ")
+                ranges.add(f"{q(sh)}!{tb['first_col']}{f}:{tb['last_col']}{l}")
+            elif s in ("rows.insert", "cols.insert"):
+                if op.get("at") in (None, ""):
+                    raise Skip("at が要る")
+                cnt = int(op.get("count") or 1)
+                if cnt < 1 or cnt > 50:
+                    raise Skip("count 範囲外")
+            elif s == "cf.clear":
+                pass
             elif s == "width":
                 if op.get("all_sheets") or op.get("auto_rows"):
                     raise Skip("all_sheets / auto_rows はエンジンの道へ")
@@ -662,6 +725,138 @@ class DirectRunner:
                 undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": "note"}})
                 area(shn, r1, c1, r2, c2)
                 changed.append(f"{shn}!{label} メモを消去")
+            elif s == "format.negred":
+                unit = str(op.get("unit") or "none").lower()
+                base = "¥#,##0" if unit == "yen" else ("#,##0," if unit == "thousand" else ("#,##0,," if unit == "million" else "#,##0"))
+                neg = ('"▲"' if op.get("triangle") else "-") + base
+                fmt = f"{base};[Red]{neg}"
+                pls = []
+                if op.get("col") or op.get("range"):
+                    pls.append(self._place(op, tb))
+                else:
+                    f_r, l_r = self._table_rows(tb)
+                    r_end = tb.get("total_row") or l_r
+                    for c_info in tb.get("columns") or []:
+                        if c_info.get("number") and not re.fullmatch(r"no\.?|番号|項番|id", str(c_info.get("name") or "").strip(), re.IGNORECASE):
+                            ci = col_num(c_info["col"])
+                            pls.append((f_r, ci, r_end, ci))
+                if not pls:
+                    raise Skip("数値列が見つからない")
+                nf_obj = {"type": "NUMBER", "pattern": fmt}
+                done_lbls = []
+                for r1, c1, r2, c2 in pls:
+                    g = grid(sid, r1, c1, r2, c2)
+                    req.append({"repeatCell": {"range": g, "cell": {"userEnteredFormat": {"numberFormat": nf_obj}}, "fields": "userEnteredFormat.numberFormat"}})
+                    rows = [{"values": [{"userEnteredFormat": clean_format((ent["cells"].get((r, c)) or {}).get("userEnteredFormat"))}
+                                        for c in range(c1, c2 + 1)]} for r in range(r1, r2 + 1)]
+                    undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": "userEnteredFormat.numberFormat"}})
+                    area(shn, r1, c1, r2, c2)
+                    done_lbls.append(a1(r1, c1, r2, c2))
+                changed.append(f"{shn}!{'・'.join(done_lbls)} 数値表示（{fmt}）を適用")
+            elif s == "font.unify":
+                font_nm = str(op.get("font") or "Noto Sans JP").strip() or "Noto Sans JP"
+                sz = int(op["size"]) if op.get("size") is not None else 0
+                _, l_r = self._table_rows(tb)
+                r1, c1, r2, c2 = 1, 1, tb.get("total_row") or l_r, col_num(tb["last_col"])
+                g = grid(sid, r1, c1, r2, c2)
+                tf_u = {"fontFamily": font_nm}
+                flds = ["userEnteredFormat.textFormat.fontFamily"]
+                if sz > 0:
+                    tf_u["fontSize"] = sz
+                    flds.append("userEnteredFormat.textFormat.fontSize")
+                req.append({"repeatCell": {"range": g, "cell": {"userEnteredFormat": {"textFormat": tf_u}}, "fields": ",".join(flds)}})
+                rows = [{"values": [{"userEnteredFormat": clean_format((ent["cells"].get((r, c)) or {}).get("userEnteredFormat"))}
+                                    for c in range(c1, c2 + 1)]} for r in range(r1, r2 + 1)]
+                undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": ",".join(flds)}})
+                area(shn, r1, c1, r2, c2)
+                changed.append(f"{shn}! フォントを「{font_nm}」" + (f"・{sz}pt " if sz > 0 else "") + "に統一")
+            elif s == "clear.values":
+                r1, c1, r2, c2 = parse_a1(op["range"])
+                g = grid(sid, r1, c1, r2, c2)
+                req.append({"updateCells": {"range": g, "fields": "userEnteredValue"}})
+                rows = [{"values": [{"userEnteredValue": (ent["cells"].get((r, c)) or {}).get("userEnteredValue")}
+                                    if (ent["cells"].get((r, c)) or {}).get("userEnteredValue") else {}
+                                    for c in range(c1, c2 + 1)]} for r in range(r1, r2 + 1)]
+                undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": "userEnteredValue"}})
+                area(shn, r1, c1, r2, c2)
+                changed.append(f"{shn}!{a1(r1, c1, r2, c2)} 値を消去")
+            elif s == "clear.format":
+                r1, c1, r2, c2 = parse_a1(op["range"])
+                g = grid(sid, r1, c1, r2, c2)
+                req.append({"repeatCell": {"range": g, "cell": {}, "fields": "userEnteredFormat"}})
+                rows = [{"values": [{"userEnteredFormat": clean_format((ent["cells"].get((r, c)) or {}).get("userEnteredFormat"))}
+                                    for c in range(c1, c2 + 1)]} for r in range(r1, r2 + 1)]
+                undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": "userEnteredFormat"}})
+                area(shn, r1, c1, r2, c2)
+                changed.append(f"{shn}!{a1(r1, c1, r2, c2)} 書式をクリア")
+            elif s == "sort":
+                f_r, l_r = self._table_rows(tb)
+                r1, c1, r2, c2 = f_r, col_num(tb["first_col"]), l_r, col_num(tb["last_col"])
+                raw_specs = op.get("cols") if isinstance(op.get("cols"), list) else ([op["cols"]] if op.get("cols") else [])
+                sort_specs, lbl_specs = [], []
+                if raw_specs:
+                    for item in raw_specs:
+                        if isinstance(item, dict):
+                            cn, is_desc = item.get("col"), bool(item.get("desc"))
+                        else:
+                            st_s = str(item or "").strip()
+                            is_desc = st_s.startswith("-") or st_s.lower().endswith(":desc")
+                            cn = re.sub(r":(?:asc|desc)$", "", st_s.lstrip("-"), flags=re.IGNORECASE).strip()
+                        ci = self._col_of(tb, cn)
+                        sort_specs.append({"dimensionIndex": ci - 1, "sortOrder": "DESCENDING" if is_desc else "ASCENDING"})
+                        lbl_specs.append(f"{cn}({'降順' if is_desc else '昇順'})")
+                else:
+                    ci = self._col_of(tb, op["col"])
+                    is_desc = bool(op.get("desc"))
+                    sort_specs.append({"dimensionIndex": ci - 1, "sortOrder": "DESCENDING" if is_desc else "ASCENDING"})
+                    lbl_specs.append(f"{op['col']} で{'降順' if is_desc else '昇順'}")
+                g = grid(sid, r1, c1, r2, c2)
+                req.append({"sortRange": {"range": g, "sortSpecs": sort_specs}})
+                rows = [{"values": [
+                    {k: v for k, v in (
+                        ("userEnteredValue", (ent["cells"].get((r, c)) or {}).get("userEnteredValue")),
+                        ("userEnteredFormat", clean_format((ent["cells"].get((r, c)) or {}).get("userEnteredFormat"))),
+                    ) if v is not None}
+                    for c in range(c1, c2 + 1)
+                ]} for r in range(r1, r2 + 1)]
+                undo.insert(0, {"updateCells": {"range": g, "rows": rows, "fields": "userEnteredValue,userEnteredFormat"}})
+                area(shn, r1, c1, r2, c2)
+                changed.append(f"{shn}!{a1(r1, c1, r2, c2)} {'→'.join(lbl_specs)} に並べ替え")
+            elif s in ("rows.insert", "cols.insert"):
+                is_col_ins = (s == "cols.insert")
+                cnt = int(op.get("count") or 1)
+                at_num = (self._col_of(tb, op["at"]) if tb else col_num(op["at"])) if is_col_ins else int(op["at"])
+                if at_num < 1:
+                    raise Skip("挿入位置が不正")
+                dim = "COLUMNS" if is_col_ins else "ROWS"
+                req.append({"insertDimension": {
+                    "range": {"sheetId": sid, "dimension": dim, "startIndex": at_num - 1, "endIndex": at_num - 1 + cnt},
+                    "inheritFromBefore": at_num > 1
+                }})
+                undo.insert(0, {"deleteDimension": {"range": {"sheetId": sid, "dimension": dim, "startIndex": at_num - 1, "endIndex": at_num - 1 + cnt}}})
+                area(shn, 0, 0, 0, 0)
+                changed.append(f"{shn}!{op['at']}{'列' if is_col_ins else '行目'}の前に {cnt} {'列' if is_col_ins else '行'}挿入")
+            elif s == "cf.clear":
+                rules = ent.get("cf_rules") or []
+                targets_cf = []
+                if not op.get("range"):
+                    targets_cf = list(enumerate(rules))
+                else:
+                    tr1, tc1, tr2, tc2 = parse_a1(op["range"])
+                    for idx_cf, rule in enumerate(rules):
+                        if any(
+                            r_g.get("sheetId", sid) == sid and _intersects(r_g, tr1, tc1, tr2, tc2)
+                            for r_g in (rule.get("ranges") or [])
+                        ):
+                            targets_cf.append((idx_cf, rule))
+                if not targets_cf:
+                    raise Skip("消す条件付き書式が無い")
+                for idx_cf, _ in reversed(targets_cf):
+                    req.append({"deleteConditionalFormatRule": {"sheetId": sid, "index": idx_cf}})
+                for idx_cf, rule in targets_cf:
+                    undo.append({"addConditionalFormatRule": {"rule": rule, "index": idx_cf}})
+                area(shn, 0, 0, 0, 0)
+                changed.append(f"{shn}!{op.get('range') or 'シート全体'} 条件付き書式を解除（{len(targets_cf)} 件）")
         return req, undo, changed, touched
 
     # ------------------------------------------------------------ 指紋（撃った後の姿。戻す前に人の手直しを見つける）
@@ -673,6 +868,7 @@ class DirectRunner:
             p = ent.get("props") or {}
             if r1 == 0:
                 parts.append([shn, p.get("title"), p.get("hidden"), p.get("tabColorStyle"), p.get("gridProperties"), ent.get("filter"),
+                              ent.get("cf_rules"),
                               sorted(ent.get("colpx", {}).items()), sorted(ent.get("rowpx", {}).items()),
                               sorted(ent.get("colhid", {}).items()), sorted(ent.get("rowhid", {}).items())])
             else:
@@ -752,7 +948,7 @@ class DirectRunner:
         led = st.setdefault("direct_ledger", [])
         n = (max([x["n"] for x in led], default=0) + 1)
         after_ranges = sorted(set(ranges) | {f"{q(s)}!{a1(r1, c1, r2, c2)}" for s, r1, c1, r2, c2 in touched if r1})
-        writes = any(o.get("shelf") == "write" for o in ops)
+        writes = any(o.get("shelf") in ("write", "clear.values", "sort", "rows.insert", "cols.insert") for o in ops)
         after, fp = None, None
         if writes:     # 値を書いたときは、新しいエラーを返事に入れるので、ここで読み直す
             try:
@@ -771,9 +967,9 @@ class DirectRunner:
             notes.append("新しいエラー: " + "・".join(news[:5]) + (f" ほか {len(news) - 5} 件" if len(news) > 5 else ""))
         led.append({"n": n, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "id": tgt["id"], "name": tgt.get("name", ""),
                     "sheet": sheet, "what": " ／ ".join(changed)[:120], "undo": undo, "touched": touched,
-                    "fp": fp, "ranges": ranges, "shape": any(o.get("shelf") in ("write", "sheet.rename") for o in ops)})
+                    "fp": fp, "ranges": ranges, "shape": any(o.get("shelf") in ("write", "clear.values", "sort", "rows.insert", "cols.insert", "sheet.rename") for o in ops)})
         del led[:-LEDGER_KEEP]
-        if any(o.get("shelf") in ("write", "sheet.rename") for o in ops):
+        if any(o.get("shelf") in ("write", "clear.values", "sort", "rows.insert", "cols.insert", "sheet.rename") for o in ops):
             st.pop("table_cache", None)      # 値やシート名が変わったので、次の頼みで表の形を見直す
         out_t = {k: tgt[k] for k in ("id", "name", "kind", "url") if tgt.get(k)}
         out_t["sheet"] = next((o.get("to") for o in ops if o.get("shelf") == "sheet.rename" and (o.get("name") or sheet) == sheet), None) or sheet
@@ -782,7 +978,7 @@ class DirectRunner:
     # ------------------------------------------------------------ 裏の指紋
     def _fp_later(self, n, token, sid, ranges, touched):
         fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),"
-                  "basicFilter,merges,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,note,effectiveValue(errorValue))),"
+                  "basicFilter,merges,conditionalFormats,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,note,effectiveValue(errorValue))),"
                   "columnMetadata(pixelSize,hiddenByUser),rowMetadata(pixelSize,hiddenByUser)))")
 
         def run():

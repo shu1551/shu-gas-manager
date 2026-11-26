@@ -769,6 +769,7 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
                          "enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
         "oauthScopes": [
             "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/documents",
             "https://www.googleapis.com/auth/drive",
             "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/drive.scripts",
@@ -778,6 +779,7 @@ def build_combo_addon_files(engine_lib_id, engine_version, lib_symbol="shucomboe
         "addOns": {
             "common": {"name": "GASコンボ", "logoUrl": "https://www.gstatic.com/images/icons/material/system/1x/bolt_black_48dp.png"},
             "sheets": {"homepageTrigger": {"runFunction": "onHome"}, "onFileScopeGrantedTrigger": {"runFunction": "onFileScopeGranted"}},
+            "docs": {"homepageTrigger": {"runFunction": "onHome"}, "onFileScopeGrantedTrigger": {"runFunction": "onFileScopeGranted"}},
         },
         "webapp": {"executeAs": "USER_ACCESSING", "access": "MYSELF"},   # 操作窓（前のサイドバーの HTML）を別の窓で開く
         # Workspace アドオンを正式にデプロイするには、外へ通信する先の一覧が要る（AI の API 鍵の道・Sheets API・書き出し）

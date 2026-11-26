@@ -4,7 +4,8 @@
   var QUICK_USAGE_LS_KEY = "gascombo_quick_usage_v1";
   var QUICK_UI_LS_KEY = "gascombo_quick_ui_v1";
   var QUICK_TAG = { my: "マイ", shelf: "棚" };
-  var _quickShelfCache = null;
+  var _quickShelfCacheSheet = null;
+  var _quickShelfCacheDoc = null;
   var _quickSynRules = null;
   var quickPinSaveTimer = null;
   var quickSaveTimer = {};
@@ -63,15 +64,22 @@
   }
 
   function quickShelfItems() {
-    if (_quickShelfCache) return _quickShelfCache;
+    var isDoc = !!(state.target && state.target.kind === "doc");
+    if (isDoc && _quickShelfCacheDoc) return _quickShelfCacheDoc;
+    if (!isDoc && _quickShelfCacheSheet) return _quickShelfCacheSheet;
     var shelves = (typeof COMBO_CATALOG_DATA !== "undefined" && COMBO_CATALOG_DATA.shelves) || [];
-    _quickShelfCache = shelves.filter(function(sh) { return sh.searchable !== false && sh.kind !== "doc" && sh.name !== "api"; }).map(function(sh) {
+    var items = shelves.filter(function(sh) {
+      if (sh.searchable === false || sh.name === "api") return false;
+      return isDoc ? (sh.kind === "doc" || sh.shared) : (sh.kind !== "doc");
+    }).map(function(sh) {
       var needArgs = (sh.args || []).some(function(a) { return a.req; });
       var ex = (Array.isArray(sh.examples) && sh.examples.length && Array.isArray(sh.examples[0]) && sh.examples[0][0])
         ? String(sh.examples[0][0]) : "";
       return quickAttachNorm({ src: "shelf", name: sh.name, label: sh.title || sh.name, cat: sh.category || "", words: sh.words || [], desc: "", example: ex, needArgs: needArgs });
     });
-    return _quickShelfCache;
+    if (isDoc) _quickShelfCacheDoc = items;
+    else _quickShelfCacheSheet = items;
+    return items;
   }
 
   function quickCatList() {
@@ -2268,10 +2276,16 @@
     switchTab("list");
   }
   if (hasGasBridge()) {
+    var initKind = "";
+    try {
+      var usp = new URLSearchParams(window.location.search || "");
+      initKind = usp.get("kind") || "";
+    } catch (_eUsp) {}
     runServerAction({
       fnName: "comboInit",
       payload: {
         targetId: "",
+        kind: initKind,
         sheet: "",
         assumeActive: true,
         includeQuick: true,

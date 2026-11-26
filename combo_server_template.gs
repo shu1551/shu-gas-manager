@@ -90,6 +90,64 @@ function comboSetTestTarget(ssId) {
  * @param {Object} req リクエスト
  * @return {Spreadsheet}
  */
+function comboIsDocReq_(req) {
+  if (req && (req.kind === 'doc' || (req.target && req.target.kind === 'doc'))) return true;
+  if (req && Array.isArray(req.ops) && req.ops.length && req.ops.every(function (o) { return o && /^doc\./.test(String(o.shelf || '')); })) return true;
+  if (req && req.kind === 'sheet') return false;
+  try {
+    if (typeof SpreadsheetApp !== 'undefined' && typeof SpreadsheetApp.getActiveSpreadsheet === 'function' && SpreadsheetApp.getActiveSpreadsheet()) return false;
+  } catch (e1) {}
+  try {
+    if (typeof DocumentApp !== 'undefined' && typeof DocumentApp.getActiveDocument === 'function' && DocumentApp.getActiveDocument()) return true;
+  } catch (e2) {}
+  return false;
+}
+
+function comboOpenDoc_(req) {
+  req = req || {};
+  var reqId = String(req.targetId || (req.target && req.target.id) || '').trim();
+  var active = null;
+  try {
+    if (typeof DocumentApp !== 'undefined' && typeof DocumentApp.getActiveDocument === 'function') {
+      active = DocumentApp.getActiveDocument();
+    }
+  } catch (e) {}
+  if (active && (!reqId || req.assumeActive === true || active.getId() === reqId)) {
+    return active;
+  }
+  var propId = '';
+  try {
+    propId = PropertiesService.getUserProperties().getProperty(COMBO_PROP_TARGET) || '';
+  } catch (e2) {}
+  var id = reqId || propId || '';
+  if (id && typeof DocumentApp !== 'undefined' && typeof DocumentApp.openById === 'function') {
+    return DocumentApp.openById(id);
+  }
+  if (active) return active;
+  throw new ArgError('対象のドキュメントを開けません（targetId を指定してください）');
+}
+
+function comboDocOutline_(doc) {
+  var out = [];
+  try {
+    var body = doc && typeof doc.getBody === 'function' ? doc.getBody() : null;
+    if (!body || typeof body.getNumChildren !== 'function') return out;
+    var n = body.getNumChildren();
+    for (var i = 0; i < n; i++) {
+      var ch = body.getChild(i);
+      if (typeof DocumentApp !== 'undefined' && DocumentApp.ElementType && ch.getType() === DocumentApp.ElementType.PARAGRAPH) {
+        var p = ch.asParagraph();
+        var h = p.getHeading();
+        if (h && DocumentApp.ParagraphHeading && h !== DocumentApp.ParagraphHeading.NORMAL) {
+          var txt = String(p.getText() || '').trim();
+          if (txt) out.push({ level: String(h), text: txt });
+        }
+      }
+    }
+  } catch (e) {}
+  return out;
+}
+
 function comboOpenSs_(req) {
   req = req || {};
   var reqId = String(req.targetId || (req.target && req.target.id) || '').trim();
@@ -295,6 +353,43 @@ function comboInit(req) {
     req = req || {};
     var allProps = null;
     try { allProps = PropertiesService.getUserProperties().getProperties() || null; } catch (eP) {}
+    if (comboIsDocReq_(req)) {
+      var doc = comboOpenDoc_(req);
+      var docId = doc.getId();
+      var docName = doc.getName();
+      var docOutline = comboDocOutline_(doc);
+      var docOut = {
+        ok: true,
+        target: {
+          id: docId,
+          name: docName,
+          kind: 'doc',
+          url: 'https://docs.google.com/document/d/' + docId + '/edit',
+          sheet: ''
+        },
+        oauthToken: comboGetOAuthToken_(),
+        sheets: [],
+        sheetInfos: [],
+        table: null,
+        outline: docOutline,
+        selection: '',
+        scope: null,
+        config: comboSanitizeConfig_(comboGetRawConfig_(allProps)),
+        postboxPendingCount: comboPostboxPoll().count
+      };
+      if (req.includeQuick) {
+        docOut.quick = comboQuickList({
+          force: !!req.forceQuick,
+          targetId: docId,
+          _skipToken: true,
+          _allProps: allProps,
+          wantCodes: !!req.wantCodes,
+          clientStamp: req.clientStamp || ''
+        });
+      }
+      docOut.gasMs = Date.now() - t0;
+      return docOut;
+    }
     var ss = comboOpenSs_(req);
     var selInfo = comboGetSelectionInfo_(ss, req);
     var sh = sheetOf_(ss, selInfo.sheet, '');
@@ -366,6 +461,19 @@ function comboPollSelection(req) {
       return {
         ok: true,
         postboxDone: comboPopPostboxDone_(String(req.targetId).trim()),
+        gasMs: Date.now() - t0
+      };
+    }
+    if (comboIsDocReq_(req)) {
+      var docP = comboOpenDoc_(req);
+      return {
+        ok: true,
+        kind: 'doc',
+        sheet: '',
+        selection: '',
+        scope: null,
+        oauthToken: comboGetOAuthToken_(),
+        postboxDone: comboPopPostboxDone_(docP.getId()),
         gasMs: Date.now() - t0
       };
     }
@@ -463,6 +571,30 @@ function comboLook(req) {
   var t0 = Date.now();
   try {
     req = req || {};
+    if (comboIsDocReq_(req)) {
+      var doc = comboOpenDoc_(req);
+      var docId = doc.getId();
+      var docName = doc.getName();
+      var outline = comboDocOutline_(doc);
+      var docUrl = 'https://docs.google.com/document/d/' + docId + '/edit';
+      var docTarget = { id: docId, name: docName, kind: 'doc', url: docUrl, sheet: '' };
+      var linesD = [
+        '対象: [文書] ' + docName,
+        'URL: ' + docUrl,
+        outline.length ? ('見出し（' + outline.length + ' 件）: ' + outline.slice(0, 8).map(function (x) { return x.text; }).join(' ／ ')) : '見出し: なし'
+      ];
+      return {
+        ok: true,
+        target: docTarget,
+        oauthToken: comboGetOAuthToken_(),
+        sheets: [],
+        sheetInfos: [],
+        table: null,
+        outline: outline,
+        text: linesD.join('\n'),
+        gasMs: Date.now() - t0
+      };
+    }
     var ss = comboOpenSs_(req);
     var selInfo = comboGetSelectionInfo_(ss, req);
     var sh = sheetOf_(ss, req.sheet || selInfo.sheet, '');
@@ -962,6 +1094,74 @@ function comboRunOps(req) {
   if (ops && !Array.isArray(ops) && ops.shelf) ops = [ops];
   if (!Array.isArray(ops) || !ops.length) {
     return { ok: false, error: 'ops が空です', text: 'エラー: ops が空です', gasMs: Date.now() - t0 };
+  }
+
+  if (comboIsDocReq_(req)) {
+    try {
+      var doc = req._doc || comboOpenDoc_(req);
+      var docId = String(req.targetId || (req.target && req.target.id) || '').trim() || doc.getId();
+      var docName = req.targetName || doc.getName();
+      var docUrl = 'https://docs.google.com/document/d/' + docId + '/edit';
+      var effOkDoc = !!req.ok || ops.some(function (o) { return !!(o && o.ok === true); });
+      if (typeof actDo_ === 'function') {
+        var docRes = actDo_({
+          target: { id: docId, kind: 'doc' },
+          ops: ops,
+          ok: effOkDoc,
+          backup: !!req.backup
+        });
+        docRes.oauthToken = comboGetOAuthToken_();
+        docRes.text = comboFormatDoText_(docRes, !!req.backup);
+        docRes.gasMs = Date.now() - t0;
+        return docRes;
+      }
+      var docCtx = {
+        wideKey: '',
+        kind: 'doc',
+        file: doc,
+        ss: null,
+        doc: doc,
+        ok: effOkDoc,
+        changed: [],
+        notes: [],
+        remaining: [],
+        n: 0,
+        isNew: false,
+        _file: { id: docId, name: docName, url: docUrl }
+      };
+      for (var di = 0; di < ops.length; di++) {
+        var dop = ops[di];
+        var dfn = SHELF[dop.shelf];
+        if (!dfn) throw new ArgError('棚「' + dop.shelf + '」はありません');
+        docCtx.opNo = di + 1;
+        docCtx.opName = dop.shelf;
+        dfn(docCtx, dop);
+      }
+      var docOut = {
+        ok: true,
+        target: { id: docId, name: docName, kind: 'doc', url: docUrl, sheet: '' },
+        changed: docCtx.changed,
+        notes: docCtx.notes,
+        remaining: docCtx.remaining,
+        backup: 0,
+        oauthToken: comboGetOAuthToken_()
+      };
+      docOut.text = comboFormatDoText_(docOut, false);
+      docOut.gasMs = Date.now() - t0;
+      return docOut;
+    } catch (errDoc) {
+      var docErr = {
+        ok: false,
+        error: String(errDoc && errDoc.message || errDoc),
+        blocked: !!(errDoc && errDoc.isBlocked),
+        needs_ok: !!(errDoc && errDoc.isBlocked),
+        arg: !!(errDoc && errDoc.isArg),
+        target: { id: String(req.targetId || ''), name: req.targetName || '', kind: 'doc', sheet: '' }
+      };
+      docErr.text = comboFormatDoText_(docErr, false);
+      docErr.gasMs = Date.now() - t0;
+      return docErr;
+    }
   }
 
   var ss;
@@ -1532,6 +1732,7 @@ function comboRunAsk(req) {
       ok: !!req.ok,
       backup: !!req.backup,
       fastUndo: req.fastUndo,
+      kind: req.kind,
       sheet: req.sheet,
       selection: req.selection,
       table: req.table,
@@ -1549,6 +1750,51 @@ function comboRunAsk(req) {
 
   if (!askText) {
     return { ok: false, error: '依頼文が空です', text: '依頼文が空です', gasMs: Date.now() - t0 };
+  }
+
+  if (comboIsDocReq_(req)) {
+    var doc;
+    try {
+      doc = comboOpenDoc_(req);
+    } catch (errOpenDoc) {
+      return { ok: false, error: String(errOpenDoc && errOpenDoc.message || errOpenDoc), text: 'エラー: ' + String(errOpenDoc && errOpenDoc.message || errOpenDoc), gasMs: Date.now() - t0 };
+    }
+    var docId = doc.getId();
+    var docName = req.targetName || doc.getName();
+    if (typeof ComboPlanner !== 'undefined' && typeof ComboPlanner.plan === 'function') {
+      if (typeof ComboPlanner.setLearned === 'function') ComboPlanner.setLearned(comboGetLearned().learned);
+      var docPlan = ComboPlanner.plan(askText, 'doc', null, [], '', null);
+      if (docPlan && docPlan.fire && docPlan.ops && docPlan.ops.length) {
+        var docHit = comboRunOps({
+          kind: 'doc',
+          ops: docPlan.ops,
+          ok: !!req.ok,
+          backup: !!req.backup,
+          targetId: docId,
+          targetName: docName,
+          _doc: doc
+        });
+        if (docHit.ok) {
+          docHit.source = 'shelf';
+          docHit.text = '[棚ヒット] ' + comboFormatOpsShort_(docPlan.ops) + '\n' + docHit.text;
+        }
+        docHit.gasMs = Date.now() - t0;
+        return docHit;
+      }
+      return {
+        ok: false,
+        unfired: true,
+        plan: docPlan,
+        text: comboRenderUnfired_(docPlan),
+        gasMs: Date.now() - t0
+      };
+    }
+    return {
+      ok: false,
+      unfired: true,
+      text: '撃っていません: 棚に一発で当てはまらない文書指示です',
+      gasMs: Date.now() - t0
+    };
   }
 
   var ss;
@@ -1775,6 +2021,27 @@ function comboUndo(req) {
   var t0 = Date.now();
   req = req || {};
   try {
+    if (comboIsDocReq_(req)) {
+      var docU = comboOpenDoc_(req);
+      var resDoc = actUndo_({
+        target_id: docU.getId(),
+        ok: !!req.ok,
+        to: req.to ? String(req.to) : ''
+      });
+      var td = resDoc.target || {};
+      if (resDoc.ok) {
+        resDoc.text = [
+          '対象: [文書] ' + (td.name || docU.getName()),
+          '戻した: #' + resDoc.undone + '（' + (resDoc.what || '') + '）を取り消しました',
+          '控え #' + resDoc.backup + '（もう一度 戻す で元に戻せます）'
+        ].join('\n');
+      } else {
+        resDoc.text = (resDoc.needs_ok ? '止めました: ' : '戻せませんでした: ') + (resDoc.error || '');
+      }
+      resDoc.oauthToken = comboGetOAuthToken_();
+      resDoc.gasMs = Date.now() - t0;
+      return resDoc;
+    }
     var ss = comboOpenSs_(req);
     if (!req.to) {
       var cUndo = comboCache_();

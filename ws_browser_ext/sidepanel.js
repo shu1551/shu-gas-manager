@@ -47,13 +47,16 @@ async function base() {
 
 async function refresh() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const m = String((tab && tab.url) || "").match(/docs\.google\.com\/spreadsheets\/d\/([\w-]+)/);
-  if (!m) { if (!curId) show("スプレッドシートのタブで開くと、そのシートを相手に GASコンボが使えます。"); return; }
-  if (m[1] === curId) return;
+  const m = String((tab && tab.url) || "").match(/docs\.google\.com\/(spreadsheets|document)\/d\/([\w-]+)/);
+  if (!m) { if (!curId) show("スプレッドシートまたはドキュメントのタブで開くと、そのファイルを相手に GASコンボが使えます。"); return; }
+  const kind = m[1] === "document" ? "doc" : "sheet";
+  const fileId = m[2];
+  const sig = kind + ":" + fileId;
+  if (sig === curId) return;
   const b = await base();
   if (!b) { show("GASコンボの画面の番地がまだありません。AI に「GASコンボを入れて」と頼む（py gas.py combo addon）と番地が入るので、その後このサイドパネルを閉じて開き直してください。"); return; }
-  curId = m[1];
-  frame.src = b + (b.indexOf("?") >= 0 ? "&" : "?") + "id=" + encodeURIComponent(curId) + "&z=1";
+  curId = sig;
+  frame.src = b + (b.indexOf("?") >= 0 ? "&" : "?") + "id=" + encodeURIComponent(fileId) + "&kind=" + encodeURIComponent(kind) + "&z=1";
   msg.style.display = "none";
   frame.style.display = "block";
 }

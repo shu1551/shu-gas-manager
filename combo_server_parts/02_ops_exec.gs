@@ -73,6 +73,74 @@ function comboRunOps(req) {
     return { ok: false, error: 'ops が空です', text: 'エラー: ops が空です', gasMs: Date.now() - t0 };
   }
 
+  if (comboIsDocReq_(req)) {
+    try {
+      var doc = req._doc || comboOpenDoc_(req);
+      var docId = String(req.targetId || (req.target && req.target.id) || '').trim() || doc.getId();
+      var docName = req.targetName || doc.getName();
+      var docUrl = 'https://docs.google.com/document/d/' + docId + '/edit';
+      var effOkDoc = !!req.ok || ops.some(function (o) { return !!(o && o.ok === true); });
+      if (typeof actDo_ === 'function') {
+        var docRes = actDo_({
+          target: { id: docId, kind: 'doc' },
+          ops: ops,
+          ok: effOkDoc,
+          backup: !!req.backup
+        });
+        docRes.oauthToken = comboGetOAuthToken_();
+        docRes.text = comboFormatDoText_(docRes, !!req.backup);
+        docRes.gasMs = Date.now() - t0;
+        return docRes;
+      }
+      var docCtx = {
+        wideKey: '',
+        kind: 'doc',
+        file: doc,
+        ss: null,
+        doc: doc,
+        ok: effOkDoc,
+        changed: [],
+        notes: [],
+        remaining: [],
+        n: 0,
+        isNew: false,
+        _file: { id: docId, name: docName, url: docUrl }
+      };
+      for (var di = 0; di < ops.length; di++) {
+        var dop = ops[di];
+        var dfn = SHELF[dop.shelf];
+        if (!dfn) throw new ArgError('棚「' + dop.shelf + '」はありません');
+        docCtx.opNo = di + 1;
+        docCtx.opName = dop.shelf;
+        dfn(docCtx, dop);
+      }
+      var docOut = {
+        ok: true,
+        target: { id: docId, name: docName, kind: 'doc', url: docUrl, sheet: '' },
+        changed: docCtx.changed,
+        notes: docCtx.notes,
+        remaining: docCtx.remaining,
+        backup: 0,
+        oauthToken: comboGetOAuthToken_()
+      };
+      docOut.text = comboFormatDoText_(docOut, false);
+      docOut.gasMs = Date.now() - t0;
+      return docOut;
+    } catch (errDoc) {
+      var docErr = {
+        ok: false,
+        error: String(errDoc && errDoc.message || errDoc),
+        blocked: !!(errDoc && errDoc.isBlocked),
+        needs_ok: !!(errDoc && errDoc.isBlocked),
+        arg: !!(errDoc && errDoc.isArg),
+        target: { id: String(req.targetId || ''), name: req.targetName || '', kind: 'doc', sheet: '' }
+      };
+      docErr.text = comboFormatDoText_(docErr, false);
+      docErr.gasMs = Date.now() - t0;
+      return docErr;
+    }
+  }
+
   var ss;
   try {
     ss = req._ss || comboOpenSs_(req);
