@@ -404,6 +404,16 @@ def build_combo_files(
         raise RuntimeError("combo_sidebar_template.html に必須の注入プレースホルダーが見つかりません")
     sidebar_out = sidebar_src.replace("/*__COMBO_CATALOG_DATA__*/", html_cat, 1)
     sidebar_out = sidebar_out.replace("/*__COMBO_PLANNER_JS__*/", html_planner, 1)
+    shared_defs_p = Path(__file__).resolve().parent / "ws_shared_defs.json"
+    if shared_defs_p.exists() and "/*__WS_SHARED_COLOR_MAP_START__*/" in sidebar_out and "/*__WS_SHARED_COLOR_MAP_END__*/" in sidebar_out:
+        _sdefs = json.loads(shared_defs_p.read_text(encoding="utf-8"))
+        _cmap_json = json.dumps(_sdefs.get("color_map") or {}, ensure_ascii=False, separators=(",", ":"))
+        sidebar_out = re.sub(
+            r"/\*__WS_SHARED_COLOR_MAP_START__\*/[\s\S]*?/\*__WS_SHARED_COLOR_MAP_END__\*/",
+            f"var DIRECT_COLOR_MAP = {_cmap_json};",
+            sidebar_out,
+            count=1,
+        )
 
     out_files = [
         {"name": "appsscript", "type": "JSON", "source": json.dumps(manifest, ensure_ascii=False, indent=2)},

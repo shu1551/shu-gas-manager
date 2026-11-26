@@ -31,26 +31,23 @@ DIRECT_SHELVES = {"format", "bg.clear", "freeze", "unfreeze", "width", "write",
                   "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "sheet.gridlines",
                   "filter.on", "filter.off", "rows.hide", "rows.show", "cols.hide", "cols.show",
                   "note.set", "note.clear"}
-BORDER_COLOR = {"red": 0x9E / 255, "green": 0x9E / 255, "blue": 0x9E / 255}   # エンジンの STYLE.border（#9E9E9E）
+_SHARED_DEFS_FILE = Path(__file__).resolve().parent / "ws_shared_defs.json"
+
+
+def load_shared_defs(path=None):
+    """Python・JS 共通の色・罫線・エラー表記定義（ws_shared_defs.json）を読み込む。"""
+    p = Path(path) if path else _SHARED_DEFS_FILE
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+_SHARED_DEFS = load_shared_defs()
+_BC255 = _SHARED_DEFS["border_color"]["rgb255"]
+BORDER_COLOR = {"red": _BC255[0] / 255, "green": _BC255[1] / 255, "blue": _BC255[2] / 255}   # エンジンの STYLE.border（#9E9E9E）
 
 # エンジンの rgb_ と同じ色の名前（どちらの道でも同じ色になるように）
-COLOR_MAP = {
-    "黒": "#000000", "black": "#000000", "白": "#FFFFFF", "white": "#FFFFFF",
-    "赤": "#FF0000", "red": "#FF0000", "青": "#0000FF", "blue": "#0000FF",
-    "緑": "#008000", "green": "#008000", "黄": "#FFFF00", "yellow": "#FFFF00",
-    "橙": "#FFA500", "オレンジ": "#FFA500", "orange": "#FFA500",
-    "紫": "#800080", "purple": "#800080", "桃": "#FFC0CB", "ピンク": "#FFC0CB", "pink": "#FFC0CB",
-    "灰": "#808080", "灰色": "#808080", "グレー": "#808080", "gray": "#808080", "grey": "#808080",
-    "水色": "#00FFFF", "シアン": "#00FFFF", "cyan": "#00FFFF", "lightblue": "#ADD8E6",
-    "紺": "#000080", "ネイビー": "#000080", "navy": "#000080",
-    "茶": "#8B4513", "茶色": "#8B4513", "brown": "#8B4513",
-    "薄赤": "#FCE4D6", "薄青": "#D9E1F2", "薄緑": "#E2EFDA", "薄黄": "#FFF2CC", "薄灰": "#F2F2F2", "薄灰色": "#F2F2F2",
-    "薄グレー": "#F2F2F2", "薄橙": "#FCE5CD", "薄紫": "#EAD1DC",
-    "lightred": "#FCE4D6", "lightgreen": "#E2EFDA", "lightyellow": "#FFF2CC", "lightgray": "#F2F2F2",
-}
-NONE_WORDS = {"なし", "none", "transparent", "clear", ""}
-ERR_LABEL = {"ERROR": "#ERROR!", "NULL_VALUE": "#NULL!", "DIVIDE_BY_ZERO": "#DIV/0!", "VALUE": "#VALUE!", "REF": "#REF!",
-             "NAME": "#NAME?", "NUM": "#NUM!", "N_A": "#N/A", "LOADING": ""}
+COLOR_MAP = dict(_SHARED_DEFS["color_map"])
+NONE_WORDS = set(_SHARED_DEFS["none_words"])
+ERR_LABEL = dict(_SHARED_DEFS["err_label"])
 
 
 class Skip(Exception):

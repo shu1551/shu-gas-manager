@@ -31,6 +31,10 @@ PUBLIC_FILES = [
     "requirements.txt",
     "gas.py",
     "gas_client.py",
+    "gas_client_common.py",
+    "gas_client_diag.py",
+    "gas_client_recipes.py",
+    "gas_client_ui.py",
     "gas_mcp_server.py",
     "gas_workspace.py",
     "gas_workspace_view.py",
@@ -79,14 +83,26 @@ PUBLIC_FILES = [
     # GASコンボ（シートのサイドバー・つなぎコード・ライブラリの元）と Python の操作窓・ブラウザ連動の拡張
     "gas_ws_combo.py",
     "gas_ws_direct.py",
+    "build_combo_templates.py",
+    "ws_shared_defs.json",
     "combo_server_template.gs",
+    "combo_server_parts/01_core_init.gs",
+    "combo_server_parts/02_ops_exec.gs",
+    "combo_server_parts/03_ai_postbox.gs",
+    "combo_server_parts/04_mymacro_quick.gs",
     "combo_lite_server.gs",
     "combo_planner_template.js",
     "combo_phrases.json",
     "ws_ask_rules.json",
     "combo_sidebar_template.html",
+    "combo_ui_parts/01_head_styles.html",
+    "combo_ui_parts/02_body.html",
+    "combo_ui_parts/03_state_direct.js",
+    "combo_ui_parts/04_actions_events.js",
+    "combo_ui_parts/05_mymacro_init.js",
     "combo_addon_template.gs",
     "test_gas_ws_combo.py",
+    "test_gas_ws_parity.py",
     "ws_window.py",
     "ws_window_ai.py",
     "native_host.py",
@@ -159,7 +175,7 @@ def main():
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {"queue", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
+    allowed_local = set(PUBLIC_FILES) | {"queue", "combo_ui_parts", "combo_server_parts", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
                                                   # 公開しない物（試験の道具・試験場の記録・手元の記録）。公開物に入らないことは、ホワイトリストと上の禁止パターンで見る
                                                   "ws_exam", "ws_shelves", "ws_trial", "gas_ws_ai.py", "gas_ws_coverage.py", "gas_ws_exam.py", "gas_ws_judge.py", "gas_ws_props.py", "gas_ws_sealreport.py", "gas_ws_shot.py", "gas_ws_tables.py", "gas_ws_trial.py",
                                                   "test_gas_ws_167.py", "test_gas_ws_ai.py", "test_gas_ws_coverage.py", "test_gas_ws_exam.py", "test_gas_ws_judge_extra.py", "test_gas_ws_lane.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_shot_sealed.py", "test_gas_ws_speed.py", "test_gas_ws_trial.py", "test_gas_ws_undo_side.py",
@@ -169,6 +185,23 @@ def main():
         if item.name not in allowed_local:
             print(f"  [NG] 公開ホワイトリスト外の未知のファイル/フォルダが存在します: {item.name}")
             bad += 1
+
+    # 4. テンプレート部品同期 ＆ 共通定義 (ws_shared_defs.json) 整合検査
+    try:
+        import json as _json
+        import build_combo_templates
+        for msg in build_combo_templates.check_sync():
+            print(f"  [NG] {msg}")
+            bad += 1
+        sdefs = _json.loads((HERE / "ws_shared_defs.json").read_text(encoding="utf-8"))
+        sidebar_txt = (HERE / "combo_sidebar_template.html").read_text(encoding="utf-8")
+        m_cm = re.search(r"var DIRECT_COLOR_MAP\s*=\s*(\{[\s\S]*?\});", sidebar_txt)
+        if not m_cm or _json.loads(m_cm.group(1)) != sdefs.get("color_map"):
+            print("  [NG] combo_sidebar_template.html の DIRECT_COLOR_MAP が ws_shared_defs.json と一致しません")
+            bad += 1
+    except Exception as e:
+        print(f"  [NG] テンプレート・共通定義整合検査エラー: {e}")
+        bad += 1
 
     # 試験は回さない（作るときに確かめて作る）。ここで見るのは、公開してはいけない物が混ざっていないかだけ
     elapsed = time.perf_counter() - t0

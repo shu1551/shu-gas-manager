@@ -1,0 +1,255 @@
+<body>
+<div class="app">
+  <!-- 上部入力欄 -->
+  <div class="top-input">
+    <textarea id="askInput" class="ask-textarea" rows="3" placeholder="指示を入力（例: タイトルの色を赤に / 売上合計）"></textarea>
+    <div class="top-btns">
+      <button id="btnRun" class="btn btn-primary btn-run" type="button">実 行</button>
+      <div class="top-sub-btns">
+        <button id="btnClear" class="btn btn-clear" type="button" title="入力欄をクリア">✖</button>
+        <button id="btnCopyAi" class="btn btn-ai" type="button" title="対象URL・シート・選択範囲・入力文をAI用にコピー">AI</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- オプション行 -->
+  <div class="option-row">
+    <label class="chk-label"><input type="checkbox" id="chkOk">確認なし</label>
+    <label class="chk-label"><input type="checkbox" id="chkBackup">控え</label>
+    <label class="chk-label"><input type="checkbox" id="chkAiAuto" checked>AI自動</label>
+    <label class="chk-label"><input type="checkbox" id="chkSync" checked>連動</label>
+    <span id="statusLabel" class="status-label">表示中: 自動</span>
+  </div>
+
+  <!-- 対象 / シートバー -->
+  <div class="target-bar">
+    <span id="targetNameLabel" class="target-name" title="対象スプレッドシート">読込中…</span>
+    <select id="sheetSelect" class="sheet-select" title="シート切替"></select>
+    <button id="btnLook" class="btn" type="button">読込</button>
+    <button id="btnRefresh" class="btn" type="button">更新</button>
+  </div>
+
+  <!-- 6タブ -->
+  <div class="tabs-wrap">
+    <div class="tab-bar" role="tablist">
+      <button class="tab-btn active" type="button" data-tab="auto">自動</button>
+      <button class="tab-btn" type="button" data-tab="list">一覧</button>
+      <button class="tab-btn" type="button" data-tab="chat">会話</button>
+      <button class="tab-btn" type="button" data-tab="hist">履歴</button>
+      <button class="tab-btn" type="button" data-tab="trace">経過</button>
+      <button class="tab-btn" type="button" data-tab="conf">設定</button>
+    </div>
+
+    <div class="tab-body">
+      <!-- 自動タブ -->
+      <div id="pane-auto" class="tab-pane active">
+        <!-- Sheetモード -->
+        <div id="autoSheetPanel">
+          <button id="btnSeiri" class="btn btn-hero" type="button">【一発整形】データ整理 ＋ 表を整える</button>
+          <div class="quick-grid quick-grid-4">
+            <button class="btn" type="button" data-op='[{"shelf":"total"}]'>合計行</button>
+            <button class="btn" type="button" data-action="autoWidth">列幅自動</button>
+            <button class="btn" type="button" data-op='[{"shelf":"dedupe"}]'>重複削除</button>
+            <button class="btn" type="button" data-action="borders" title="複数セル選択中は選択範囲、1セルなら表全体に罫線を引く">罫線</button>
+            <button class="btn" type="button" data-action="freezeHeader">見出し固定</button>
+            <button class="btn" type="button" data-op='[{"shelf":"unfreeze"}]'>固定解除</button>
+            <button class="btn" type="button" data-op='[{"shelf":"banding.add","theme":"blue"}]'>交互の色</button>
+            <button class="btn" type="button" data-op='[{"shelf":"banding.remove"}]'>交互解除</button>
+          </div>
+        </div>
+
+        <!-- Docモード -->
+        <div id="autoDocPanel" style="display:none;">
+          <button id="btnDocStyle" class="btn btn-hero" type="button">【一発整形】文書の体裁を整える</button>
+          <div class="quick-grid">
+            <button class="btn" type="button" data-action="look">読込</button>
+            <button class="btn" type="button" data-action="undo">戻す</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.outline"}]'>章立て確認</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.toc"}]'>目次挿入</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.header","page_number":true}]'>ページ番号</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.table.style"}]'>表の装飾</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.align","align":"left"}]'>左揃え</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.align","align":"center"}]'>中央揃え</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.align","line_spacing":1.5}]'>行間1.5</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.list","type":"bullet"}]'>箇条書き</button>
+            <button class="btn" type="button" data-op='[{"shelf":"doc.list","type":"none"}]'>リスト解除</button>
+            <button class="btn" type="button" data-action="findShelf">棚検索</button>
+          </div>
+        </div>
+
+        <!-- 3行ステータス -->
+        <div class="auto-status-box">
+          <div id="selLabel" class="status-line">選択中: 待機中…</div>
+          <div id="previewLabel" class="status-line">自動判定: 待機中</div>
+          <div id="infoLabel" class="status-line info-line">対象: 読込中…</div>
+        </div>
+      </div>
+
+      <!-- 一覧タブ -->
+      <div id="pane-list" class="tab-pane">
+        <div id="quickFilterBar" class="quick-filter-bar">
+          <button class="quick-filter-btn active" type="button" data-qfilter="all">すべて</button>
+          <button class="quick-filter-btn" type="button" data-qfilter="pin">★</button>
+          <button class="quick-filter-btn" type="button" data-qfilter="recent">最近</button>
+          <button class="quick-filter-btn" type="button" data-qfilter="my">マイ</button>
+          <button class="quick-filter-btn" type="button" data-qfilter="shelf">棚</button>
+        </div>
+        <div id="quickCatBar" class="quick-cat-bar" style="display:none;"></div>
+        <div id="quickList" class="hist-list">
+          <div class="log-empty">読込中…</div>
+        </div>
+        <div class="pane-footer">
+          <button id="btnQuickRun" class="btn btn-primary" type="button">実行</button>
+          <button id="btnQuickAi" class="btn btn-ai-primary" type="button" title="日本語で頼むと AI がコードを作成し、画面で確認してからマイマクロへ保存します">✨AI作成</button>
+          <button id="btnQuickEdit" class="btn" type="button">編集</button>
+          <button id="btnQuickAdd" class="btn" type="button" title="コードを直接貼り付けて追加">＋手動</button>
+          <button id="btnQuickReload" class="btn" type="button">更新</button>
+        </div>
+        <div id="quickNote" class="quick-note"></div>
+      </div>
+
+      <!-- 会話タブ -->
+      <div id="pane-chat" class="tab-pane">
+        <div id="chatLog" class="log-box">
+          <div class="log-empty">実行結果がここに表示されます。</div>
+        </div>
+        <div class="pane-footer">
+          <button id="btnAgain" class="btn" type="button">もう一度</button>
+          <button id="btnGoChanged" class="btn" type="button">直した所</button>
+          <button id="btnCopyLog" class="btn" type="button">会話をコピー</button>
+          <button id="btnClearLog" class="btn" type="button">会話消去</button>
+        </div>
+      </div>
+
+      <!-- 履歴タブ -->
+      <div id="pane-hist" class="tab-pane">
+        <div id="histList" class="hist-list">
+          <div class="log-empty">実行した指示の履歴はまだありません。</div>
+        </div>
+        <div id="saveStepsBar" class="save-steps-bar" style="display:none;">
+          <div id="saveStepsInfo" class="save-steps-info"></div>
+          <div class="save-steps-row">
+            <input id="saveStepsName" class="save-steps-input" type="text" placeholder="手順マクロ名を入力">
+            <button id="btnSaveStepsOk" class="btn btn-primary" type="button">保存</button>
+            <button id="btnSaveStepsCancel" class="btn" type="button">やめる</button>
+          </div>
+        </div>
+        <div class="pane-footer">
+          <button id="btnUseHist" class="btn" type="button">入力欄へ</button>
+          <button id="btnSaveSteps" class="btn" type="button" title="チェックした履歴（または選択中の履歴）を⚡手順マクロとしてマイマクロへ保存">⚡手順化</button>
+          <button id="btnRerunHist" class="btn btn-primary" type="button">再実行</button>
+        </div>
+      </div>
+
+      <!-- 経過タブ -->
+      <div id="pane-trace" class="tab-pane">
+        <div id="traceLog" class="log-box">
+          <div class="log-empty">実行時間の内訳がここに記録されます。</div>
+        </div>
+      </div>
+
+      <!-- 設定タブ -->
+      <div id="pane-conf" class="tab-pane">
+        <div class="conf-group">
+          <label class="conf-label" for="settingsSheetSelect">シート切替</label>
+          <select id="settingsSheetSelect" class="conf-control"></select>
+        </div>
+        <div class="conf-group">
+          <div id="settingsInfoLabel" class="conf-note">対象: 未読込</div>
+        </div>
+        <div class="conf-group">
+          <label class="conf-label">マイマクロ（全シート共通・GASクイック共通）</label>
+          <div id="settingsMyStatus" class="conf-note" style="margin-bottom:4px;">確認中…</div>
+          <button id="btnSettingsMyMacro" class="btn" type="button" style="width:100%;">マイマクロを作る</button>
+        </div>
+        <div class="conf-group">
+          <label class="conf-label" for="settingsDefaultTab">起動時に開くタブ</label>
+          <select id="settingsDefaultTab" class="conf-control">
+            <option value="auto">自動（一発ボタン・自動判定）</option>
+            <option value="list">一覧（マイマクロ・棚一覧）</option>
+          </select>
+        </div>
+        <div class="conf-group">
+          <label class="conf-label" for="cfgAiMode">AI連携方式</label>
+          <select id="cfgAiMode" class="conf-control">
+            <option value="postbox">ローカル直結 (Claude Code CLI)</option>
+            <option value="api_gemini">Gemini API (鍵)</option>
+            <option value="api_claude">Claude API (鍵)</option>
+          </select>
+        </div>
+        <div class="conf-group">
+          <label class="conf-label" for="cfgAiModel">AIモデル</label>
+          <select id="cfgAiModel" class="conf-control">
+            <option value="sonnet">Claude Sonnet（最新）</option>
+            <option value="opus">Claude Opus（最新・最高精度）</option>
+            <option value="haiku">Claude Haiku（最新・高速）</option>
+            <option value="gemini_hydrogen">Gemini Hydrogen（最新・高速 / APIキー用）</option>
+            <option value="gemini_neon">Gemini Neon（最新・高精度 / APIキー用）</option>
+          </select>
+        </div>
+        <div class="conf-group">
+          <label class="conf-label" for="cfgApiKey">APIキー</label>
+          <input id="cfgApiKey" class="conf-control" type="password" placeholder="APIキーを入力（変更時のみ）" autocomplete="off">
+        </div>
+        <div class="conf-actions">
+          <button id="btnSaveConfig" class="btn btn-primary" type="button">設定を保存</button>
+          <button id="btnCheckPostbox" class="btn" type="button">ローカル接続確認</button>
+        </div>
+        <div id="postboxStatusLabel" class="conf-note" style="margin-top:6px;">ローカル直結: 未確認</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 下部固定バー -->
+  <div class="bottom-bar">
+    <button id="btnNewTalk" class="btn" type="button">新しい話</button>
+    <button id="btnUndo" class="btn" type="button">直前を取り消す</button>
+    <button id="btnReload" class="btn" type="button">再読込</button>
+  </div>
+</div>
+
+<!-- マイマクロ AI 作成・修正／会話＆コード編集オーバーレイ -->
+<div id="quickEditModal" style="display:none;position:fixed;inset:0;z-index:999;background:#f8fafc;flex-direction:column;padding:6px;gap:4px;box-sizing:border-box;overflow:hidden;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-shrink:0;">
+    <strong id="quickEditTitle" style="flex:1;min-width:0;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">✨ 新規マイマクロ作成（AI）</strong>
+    <div style="display:flex;gap:4px;flex-shrink:0;">
+      <button id="btnQuickImportRec" class="btn" type="button" style="display:none;padding:2px 6px;" title="スプレッドシート標準の「マクロを記録」を取り込んでAIでまとめ棚マイマクロに磨き上げます">🎬記録取込</button>
+      <button id="btnQuickEditCopy" class="btn" type="button" style="padding:2px 6px;" title="コードをコピー">コピー</button>
+      <button id="btnQuickEditPaste" class="btn" type="button" style="padding:2px 6px;" title="クリップボードから貼り付け">貼付</button>
+      <button id="btnQuickEditClose" class="btn" type="button" style="padding:2px 8px;">✕</button>
+    </div>
+  </div>
+  <div id="quickModalTabs" class="quick-modal-tabs">
+    <button id="tabQuickModalChat" class="btn quick-modal-tab" type="button" data-qmtab="chat">💬 AI会話</button>
+    <button id="tabQuickModalCode" class="btn quick-modal-tab active" type="button" data-qmtab="code">📄 コード<span id="quickCodeBadge" class="quick-code-badge">更新</span></button>
+  </div>
+  <div id="quickChatPane" class="quick-chat-pane">
+    <div id="quickChatLog" class="quick-chat-log"></div>
+    <div id="quickChatChips" class="quick-chat-chips"></div>
+  </div>
+  <textarea id="quickEditCode" spellcheck="false" style="flex:1;min-height:80px;width:100%;font-family:Consolas,monospace;font-size:12px;line-height:1.45;padding:7px;border:1px solid #94a3b8;border-radius:4px;background:#ffffff;box-sizing:border-box;overflow-y:auto;resize:none;"></textarea>
+  <div id="quickAiBox" class="quick-ai-box">
+    <div class="quick-ai-row">
+      <textarea id="quickAiInput" class="quick-ai-input" rows="2" style="flex:1;min-height:40px;max-height:60px;" placeholder="質問・相談や修正内容を入力（Enterで送信）"></textarea>
+      <div style="display:flex;flex-direction:column;gap:3px;flex-shrink:0;">
+        <button id="btnQuickAiSubmit" class="btn btn-ai-primary" type="button" style="flex:1;padding:4px 10px;">✨ 送信</button>
+        <button id="btnQuickRevert" class="btn" type="button" style="display:none;padding:2px 6px;font-size:10.5px;" title="直前の保存前に戻す">元に戻す</button>
+      </div>
+    </div>
+  </div>
+  <div id="quickEditPromptRow" style="display:none;flex-shrink:0;">
+    <button id="btnQuickEditPrompt" class="btn" type="button" style="width:100%;">AI に頼む型（プロンプト）をコピー</button>
+  </div>
+  <div id="quickEditStatus" style="font-size:11px;line-height:1.35;color:#334155;min-height:15px;max-height:48px;overflow-y:auto;flex-shrink:0;word-break:break-word;"></div>
+  <div style="display:flex;gap:6px;flex-shrink:0;">
+    <button id="btnQuickEditSave" class="btn btn-primary" type="button" style="flex:1;padding:5px 8px;font-size:12.5px;">決定して保存</button>
+    <button id="btnQuickEditDelete" class="btn" type="button" style="display:none;color:#dc2626;border-color:#fca5a5;">削除</button>
+  </div>
+</div>
+
+<script>
+/*__COMBO_CATALOG_DATA__*/
+</script>
+<script>
+/*__COMBO_PLANNER_JS__*/
+</script>
