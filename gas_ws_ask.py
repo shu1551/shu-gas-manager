@@ -491,7 +491,7 @@ def _resolve_cmp_value(op, text):
         return
     t_n = nfkc(text)
     m_num = re.search(
-        r"(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)",
+        r"(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)",
         t_n,
     )
     raw = op.get("value")
@@ -819,7 +819,7 @@ def _clean_filter_equals(op, text, table, quoted_vals):
             not eq_s
             or eq_s in cols_all
             or re.search(r"(?:が|は)", eq_s)
-            or re.search(r"以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではな|でない|空白|空欄", eq_s)
+            or re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄", eq_s)
         ):
             op.pop("equals", None)
             return
@@ -857,7 +857,7 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
     if sh_name == "format":
         has_row_cond = bool(
             re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", scan_n)
-            or re.search(r"(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)", scan_n)
+            or re.search(r"(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)", scan_n)
         )
         if has_row_cond:
             _add_miss("条件付き書式（cf.add）の条件")
@@ -888,7 +888,7 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
 
     # 4. フィルタ系で条件語が落ちている／条件自体が空
     if sh_name in ("filter.where", "filter.delete", "filter.extract"):
-        if re.search(r"以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", scan_n) and not op.get("when"):
+        if re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", scan_n) and not op.get("when"):
             _add_miss("条件（when）")
         if not op.get("when") and op.get("equals") in (None, "") and op.get("value") in (None, ""):
             _add_miss("絞り込み条件（equals/when）")
@@ -1314,6 +1314,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     if shelf["name"] == "sort":
         sort_pairs = []
         nfkc_t = nfkc(text)
+        _desc_pat = r"(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順"
+        _asc_pat = r"(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順"
         # 「部署ごと、同部署内は社員番号の昇順」「部署ごとにかためて…社員番号の若い順」の 1 列目（ごと）を拾う
         m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)", nfkc_t)
         if m_grp:
@@ -1324,7 +1326,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             else:
                 extra_missing.append(f"表に無い列名（{raw_g}）")
         for sm in re.finditer(
-            r"(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のは]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順|若い順))",
+            r"(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のがは]{1,16})(?:の|が)(?:(" + _desc_pat + r")|(" + _asc_pat + r"))",
             nfkc_t,
         ):
             raw_c = sm.group(1).strip()
@@ -1341,6 +1343,11 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op.pop("col", None)
             op.pop("desc", None)
             named = True
+        elif "desc" not in op:
+            if re.search(_desc_pat, nfkc_t):
+                op["desc"] = True
+            elif re.search(_asc_pat, nfkc_t):
+                op["desc"] = False
     if shelf["name"] == "sheet.diff":
         op.pop("sheet", None)
         if sheet_hits and (op.get("from") == op.get("to") or "from" not in op or "to" not in op):
@@ -1509,14 +1516,18 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         if shelf["name"] == "filter.extract" and op.get("into") == "別":
             op.pop("into", None)
         if "when" in op and "equals" in op and isinstance(op["equals"], str):
-            if re.search(r"以上|以下|未満|より|超|を含|含む|以外|ではな|でない|空白|空欄", op["equals"]):
+            if re.search(r"以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄", op["equals"]):
                 op.pop("equals", None)
         if shelf["name"] == "filter.where":
-            has_cmp_cue = ("when" in op) or bool(re.search(r"以上|以下|未満|より|を超?|を含|含む|以外|ではな|でない|空白|空欄", text))
+            has_cmp_cue = ("when" in op) or bool(re.search(r"以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄", text))
             if not has_cmp_cue and "equals" not in op:
-                m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip())
-                if m_name:
-                    op["equals"] = m_name.group(1).strip()
+                m_gen = re.search(r"(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)", text.strip())
+                if m_gen:
+                    op["equals"] = m_gen.group(1).strip()
+                else:
+                    m_name = re.search(r"^(.+?)(?:さん|様)?の行だけ", text.strip())
+                    if m_name:
+                        op["equals"] = m_name.group(1).strip()
         if "equals" in op:
             _clean_filter_equals(op, text, table, orig_quotes)
         if op.get("when") == "ne":
@@ -1534,6 +1545,11 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 if text_cols:
                     op["col"] = text_cols[0]
         if shelf["name"] == "filter.delete" and op.get("col") and (op.get("when") or op.get("equals") is not None or op.get("value") is not None):
+            named = True
+    if shelf["name"] == "cols.delete" and not op.get("cols") and table:
+        u_del = _resolve_unique_cols(scan, table)
+        if u_del:
+            op["cols"] = u_del
             named = True
     if shelf["name"] == "width":
         if "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
@@ -1684,7 +1700,7 @@ def _apply_scope_fallback(op, missing, source_scope, shelf=None, clause=""):
     if sh_name in ("rows.delete", "cols.delete", "filter.delete"):
         if sh_name == "filter.delete":
             return missing, False
-        if re.search(r"(?:が|は|の).{0,16}(?:行|データ)|以上|以下|未満|超え?|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", clause):
+        if re.search(r"(?:が|は|の).{0,16}(?:行|データ)|以上|以下|未満|超え?|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", clause):
             return missing, False
         if sh_name == "rows.delete" and not source_scope.get("row_select") and not _HERE_ROW_RE.search(clause):
             return missing, False
@@ -1828,10 +1844,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             has_paint_fmt_cue = bool(
                 _color_hits(c)
                 and "塗" in c
-                and not re.search(r"条件|以上|以下|未満|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行", c)
+                and not re.search(r"条件|以上|以下|未満|上回|下回|届か|届いてい?ない|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行", c)
             )
             has_row_cf_cond = bool(
-                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
+                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
                 or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
             )
             has_row_cf_cue = bool(
@@ -1841,9 +1857,21 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and (_color_hits(c) or re.search(r"色[を]?付|色[を]?つ|目立|ハイライト", c))
             )
             has_row_del_cond = bool(
-                re.search(r"の行|行を|行に|行は|データ", c)
-                and re.search(r"以上|以下|未満|より大きい|より小さい|を超え|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", c)
+                re.search(r"の行|行を|行に|行は|いない行|ない行|データ", c)
+                and (
+                    re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", c)
+                    or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
+                )
                 and re.search(r"消|削除", c)
+                and not re.search(r"重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則", c)
+                and not _rows_of(c)
+            )
+            _m_col_del = re.search(r"([^\s、。のをにはが]{2,16}?)の?(?:列|カラム)", c)
+            has_cols_del_cue = bool(
+                re.search(r"(?:列|カラム)", c)
+                and re.search(r"消|削除|取り除|捨て", c)
+                and not re.search(r"中身|値だけ|値を|データだけ|クリア|スペース|余分な空白|色|背景|書式|罫線|太字|メモ|コメント|リンク|プルダウン|入力規則|フィルタ|フィルター|条件付き書式|重複|ダブ|数式|式だけ|非表示|隠|振り直|付け直|連番|行を|の行|行目", c)
+                and bool(_col_names(c, table) or _col_letters(c) or (_m_col_del and _resolve_col_ref(_m_col_del.group(1), table)))
             )
             has_summary_cue = bool(
                 re.search(r"(?:別(?:に|で|の)|ごと(?:に|の))", c)
@@ -1863,8 +1891,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             )
             has_filter_where_cue = bool(
                 (
-                    re.search(r"以上|以下|未満|より大|より小|を超|超え|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", c)
-                    or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|もの|データ|人)", c)
+                    re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", c)
+                    or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の[^\s、。のをにはが]{1,12}", c)
                 )
                 and re.search(r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
                 and not re.search(r"消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す", c, re.IGNORECASE)
@@ -1906,6 +1934,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("group.remove")
             elif has_remove_act and re.search(r"グラフ|棒グラフ|折れ線|円グラフ", c):
                 _ensure_boost("chart.delete")
+            elif has_row_del_cond:
+                _ensure_boost("filter.delete")
+            elif has_cols_del_cue:
+                _ensure_boost("cols.delete")
             elif has_row_cf_cue:
                 _ensure_boost("cf.add")
             elif has_chart_cue:
@@ -1939,8 +1971,6 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             elif len(scored) >= 2:
                 if _color_hits(c) and "文字" in c and not re.search(r"大文字|小文字|全角|半角|UPPER|LOWER|PROPER", c, re.IGNORECASE) and "format" in cand_names:
                     boost_name = "format"
-                elif has_row_del_cond and "filter.delete" in cand_names:
-                    boost_name = "filter.delete"
                 elif "link.clear" in cand_names and re.search(r"(?:リンク|ハイパーリンク).*(?:外|解除|消|削除|クリア)", c):
                     boost_name = "link.clear"
                 elif "link.extract" in cand_names and re.search(r"(?:URL|リンク先).*(?:抽出|取り出)|埋め込みリンク", c, re.IGNORECASE):

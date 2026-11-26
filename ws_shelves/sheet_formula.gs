@@ -766,7 +766,7 @@ SHELF['text.affix'] = function (ctx, op) {
 // 語: 条件分岐|IF文の列|IF式|判定列を足|合格判定|達成判定|ならマル|条件で判定
 // 違い: 汎用数式なら calc.col、条件に合う件数なら count.if
 // 引数: col*=列, when*=選択(ge/gt/le/lt/eq/ne/contains/blank/notblank)=ge, value=文字, then_val=文字=○, else_val=文字=×, name=文字=判定, at=列
-// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え ; when=lt<未満|より小 ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外 ; col~([^\sがは、。]+?)(?:列)?(?:が|は)[^がは、。]*?(?:なら|判定) ; value~(?:が|は)([0-9]+(?:\.[0-9]+)?)[^、。]*?(?:なら|判定) ; then_val~なら([^\sそう、。]+) ; else_val~(?!そう)なければ([^\sの、。]+)
+// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え|上回る|上回っ ; when=lt<未満|より小|下回る|下回っ|届かない|届いていない|届いてない ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外 ; col~([^\sがは、。]+?)(?:列)?(?:が|は)[^がは、。]*?(?:なら|判定) ; value~(?:が|は)([0-9]+(?:\.[0-9]+)?)[^、。]*?(?:なら|判定) ; then_val~なら([^\sそう、。]+) ; else_val~(?!そう)なければ([^\sの、。]+)
 // 例: 「金額が10000以上なら○そうでなければ×の判定列を足して」 → {"shelf":"calc.if","col":"金額","when":"ge","value":"10000"}
 // 触る: 値 書式
 // 控え: 今

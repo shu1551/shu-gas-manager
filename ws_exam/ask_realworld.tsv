@@ -78,3 +78,9 @@
 1	部門ごとに売上金額を合計して	[{"shelf":"summary","by":"部門","values":["売上金額"]}]
 1	金額の合計を一番下に出して	[{"shelf":"total","cols":["売上金額"]}]
 1	単価の列を薄い青で塗って	[{"shelf":"format","range":"F4:F9","bg":"薄青"}]
+# 第5ラウンド番頭検算の外れ5件
+1	日付が新しいものから並べて	[{"shelf":"sort","col":"日付","desc":true}]
+1	進捗率が30%を下回る行だけ表示して	[{"shelf":"filter.where","col":"進捗率","when":"lt","value":"0.3"}]
+1	担当者が佐藤の売上だけ見せて	[{"shelf":"filter.where","col":"担当者","equals":"佐藤"}]
+1	部門が営業じゃない行を消して	[{"shelf":"filter.delete","col":"部門","when":"ne","value":"営業","ok":true}]
+1	備考の列を一番右から消して	[{"shelf":"cols.delete","cols":["備考"],"ok":true}]

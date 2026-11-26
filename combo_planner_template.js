@@ -30,7 +30,7 @@ var ComboPlanner = (function () {
   var FIND_CLAUSE_SPLIT = /[。、，,\n]|それから|ついでに|あと|でも/;
   var ASK_SPLIT = /[。、，,\n]|(?<=[\u3041-\u3093]て)から|それから|ついでに|そのあと|その後/;
 
-  var VAGUE_RE = /いらない|要らない|不要な?|余分なところ|余分な箇所|古い(?!順)|おかしい|この辺|どこか|適当に|いい感じ|ダブってる人|変な/;
+  var VAGUE_RE = /いらない|要らない|不要な?|余分なところ|余分な箇所|古い(?!順|ものから|方から|ほうから|のから)|おかしい|この辺|どこか|適当に|いい感じ|ダブってる人|変な/;
   var CUR_SHEET_RE = /今の|この|現在の|シート名/;
   var LOCATOR_TYPES = { "範囲": true, "列": true, "列[]": true, "行[]": true, "シート": true };
 
@@ -80,7 +80,7 @@ var ComboPlanner = (function () {
   var _CLAUSE_PROTECT_RES = [
     /(?:に|へ|は)\s*[^\s、,。]{1,16}(?:[、,][^\s、,。]{1,16})+(?=(?:の|という|から)?(?:プルダウン|リスト|選択肢))/g,
     /[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+(?:[、,]\s*[A-Z]{1,3}[0-9]{1,6}に[^\s、,。]+)+/g,
-    /[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順)(?:[、,]\s*(?:その中で\s*)?[^\s、,。]{1,16}の(?:昇順|降順|大きい順|小さい順|高い順|低い順|多い順|少ない順|古い順|新しい順))+/g,
+    /[^\s、,。]{1,16}(?:(?:の|が)(?:昇順|降順|(?:大きい|小さい|高い|低い|多い|少ない|古い|新しい|若い|遅い)(?:順|ものから|方から|ほうから|のから))|ごと(?:に?かためて並べ(?:てもらっ)?て?)?)(?:[、,]\s*(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?[^\s、,。]{1,16}(?:の|が)(?:昇順|降順|(?:大きい|小さい|高い|低い|多い|少ない|古い|新しい|若い|遅い)(?:順|ものから|方から|ほうから|のから)))+/g,
     /(?:(?:見出し|項目|列)[がは]\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで](?:[、,]\s*(?:と\s*)?[^\s、,。をに]{0,11}[^\s、,。をにてで])+(?=(?:の|で|という)(?:表|テーブル|名簿|一覧表))/g
   ];
 
@@ -666,7 +666,7 @@ var ComboPlanner = (function () {
     var w = opObj.when;
     if (w !== "gt" && w !== "ge" && w !== "lt" && w !== "le" && w !== "eq" && w !== "ne") return;
     var tN = nfkc(text);
-    var mNum = /(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|を超|超|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)/.exec(tN);
+    var mNum = /(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)/.exec(tN);
     var raw = opObj.value;
     if (w === "gt" || w === "ge" || w === "lt" || w === "le") {
       delete opObj.equals;
@@ -1662,7 +1662,7 @@ var ComboPlanner = (function () {
           }
         }
         eqS = eqS.replace(/(?:さん|様)$/, "").trim();
-        if (!eqS || colsAll.indexOf(eqS) >= 0 || /(?:が|は)/.test(eqS) || /以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではな|でない|空白|空欄/.test(eqS)) {
+        if (!eqS || colsAll.indexOf(eqS) >= 0 || /(?:が|は)/.test(eqS) || /以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄/.test(eqS)) {
           delete opObj.equals;
           return;
         }
@@ -1691,7 +1691,7 @@ var ComboPlanner = (function () {
       }
       if (shN === "format") {
         var hasRowCond = /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(scanN) ||
-          /(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN);
+          /(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN);
         if (hasRowCond) addMiss("条件付き書式（cf.add）の条件");
         if (/固定|フリーズ/.test(scanN)) addMiss("固定（freeze）の指定");
         if (/並べ替|ソート/.test(scanN)) addMiss("並べ替え（sort）の指定");
@@ -1709,7 +1709,7 @@ var ComboPlanner = (function () {
         if (cHits.length && !opObj.bg && !opObj.color) addMiss("色（color/bg）");
       }
       if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
-        if (/以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) && !opObj.when) {
+        if (/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) && !opObj.when) {
           addMiss("条件（when）");
         }
         if (!opObj.when && _isEmptyVal(opObj.equals) && _isEmptyVal(opObj.value)) {
@@ -1957,6 +1957,8 @@ var ComboPlanner = (function () {
     if (shelf.name === "sort") {
       var sortPairs = [];
       var nfkcTxt = nfkc(text);
+      var descPatJs = "(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順";
+      var ascPatJs = "(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順";
       var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)/);
       if (mGrp) {
         var rawGrp = mGrp[1].trim();
@@ -1964,7 +1966,7 @@ var ComboPlanner = (function () {
         if (mappedGrp) sortPairs.push(mappedGrp);
         else extraMissing.push("表に無い列名（" + rawGrp + "）");
       }
-      var sortReG = /(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のは]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順|若い順))/g;
+      var sortReG = new RegExp("(?:その中で\\s*|同じ[^\\s、,。]{1,12}の中は\\s*|同[^\\s、,。]{1,12}内は\\s*)?([^\\s、,のがは]{1,16})(?:の|が)(?:(" + descPatJs + ")|(" + ascPatJs + "))", "g");
       var sm;
       while ((sm = sortReG.exec(nfkcTxt)) !== null) {
         var rawColS = sm[1].trim();
@@ -1983,6 +1985,9 @@ var ComboPlanner = (function () {
         delete op.col;
         delete op.desc;
         named = true;
+      } else if (!_hasOwn(op, "desc")) {
+        if (new RegExp(descPatJs).test(nfkcTxt)) op.desc = true;
+        else if (new RegExp(ascPatJs).test(nfkcTxt)) op.desc = false;
       }
     }
     if (shelf.name === "sheet.diff") {
@@ -2265,15 +2270,20 @@ var ComboPlanner = (function () {
     if (shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") {
       if (shelf.name === "filter.extract" && op.into === "別") delete op.into;
       if (_hasOwn(op, "when") && _hasOwn(op, "equals") && typeof op.equals === "string") {
-        if (/以上|以下|未満|より|超|を含|含む|以外|ではな|でない|空白|空欄/.test(op.equals)) {
+        if (/以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄/.test(op.equals)) {
           delete op.equals;
         }
       }
       if (shelf.name === "filter.where") {
-        var hasCmpCue = _hasOwn(op, "when") || /以上|以下|未満|より|を超?|を含|含む|以外|ではな|でない|空白|空欄/.test(text);
+        var hasCmpCue = _hasOwn(op, "when") || /以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄/.test(text);
         if (!hasCmpCue && !_hasOwn(op, "equals")) {
-          var mName = /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim());
-          if (mName) op.equals = mName[1].trim();
+          var mGen = /(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)/.exec(text.trim());
+          if (mGen) {
+            op.equals = mGen[1].trim();
+          } else {
+            var mName = /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim());
+            if (mName) op.equals = mName[1].trim();
+          }
         }
       }
       if (_hasOwn(op, "equals")) {
@@ -2311,6 +2321,13 @@ var ComboPlanner = (function () {
         }
       }
       if (shelf.name === "filter.delete" && op.col && (op.when || _hasOwn(op, "equals") || _hasOwn(op, "value"))) {
+        named = true;
+      }
+    }
+    if (shelf.name === "cols.delete" && (!op.cols || !op.cols.length) && table) {
+      var uDel = _resolveUniqueColsJs(scan, table);
+      if (uDel.length) {
+        op.cols = uDel;
         named = true;
       }
     }
@@ -2547,7 +2564,7 @@ var ComboPlanner = (function () {
       if (shName === "filter.delete") {
         return { missing: missing, added: false };
       }
-      if (/(?:が|は|の).{0,16}(?:行|データ)|以上|以下|未満|超え?|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行/.test(clause)) {
+      if (/(?:が|は|の).{0,16}(?:行|データ)|以上|以下|未満|超え?|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行/.test(clause)) {
         return { missing: missing, added: false };
       }
       if (shName === "rows.delete" && !sourceScope.row_select && !_HERE_ROW_RE.test(clause)) {
@@ -2786,16 +2803,24 @@ var ComboPlanner = (function () {
           /一番下|最後の行|末尾の行|表の下|下に|(?:平均|最大|最小)(?:値)?(?:の?行|を.{0,12}(?:足|追加|入れ|付け))/.test(c) &&
           !/ごと|別に|別シート|合計|ピボット|クロス/.test(c);
         var hasPaintFmtCue = _colorHits(c).length > 0 && c.indexOf("塗") >= 0 &&
-          !/条件|以上|以下|未満|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行/.test(c);
-        var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了)/.test(c) ||
+          !/条件|以上|以下|未満|上回|下回|届か|届いてい?ない|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行/.test(c);
+        var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了)/.test(c) ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c);
         var hasRowCfCue = /(?:行全体|の行|行を|行に|いない行|ない行)/.test(c) &&
           hasRowCfCond &&
           !/消|削除|重複|ダブ|固定色/.test(c) &&
           (_colorHits(c).length > 0 || /色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
-        var hasRowDelCond = /(?:の行|行を|行に|行は|データ)/.test(c) &&
-          /(?:以上|以下|未満|より大きい|より小さい|を超え|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) &&
-          /消|削除/.test(c);
+        var hasRowDelCond = /(?:の行|行を|行に|行は|いない行|ない行|データ)/.test(c) &&
+          (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) ||
+            /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c)) &&
+          /消|削除/.test(c) &&
+          !/重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則/.test(c) &&
+          _rowsOf(c).length === 0;
+        var mColDel = /([^\s、。のをにはが]{2,16}?)の?(?:列|カラム)/.exec(c);
+        var hasColsDelCue = /(?:列|カラム)/.test(c) &&
+          /消|削除|取り除|捨て/.test(c) &&
+          !/中身|値だけ|値を|データだけ|クリア|スペース|余分な空白|色|背景|書式|罫線|太字|メモ|コメント|リンク|プルダウン|入力規則|フィルタ|フィルター|条件付き書式|重複|ダブ|数式|式だけ|非表示|隠|振り直|付け直|連番|行を|の行|行目/.test(c) &&
+          (_colNames(c, table).length > 0 || _colLetters(c).length > 0 || !!(mColDel && _resolveColRefJs(mColDel[1], table)));
         var hasSummaryCue = /(?:別(?:に|で|の)|ごと(?:に|の))/.test(c) &&
           /集計|合計|平均|件数/.test(c) &&
           !/ピボット|クロス|縦と横|小計|グラフ|並|ソート|抽出/.test(c);
@@ -2803,8 +2828,8 @@ var ComboPlanner = (function () {
           !/構成比|割合|消費税|税込|税抜|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に/.test(c);
         var hasChartCue = /(?:グラフ|棒グラフ|折れ線|円グラフ|散布図|面グラフ)/.test(c) &&
           !/消|削除|なく|いらない/.test(c);
-        var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄)/.test(c) ||
-          /[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|もの|データ|人)/.test(c)) &&
+        var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄)/.test(c) ||
+          /[^\s、。]+?(?:が|は)[^\s、。の]+?の[^\s、。のをにはが]{1,12}/.test(c)) &&
           /(?:だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ)/.test(c) &&
           !/(?:消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す)/i.test(c);
         var hasFreezeCue = /固定|フリーズ/.test(c) &&
@@ -2839,6 +2864,10 @@ var ComboPlanner = (function () {
           ensureBoost("group.remove");
         } else if (hasRemoveAct && /グラフ|棒グラフ|折れ線|円グラフ/.test(c)) {
           ensureBoost("chart.delete");
+        } else if (hasRowDelCond) {
+          ensureBoost("filter.delete");
+        } else if (hasColsDelCue) {
+          ensureBoost("cols.delete");
         } else if (hasRowCfCue) {
           ensureBoost("cf.add");
         } else if (hasChartCue) {
@@ -2872,8 +2901,6 @@ var ComboPlanner = (function () {
         } else if (scored.length >= 2) {
           if (_colorHits(c).length > 0 && c.indexOf("文字") >= 0 && !/(?:大文字|小文字|全角|半角|UPPER|LOWER|PROPER)/i.test(c) && candMap["format"]) {
             boostName = "format";
-          } else if (hasRowDelCond && candMap["filter.delete"]) {
-            boostName = "filter.delete";
           } else if (candMap["link.clear"] && /(?:リンク|ハイパーリンク).*(?:外|解除|消|削除|クリア)/.test(c)) {
             boostName = "link.clear";
           } else if (candMap["link.extract"] && /(?:URL|リンク先).*(?:抽出|取り出)|埋め込みリンク/i.test(c)) {
