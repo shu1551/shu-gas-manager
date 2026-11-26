@@ -59,3 +59,7 @@ sheet.snapshot	売上シートを日付つきで複製保存して
 sheet.snapshot	集計シートの日付入りスナップショットを作って
 sheet.snapshot	今日の控えを作ってバックアップシートを複製保存して
 ?sheet.snapshot	スナップショット 日付付き控え 複製保存
+sheet.list	シート一覧を教えて
+sheet.list	他のシートがあるか確認したい
+?sheet.list	ブックにどんなシートがあるか知りたい
+?sheet.list	全シート名 何枚シート シートの一覧

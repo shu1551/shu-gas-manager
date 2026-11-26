@@ -226,7 +226,7 @@ SHELF['cf.add'] = function (ctx, op) {
 // 棚: cf.dup
 // 題: 重複に色を付ける
 // 分類: 見た目
-// 語: 重複に色|重複を赤|ダブりに色|重複を目立|重複をハイライト|重複してるとこ|ダブっている|ダブっている行に色|ダブってる行をハイライト|重複行をハイライト
+// 語: 重複に色|重複を赤|重複を黄色|重複に印|ダブりに色|重複を目立|重複をハイライト|重複してるとこ|ダブっている|ダブっている行に色|ダブってる行をハイライト|重複行をハイライト
 // 違い: 重複した行を消すなら dedupe
 // 引数: range*=範囲, bg=色
 // 例: 「C列の重複を赤く」 → {"shelf":"cf.dup","range":"C2:C100","bg":"赤"}
@@ -592,6 +592,56 @@ SHELF['rows.highlight'] = function (ctx, op) {
   chg_(ctx, sh, dr.getA1Notation(), '条件に合う ' + hits + ' 行をハイライト（' + hex + '）');
 };
 DYNAMIC['rows.highlight'] = {
+  touch: function () { return ['書式']; },
+  sheets: function (ctx, op) { return [op.sheet || ctx.sheetName || ctx.ss.getSheets()[0].getName()]; }
+};
+
+// 棚: borders.group
+// 題: 値が変わる行の下に区切り線を引く
+// 分類: 見た目
+// 語: 区切り線|境目に線|境界線|値が変わる行|部署が変わる行|グループ境界|変わる行の下|切り替わる行
+// 違い: 表全体に格子を引くなら format の borders。行に色を付けるなら rows.highlight
+// 引数: col*=列, style=選択(solid/dashed/double/thick)=solid, color=色, clear_inner=真偽=false
+// 頼み: style=dashed<破線|点線 ; style=double<二重線 ; style=thick<太線 ; clear_inner=true<中の線を消|内側を消 ; col~([^\sのが]+)(?:ごと|が変わる|の切り替わり)
+// 例: 「部署が変わる行の下に区切り線を引いて」 → {"shelf":"borders.group","col":"部署"}
+// 例: 「日付が変わる行の下に二重線の区切り線を引いて」 → {"shelf":"borders.group","col":"日付","style":"double"}
+// 触る: 書式
+// 控え: 今
+SHELF['borders.group'] = function (ctx, op) {
+  need_(op, ['col']);
+  var sh = sheetCtx_(ctx, op), t = needTable_(sh), ci = colIndexOf_(t, op.col);
+  var nr = Math.max(0, t.lastData - t.firstData + 1);
+  if (nr < 2) { note_(ctx, '比較できるデータ行が 2 行未満です'); return; }
+  var nc = t.lastCol - t.firstCol + 1;
+  var styleMap = {
+    solid: SpreadsheetApp.BorderStyle.SOLID,
+    dashed: SpreadsheetApp.BorderStyle.DASHED,
+    double: SpreadsheetApp.BorderStyle.DOUBLE,
+    thick: SpreadsheetApp.BorderStyle.SOLID_THICK
+  };
+  var stKey = String(op.style || 'solid').toLowerCase();
+  var bs = styleMap[stKey] || SpreadsheetApp.BorderStyle.SOLID;
+  var colHex = rgb_(op.color || STYLE.border) || STYLE.border;
+  if (op.clear_inner) {
+    sh.getRange(t.firstData, t.firstCol, nr, nc).setBorder(null, null, null, null, null, false);
+  }
+  var disp = sh.getRange(t.firstData, ci, nr, 1).getDisplayValues();
+  var boundaryRows = [];
+  for (var r = 0; r < nr - 1; r++) {
+    var cur = String(disp[r][0] == null ? '' : disp[r][0]).trim();
+    var nxt = String(disp[r + 1][0] == null ? '' : disp[r + 1][0]).trim();
+    if (cur !== nxt) boundaryRows.push(t.firstData + r);
+  }
+  if (!boundaryRows.length) {
+    note_(ctx, op.col + ' 列の値が切り替わる行はありませんでした（変更なし）');
+    return;
+  }
+  boundaryRows.forEach(function (rowNum) {
+    sh.getRange(rowNum, t.firstCol, 1, nc).setBorder(null, null, true, null, null, null, colHex, bs);
+  });
+  chg_(ctx, sh, colLetter_(t.firstCol) + t.firstData + ':' + colLetter_(t.lastCol) + t.lastData, op.col + ' が変わる ' + boundaryRows.length + ' 箇所の下に区切り線');
+};
+DYNAMIC['borders.group'] = {
   touch: function () { return ['書式']; },
   sheets: function (ctx, op) { return [op.sheet || ctx.sheetName || ctx.ss.getSheets()[0].getName()]; }
 };

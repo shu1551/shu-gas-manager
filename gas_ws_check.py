@@ -256,11 +256,44 @@ def run(write=True, exam_dir=EXAM_DIR, answers_path=ANSWERS):
     return problems, notes, summary, results
 
 
-def main(write=True):
+def suggest_misses(limit=15, misses_path=None):
+    """手元の .ws_misses.tsv から、まだ弱い頼みを抜き出して TSV テスト雛形を提案する。"""
+    mp = Path(misses_path) if misses_path else gas_ws_find.MISSES_FILE
+    if not mp.exists():
+        return []
+    cat = gas_ws_catalog.load()
+    finder = gas_ws_find.Finder(cat)
+    seen = set()
+    out = []
+    for ln in reversed(mp.read_text(encoding="utf-8").splitlines()):
+        parts = ln.split("\t")
+        if len(parts) < 2:
+            continue
+        ask = parts[1].strip()
+        if not ask or ask in seen:
+            continue
+        seen.add(ask)
+        picks, scores, _ = finder.find(ask)
+        top_nm = picks[0]["name"] if picks else "(なし)"
+        top_sc = scores.get(top_nm, 0) if picks else 0
+        if top_sc < gas_ws_find.WEAK_SCORE:
+            out.append({"ask": ask, "top": top_nm, "score": top_sc, "tsv": f"?{top_nm}\t{ask}"})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def main(write=True, suggest=False):
     problems, notes, summary, _ = run(write=write)
     for p in problems:
         print("[止める] " + p)
     for n in notes:
         print("[注意] " + n)
+    if suggest:
+        sugs = suggest_misses()
+        if sugs:
+            print(f"[提案] .ws_misses.tsv の未解決候補（上位 {len(sugs)} 件・TSV雛形）:")
+            for s in sugs:
+                print(f"  {s['tsv']}   # 現1位: {s['top']} ({s['score']}点)")
     print(("[NG] " if problems else "[OK] ") + summary)
     return 1 if problems else 0

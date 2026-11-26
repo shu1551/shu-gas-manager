@@ -462,6 +462,7 @@ def main():
     wse_p.add_argument("--model", default="sonnet", help="ヘッドレスの Claude Code のモデル（既定 sonnet）")
     wsc_p = subparsers.add_parser("ws-check", help="Workspace の棚の検査（札の形・引く試験・説明の量。通信なし）")
     wsc_p.add_argument("--no-write", action="store_true", help="ws_exam/answers.tsv を書き換えない")
+    wsc_p.add_argument("--suggest", action="store_true", help=".ws_misses.tsv の未解決候補から TSV 雛形を提案表示する")
     combo_p = subparsers.add_parser("combo", help="GASコンボ (template / addon / connect / install / look / ask / ops / undo / watch)")
     combo_p.add_argument("combo_args", nargs=argparse.REMAINDER, help="サブコマンドと引数")
 
@@ -519,7 +520,7 @@ def main():
         sys.exit(gas_ws_exam.main(n=args.n, model=args.model))
     if args.command == "ws-check":
         import gas_ws_check
-        sys.exit(gas_ws_check.main(write=not args.no_write))
+        sys.exit(gas_ws_check.main(write=not args.no_write, suggest=getattr(args, "suggest", False)))
     if args.command == "combo":
         import gas_ws_combo
         sys.exit(gas_ws_combo._run_cli(list(args.combo_args) or ["--help"]))

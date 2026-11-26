@@ -196,3 +196,118 @@ def test_browser_selection_scope_and_pronouns():
 
 
 A_WS = ("ws_do", "ws_look", "ws_find", "ws_undo")
+
+
+def test_phase1_misses_fix_and_new_shelves_runtime(tmp_path):
+    """Phase 1: 新棚 borders.group / sheet.list の計画・JS実行と実ログ誤ヒット改善を検証する。"""
+    import json
+    import subprocess
+    import gas_ws_catalog
+    import gas_ws_check
+
+    tbl = {
+        "header_row": 1, "first_col": "A", "last_col": "E", "data": "2-5", "title_a1": "A1",
+        "columns": [
+            {"col": "A", "name": "部署"}, {"col": "B", "name": "社員番号"},
+            {"col": "C", "name": "氏名"}, {"col": "D", "name": "日付"}, {"col": "E", "name": "金額"},
+        ],
+    }
+    cases = [
+        ("タイトルの本当の色を青に変えて", "format", {"title": True, "color": "青"}),
+        ("タイトルの持ちの色を赤に変えて", "format", {"title": True, "color": "赤"}),
+        ("シート一覧を教えて", "sheet.list", {}),
+        ("他のシートがあるか確認したい", "sheet.list", {}),
+        ("部署が変わる行の下に区切り線を引いて", "borders.group", {"col": "部署"}),
+        ("日付の文字列を日付に変換して", "date.fix", {"col": "日付"}),
+        ("部署ごと、同部署内は社員番号の昇順に並べ替え", "sort", {"cols": ["部署", "社員番号"]}),
+        ("部署ごとにかためて並べてもらって、同じ部署の中は社員番号の若い順でお願いします", "sort", {"cols": ["部署", "社員番号"]}),
+        ("重複を黄色で印", "cf.dup", {"bg": "黄"}),
+    ]
+    for ask, exp_shelf, exp_kv in cases:
+        p = A.plan(ask, FD, "sheet", tbl, ["売上", "集計"], cur_sheet="売上")
+        assert p.fire, f"{ask} did not fire: {p.reasons} / {p.missing}"
+        assert p.ops[0]["shelf"] == exp_shelf, f"{ask}: got {p.ops}"
+        for k, v in exp_kv.items():
+            assert p.ops[0].get(k) == v, f"{ask}: {k} expected {v}, got {p.ops[0]}"
+
+    # borders.group と sheet.list の .gs 実行検証（Node vm）
+    cat = gas_ws_catalog.load()
+    eng = (gas_ws_catalog.HERE / "workspace_engine.gs").read_text(encoding="utf-8")
+    look_src = (gas_ws_catalog.SHELF_DIR / "sheet_look.gs").read_text(encoding="utf-8")
+    sheet_src = (gas_ws_catalog.SHELF_DIR / "sheet_sheet.gs").read_text(encoding="utf-8")
+    assert "borders.group" in cat.by_name and "sheet.list" in cat.by_name
+
+    node_code = r"""
+const vm = require('vm'), fs = require('fs');
+const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+const grid = [
+  ['部署', '社員番号', '氏名', '日付', '金額'],
+  ['営業', '101', '田中', '2026/11/01', 1000],
+  ['営業', '102', '佐藤', '2026/11/02', 2000],
+  ['開発', '201', '鈴木', '2026/11/03', 3000],
+  ['総務', '301', '高橋', '2026/11/04', 4000]
+];
+const bordersSet = [];
+function mkRange(r, c, nr, nc) {
+  return {
+    getRow: () => r, getColumn: () => c, getNumRows: () => nr, getNumColumns: () => nc,
+    getA1Notation: () => 'A' + r + ':E' + (r + nr - 1),
+    getValues: () => grid.slice(r - 1, r - 1 + nr).map(row => row.slice(c - 1, c - 1 + nc)),
+    getDisplayValues: () => grid.slice(r - 1, r - 1 + nr).map(row => row.slice(c - 1, c - 1 + nc).map(String)),
+    setBorder: (t, l, b, ri, iv, ih, color, style) => {
+      if (b) bordersSet.push({ r, c, nr, nc, color, style });
+    }
+  };
+}
+const sh1 = {
+  getSheetId: () => 1, getName: () => '売上', isSheetHidden: () => false,
+  getLastRow: () => 5, getLastColumn: () => 5,
+  getDataRange: () => mkRange(1, 1, 5, 5),
+  getRange: (a, b, c, d) => mkRange(a, b, c || 1, d || 1),
+  getParent: () => mockSs
+};
+const sh2 = {
+  getSheetId: () => 2, getName: () => '集計', isSheetHidden: () => true,
+  getLastRow: () => 10, getLastColumn: () => 3,
+  getDataRange: () => mkRange(1, 1, 1, 1),
+  getRange: (a, b, c, d) => mkRange(a, b, c || 1, d || 1),
+  getParent: () => mockSs
+};
+const mockSs = {
+  getId: () => 'SS_P1', getName: () => 'Phase1表',
+  getSheets: () => [sh1, sh2], getActiveSheet: () => sh1,
+  getSheetByName: (n) => n === '売上' ? sh1 : (n === '集計' ? sh2 : null)
+};
+const ctx = vm.createContext({
+  SpreadsheetApp: {
+    getActiveSpreadsheet: () => mockSs, openById: () => mockSs, flush: () => {},
+    BorderStyle: { SOLID: 'SOLID', DASHED: 'DASHED', DOUBLE: 'DOUBLE', SOLID_THICK: 'SOLID_THICK' }
+  },
+  PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, setProperty: () => {}, deleteProperty: () => {} }) },
+  CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {} }) },
+  Utilities: { computeDigest: () => [1], DigestAlgorithm: { MD5: 'MD5' }, newBlob: () => ({ getBytes: () => [] }), base64Encode: () => '' }
+});
+vm.runInContext(payload.eng + '\n' + payload.look + '\n' + payload.sheet, ctx);
+const runCtx1 = { ss: mockSs, curSheet: '売上', changed: [], notes: [], createdSheets: [], ok: true };
+ctx.SHELF['borders.group'](runCtx1, { shelf: 'borders.group', col: '部署', style: 'double' });
+const runCtx2 = { ss: mockSs, curSheet: '売上', changed: [], notes: [], createdSheets: [], ok: true };
+ctx.SHELF['sheet.list'](runCtx2, { shelf: 'sheet.list' });
+process.stdout.write(JSON.stringify({ bordersSet, changed1: runCtx1.changed, notes2: runCtx2.notes }));
+"""
+    proc = subprocess.run(
+        ["node", "-e", node_code],
+        input=json.dumps({"eng": eng, "look": look_src, "sheet": sheet_src}, ensure_ascii=False),
+        capture_output=True, text=True, encoding="utf-8", timeout=20,
+    )
+    assert proc.returncode == 0, proc.stderr
+    res = json.loads(proc.stdout.strip())
+    # 部署は 3行目(営業→開発) と 4行目(開発→総務) の2箇所で切り替わる
+    assert [b["r"] for b in res["bordersSet"]] == [3, 4]
+    assert all(b["style"] == "DOUBLE" for b in res["bordersSet"])
+    assert "シート一覧（2 枚）" in res["notes2"][0] and "集計（非表示）" in res["notes2"][0]
+
+    # ws-misses --suggest がダミー TSV から提案雛形を作れること
+    miss_tsv = tmp_path / "misses.tsv"
+    miss_tsv.write_text("2026-11-19\t未知の謎操作をして\t 0\n", encoding="utf-8")
+    sugs = gas_ws_check.suggest_misses(limit=5, misses_path=miss_tsv)
+    assert len(sugs) == 1 and sugs[0]["ask"] == "未知の謎操作をして" and sugs[0]["tsv"].startswith("?")

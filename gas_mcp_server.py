@@ -2802,7 +2802,9 @@ def gas(command: str) -> str:
         return header + f"\n[NG] {len(problems)} 件の問題が見つかりました:\n" + "\n".join(f"- {p}" for p in problems)
 
     if sub in ("ws-misses", "ws_misses"):
-        limit = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
+        suggest_mode = "--suggest" in parts or "suggest" in parts
+        num_parts = [p for p in parts[1:] if p.isdigit()]
+        limit = int(num_parts[0]) if num_parts else 20
         lines = ["=== Workspace 棚の外れ・API逃げ集計 ==="]
         misses_p = SCRIPT_DIR / ".ws_misses.tsv"
         if misses_p.exists():
@@ -2834,6 +2836,12 @@ def gas(command: str) -> str:
                 lines.append(f"  - {k}: {cnt} 回{ex_s}")
         else:
             lines.append("\n[.ws_api_uses.tsv] 記録はまだありません。")
+        if suggest_mode:
+            import gas_ws_check
+            sugs = gas_ws_check.suggest_misses(limit=limit)
+            lines.append(f"\n[TSV回帰テスト雛形提案] 未解決候補 {len(sugs)} 件:")
+            for s in sugs:
+                lines.append(f"  {s['tsv']}  # 現1位: {s['top']} ({s['score']}点)")
         return "\n".join(lines)
 
     return f"不明なコマンドです: '{sub}'。'help' で使い方を確認してください。"

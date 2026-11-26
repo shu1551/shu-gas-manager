@@ -493,3 +493,24 @@ SHELF['sheet.snapshot'] = function (ctx, op) {
   ctx.curSheet = targetName;
   chg_(ctx, c, '', 'シート「' + s.getName() + '」の控え「' + targetName + '」を保存');
 };
+
+// 棚: sheet.list
+// 題: シート一覧と大きさを見る
+// 分類: シート
+// 語: シート一覧|他のシート|別のシートがあ|シートがあるか|シートの一覧|どんなシート|全シート名|何枚シート
+// 違い: 目次シートを作るなら sheet.toc。隠れたシートを出すなら sheet.show
+// 引数: なし
+// 例: 「シート一覧を教えて」 → {"shelf":"sheet.list"}
+// 例: 「他のシートがあるか確認したい」 → {"shelf":"sheet.list"}
+// 触る: なし
+// 控え: なし
+SHELF['sheet.list'] = function (ctx, op) {
+  var sheets = ctx.ss.getSheets();
+  var lines = sheets.map(function (s, idx) {
+    var hidden = (typeof s.isSheetHidden === 'function' && s.isSheetHidden()) ? '（非表示）' : '';
+    var lr = typeof s.getLastRow === 'function' ? s.getLastRow() : 0;
+    var lc = typeof s.getLastColumn === 'function' ? s.getLastColumn() : 0;
+    return (idx + 1) + '. ' + s.getName() + hidden + '（' + lr + '行×' + lc + '列）';
+  });
+  note_(ctx, 'シート一覧（' + sheets.length + ' 枚）:\n' + lines.join('\n'));
+};

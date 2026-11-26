@@ -60,3 +60,10 @@ rows.highlight	ステータス列など条件に合う行に色を付けてハ�
 rows.highlight	未完了の該当行を固定色で塗って目立たせて
 ?rows.highlight	条件の行をハイライト 該当行に色
 ?rows.highlight	条件に合う行 行を固定色で塗 目立たせ
+borders.group	部署が変わる行の下に区切り線を引いて
+borders.group	日付が変わる行の下に二重線の区切り線を引いて
+?borders.group	値が変わる行の下に境界線を入れたい
+?borders.group	グループ境界 区切り線 切り替わる行
+format	タイトルの本当の色を青に変えて
+format	タイトルの持ちの色を赤に変えて
+cf.dup	重複を黄色で印を付けて

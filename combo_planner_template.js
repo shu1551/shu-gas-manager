@@ -1291,9 +1291,23 @@ var ComboPlanner = (function () {
     }
     if (shelf.name === "sort") {
       var sortPairs = [];
-      var sortReG = /(?:その中で\s*)?([^\s、,の]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順))/g;
-      var sm;
       var nfkcTxt = nfkc(text);
+      var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)/);
+      if (mGrp) {
+        var rawGrp = mGrp[1].trim();
+        var mappedGrp = rawGrp;
+        if (table && Array.isArray(table.columns)) {
+          for (var gci = 0; gci < table.columns.length; gci++) {
+            if (table.columns[gci] && table.columns[gci].name === rawGrp) {
+              mappedGrp = table.columns[gci].name;
+              break;
+            }
+          }
+        }
+        sortPairs.push(mappedGrp);
+      }
+      var sortReG = /(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のは]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順|若い順))/g;
+      var sm;
       while ((sm = sortReG.exec(nfkcTxt)) !== null) {
         var rawColS = sm[1].trim();
         var mappedColS = rawColS;
@@ -1305,7 +1319,10 @@ var ComboPlanner = (function () {
             }
           }
         }
-        sortPairs.push((sm[2] ? "-" : "") + mappedColS);
+        var specS = (sm[2] ? "-" : "") + mappedColS;
+        if (sortPairs.indexOf(specS) < 0 && sortPairs.indexOf(mappedColS) < 0) {
+          sortPairs.push(specS);
+        }
       }
       if (sortPairs.length >= 2) {
         op.cols = sortPairs;
@@ -1883,7 +1900,9 @@ var ComboPlanner = (function () {
           boostName = "number.fix";
         } else if (candMap["sheet.diff"] && /シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート/.test(c)) {
           boostName = "sheet.diff";
-        } else if (candMap["sheet.toc"] && /目次|インデックスシート|シート一覧/.test(c)) {
+        } else if (candMap["sheet.list"] && /教え|確認|見せて|あるか|どんなシート|何枚/.test(c) && !/目次|インデックス|作/.test(c)) {
+          boostName = "sheet.list";
+        } else if (candMap["sheet.toc"] && /目次|インデックスシート|シート一覧/.test(c) && !/教え|確認|見せて|あるか|どんな/.test(c)) {
           boostName = "sheet.toc";
         } else if (candMap["sheet.sort"] && /(?:シート|タブ).*(?:名前順|昇順|降順|並べ替)/.test(c)) {
           boostName = "sheet.sort";

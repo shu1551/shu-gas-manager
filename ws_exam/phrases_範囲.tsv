@@ -87,3 +87,4 @@ date.today	A1に今日の日付を入れて
 date.today	B2に現在時刻のタイムスタンプを入力して
 date.today	C1に本日の日付と今の日時を入れて
 ?date.today	今日の日付 現在時刻 タイムスタンプ
+date.fix	日付列の文字列を日付に変換して

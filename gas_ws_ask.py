@@ -579,14 +579,24 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op["all_sheets"] = True
     if shelf["name"] == "sort":
         sort_pairs = []
+        nfkc_t = nfkc(text)
+        cols_meta = (table or {}).get("columns", [])
+        # 「部署ごと、同部署内は社員番号の昇順」「部署ごとにかためて…社員番号の若い順」の 1 列目（ごと）を拾う
+        m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)", nfkc_t)
+        if m_grp:
+            raw_g = m_grp.group(1).strip()
+            col_g = next((c["name"] for c in cols_meta if c["name"] == raw_g), raw_g)
+            sort_pairs.append(col_g)
         for sm in re.finditer(
-            r"(?:その中で\s*)?([^\s、,の]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順))",
-            nfkc(text),
+            r"(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のは]{1,16})の(?:(大きい順|多い順|高い順|降順|新しい順|逆順|遅い順)|(小さい順|少ない順|低い順|昇順|古い順|五十音順|あいうえお順|若い順))",
+            nfkc_t,
         ):
             raw_c = sm.group(1).strip()
-            col_c = next((c["name"] for c in (table or {}).get("columns", []) if c["name"] == raw_c), raw_c)
+            col_c = next((c["name"] for c in cols_meta if c["name"] == raw_c), raw_c)
             is_desc = bool(sm.group(2))
-            sort_pairs.append(("-" if is_desc else "") + col_c)
+            spec = ("-" if is_desc else "") + col_c
+            if spec not in sort_pairs and col_c not in sort_pairs:
+                sort_pairs.append(spec)
         if len(sort_pairs) >= 2:
             op["cols"] = sort_pairs
             op.pop("col", None)
@@ -912,7 +922,9 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 boost_name = "number.fix"
             elif "sheet.diff" in cand_names and re.search(r"シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート", c):
                 boost_name = "sheet.diff"
-            elif "sheet.toc" in cand_names and re.search(r"目次|インデックスシート|シート一覧", c):
+            elif "sheet.list" in cand_names and re.search(r"教え|確認|見せて|あるか|どんなシート|何枚", c) and not re.search(r"目次|インデックス|作", c):
+                boost_name = "sheet.list"
+            elif "sheet.toc" in cand_names and re.search(r"目次|インデックスシート|シート一覧", c) and not re.search(r"教え|確認|見せて|あるか|どんな", c):
                 boost_name = "sheet.toc"
             elif "sheet.sort" in cand_names and re.search(r"(?:シート|タブ).*(?:名前順|昇順|降順|並べ替)", c):
                 boost_name = "sheet.sort"
