@@ -710,11 +710,20 @@ const mockSs = {
 const ctx = vm.createContext({
   SpreadsheetApp: { getActiveSpreadsheet: () => mockSs, openById: () => mockSs, flush: () => {} },
   DocumentApp: new Proxy({}, { get: () => new Proxy({}, { get: () => 1 }) }),
-  PropertiesService: { getScriptProperties: () => ({
-    getProperty: k => (k in propsStore ? propsStore[k] : null),
-    setProperty: (k, v) => { propsStore[k] = String(v); },
-    deleteProperty: k => { delete propsStore[k]; }
-  }) },
+  PropertiesService: {
+    getUserProperties: () => ({
+      getProperties: () => ({ ...propsStore }),
+      getProperty: k => (k in propsStore ? propsStore[k] : null),
+      setProperty: (k, v) => { propsStore[k] = String(v); },
+      deleteProperty: k => { delete propsStore[k]; }
+    }),
+    getScriptProperties: () => ({
+      getProperties: () => ({ ...propsStore }),
+      getProperty: k => (k in propsStore ? propsStore[k] : null),
+      setProperty: (k, v) => { propsStore[k] = String(v); },
+      deleteProperty: k => { delete propsStore[k]; }
+    })
+  },
   CacheService: { getScriptCache: () => ({
     get: k => (k in cacheStore ? cacheStore[k] : null),
     put: (k, v) => { cacheStore[k] = String(v); },
@@ -847,11 +856,20 @@ const mockSs = {
 };
 const ctx = vm.createContext({
   SpreadsheetApp: { getActiveSpreadsheet: () => mockSs, openById: () => mockSs, flush: () => {} },
-  PropertiesService: { getScriptProperties: () => ({
-    getProperty: k => (k in propsStore ? propsStore[k] : null),
-    setProperty: (k, v) => { propsStore[k] = String(v); },
-    deleteProperty: k => { delete propsStore[k]; }
-  }) },
+  PropertiesService: {
+    getUserProperties: () => ({
+      getProperties: () => ({ ...propsStore }),
+      getProperty: k => (k in propsStore ? propsStore[k] : null),
+      setProperty: (k, v) => { propsStore[k] = String(v); },
+      deleteProperty: k => { delete propsStore[k]; }
+    }),
+    getScriptProperties: () => ({
+      getProperties: () => ({ ...propsStore }),
+      getProperty: k => (k in propsStore ? propsStore[k] : null),
+      setProperty: (k, v) => { propsStore[k] = String(v); },
+      deleteProperty: k => { delete propsStore[k]; }
+    })
+  },
   CacheService: { getScriptCache: () => ({
     get: k => (k in cacheStore ? cacheStore[k] : null),
     put: (k, v) => { cacheStore[k] = String(v); },
@@ -2053,17 +2071,19 @@ ctx.globalThis = ctx;
 vm.runInContext(payload.engine + '\n' + payload.server, ctx);
 
 // 1. Gemini API モード: 構文エラーで 1 回自動リトライし自動保存
-ctx.comboSaveConfig({ aiMode: 'api_gemini', aiModel: 'gemini-2.5-flash', apiKey: 'GKEY' });
+ctx.comboSaveConfig({ aiMode: 'api_gemini', aiModel: 'gemini-2.5-flash', apiKey: 'AIzaTEST_GKEY' });
 const gRes = ctx.comboQuickAiSave({ mode: 'add', prompt: '選んだセルを黄色に', targetId: 'SS_AI_1', sheet: '売上', selection: 'B2' });
 const gAttemptAfter1 = geminiAttempt;
 
 // 2. Claude API モード (edit): prevCode を返しつつ上書き保存
-ctx.comboSaveConfig({ aiMode: 'api_claude', aiModel: 'sonnet', apiKey: 'CKEY' });
+ctx.comboSaveConfig({ aiMode: 'api_claude', aiModel: 'sonnet', apiKey: 'sk-ant-TEST_CKEY' });
 const cRes = ctx.comboQuickAiSave({ mode: 'edit', name: 'セルを黄に', prompt: '少し薄くして', targetId: 'SS_AI_1', sheet: '売上', selection: 'B2' });
 const cAttemptAfter2 = claudeAttempt;
 
-// 3. 郵便受けモード: enqueue -> retryable失敗 -> 再送で保存完了 -> needsClientSave フォールバック
+// 3. 郵便受けモード: 未稼働時は案内を返して止まり、稼働中は enqueue -> retryable失敗 -> 再送で保存完了 -> needsClientSave フォールバック
 ctx.comboSaveConfig({ aiMode: 'postbox', aiModel: 'sonnet' });
+const pbNotListening = ctx.comboQuickAiSave({ mode: 'add', prompt: '見出し太字にする', targetId: 'SS_AI_1', sheet: '売上', selection: 'A1:B1' });
+ctx.comboPostboxPoll();
 const pbReq = ctx.comboQuickAiSave({ mode: 'add', prompt: '見出し太字にする', targetId: 'SS_AI_1', sheet: '売上', selection: 'A1:B1' });
 const poll1 = ctx.comboPostboxPoll();
 const dBad = ctx.comboPostboxDeliver({ reqId: pbReq.reqId, kind: 'mymacro', action: 'mymacro', code: 'function broken(){' });
@@ -2086,16 +2106,17 @@ const sidePoll2 = ctx.comboPollSelection({ targetId: 'SS_AI_1', sheet: '売上' 
 forceDriveForbidden = false;
 const driveCountBeforePreview = Object.keys(driveFiles).length;
 const driveSnapshotBeforePreview = JSON.stringify(driveFiles);
-ctx.comboSaveConfig({ aiMode: 'api_claude', aiModel: 'sonnet', apiKey: 'CKEY' });
+ctx.comboSaveConfig({ aiMode: 'api_claude', aiModel: 'sonnet', apiKey: 'sk-ant-TEST_CKEY' });
 // 'セルを黄に' は既に登録済み。add + previewOnly で重複名リトライの挙動を検証するため一旦既存の Gemini 側で試す
 const pvApiDup = ctx.comboQuickAiSave({ mode: 'add', previewOnly: true, prompt: 'セルを黄に（別名に）', targetId: 'SS_AI_1', sheet: '売上', selection: 'B2' });
-ctx.comboSaveConfig({ aiMode: 'api_gemini', aiModel: 'gemini-2.5-flash', apiKey: 'GKEY' });
+ctx.comboSaveConfig({ aiMode: 'api_gemini', aiModel: 'gemini-2.5-flash', apiKey: 'AIzaTEST_GKEY' });
 geminiAttempt = 0; // geminiAttempt===1 は構文エラー -> 2回目は 'セルを黄に' (既存名と重複！) -> リトライ後も同名なのでエラー確認
 const pvApiDupErr = ctx.comboQuickAiSave({ mode: 'add', previewOnly: true, prompt: '重複チェック', targetId: 'SS_AI_1', sheet: '売上', selection: 'B2' });
 // edit + previewOnly は同名でも OK、Drive へ書き込まないこと
 const pvApiEditOk = ctx.comboQuickAiSave({ mode: 'edit', previewOnly: true, name: 'セルを黄に', code: "// prev\nfunction セルを黄に() {}", prompt: '修正案を出して', targetId: 'SS_AI_1', sheet: '売上', selection: 'B2' });
 
 ctx.comboSaveConfig({ aiMode: 'postbox', aiModel: 'sonnet' });
+ctx.comboPostboxPoll();
 const pbPvReq = ctx.comboQuickAiSave({ mode: 'add', previewOnly: true, prompt: '背景を青に', code: '// draft\nfunction 背景を青に() {}', targetId: 'SS_AI_1', sheet: '売上', selection: 'C2' });
 const pollPv = ctx.comboPostboxPoll();
 const dPvDup = ctx.comboPostboxDeliver({ reqId: pbPvReq.reqId, kind: 'mymacro', action: 'mymacro', code: "function セルを黄に() {}" });
@@ -2107,13 +2128,14 @@ const dPvOk = ctx.comboPostboxDeliver({
 const sidePollPv = ctx.comboPollSelection({ targetId: 'SS_AI_1', sheet: '売上' });
 
 // 5. 会話・相談フロー (action: "reply" 正常返却 + history 伝搬 + 説明内コード例で誤昇格しない)
-ctx.comboSaveConfig({ aiMode: 'api_gemini', aiModel: 'gemini-2.5-flash', apiKey: 'GKEY' });
+ctx.comboSaveConfig({ aiMode: 'api_gemini', aiModel: 'gemini-2.5-flash', apiKey: 'AIzaTEST_GKEY' });
 const chatApiReply = ctx.comboQuickAiSave({
   mode: 'edit', previewOnly: true, name: 'セルを黄に', code: '// cur\nfunction セルを黄に() {}',
   prompt: 'このコード改善点の相談をして', history: [{ role: 'user', text: '前の確認' }, { role: 'ai', text: '承知しました' }],
   targetId: 'SS_AI_1', sheet: '売上', selection: 'B2'
 });
 ctx.comboSaveConfig({ aiMode: 'postbox', aiModel: 'sonnet' });
+ctx.comboPostboxPoll();
 const pbChatReq = ctx.comboQuickAiSave({
   mode: 'edit', previewOnly: true, name: 'セルを黄に', code: '// cur\nfunction セルを黄に() {}',
   prompt: '使い方を教えて', history: [{ role: 'user', text: '最初の質問' }, { role: 'ai', text: '最初の返答' }],
@@ -2143,6 +2165,7 @@ const driveSnapshotAfterPreview = JSON.stringify(driveFiles);
 console.log(JSON.stringify({
   geminiAttempt: gAttemptAfter1, geminiAttemptEnd: geminiAttempt, gOk: gRes.ok, gName: gRes.name,
   claudeAttempt: cAttemptAfter2, claudeAttemptEnd: claudeAttempt, cOk: cRes.ok, cPrevHasFef08a: (cRes.prevCode || '').includes('#fef08a'),
+  pbNotListeningOk: !pbNotListening.ok && String(pbNotListening.error || '').includes('拡張'),
   pbPending: pbReq.pendingPostbox, pbKind: poll1.queue[0] && poll1.queue[0].kind,
   dBadRetryable: !dBad.ok && !!dBad.retryable,
   dGoodSaved: dGood.ok && dGood.saved,
@@ -2178,6 +2201,7 @@ console.log(JSON.stringify({
     res = json.loads(proc.stdout.strip())
     assert res["geminiAttempt"] == 2 and res["geminiAttemptEnd"] == 3 and res["gOk"] and res["gName"] == "セルを黄に"
     assert res["claudeAttempt"] == 1 and res["claudeAttemptEnd"] == 3 and res["cOk"] and res["cPrevHasFef08a"]
+    assert res["pbNotListeningOk"]
     assert res["pbPending"] and res["pbKind"] == "mymacro"
     assert res["dBadRetryable"] and res["dGoodSaved"]
     assert res["sideDone1"]["kind"] == "mymacro" and res["sideDone1"]["saved"] is True
@@ -2932,6 +2956,11 @@ def test_postbox_watcher_fetch_recorded_macros_and_http(monkeypatch, tmp_path):
         def resolve_script_id(self, sid):
             return sid
 
+        def _get_bound_spreadsheet_id(self, sid):
+            if sid == "BOUND_SCRIPT_123456789012":
+                return "SS_REC_1"
+            return "OTHER_SS_ID"
+
         def get_content(self, sid, use_cache=False):
             assert sid == "BOUND_SCRIPT_123456789012"
             return {
@@ -2964,9 +2993,11 @@ def test_postbox_watcher_fetch_recorded_macros_and_http(monkeypatch, tmp_path):
     w = combo_mod.ComboPostboxWatcher("ADDON_REC", client=FakeClient(), backend="claude")
     monkeypatch.setattr(combo_mod, "COMBO_ENGINE_STATE_PATH", state_file)
 
-    # 1. 未紐付け時は needsEditor=True で案内を返す
+    # 1. 未紐付け時は needsEditor=True で案内を返す（別シート紐付けの scriptId も拒否）
     r0 = w.fetch_recorded_macros({"ssId": "SS_REC_1"}, state_path=state_file)
     assert r0["ok"] is False and r0.get("needsEditor") is True
+    r_foreign = w.fetch_recorded_macros({"ssId": "SS_REC_1", "scriptId": "FOREIGN_SCRIPT_123456"}, state_path=state_file)
+    assert r_foreign["ok"] is False and r_foreign.get("needsEditor") is True
 
     # 2. 初回 scriptId 指定で macros.gs 優先抽出＋補助・繋ぎ関数除外＋自動記憶
     r1 = w.fetch_recorded_macros({"ssId": "SS_REC_1", "scriptId": "BOUND_SCRIPT_123456789012"}, state_path=state_file)
