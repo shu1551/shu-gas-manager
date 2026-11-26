@@ -864,6 +864,8 @@ var ComboPlanner = (function () {
 
     var op = { shelf: shelf.name };
     var quotes = _quotes(text);
+    var origQuotesMap = {};
+    for (var oqi = 0; oqi < quotes.length; oqi++) origQuotesMap[quotes[oqi]] = true;
     var rules = shelf.ask_rules || [];
 
     for (var ri = 0; ri < rules.length; ri++) {
@@ -1199,33 +1201,238 @@ var ComboPlanner = (function () {
         op.number_format = "#,##0";
       }
     }
+    var _COL_TOKEN_STOP_JS = {
+      "集計": 1, "合計": 1, "平均": 1, "件数": 1, "人数": 1, "グラフ": 1, "ピボット": 1, "クロス": 1, "シート": 1, "別シート": 1,
+      "データ": 1, "テーブル": 1, "一覧": 1, "全部": 1, "全体": 1, "全て": 1, "行全体": 1, "条件": 1, "書式": 1, "表示": 1, "形式": 1,
+      "作成": 1, "追加": 1, "変更": 1, "削除": 1, "抽出": 1, "固定": 1, "並べ": 1, "整理": 1, "自動": 1, "調整": 1, "内容": 1, "中身": 1,
+      "範囲": 1, "セル": 1, "タイトル": 1, "見出し": 1, "ヘッダ": 1, "合計行": 1, "標準": 1, "棒グラフ": 1, "折れ線": 1, "円グラフ": 1,
+      "新しい": 1, "別表": 1, "結果": 1, "計算": 1, "数式": 1
+    };
+
+    function _hasNumberMetaJs(tbl) {
+      var cols = (tbl && tbl.columns) || [];
+      for (var i = 0; i < cols.length; i++) {
+        if (cols[i] && cols[i].number) return true;
+      }
+      return false;
+    }
+
+    function _isNumberColJs(tbl, colRef) {
+      var cols = (tbl && tbl.columns) || [];
+      for (var i = 0; i < cols.length; i++) {
+        if (cols[i] && (cols[i].name === colRef || cols[i].col === colRef)) return !!cols[i].number;
+      }
+      return false;
+    }
+
+    function _resolveUniqueColsJs(txt, tbl, numberOnly, excludeArr) {
+      if (!tbl || !Array.isArray(tbl.columns)) return [];
+      var excl = {};
+      var exList = excludeArr || [];
+      for (var ei = 0; ei < exList.length; ei++) excl[exList[ei]] = true;
+      var cands = [];
+      var allNames = [];
+      for (var i = 0; i < tbl.columns.length; i++) {
+        var nm = String((tbl.columns[i] && tbl.columns[i].name) || "").trim();
+        if (!nm) continue;
+        if (allNames.indexOf(nm) < 0) allNames.push(nm);
+        if (excl[nm]) continue;
+        if (numberOnly && !tbl.columns[i].number) continue;
+        cands.push(nm);
+      }
+      if (!cands.length) return [];
+      var work = nfkc(txt);
+      allNames.sort(function (a, b) { return b.length - a.length; });
+      for (var ai2 = 0; ai2 < allNames.length; ai2++) {
+        if (excl[allNames[ai2]]) work = work.split(allNames[ai2]).join(" ");
+      }
+      var out = [];
+      var tokRe = /[\u4e00-\u9fff\u30a1-\u30f6A-Za-z0-9]{2,}/g;
+      var tm;
+      while ((tm = tokRe.exec(work)) !== null) {
+        var tok = tm[0].replace(/(?:別表|別|毎|列|欄)$/, "");
+        if (tok.length < 2 || _COL_TOKEN_STOP_JS[tok] || excl[tok]) continue;
+        var hits = [];
+        for (var ci2 = 0; ci2 < cands.length; ci2++) {
+          if (cands[ci2].indexOf(tok) >= 0) hits.push(cands[ci2]);
+        }
+        if (hits.length === 1 && out.indexOf(hits[0]) < 0) out.push(hits[0]);
+      }
+      return out;
+    }
+
+    function _singleNumericFallbackJs(tbl, excludeArr) {
+      if (!tbl || !_hasNumberMetaJs(tbl)) return null;
+      var excl = {};
+      var exList = excludeArr || [];
+      for (var ei = 0; ei < exList.length; ei++) excl[exList[ei]] = true;
+      var numsList = [];
+      for (var i = 0; i < tbl.columns.length; i++) {
+        var c0 = tbl.columns[i];
+        var nm = String((c0 && c0.name) || "").trim();
+        if (c0 && c0.number && nm && !excl[nm] && !/^(?:no\.?|番号|id)$/i.test(nm)) {
+          numsList.push(nm);
+        }
+      }
+      return numsList.length === 1 ? numsList[0] : null;
+    }
+
+    function _normFilterNumJs(val) {
+      if (val === undefined || val === null) return null;
+      var s = nfkc(String(val)).replace(/,/g, "").trim();
+      if (!s) return null;
+      var isPct = s.slice(-1) === "%";
+      if (isPct) s = s.slice(0, -1).trim();
+      var mul = 1;
+      if (s.slice(-1) === "万") { mul = 10000; s = s.slice(0, -1).trim(); }
+      else if (s.slice(-1) === "億") { mul = 100000000; s = s.slice(0, -1).trim(); }
+      if (!s || isNaN(Number(s))) return null;
+      var num = Number(s) * mul;
+      if (isPct) num = num / 100.0;
+      return String(num);
+    }
+
+    function _cleanFilterEqualsJs(opObj, txt, tbl, qMap) {
+      if (typeof opObj.equals !== "string") return;
+      var eqS = opObj.equals.trim();
+      var isQuoted = !!qMap[eqS];
+      if (!isQuoted) {
+        var colsAll = [];
+        var tCols = (tbl && tbl.columns) || [];
+        for (var i = 0; i < tCols.length; i++) {
+          var cn = String((tCols[i] && tCols[i].name) || "").trim();
+          if (cn) colsAll.push(cn);
+        }
+        var mGa = /^([^\s、。]+?)(?:列)?(?:が|は)(.+)$/.exec(eqS);
+        if (mGa) {
+          var lhs = mGa[1].trim(), rhs = mGa[2].trim();
+          var resCol = null;
+          if (colsAll.indexOf(lhs) >= 0) resCol = lhs;
+          else if (opObj.col && (lhs === opObj.col || (lhs.length >= String(opObj.col).length && lhs.slice(lhs.length - String(opObj.col).length) === String(opObj.col)))) {
+            resCol = opObj.col;
+          } else {
+            var uq = _resolveUniqueColsJs(lhs, tbl, false, []);
+            if (uq.length === 1) resCol = uq[0];
+          }
+          if (resCol && rhs) {
+            if (!_hasOwn(opObj, "col")) opObj.col = resCol;
+            eqS = rhs;
+          } else {
+            delete opObj.equals;
+            return;
+          }
+        }
+        if (opObj.col && typeof opObj.col === "string") {
+          var colNm = opObj.col.trim();
+          if (colNm && eqS.indexOf(colNm) === 0 && eqS.length > colNm.length) {
+            var rest = eqS.slice(colNm.length).replace(/^(?:列)?(?:が|は)/, "").trim();
+            if (rest) eqS = rest;
+          }
+        }
+        eqS = eqS.replace(/(?:さん|様)$/, "").trim();
+        if (!eqS || colsAll.indexOf(eqS) >= 0 || /(?:が|は)/.test(eqS) || /以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではな|でない|空白|空欄/.test(eqS)) {
+          delete opObj.equals;
+          return;
+        }
+      }
+      opObj.equals = eqS;
+    }
+
+    function _auditBuiltOpJs(shObj, opObj, txt, scanTxt, tbl, cHits, missArr) {
+      var shN = shObj.name;
+      var scanN = nfkc(scanTxt);
+      var addMiss = function (msg) {
+        if (missArr.indexOf(msg) < 0) missArr.push(msg);
+      };
+      var hasSizeCue = /(?<!より)(?:大きく|小さく)|文字サイズ|フォントサイズ|(?<![0-9])サイズを(?:変え|上げ|下げ|大きく|小さく|拡大|縮小)|拡大して|縮小して/.test(scanN);
+      var isDimSize = /(?:幅|高さ|列幅|行高|行|列)を(?:大きく|小さく)/.test(scanN);
+      if (hasSizeCue && (!isDimSize || /文字|フォント/.test(scanN))) {
+        if (!(shN === "width" && !/文字|フォント/.test(scanN)) && (opObj.size === undefined || opObj.size === null)) {
+          addMiss("サイズ（具体的な数値 pt）");
+        }
+      }
+      if (/下線|アンダーライン|取り消し線|打ち消し線|取消線|縦書き|斜め文字|文字を回転|テキストを回転/.test(scanN)) {
+        addMiss("未対応の書式指示（下線・取り消し線・回転等）");
+      }
+      if (shN === "format") {
+        var hasRowCond = /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(scanN) ||
+          /(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN);
+        if (hasRowCond) addMiss("条件付き書式（cf.add）の条件");
+        if (/固定|フリーズ/.test(scanN)) addMiss("固定（freeze）の指定");
+        if (/並べ替|ソート/.test(scanN)) addMiss("並べ替え（sort）の指定");
+        if (/フィルタ|絞り込/.test(scanN)) addMiss("絞り込み（filter）の指定");
+        if (scanN.indexOf("太字") >= 0 && !_hasOwn(opObj, "bold")) addMiss("太字（bold）");
+        if (/斜体|イタリック/.test(scanN) && !_hasOwn(opObj, "italic")) addMiss("斜体（italic）");
+        if (/中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ/.test(scanN) && !_hasOwn(opObj, "align")) addMiss("配置（align）");
+        if (scanN.indexOf("折り返") >= 0 && !_hasOwn(opObj, "wrap")) addMiss("折り返し（wrap）");
+        if (/罫線|外枠/.test(scanN) && !_hasOwn(opObj, "borders")) addMiss("罫線（borders）");
+        if (/結合|マージ/.test(scanN) && !_hasOwn(opObj, "merge")) addMiss("結合（merge）");
+        if (/二重線|点線|破線/.test(scanN)) addMiss("罫線の種類（formatは実線のみ）");
+        if (/(?:パーセント|%\s*表示|桁区切|カンマ区切|通貨形式|円マーク|年月日の?形|年月日形式|yyyy|hh:mm|曜日)/i.test(scanN) && !_hasOwn(opObj, "number_format")) {
+          addMiss("表示形式（number_format）");
+        }
+        if (cHits.length && !opObj.bg && !opObj.color) addMiss("色（color/bg）");
+      }
+      if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
+        if (/以上|以下|未満|より大|より小|を超|超え|を含|含む|以外|ではない|でない|空白|空欄/.test(scanN) && !opObj.when) {
+          addMiss("条件（when）");
+        }
+        if (!opObj.when && _isEmptyVal(opObj.equals) && _isEmptyVal(opObj.value)) {
+          addMiss("絞り込み条件（equals/when）");
+        }
+        if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le") && _isEmptyVal(opObj.value)) {
+          addMiss("value");
+        }
+      }
+    }
+
     if (shelf.name === "cf.add" && op.when !== "formula") {
-      var mJpNum = /^([0-9][0-9,\.]*)(万|億)$/.exec(String(op.value || "").trim());
-      if (mJpNum) {
-        var mulJp = mJpNum[2] === "万" ? 10000 : 100000000;
-        var vfJp = parseFloat(mJpNum[1].replace(/,/g, "")) * mulJp;
-        op.value = String(vfJp);
+      if (!_isEmptyVal(op.value)) {
+        var normCfV = _normFilterNumJs(op.value);
+        if (normCfV !== null && /[%万億,]/.test(nfkc(String(op.value)))) {
+          op.value = normCfV;
+        }
       }
     }
     if (shelf.name === "cf.add" && op.when !== "formula" && table && table.first_col && table.last_col) {
-      if (/(?:行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白))/.test(text)) {
+      if (/(?:行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|橙|灰|紫|水色|紺|茶|桃))/.test(text)) {
         var spCf = _dataSpan(table);
         var cfR1 = spCf ? spCf[0] : ((table.header_row || 1) + 1);
         var cfR2 = spCf ? spCf[1] : cfR1;
         var refL = (names.length && _letterOf(table, names[0])) || (letters.length ? letters[0] : "");
+        if (!refL) {
+          var uCf = _resolveUniqueColsJs(scan, table, false, []);
+          if (uCf.length) refL = _letterOf(table, uCf[0]) || "";
+        }
         var expr = "";
-        var numVal = (op.value !== undefined && op.value !== null) ? String(op.value).replace(/,/g, "") : "";
+        var rawVCf = op.value;
+        var normVCf = !_isEmptyVal(rawVCf) ? _normFilterNumJs(rawVCf) : null;
+        var numVal = normVCf !== null ? normVCf : ((rawVCf !== undefined && rawVCf !== null) ? String(rawVCf).replace(/,/g, "") : "");
         if (refL) {
           if (op.when === "ge" && numVal !== "") expr = "=$" + refL + cfR1 + ">=" + numVal;
           else if (op.when === "le" && numVal !== "") expr = "=$" + refL + cfR1 + "<=" + numVal;
           else if (op.when === "gt" && numVal !== "") expr = "=$" + refL + cfR1 + ">" + numVal;
           else if (op.when === "lt" && numVal !== "") expr = "=$" + refL + cfR1 + "<" + numVal;
           else if (/マイナス|負の値/.test(text)) expr = "=$" + refL + cfR1 + "<0";
-          else if (/([0-9]+)\s*%?(?:になってない|ではない)/.test(text)) {
-            var mNot = /([0-9]+)\s*%?(?:になってない|ではない)/.exec(text);
-            expr = "=$" + refL + cfR1 + "<>" + mNot[1];
-          } else if (op.value !== undefined && op.value !== "") {
-            expr = "=ISNUMBER(SEARCH(\"" + String(op.value).replace(/"/g, "\"\"") + "\",$" + refL + cfR1 + "))";
+          else if (/([0-9][0-9,\.]*%?)(?:になってない|ではない)/.test(nfkc(text))) {
+            var mNot = /([0-9][0-9,\.]*%?)(?:になってない|ではない)/.exec(nfkc(text));
+            var nvNot = _normFilterNumJs(mNot[1]) || mNot[1];
+            expr = "=$" + refL + cfR1 + "<>" + nvNot;
+          } else if (op.when === "contains" && !_isEmptyVal(rawVCf)) {
+            expr = "=ISNUMBER(SEARCH(\"" + String(rawVCf).replace(/"/g, "\"\"") + "\",$" + refL + cfR1 + "))";
+          } else if (op.when === "eq" && !_isEmptyVal(rawVCf)) {
+            if (normVCf !== null) expr = "=$" + refL + cfR1 + "=" + normVCf;
+            else expr = "=$" + refL + cfR1 + "=\"" + String(rawVCf).replace(/"/g, "\"\"") + "\"";
+          } else if (!op.when) {
+            var mEqRow = /([^\s、。]+?)(?:が|は)[『「]?([^』」\s、。の]+?)[』」]?の行/.exec(nfkc(text));
+            if (mEqRow) {
+              var rvEq = mEqRow[2].trim();
+              var nvEq = _normFilterNumJs(rvEq);
+              if (nvEq !== null) expr = "=$" + refL + cfR1 + "=" + nvEq;
+              else expr = "=$" + refL + cfR1 + "=\"" + rvEq.replace(/"/g, "\"\"") + "\"";
+            } else if (!_isEmptyVal(rawVCf)) {
+              expr = "=ISNUMBER(SEARCH(\"" + String(rawVCf).replace(/"/g, "\"\"") + "\",$" + refL + cfR1 + "))";
+            }
           }
         } else if (/欠席|完了|未完了|終了/.test(text)) {
           var kwCf = /欠席/.test(text) ? "欠席" : (/未完了/.test(text) ? "未完了" : (/完了/.test(text) ? "完了" : "終了"));
@@ -1404,21 +1611,6 @@ var ComboPlanner = (function () {
       return null;
     }
 
-    function _normFilterNumJs(val) {
-      if (val === undefined || val === null) return null;
-      var s = nfkc(String(val)).replace(/,/g, "").trim();
-      if (!s) return null;
-      var isPct = s.slice(-1) === "%";
-      if (isPct) s = s.slice(0, -1).trim();
-      var mul = 1;
-      if (s.slice(-1) === "万") { mul = 10000; s = s.slice(0, -1).trim(); }
-      else if (s.slice(-1) === "億") { mul = 100000000; s = s.slice(0, -1).trim(); }
-      if (!s || isNaN(Number(s))) return null;
-      var num = Number(s) * mul;
-      if (isPct) num = num / 100.0;
-      return String(num);
-    }
-
     if (shelf.name === "freeze" && !_hasOwn(op, "rows") && table && table.header_row && /見出し|ヘッダ/.test(text)) {
       op.rows = parseInt(table.header_row, 10);
     }
@@ -1448,13 +1640,106 @@ var ComboPlanner = (function () {
       if (!_hasOwn(op, "name") && _hasOwn(op, "at")) op.name = op.at;
       if (op.expr && op.name) named = true;
     }
-    if (shelf.name === "summary" && _hasOwn(op, "by") && op.func !== "count" && Array.isArray(op.values)) {
-      var fvList = [];
-      for (var svi = 0; svi < op.values.length; svi++) {
-        if (op.values[svi] !== op.by) fvList.push(op.values[svi]);
+
+    var extraMissing = [];
+    if (shelf.name === "summary" || shelf.name === "pivot.new") {
+      if (shelf.name === "pivot.new" && Array.isArray(op.rows) && Array.isArray(op.cols)) {
+        var dedupCols = [];
+        for (var dci = 0; dci < op.cols.length; dci++) {
+          if (op.rows.indexOf(op.cols[dci]) < 0) dedupCols.push(op.cols[dci]);
+        }
+        if (dedupCols.length) op.cols = dedupCols;
+        else delete op.cols;
       }
-      if (fvList.length) op.values = fvList;
-      else delete op.values;
+      var groupCols = [];
+      if (shelf.name === "summary" && op.by) groupCols.push(op.by);
+      if (shelf.name === "pivot.new") {
+        if (Array.isArray(op.rows)) groupCols = groupCols.concat(op.rows);
+        if (Array.isArray(op.cols)) groupCols = groupCols.concat(op.cols);
+      }
+      if (op.func !== "count") {
+        var curVals = Array.isArray(op.values) ? op.values.slice() : (op.values ? [op.values] : []);
+        var fvList = [];
+        for (var svi = 0; svi < curVals.length; svi++) {
+          if (groupCols.indexOf(curVals[svi]) < 0) fvList.push(curVals[svi]);
+        }
+        if (table && _hasNumberMetaJs(table)) {
+          var numFv = [];
+          for (var nvi = 0; nvi < fvList.length; nvi++) {
+            if (_isNumberColJs(table, fvList[nvi])) numFv.push(fvList[nvi]);
+          }
+          fvList = numFv;
+        }
+        if (!fvList.length && table) {
+          var resNums = _resolveUniqueColsJs(scan, table, _hasNumberMetaJs(table), groupCols);
+          if (resNums.length) fvList = resNums;
+          else {
+            var fbNum = _singleNumericFallbackJs(table, groupCols);
+            if (fbNum) fvList = [fbNum];
+          }
+        }
+        if (fvList.length) op.values = fvList;
+        else delete op.values;
+      } else if ((!op.values || !op.values.length) && groupCols.length) {
+        op.values = [groupCols[0]];
+      }
+    }
+    if (shelf.name === "chart.new" && !op.edit && !explicitRange && table) {
+      var chartCols = names.slice();
+      for (var cli2 = 0; cli2 < letters.length; cli2++) {
+        if (!nameLetters[letters[cli2]] && chartCols.indexOf(letters[cli2]) < 0) chartCols.push(letters[cli2]);
+      }
+      var uChart = _resolveUniqueColsJs(scan, table, false, chartCols);
+      for (var uci = 0; uci < uChart.length; uci++) {
+        if (chartCols.indexOf(uChart[uci]) < 0) chartCols.push(uChart[uci]);
+      }
+      if (chartCols.length) {
+        var hasNumMetaCh = _hasNumberMetaJs(table);
+        var labelCols = [], numColsCh = [];
+        for (var cci = 0; cci < chartCols.length; cci++) {
+          if (hasNumMetaCh && _isNumberColJs(table, chartCols[cci])) numColsCh.push(chartCols[cci]);
+          else labelCols.push(chartCols[cci]);
+        }
+        if (hasNumMetaCh && !numColsCh.length) {
+          var resChNums = _resolveUniqueColsJs(scan, table, true, chartCols);
+          if (resChNums.length) numColsCh = numColsCh.concat(resChNums);
+          else {
+            var fbCh = _singleNumericFallbackJs(table, chartCols);
+            if (fbCh) numColsCh.push(fbCh);
+          }
+        }
+        if (hasNumMetaCh && !numColsCh.length) {
+          delete op.range;
+          extraMissing.push("グラフにする数値の列");
+        } else {
+          var orderedCols = hasNumMetaCh ? labelCols.concat(numColsCh) : chartCols;
+          var orderedLs = [];
+          for (var oci = 0; oci < orderedCols.length; oci++) {
+            var ol = _letterOf(table, orderedCols[oci]) || (/^[A-Z]{1,3}$/.test(String(orderedCols[oci])) ? String(orderedCols[oci]) : null);
+            if (ol && orderedLs.indexOf(ol) < 0) orderedLs.push(ol);
+          }
+          var spCh = _dataSpan(table);
+          if (orderedLs.length && spCh) {
+            var chR1 = parseInt(table.header_row || spCh[0], 10);
+            var chR2 = spCh[1];
+            if (orderedLs.length === 1) {
+              op.range = orderedLs[0] + chR1 + ":" + orderedLs[0] + chR2;
+            } else {
+              var contigAsc = true;
+              for (var cai2 = 1; cai2 < orderedLs.length; cai2++) {
+                if (_colNum(orderedLs[cai2]) - _colNum(orderedLs[cai2 - 1]) !== 1) { contigAsc = false; break; }
+              }
+              if (contigAsc) {
+                op.range = orderedLs[0] + chR1 + ":" + orderedLs[orderedLs.length - 1] + chR2;
+              } else {
+                var rParts = [];
+                for (var rpi = 0; rpi < orderedLs.length; rpi++) rParts.push(orderedLs[rpi] + chR1 + ":" + orderedLs[rpi] + chR2);
+                op.range = rParts.join(",");
+              }
+            }
+          }
+        }
+      }
     }
     if (shelf.name === "width") {
       if (_hasOwn(op, "col") && !_hasOwn(op, "width") && !_hasOwn(op, "auto") && /(?:自動|中身に合|オートフィット)/.test(text)) {
@@ -1480,12 +1765,13 @@ var ComboPlanner = (function () {
       }
       if (shelf.name === "filter.where") {
         var hasCmpCue = _hasOwn(op, "when") || /以上|以下|未満|より|を超?|を含|含む|以外|ではな|でない|空白|空欄/.test(text);
-        var mName = !hasCmpCue ? /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim()) : null;
-        if (mName) {
-          op.equals = mName[1].trim();
-        } else if (_hasOwn(op, "equals") && typeof op.equals === "string") {
-          op.equals = op.equals.replace(/(?:さん|様)$/, "").trim();
+        if (!hasCmpCue && !_hasOwn(op, "equals")) {
+          var mName = /^(.+?)(?:さん|様)?の行だけ/.exec(text.trim());
+          if (mName) op.equals = mName[1].trim();
         }
+      }
+      if (_hasOwn(op, "equals")) {
+        _cleanFilterEqualsJs(op, text, table, origQuotesMap);
       }
       if (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le") {
         delete op.equals;
@@ -1505,7 +1791,7 @@ var ComboPlanner = (function () {
         var eq = String(op.equals || "");
         var hasKamoku = cols.indexOf("勘定科目") >= 0 || cols.indexOf("科目") >= 0;
         var isExpense = eq.indexOf("旅費") >= 0 || ["費", "料", "税", "手当"].some(function (x) { return eq.indexOf(x) >= 0; });
-        var personCols = ["氏名", "名前", "社員名", "担当"];
+        var personCols = ["氏名", "名前", "社員名", "担当者", "担当"];
         var foundPersonCol = null;
         for (var pci = 0; pci < personCols.length; pci++) {
           if (cols.indexOf(personCols[pci]) >= 0) {
@@ -1537,9 +1823,8 @@ var ComboPlanner = (function () {
         missing.push(argsList[mi].name);
       }
     }
-    if ((shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") &&
-        (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le") && _isEmptyVal(op.value)) {
-      if (missing.indexOf("value") < 0) missing.push("value");
+    for (var emi = 0; emi < extraMissing.length; emi++) {
+      if (missing.indexOf(extraMissing[emi]) < 0) missing.push(extraMissing[emi]);
     }
     if (anyList.length && !hasAnyFilled()) {
       missing.push(anyList.join("・") + " のどれか");
@@ -1580,6 +1865,7 @@ var ComboPlanner = (function () {
     if (!missing.length && !bareOk && what.length >= WHAT_MIN && !hasWhatInOp && !hasNonLocReq) {
       missing.push("何をするか（" + what.slice(0, 6).join("・") + " …）");
     }
+    _auditBuiltOpJs(shelf, op, text, scan, table, colorHits, missing);
     if (shelf.danger && named && !VAGUE_RE.test(nfkc(text)) && !missing.length) {
       op.ok = true;
     }
@@ -1980,55 +2266,73 @@ var ComboPlanner = (function () {
 
       // 競合する新・既存棚の文脈調停（明示的文脈がある側を優遇）
       var boostName = "";
-      if (scored.length >= 2) {
+      if (scored.length) {
         var topBase = scored[0].total;
         var candMap = {};
         for (var cmi = 0; cmi < scored.length; cmi++) candMap[scored[cmi].shelf.name] = true;
         var hasFmtCue = /(?:表示形式|曜日|hh:mm|yyyy|mm\/dd|時刻.{0,4}2桁|09:00|カンマ|桁区切|パーセント|通貨形式|数値\s*[（(]?標準|標準形式|標準に戻)/i.test(c);
+        var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了)/.test(c) ||
+          /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c);
         var hasRowCfCue = /(?:行全体|の行|行を|行に)/.test(c) &&
-          /(?:以上|以下|未満|より大きい|より小さい|を超え|マイナス|負の値|になってない|ではない|以外|空欄|空白|欠席|完了)/.test(c) &&
-          _colorHits(c).length > 0;
+          hasRowCfCond &&
+          !/消|削除|重複|ダブ|固定色/.test(c) &&
+          (_colorHits(c).length > 0 || /色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
         var hasRowDelCond = /(?:の行|行を|行に|行は|データ)/.test(c) &&
           /(?:以上|以下|未満|より大きい|より小さい|を超え|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) &&
           /消|削除/.test(c);
-        if (hasFmtCue && candMap["format"] && candMap["date.fix"] && (scored[0].shelf.name === "format" || scored[0].shelf.name === "date.fix")) {
-          boostName = "format";
-        } else if (_colorHits(c).length > 0 && c.indexOf("文字") >= 0 && !/(?:大文字|小文字|全角|半角|UPPER|LOWER|PROPER)/i.test(c) && candMap["format"]) {
-          boostName = "format";
-        } else if (hasRowCfCue && candMap["cf.add"]) {
+        var hasSummaryCue = /(?:別(?:に|で|の)|ごと(?:に|の))/.test(c) &&
+          /集計|合計|平均|件数/.test(c) &&
+          !/ピボット|クロス|縦と横|小計|グラフ|並|ソート|抽出/.test(c);
+        if (hasRowCfCue && kind !== "doc") {
           boostName = "cf.add";
-        } else if (hasRowDelCond && candMap["filter.delete"]) {
-          boostName = "filter.delete";
-        } else if (candMap["link.clear"] && /(?:リンク|ハイパーリンク).*(?:外|解除|消|削除|クリア)/.test(c)) {
-          boostName = "link.clear";
-        } else if (candMap["link.extract"] && /(?:URL|リンク先).*(?:抽出|取り出)|埋め込みリンク/i.test(c)) {
-          boostName = "link.extract";
-        } else if (candMap["top.n"] && /(?:上位|下位|トップ|ワースト|ベスト)\s*[0-9]*/.test(c)) {
-          boostName = "top.n";
-        } else if (candMap["filter.extract"] && c.indexOf("抽出") >= 0 && !/(?:上位|下位|トップ|ワースト|ベスト|URL|リンク)/i.test(c)) {
-          boostName = "filter.extract";
-        } else if (candMap["merge.unmerge"] && /結合.*(?:埋め|バラ|ばら|分解|ほど|穴埋)|(?:埋め|穴埋).*結合/.test(c)) {
-          boostName = "merge.unmerge";
-        } else if (candMap["fill.blank"] && /穴埋め|(?:空白|空欄|ブランク).*上の値/.test(c)) {
-          boostName = "fill.blank";
-        } else if (candMap["transpose"] && /転置|縦横を入れ替|行列を入れ替|行と列を入れ替|縦と横を逆|横向きを縦向き|縦向きを横向き/.test(c)) {
-          boostName = "transpose";
-        } else if (candMap["number.fix"] && /(?:文字|テキスト).{0,6}数字|数値に変換|本物の数値|文字.{0,4}数値に直/.test(c)) {
-          boostName = "number.fix";
-        } else if (candMap["sheet.diff"] && /シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート/.test(c)) {
-          boostName = "sheet.diff";
-        } else if (candMap["sheet.list"] && /教え|確認|見せて|あるか|どんなシート|何枚/.test(c) && !/目次|インデックス|作/.test(c)) {
-          boostName = "sheet.list";
-        } else if (candMap["sheet.toc"] && /目次|インデックスシート|シート一覧/.test(c) && !/教え|確認|見せて|あるか|どんな/.test(c)) {
-          boostName = "sheet.toc";
-        } else if (candMap["sheet.sort"] && /(?:シート|タブ).*(?:名前順|昇順|降順|並べ替)/.test(c)) {
-          boostName = "sheet.sort";
-        } else if (candMap["sheet.gridlines"] && /(?:グリッド線|目盛り線|シート.*枠線|全シート.*枠線|枠線を非表示|枠線を表示)/.test(c) && !/(?:印刷|PDF|A4|A3|余白|ページ)/i.test(c) && !CELL_RE.test(c)) {
-          boostName = "sheet.gridlines";
-        } else if (candMap["sheet.snapshot"] && /スナップショット|日付[つ付入].*(?:複製|控え|コピー|保存)|控えを複製|今日の控え/.test(c)) {
-          boostName = "sheet.snapshot";
-        } else if (/書式|見た目/.test(c) && !/消|クリア|削除|外|解除/.test(c) && (scored[0].shelf.name === "copy" || scored[0].shelf.name === "copy.format")) {
-          if (candMap["copy.format"] && candMap["copy"]) boostName = "copy.format";
+          if (!candMap["cf.add"] && _byName["cf.add"]) {
+            scored.push({ total: topBase, order: 999, shelf: _byName["cf.add"], detail: {} });
+            candMap["cf.add"] = true;
+          }
+        } else if (hasSummaryCue && kind !== "doc") {
+          boostName = "summary";
+          if (!candMap["summary"] && _byName["summary"]) {
+            scored.push({ total: topBase, order: 999, shelf: _byName["summary"], detail: {} });
+            candMap["summary"] = true;
+          }
+        } else if (scored.length >= 2) {
+          if (hasFmtCue && candMap["format"] && candMap["date.fix"] && (scored[0].shelf.name === "format" || scored[0].shelf.name === "date.fix")) {
+            boostName = "format";
+          } else if (_colorHits(c).length > 0 && c.indexOf("文字") >= 0 && !/(?:大文字|小文字|全角|半角|UPPER|LOWER|PROPER)/i.test(c) && candMap["format"]) {
+            boostName = "format";
+          } else if (hasRowDelCond && candMap["filter.delete"]) {
+            boostName = "filter.delete";
+          } else if (candMap["link.clear"] && /(?:リンク|ハイパーリンク).*(?:外|解除|消|削除|クリア)/.test(c)) {
+            boostName = "link.clear";
+          } else if (candMap["link.extract"] && /(?:URL|リンク先).*(?:抽出|取り出)|埋め込みリンク/i.test(c)) {
+            boostName = "link.extract";
+          } else if (candMap["top.n"] && /(?:上位|下位|トップ|ワースト|ベスト)\s*[0-9]*/.test(c)) {
+            boostName = "top.n";
+          } else if (candMap["filter.extract"] && c.indexOf("抽出") >= 0 && !/(?:上位|下位|トップ|ワースト|ベスト|URL|リンク)/i.test(c)) {
+            boostName = "filter.extract";
+          } else if (candMap["merge.unmerge"] && /結合.*(?:埋め|バラ|ばら|分解|ほど|穴埋)|(?:埋め|穴埋).*結合/.test(c)) {
+            boostName = "merge.unmerge";
+          } else if (candMap["fill.blank"] && /穴埋め|(?:空白|空欄|ブランク).*上の値/.test(c)) {
+            boostName = "fill.blank";
+          } else if (candMap["transpose"] && /転置|縦横を入れ替|行列を入れ替|行と列を入れ替|縦と横を逆|横向きを縦向き|縦向きを横向き/.test(c)) {
+            boostName = "transpose";
+          } else if (candMap["number.fix"] && /(?:文字|テキスト).{0,6}数字|数値に変換|本物の数値|文字.{0,4}数値に直/.test(c)) {
+            boostName = "number.fix";
+          } else if (candMap["sheet.diff"] && /シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート/.test(c)) {
+            boostName = "sheet.diff";
+          } else if (candMap["sheet.list"] && /教え|確認|見せて|あるか|どんなシート|何枚/.test(c) && !/目次|インデックス|作/.test(c)) {
+            boostName = "sheet.list";
+          } else if (candMap["sheet.toc"] && /目次|インデックスシート|シート一覧/.test(c) && !/教え|確認|見せて|あるか|どんな/.test(c)) {
+            boostName = "sheet.toc";
+          } else if (candMap["sheet.sort"] && /(?:シート|タブ).*(?:名前順|昇順|降順|並べ替)/.test(c)) {
+            boostName = "sheet.sort";
+          } else if (candMap["sheet.gridlines"] && /(?:グリッド線|目盛り線|シート.*枠線|全シート.*枠線|枠線を非表示|枠線を表示)/.test(c) && !/(?:印刷|PDF|A4|A3|余白|ページ)/i.test(c) && !CELL_RE.test(c)) {
+            boostName = "sheet.gridlines";
+          } else if (candMap["sheet.snapshot"] && /スナップショット|日付[つ付入].*(?:複製|控え|コピー|保存)|控えを複製|今日の控え/.test(c)) {
+            boostName = "sheet.snapshot";
+          } else if (/書式|見た目/.test(c) && !/消|クリア|削除|外|解除/.test(c) && (scored[0].shelf.name === "copy" || scored[0].shelf.name === "copy.format")) {
+            if (candMap["copy.format"] && candMap["copy"]) boostName = "copy.format";
+          }
         }
         if (boostName) {
           for (var bsi = 0; bsi < scored.length; bsi++) {
