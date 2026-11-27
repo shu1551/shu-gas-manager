@@ -179,3 +179,6 @@ R	備考に「VIP」が入っている担当者と部門を一覧で教えて
 # 第15ラウンド: 安い順desc=false・〈値〉の数summary count
 1	単価の安い順に並べて	[{"shelf":"sort","col":"単価","desc":false}]
 1	担当者ごとの完了の数を集計して	[{"shelf":"summary","by":"担当者","func":"count"}]
+# 第16ラウンド: 件数グラフ(summary count→chart.new)・AからBまでの引き算・の掛け算
+1	部門ごとの行の件数をグラフにして	[{"shelf":"summary","by":"部門","func":"count"},{"shelf":"chart.new","range":"集計_部門別"}]
+1	数量と単価の掛け算の列を足して	[{"shelf":"calc.col","expr":"数量*単価"}]

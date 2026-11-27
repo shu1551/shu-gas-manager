@@ -2581,7 +2581,7 @@ var ComboPlanner = (function () {
       var mPref = /^.*?(?:列|欄)[にへ]\s*/.exec(src);
       var exprPref = mPref ? src.slice(mPref[0].length) : src;
       function _cleanOp(raw) {
-        var s = String(raw || "").trim().replace(/^[\s、,。をにで]+|[\s、,。をにで]+$/g, "");
+        var s = String(raw || "").trim().replace(/^[\s、,。をにで]+|[\s、,。をにでの]+$/g, "");
         if (!s) return null;
         var mPow = /^(.+?)の([0-9]+(?:\.[0-9]+)?)乗$/.exec(s);
         if (mPow) {
@@ -2616,6 +2616,11 @@ var ComboPlanner = (function () {
             var a = _cleanOp(mm[1]), b = _cleanOp(mm[2]);
             if (a && b) return a + pats[pi1][1] + b;
           }
+        }
+        var mSpan = /([^\s、,。をにから−-]{1,20})から([^\s、,。をにまで]{1,20})まで/.exec(cands[ci1]);
+        if (mSpan) {
+          var aSp = _cleanOp(mSpan[1]), bSp = _cleanOp(mSpan[2]);
+          if (aSp && bSp) return bSp + "-" + aSp;
         }
       }
       for (var ci2 = 0; ci2 < cands.length; ci2++) {
@@ -2877,7 +2882,9 @@ var ComboPlanner = (function () {
         }
         if (hasNumMetaCh && !numColsCh.length) {
           delete op.range;
-          extraMissing.push("グラフにする数値の列");
+          if (!(/(?:ごと(?:に|の)|別(?:に|で|の))/.test(nfkc(text)) && /件数|人数|回数|の数|回答数|カウント/.test(nfkc(text)))) {
+            extraMissing.push("グラフにする数値の列");
+          }
         } else {
           var orderedCols = hasNumMetaCh ? labelCols.concat(numColsCh) : chartCols;
           var orderedLs = [];
@@ -3473,7 +3480,7 @@ var ComboPlanner = (function () {
       }
       return false;
     };
-    var func = /件数|人数/.test(cN) ? "count" : (cN.indexOf("平均") >= 0 ? "avg" : null);
+    var func = /件数|人数|回数|の数|回答数|カウント/.test(cN) ? "count" : (cN.indexOf("平均") >= 0 ? "avg" : null);
     var valCols = [];
     if (func === "count") {
       valCols = [byCol];
@@ -3824,6 +3831,8 @@ var ComboPlanner = (function () {
         } else if (hasFilterExtractCue) {
           ensureBoost("filter.extract");
         } else if ((_dateShiftOfJs(c, table) && /列|欄/.test(c)) || _multiColAggOfJs(c, table)) {
+          ensureBoost("calc.col");
+        } else if (/([^\s、,。をにから]{1,16})から([^\s、,。をにまで]{1,16})までの?(?:日数|期間)/.test(c) && !/月数|年数|営業日/.test(c)) {
           ensureBoost("calc.col");
         } else if (/重複|ダブ/.test(c) && /調べ|確認|チェック|ないか|探し|見つけ|色|目立|ハイライト/.test(c) && !hasRemoveAct && _byName["cf.dup"]) {
           ensureBoost("cf.dup");

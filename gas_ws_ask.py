@@ -399,7 +399,7 @@ def _extract_calc_expr(text, table):
     expr_pref = src[m_pref.end():] if m_pref else src
 
     def _clean_operand(raw):
-        s = re.sub(r"^[\s、,。をにで]+|[\s、,。をにで]+$", "", str(raw or "").strip())
+        s = re.sub(r"^[\s、,。をにで]+|[\s、,。をにでの]+$", "", str(raw or "").strip())
         if not s:
             return None
         m_pow = re.fullmatch(r"(.+?)の([0-9]+(?:\.[0-9]+)?)乗", s)
@@ -435,6 +435,12 @@ def _extract_calc_expr(text, table):
                 b = _clean_operand(m.group(2))
                 if a and b:
                     return f"{a}{sym}{b}"
+        m_span = re.search(r"([^\s、,。をにから−-]{1,20})から([^\s、,。をにまで]{1,20})まで", cand_src)
+        if m_span:
+            a = _clean_operand(m_span.group(1))
+            b = _clean_operand(m_span.group(2))
+            if a and b:
+                return f"{b}-{a}"
     for cand_src in cands:
         m_solo = re.search(r"([^\s、,。をにで]{1,20}の(?:[0-9]+(?:\.[0-9]+)?乗|平方根))", cand_src)
         if m_solo:
@@ -2269,7 +2275,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         num_cols.append(fb_c)
             if has_num_meta and not num_cols:
                 op.pop("range", None)
-                extra_missing.append("グラフにする数値の列")
+                if not (re.search(r"ごと(?:に|の)|別(?:に|で|の)", nfkc(text)) and re.search(r"件数|人数|回数|の数|回答数|カウント", nfkc(text))):
+                    extra_missing.append("グラフにする数値の列")
             else:
                 ordered_cols = label_cols + num_cols if has_num_meta else chart_cols
                 ordered_ls = []
@@ -2643,7 +2650,7 @@ def _chart_summary_ops(op, clause, table):
     if not by_col:
         return None
     # 値列（values）を解決
-    func = "count" if re.search(r"件数|人数", c_n) else ("avg" if "平均" in c_n else None)
+    func = "count" if re.search(r"件数|人数|回数|の数|回答数|カウント", c_n) else ("avg" if "平均" in c_n else None)
     val_cols = []
     if func == "count":
         val_cols = [by_col]
@@ -3023,6 +3030,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             elif has_filter_extract_cue:
                 _ensure_boost("filter.extract")
             elif (_date_shift_of(c, table) and re.search(r"列|欄", c)) or _multi_col_agg_of(c, table):
+                _ensure_boost("calc.col")
+            elif re.search(r"([^\s、,。をにから]{1,16})から([^\s、,。をにまで]{1,16})までの?(?:日数|期間)", c) and not re.search(r"月数|年数|営業日", c):
                 _ensure_boost("calc.col")
             elif re.search(r"重複|ダブ", c) and re.search(r"調べ|確認|チェック|ないか|探し|見つけ|色|目立|ハイライト", c) and not has_remove_act and "cf.dup" in finder.cat.by_name:
                 _ensure_boost("cf.dup")
