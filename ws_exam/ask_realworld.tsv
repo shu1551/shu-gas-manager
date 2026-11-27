@@ -124,3 +124,4 @@ R	このシートにはどんな項目が入っていますか？
 1	タイトルを大きく、赤文字、中央に	[{"shelf":"format","title":true,"size_delta":2},{"shelf":"format","title":true,"color":"赤"},{"shelf":"format","title":true,"align":"center"}]
 1	備考の全角を半角にして	[{"shelf":"seiri","col":"備考","halfwidth":true,"ok":true}]
 1	日付が11月20日までの明細を削除して	[{"shelf":"filter.delete","col":"日付","when":"le","value":"11/20","ok":true}]
+0	備考に値引ありと書かれている行の売上金額を1割引きの式にして	

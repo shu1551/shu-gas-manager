@@ -1268,10 +1268,43 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
 
 _AI_DESTRUCTIVE_SHELVES = frozenset({"rows.delete", "cols.delete", "filter.delete", "clear.values", "clear.all", "sheet.delete"})
 _AI_DELETE_CUE_RE = re.compile(r"消|削除|取り除|捨て|クリア|空に|抜[いきく]|削[っりる]|除去|除外|詰め|無く|なく[しす]|減ら|落と")
+_AI_SPLITTABLE_RANGE_SHELVES = frozenset({
+    "clear.values", "clear.format", "clear.all", "bg.clear",
+    "format", "cf.add", "cf.clear",
+    "formula.guard", "formula.tovalue", "round", "text.case", "text.affix", "text.clean",
+    "note.clear", "link.clear", "checkbox", "protect.add",
+})
+_A1_PART_RE = re.compile(r"^(?:(?:'(?:[^']|'')+'|[^!',\s]+)!)?(?:[A-Za-z]{1,3}\d*(?::[A-Za-z]{1,3}\d*)?|\d+:\d+)$")
+
+
+def _expand_disjoint_range_op(op, sh_name, issues):
+    """range にカンマ区切りの飛び地（例: 'F5,F8'）があれば、安全な棚だけ 1 範囲ずつの ops に分ける。分けられない棚は止める。"""
+    raw_r = op.get("range")
+    if not isinstance(raw_r, str) or "," not in raw_r:
+        return [op]
+    parts = [p.strip() for p in raw_r.split(",")]
+    if not parts or any(not p or not _A1_PART_RE.fullmatch(p) for p in parts):
+        issues.append(f"棚「{sh_name}」の range に不正な複数範囲（{raw_r}）が含まれています")
+        return None
+    can_split = sh_name in _AI_SPLITTABLE_RANGE_SHELVES
+    if sh_name == "format" and op.get("merge") is not None:
+        can_split = False
+    if not can_split:
+        issues.append(f"棚「{sh_name}」の range にカンマ区切りの複数範囲（{raw_r}）は使えません（1 範囲ずつに分けて指定してください）")
+        return None
+    if len(parts) > 50:
+        issues.append(f"棚「{sh_name}」の飛び地範囲が多すぎます（{len(parts)} か所・上限 50）")
+        return None
+    out = []
+    for p in parts:
+        cp = dict(op)
+        cp["range"] = p
+        out.append(cp)
+    return out
 
 
 def audit_ai_ops(ops, ask, finder, table=None):
-    """AI が返した ops を棚と同じ守り（ok 剥ぎ取り・カタログ検査・_audit_built_op）に通す。
+    """AI が返した ops を棚と同じ守り（ok 剥ぎ取り・飛び地範囲分割・カタログ検査・_audit_built_op）に通す。
     戻り値: {"ok": bool, "ops": sanitized_ops, "issues": list[str]}
     """
     issues = []
@@ -1304,7 +1337,10 @@ def audit_ai_ops(ops, ask, finder, table=None):
         if ask_s and sh_name in _AI_DESTRUCTIVE_SHELVES and not _AI_DELETE_CUE_RE.search(ask_n):
             issues.append(f"頼みに削除・消去の指示が無いため「{sh_name}」は実行しません")
             continue
-        sanitized.append(op)
+        expanded = _expand_disjoint_range_op(op, sh_name, issues)
+        if expanded is None:
+            continue
+        sanitized.extend(expanded)
 
     if issues or not sanitized or not ask_s or cat is None:
         return {"ok": not issues and bool(sanitized), "ops": sanitized, "issues": issues}

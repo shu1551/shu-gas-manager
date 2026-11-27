@@ -1850,16 +1850,15 @@ class ComboPostboxWatcher:
                 card = "\n".join(finder.card(s))
                 return {"ok": False, "ops": [], "error": f"{msg}\nその棚の札:\n{card}\n   引数: {s['args_raw']}"}
             sanitized.append(op)
-        if ask:
-            import gas_ws_ask
-            aud = gas_ws_ask.audit_ai_ops(sanitized, ask, finder, table=table)
-            if not aud.get("ok"):
-                return {
-                    "ok": False,
-                    "ops": [],
-                    "error": "守りの監査で止まりました: " + " ／ ".join(aud.get("issues") or ["不明な不備"]),
-                }
-            sanitized = aud.get("ops") or sanitized
+        import gas_ws_ask
+        aud = gas_ws_ask.audit_ai_ops(sanitized, ask or "", finder, table=table)
+        if not aud.get("ok"):
+            return {
+                "ok": False,
+                "ops": [],
+                "error": "守りの監査で止まりました: " + " ／ ".join(aud.get("issues") or ["不明な不備"]),
+            }
+        sanitized = aud.get("ops") or sanitized
         return {"ok": True, "ops": sanitized}
 
     @staticmethod

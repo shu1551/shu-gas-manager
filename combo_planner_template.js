@@ -3845,6 +3845,44 @@ var ComboPlanner = (function () {
     "clear.values": 1, "clear.all": 1, "sheet.delete": 1
   };
   var _AI_DELETE_CUE_RE_JS = /消|削除|取り除|捨て|クリア|空に|抜[いきく]|削[っりる]|除去|除外|詰め|無く|なく[しす]|減ら|落と/;
+  var _AI_SPLITTABLE_RANGE_SHELVES_JS = {
+    "clear.values": 1, "clear.format": 1, "clear.all": 1, "bg.clear": 1,
+    "format": 1, "cf.add": 1, "cf.clear": 1,
+    "formula.guard": 1, "formula.tovalue": 1, "round": 1, "text.case": 1, "text.affix": 1, "text.clean": 1,
+    "note.clear": 1, "link.clear": 1, "checkbox": 1, "protect.add": 1
+  };
+  var _A1_PART_RE_JS = /^(?:(?:'(?:[^']|'')+'|[^!',\s]+)!)?(?:[A-Za-z]{1,3}\d*(?::[A-Za-z]{1,3}\d*)?|\d+:\d+)$/;
+
+  function _expandDisjointRangeOpJs(op, shName, issues) {
+    var rawR = op.range;
+    if (typeof rawR !== "string" || rawR.indexOf(",") < 0) return [op];
+    var parts = rawR.split(",").map(function (p) { return p.trim(); });
+    for (var pi = 0; pi < parts.length; pi++) {
+      if (!parts[pi] || !_A1_PART_RE_JS.test(parts[pi])) {
+        issues.push("棚「" + shName + "」の range に不正な複数範囲（" + rawR + "）が含まれています");
+        return null;
+      }
+    }
+    var canSplit = !!_AI_SPLITTABLE_RANGE_SHELVES_JS[shName];
+    if (shName === "format" && op.merge !== undefined && op.merge !== null) canSplit = false;
+    if (!canSplit) {
+      issues.push("棚「" + shName + "」の range にカンマ区切りの複数範囲（" + rawR + "）は使えません（1 範囲ずつに分けて指定してください）");
+      return null;
+    }
+    if (parts.length > 50) {
+      issues.push("棚「" + shName + "」の飛び地範囲が多すぎます（" + parts.length + " か所・上限 50）");
+      return null;
+    }
+    var out = [];
+    for (var pj = 0; pj < parts.length; pj++) {
+      var cp = {};
+      var ks = Object.keys(op);
+      for (var k2 = 0; k2 < ks.length; k2++) cp[ks[k2]] = op[ks[k2]];
+      cp.range = parts[pj];
+      out.push(cp);
+    }
+    return out;
+  }
 
   function auditAiOps(ops, askText, table) {
     _ensureInit();
@@ -3897,7 +3935,9 @@ var ComboPlanner = (function () {
         issues.push("頼みに削除・消去の指示が無いため「" + shName + "」は実行しません");
         continue;
       }
-      sanitized.push(op);
+      var expanded = _expandDisjointRangeOpJs(op, shName, issues);
+      if (!expanded) continue;
+      for (var ei = 0; ei < expanded.length; ei++) sanitized.push(expanded[ei]);
     }
     if (issues.length || !sanitized.length || !askS) {
       return { ok: !issues.length && sanitized.length > 0, ops: sanitized, issues: issues };
