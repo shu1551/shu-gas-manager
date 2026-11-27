@@ -55,6 +55,8 @@ PUBLIC_FILES = [
     "gas_ws_api.py",
     "gas_ws_ask.py",
     "ws_shelves/api.gs",
+    "ws_shelves/script.gs",
+    "gas_ws_agent.py",
     "ws_exam/phrases_api.tsv",
     "test_gas_ws_api.py",
     "test_gas_ws_ask.py",

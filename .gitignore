@@ -68,3 +68,7 @@ ws_browser_ext/combo_window.json
 .combo_bridge_token
 .combo_watch.pid
 gas_combo_ext/
+
+# 脳（ws_agent）の走行の記録（使う人ごと・公開しない）
+.ws_agent_runs.jsonl
+.ws_agent_last.jsonl

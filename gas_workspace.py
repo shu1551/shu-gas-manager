@@ -129,6 +129,20 @@ def _file_hash(common_path=ENGINE_COMMON, shelf_dir=SHELF_DIR):
     return _engine_bundle(common_path, shelf_dir)[1]
 
 
+def _range_origin(range_str):
+    """"A2:H16"・"経費!C3:D9"・"" の左上の (行, 列)（1 始まり）。読めなければ (1, 1)"""
+    s = str(range_str or "").strip()
+    if "!" in s:
+        s = s.rsplit("!", 1)[1]
+    m = re.match(r"\$?([A-Za-z]{1,3})\$?(\d+)", s)
+    if not m:
+        return 1, 1
+    col = 0
+    for ch in m.group(1).upper():
+        col = col * 26 + (ord(ch) - 64)
+    return int(m.group(2)), col
+
+
 def _digest(*parts):
     h = hashlib.sha1()
     for p in parts:
@@ -622,10 +636,28 @@ class WorkspaceManager:
         return self._search_name(target, kind), False
 
     # ------------------------------------------------------------ ws_do
-    def do(self, ops="", target="", ok=False, ask=""):
+    def _switch_sheet(self, target, sheet):
+        """ws_do(sheet=…): 撃つシートを名指しする。今の相手と違うときだけ、そのシートを読んで相手にする
+        （確かめに読んだ別のシートへ次の手が流れないように・11/27 撃ち直し 3 の #5）"""
+        sheet = str(sheet or "").strip()
+        if not sheet or str(target or "").startswith("new:"):
+            return
+        cur = self._load().get("target") or {}
+        t = str(target or "").strip()
+        same_file = (not t) or t == cur.get("id") or t == cur.get("name") or (cur.get("id") and cur["id"] in t)
+        if same_file and cur.get("sheet") == sheet:
+            return
+        self._look(target=target, sheet=sheet)
+
+    def do(self, ops="", target="", ok=False, ask="", sheet=""):
         tim = _Timer()
         self._tim = tim
         try:
+            self._switch_sheet(target, sheet)
+            tim.lap("シート")
+            if not str(target or "").startswith("new:"):
+                self._prime_before()                 # 前→後の「前」を撃つ直前に取る
+                tim.lap("前の写し")
             if ask and not (ops if isinstance(ops, (list, dict)) else str(ops or "").strip()):
                 out = self._do_ask(ask, target, ok, tim)
             else:
@@ -638,13 +670,17 @@ class WorkspaceManager:
 
     # ------------------------------------------------------------ ws_do(ask=…)：当てて・組んで・撃つを 1 回で
     @staticmethod
-    def _save_sheet_vals(st, sid, sheet, cell_map):
+    def _save_sheet_vals(st, sid, sheet, cell_map, bounds=None):
+        """前→後の「前」を覚える。bounds=(r1, c1, r2, c2) は読んだ範囲（後と比べるのはこの中だけ）。
+        読んだ範囲の外を「(空) → 値」と出さないように、範囲も一緒に覚える（11/27・A1:B2 だけ読んだ後に 113 セルの誤報）"""
         if not sid or not sheet or not isinstance(cell_map, dict):
             return
         m = st.setdefault("last_sheet_values", {})
         key = f"{sid}:{sheet}"
-        # 上限200セルまで軽量に保存
-        ser = {f"{r},{c}": str(v) for (r, c), v in list(cell_map.items())[:200]}
+        # A1:Z60（1,560 セル）まで覚える（200 で切ると、大きい表で切った先が「(空) → 値」に見えた）
+        ser = {f"{r},{c}": str(v) for (r, c), v in list(cell_map.items())[:1600]}
+        if bounds:
+            ser["_bounds"] = ",".join(str(int(x)) for x in bounds)
         m[key] = ser
         if len(m) > 8:
             for old_k in list(m.keys())[:-8]:
@@ -657,12 +693,44 @@ class WorkspaceManager:
         raw = (st.get("last_sheet_values") or {}).get(f"{sid}:{sheet}") or {}
         out = {}
         for k, v in raw.items():
+            if k == "_bounds":
+                continue
             try:
                 r_s, c_s = k.split(",", 1)
                 out[(int(r_s), int(c_s))] = v
             except Exception:
                 pass
         return out
+
+    @staticmethod
+    def _sheet_vals_bounds(st, sid, sheet):
+        raw = (st.get("last_sheet_values") or {}).get(f"{sid}:{sheet}") or {}
+        try:
+            r1, c1, r2, c2 = (int(x) for x in str(raw.get("_bounds") or "").split(","))
+            return r1, c1, r2, c2
+        except Exception:
+            return None
+
+    def _prime_before(self):
+        """撃つ直前に、今の相手のシートの A1:Z60 を読んで前→後の「前」にする（Excel マネージャーの seiri が
+        撃つ前に写しを取るのと同じ）。前に読んだ物と比べると、読んだ範囲・時が違って偽の「変更」が出た（11/27）"""
+        st = self._load()
+        tgt = st.get("target") or {}
+        if st.get("direct_off") or tgt.get("kind") != "sheet" or not tgt.get("id") or not tgt.get("sheet"):
+            return
+        try:
+            import gas_ws_direct
+            light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt["id"], tgt["sheet"], "A1:Z60")
+            if not light:
+                return
+            _, _, a_map = gas_ws_direct.snapshot_to_grids(light["snap"], tgt["sheet"], light["table"])
+            st_now = self._load()
+            if st.get("direct_token"):
+                st_now["direct_token"] = st["direct_token"]
+            self._save_sheet_vals(st_now, tgt["id"], tgt["sheet"], a_map, bounds=(1, 1, 60, 26))
+            self._save(st_now)
+        except Exception:
+            pass
 
     @staticmethod
     def _filter_new_insights(st, tgt_id, sheet_name, insights):
@@ -711,7 +779,8 @@ class WorkspaceManager:
             out_lines += errs
             if rest:
                 out_lines.append("メモ: " + " ／ ".join(rest[:3]))
-            out_lines.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
+            out_lines.append("次の手: 上のエラーを見て、直すか ws_undo で戻すかを決めてから使う人に報告する" if errs
+                             else "次の手: なし＝これで仕上がり。道具をこれ以上撃たず、何をどこに作った・直したかを 3〜5 行で報告する")
             return "\n".join(out_lines)
         tgt, is_new = self.resolve_target(target, None, st)
         if tgt.get("_window_title"):
@@ -810,6 +879,10 @@ class WorkspaceManager:
                         sn_lines.append("表の中身（行番号・列記号・数式つき）:\n" + sn_info["text"])
                         sn_lines.append("※消す・上書きの棚には ok=True を勝手に付けず、ユーザー確認を取ってください。")
                         unfired_txt += "\n" + "\n".join(sn_lines)
+                if not any("人にしか分かりません" in r for r in (p.reasons or [])):
+                    unfired_txt += ("\n次の手: 棚当てでは撃てなかった＝ここからは AI の番。頼みを、棚が確かに撃てる単純な手に割って"
+                                    " ops を組む（列名・値・範囲は表の実物から・札は ws_find・棚に無ければ api）。"
+                                    "sheet を名指しして ws_do(ops=…) で撃ち、返事の検算・前→後を読んでから報告する")
                 return unfired_txt
             # 消す・値を変える棚で、人の判断が要る空白（姓と名の間などセル内の空白）がある場合の確かめ
             if (
@@ -953,35 +1026,16 @@ class WorkspaceManager:
                                         )
                 except Exception:
                     pass
-            # total のとき、対象列に「12,000円」などの文字の数が含まれていれば seiri で数値化してから合計を出し直す
-            if kind == "sheet" and not is_new and len(p.ops) == 1 and p.ops[0].get("shelf") == "total":
+            # 先撃ちの中で、棚で直せる汚れも同じ呼び出しで直す（Excel マネージャーの seiri の autofix の写し・11/27）。
+            # 汚れを AI の宿題として返さず、道具がその場で直して前→後に出す。直すのは値の意味を変えない 2 つだけ:
+            #   数の列の「12,000円」のような文字の数 → 数値 ／ 文字の前後の空白（「佐藤 」）→ 取る
+            # 人の判断が要る物（重複・どちらが正しいか）は直さず「残り」に出る。控えは頼みの手と 1 つ（ws_undo 1 回で両方戻る）
+            autofix_notes = []
+            if kind == "sheet" and not is_new and not any(isinstance(o, dict) and o.get("shelf") == "seiri" and not o.get("col") for o in p.ops):
                 try:
-                    import gas_ws_direct
-                    t_op = p.ops[0]
-                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), cur_sh, "A1:Z60")
-                    if light and light.get("table"):
-                        ltb = light["table"]
-                        dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
-                        if dr_m:
-                            r_a, r_b = int(dr_m.group(1)), int(dr_m.group(2))
-                            ent_l = light["snap"].sheet(cur_sh)
-                            cells_l = ent_l.get("cells") or {}
-                            chk_cols = t_op.get("cols") or ([t_op["col"]] if t_op.get("col") else [c["col"] for c in (ltb.get("columns") or []) if c.get("number")])
-                            fix_cols = []
-                            for cc_name in chk_cols:
-                                c_num = gas_ws_direct.DirectRunner._col_of(ltb, cc_name)
-                                for rr in range(r_a, r_b + 1):
-                                    cell_d = cells_l.get((rr, c_num)) or {}
-                                    ev = cell_d.get("effectiveValue") or {}
-                                    if "stringValue" in ev:
-                                        sv = str(ev["stringValue"]).strip()
-                                        if re.fullmatch(r"[¥￥$]?\s*-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?\s*(?:円|個|件|本|枚|台)?", sv):
-                                            fix_cols.append(cc_name)
-                                            break
-                            if fix_cols:
-                                p.ops = [{"shelf": "seiri", "col": fc, "numbers": True, "tidy": False, "ok": True} for fc in fix_cols] + p.ops
+                    p.ops, autofix_notes = self._autofix_ops(st, tgt, cur_sh, p.ops)
                 except Exception:
-                    pass
+                    autofix_notes = []
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
             # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
             keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
@@ -1019,12 +1073,13 @@ class WorkspaceManager:
             tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
         errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った", "式の値が変わった"))]
         rest = [x for x in (res.get("notes") or []) if x not in errs]
-        tail = errs + tail
-        tail.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")
         out_lines = [
             self._title(tgt_out),
             f"直した所: {ch_text}（撃った棚: {shown}）",
         ]
+        if autofix_notes:
+            out_lines.append("汚れの直し（道具がその場で・頼みの手と同じ控え）: " + " ／ ".join(autofix_notes[:4])
+                             + (f"（ほか {len(autofix_notes) - 4} 件）" if len(autofix_notes) > 4 else ""))
         if rest:
             out_lines.append("メモ: " + " ／ ".join(rest[:3]))
         self._enrich_do_res(st2, res, p.ops, cur_sh, keeps_shape=keeps_shape)
@@ -1033,16 +1088,85 @@ class WorkspaceManager:
         merged_ins = res.get("insights") or []
         if diff_cells:
             out_lines.append("変更前→後: " + " ／ ".join(diff_cells))
-        if verify.get("mismatch"):
-            out_lines.append("⚠ 検算不一致: " + " ／ ".join(verify["mismatch"]))
-            tail = [t for t in tail if t != "このまま使う人に報告して終える"]
-            tail.append("検算が合いません。確認するか ws_undo で戻してください")
-        elif verify.get("checks"):
+        if verify.get("checks") and not verify.get("mismatch"):
             out_lines.append("検算: " + " ／ ".join(verify["checks"]))
         if merged_ins:
             out_lines.append("気づき: " + " ／ ".join(merged_ins[:2]))
-        out_lines.append(" ／ ".join(tail))
+        if tail:
+            out_lines.append(" ／ ".join(tail))
+        out_lines += self._rest_lines(st2, res, tgt_out.get("sheet") or cur_sh, errs, verify.get("mismatch") or [], merged_ins)
         return "\n".join(out_lines)
+
+    _AUTOFIX_NUM_RE = re.compile(r"[¥￥$]?\s*-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?\s*(?:円|個|件|本|枚|台)?")
+
+    def _autofix_ops(self, st, tgt, sheet, ops):
+        """先撃ちの頼みの手の前に、汚れを直す seiri の手（列ごと）を足す。戻り値 (ops, 番地つきの一言[])"""
+        import gas_ws_direct
+        light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), sheet, "A1:Z60")
+        if not light or not light.get("table"):
+            return ops, []
+        ltb = light["table"]
+        dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
+        if not dr_m:
+            return ops, []
+        r_a, r_b = int(dr_m.group(1)), int(dr_m.group(2))
+        cells = (light["snap"].sheet(sheet).get("cells")) or {}
+        done_cols = {str(o.get("col")) for o in ops if isinstance(o, dict) and o.get("shelf") in ("seiri", "number.fix") and o.get("col")}
+        add, notes = [], []
+        for c in ltb.get("columns") or []:
+            col = c.get("col")
+            if not col or col in done_cols or str(c.get("name") or "") in done_cols:
+                continue
+            ci = gas_ws_direct.col_num(col)
+            trim_hit = num_hit = None
+            for rr in range(r_a, r_b + 1):
+                ev = ((cells.get((rr, ci)) or {}).get("effectiveValue")) or {}
+                if "stringValue" not in ev:
+                    continue
+                sv = str(ev["stringValue"])
+                core = sv.strip(" \t　")
+                if not core:
+                    continue
+                if trim_hit is None and core != sv:
+                    trim_hit = f"{col}{rr}「{sv}」の前後の空白"
+                if (num_hit is None and c.get("number") and not re.match(r"0\d", core)
+                        and self._AUTOFIX_NUM_RE.fullmatch(core)):
+                    num_hit = f"{col}{rr}「{core}」（文字の数）→ 数値"
+            if trim_hit or num_hit:
+                add.append({"shelf": "seiri", "col": col, "trim": bool(trim_hit), "numbers": bool(num_hit),
+                            "halfwidth": False, "dates": False, "tidy": False})
+                # ok は付けない（1 本でも ok があると、頼みの消す手まで確かめなしで撃たれる＝_do_res の決まり）
+                notes += [x for x in (num_hit, trim_hit) if x]
+        return add + list(ops), notes
+
+    def _rest_lines(self, st2, res, sheet, errs, mismatch, shown_ins=()):
+        """先撃ち（ws_do の ask）の返事の締め＝Excel の seiri と同じ「残り」と「次の手」。
+        道具が撃てた所は上に出した。ここには AI が見て決める物だけを並べ、次に何をするかを言い切る。"""
+        sid = (res.get("target") or res.get("created") or {}).get("id")
+        diag = (((st2.get("book_diagnosis") or {}).get(sid) or {}).get("findings")) or []
+        shown = set(shown_ins or ())
+        here = [d["text"] for d in diag if d.get("sheet") == sheet and d.get("text") not in shown]
+        other = [d["text"] for d in diag if d.get("sheet") != sheet and d.get("text") not in shown]
+        lines = ["--- 残り（ここだけ AI が見て決める） ---"]
+        bad = list(errs) + [f"検算不一致: {m}" for m in mismatch]
+        lines.append(("⚠ " + " ／ ".join(bad)) if bad else "エラー・検算の食い違い: なし")
+        if here:
+            lines.append("この表の気づき: " + " ／ ".join(here[:6]))
+        if other:
+            lines.append("ほかのシートの気づき: " + " ／ ".join(other[:4]))
+        if bad:
+            lines.append("次の手: 上の ⚠ を見て、直すか ws_undo で戻すかを決める。直すなら ws_look で見た実物から ops を組み、"
+                         "sheet を名指しして撃つ。直した後に使う人へ報告する")
+        elif here:
+            lines.append("次の手: 頼みが「直して・整えて・きれいに・出し直して」で、この表の気づきがその頼みの中なら、"
+                         "ws_look で見た実物（列の値・範囲）から ops を組み、sheet を名指しして同じシートに撃つ。"
+                         "人の判断が要る物（どちらを残す・消す・どれが正しい）は撃たずに番地で聞く。"
+                         "頼みの外の気づきは直さず、返事に効く物だけ番地つきで添える。"
+                         "報告は何をどこに直したかを番地で 3〜5 行（検算の数を添える）")
+        else:
+            lines.append("次の手: なし＝これで仕上がり（先撃ちは 1 回で終える）。道具をこれ以上撃たない。"
+                         "報告は何をどこに直したかを番地で 3〜5 行（検算の数を添える）")
+        return lines
 
     def _keeps_shape(self, op):
         """表の形を変えない棚か（触る に 値・シート構成 が無い。触る が引数で変わる api は変えるものとして扱う）"""
@@ -1226,9 +1350,12 @@ class WorkspaceManager:
                         v_grid, f_grid, a_map = gas_ws_direct.snapshot_to_grids(light["snap"], sh_for_ins, light["table"])
                         if not keeps_shape:
                             b_map = self._load_sheet_vals(st2, sid_out, sh_for_ins)
+                            bnd = self._sheet_vals_bounds(st2, sid_out, sh_for_ins)
                             if b_map and not diff_cells and res.get("changed"):
-                                diff_cells = gas_ws_insights.diff_cell_values(b_map, a_map)
-                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map)
+                                a_cmp = a_map if not bnd else {k: v for k, v in a_map.items()
+                                                               if bnd[0] <= k[0] <= bnd[2] and bnd[1] <= k[1] <= bnd[3]}
+                                diff_cells = gas_ws_insights.diff_cell_values(b_map, a_cmp)
+                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map, bounds=(1, 1, 60, 26))
                             if not verify.get("checks") and not verify.get("mismatch"):
                                 verify = gas_ws_insights.verify_after_do(
                                     light["table"],
@@ -1250,7 +1377,7 @@ class WorkspaceManager:
                         light_d = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid_out, sh_for_ins, "A1:Z60")
                         if light_d:
                             _, _, a_map_d = gas_ws_direct.snapshot_to_grids(light_d["snap"], sh_for_ins, light_d["table"])
-                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map_d)
+                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map_d, bounds=(1, 1, 60, 26))
                     except Exception:
                         pass
         diag_entry = (st2.get("book_diagnosis") or {}).get(sid_out) or {}
@@ -1561,9 +1688,11 @@ class WorkspaceManager:
                 k = self._cur_kind()
         return self.finder.ask(ask, k, log_to=self.misses_path)
 
-    def look(self, target="", sheet="", range="", image=False, ask=""):
+    def look(self, target="", sheet="", range="", image=False, ask="", trace=""):
         if (target or "").strip().lower() in RECENT_TARGET_ALIASES:
             return self.format_recent_files()
+        if str(trace or "").strip():
+            return self._trace(target, sheet, trace)
         if not ask:
             return self._look_image(target, sheet, range, image)
         try:
@@ -1572,6 +1701,31 @@ class WorkspaceManager:
             # 相手が見られなくても、札は引ける（通信なし）
             raise WorkspaceError(str(e) + "\n\n" + self.find(ask))
         return text + "\n\n" + self.find(ask)
+
+    def _trace(self, target, sheet, cell, depth=3):
+        """ws_look(trace="予算!I5")＝式の木（Excel マネージャーの trace の写し）。読むだけ・今の相手は替えない"""
+        import gas_ws_direct
+        st = self._load()
+        tgt, is_new = self.resolve_target(target, None, st)
+        if is_new or not tgt.get("id"):
+            raise WorkspaceError("式の木は、今あるスプレッドシートにだけ使えます。")
+        c = str(cell).strip()
+        if "!" in c:
+            sh, a1 = c.rsplit("!", 1)
+            sh = sh.strip().strip("'")
+        else:
+            sh, a1 = (sheet or tgt.get("sheet") or ((st.get("target") or {}).get("sheet")) or ""), c
+        if not sh:
+            raise WorkspaceError("どのシートのセルかを trace=\"シート名!A1\" の形で渡してください。")
+        a1 = a1.replace("$", "").upper()
+        if not re.fullmatch(r"[A-Z]{1,3}\d+", a1):
+            raise WorkspaceError(f"trace は 1 つのセルの番地で渡してください（受け取った物: {cell}）。")
+        lines = gas_ws_direct.trace(self, st, tgt["id"], sh, a1, depth=depth)
+        st_now = self._load()                       # 鍵だけ持ち帰る（今の相手・覚えた表は替えない）
+        if st.get("direct_token"):
+            st_now["direct_token"] = st["direct_token"]
+            self._save(st_now)
+        return "\n".join([f"対象: {tgt.get('name') or tgt['id']}（式の木・深さ {depth}）"] + lines)
 
     def _look_image(self, target="", sheet="", range="", image=False):
         text = self._look(target=target, sheet=sheet, range=range)
@@ -1631,11 +1785,16 @@ class WorkspaceManager:
             # 現在のシートのセル値を記憶（次の ws_do での変更前→後比較用）
             if res.get("values") and sid_lk and sh_lk:
                 cmap = {}
-                for r_i, row in enumerate(res["values"], 1):
-                    for c_i, val in enumerate(row, 1):
+                # 読んだ範囲の左上から数える（A2:H16 を読んだのに A1 から数えると、次の ws_do の前→後が 1 行ずれて
+                # 変わっていないセルまで「変更」と出た・11/27 撃ち直し 3 の #9）
+                r0, c0 = _range_origin(range)
+                for r_i, row in enumerate(res["values"], r0):
+                    for c_i, val in enumerate(row, c0):
                         if str(val or "") != "":
                             cmap[(r_i, c_i)] = str(val)
-                self._save_sheet_vals(st, sid_lk, sh_lk, cmap)
+                n_c = max((len(r) for r in res["values"]), default=1)
+                self._save_sheet_vals(st, sid_lk, sh_lk, cmap,
+                                      bounds=(r0, c0, r0 + len(res["values"]) - 1, c0 + n_c - 1))
             try:
                 import gas_ws_insights
                 ins = []

@@ -1198,9 +1198,16 @@ class DirectRunner:
             self._token(st)
             meta_fields = (
                 "spreadsheetId,properties(title),spreadsheetUrl,namedRanges,"
-                "sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),"
+                "sheets(properties(sheetId,title,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount)),"
                 "basicFilter,bandedRanges(range),protectedRanges(range,warningOnly),"
-                "rowGroups,columnGroups,charts(spec(title,basicChart(chartType),pieChart(legendPosition))))"
+                "rowGroups,columnGroups,"
+                # 目（11/27・Excel の materials の写し）: グラフは種類と題だけでなく、横軸・系列の元の範囲と置き場所まで読む。
+                # 条件付き書式も読む（撃った後に、何がどこに付いているかを値で確かめられるように）
+                "conditionalFormats(ranges,booleanRule(condition(type,values(userEnteredValue)),"
+                "format(textFormat(foregroundColor,bold),backgroundColor)),gradientRule(minpoint(color),maxpoint(color))),"
+                "charts(chartId,position(overlayPosition(anchorCell)),"
+                "spec(title,basicChart(chartType,domains(domain(sourceRange(sources))),series(series(sourceRange(sources)))),"
+                "pieChart(legendPosition,domain(sourceRange(sources)),series(sourceRange(sources))))))"
             )
             meta_resp = self._call(st, "GET", SHEETS + sid, params={"fields": meta_fields})
             sheets_meta = meta_resp.get("sheets") or []
@@ -1737,14 +1744,81 @@ def _build_side_direct(meta_resp, sh_meta, grid_data):
     if nm:
         lines.append("名前付き範囲: " + "、".join(_cap_list(nm, 4)))
 
+    id2name = {(s.get("properties") or {}).get("sheetId"): (s.get("properties") or {}).get("title") or ""
+               for s in ((meta_resp or {}).get("sheets") or [])}
+    my_name = ((sh_meta or {}).get("properties") or {}).get("title") or ""
+
+    gprops = ((sh_meta or {}).get("properties") or {}).get("gridProperties") or {}
+    fr, fc = int(gprops.get("frozenRowCount") or 0), int(gprops.get("frozenColumnCount") or 0)
+    if fr or fc:
+        lines.append("固定: " + "・".join(([f"上 {fr} 行"] if fr else []) + ([f"左 {fc} 列"] if fc else [])))
+
+    cfs = []
+    for cf in (sh_meta or {}).get("conditionalFormats") or []:
+        rngs = "・".join(_grid_a1(r) for r in (cf.get("ranges") or [])[:2])
+        br = cf.get("booleanRule")
+        if br:
+            cond = br.get("condition") or {}
+            vals = [str(v.get("userEnteredValue") or "") for v in (cond.get("values") or [])]
+            ctype = str(cond.get("type") or "")
+            what = ("式 " + vals[0]) if ctype == "CUSTOM_FORMULA" and vals else (ctype + (" " + "・".join(vals) if vals else ""))
+            fmt = br.get("format") or {}
+            look = []
+            tf = fmt.get("textFormat") or {}
+            if tf.get("foregroundColor"):
+                look.append("文字色 " + _color_hex(tf["foregroundColor"]))
+            if tf.get("bold"):
+                look.append("太字")
+            if fmt.get("backgroundColor"):
+                look.append("塗り " + _color_hex(fmt["backgroundColor"]))
+            cfs.append(f"{rngs} {what} → {'・'.join(look) or '書式'}")
+        elif cf.get("gradientRule"):
+            cfs.append(f"{rngs} 色の段階（カラースケール）")
+    if cfs:
+        lines.append("条件付き書式: " + "、".join(_cap_list(cfs, 4)))
+
     ch = []
     for c in (sh_meta or {}).get("charts") or []:
         s = c.get("spec") or {}
-        ty = (s.get("basicChart") or {}).get("chartType") or ("PIE" if s.get("pieChart") else "")
-        ch.append((_CHART_NAMES.get(ty) or ty or "グラフ") + (f"（{s.get('title')}）" if s.get("title") else ""))
+        bc = s.get("basicChart") or {}
+        pc = s.get("pieChart") or {}
+        ty = bc.get("chartType") or ("PIE" if pc else "")
+        if bc:
+            dom = [_src_a1(d.get("domain"), id2name, my_name) for d in (bc.get("domains") or [])]
+            ser = [_src_a1(x.get("series"), id2name, my_name) for x in (bc.get("series") or [])]
+        else:
+            dom = [_src_a1(pc.get("domain"), id2name, my_name)] if pc.get("domain") else []
+            ser = [_src_a1(pc.get("series"), id2name, my_name)] if pc.get("series") else []
+        parts = []
+        if dom:
+            parts.append("横軸 " + "・".join(x for x in dom if x))
+        if ser:
+            parts.append(f"系列 {len(ser)} 本 " + "・".join(x for x in ser if x))
+        anc = ((c.get("position") or {}).get("overlayPosition") or {}).get("anchorCell") or {}
+        if anc:
+            parts.append("置き場所 " + col_letter(int(anc.get("columnIndex") or 0) + 1) + str(int(anc.get("rowIndex") or 0) + 1))
+        ch.append((_CHART_NAMES.get(ty) or ty or "グラフ") + (f"「{s.get('title')}」" if s.get("title") else "")
+                  + (f"（{'／'.join(parts)}）" if parts else ""))
     if ch:
-        lines.append("グラフ: " + "、".join(_cap_list(ch, 3)))
+        lines.append("グラフ: " + "、".join(_cap_list(ch, 4)))
     return lines
+
+
+def _src_a1(chart_data, id2name, my_name):
+    """グラフの横軸・系列の元（ChartData.sourceRange.sources）を「シート!A1:A6」に。今のシートなら名前を省く"""
+    out = []
+    for g in (((chart_data or {}).get("sourceRange") or {}).get("sources") or []):
+        nm = id2name.get(g.get("sheetId"), "")
+        a1 = _grid_a1(g)
+        out.append(a1 if (not nm or nm == my_name) else f"{nm}!{a1}")
+    return ",".join(out)
+
+
+def _color_hex(c):
+    try:
+        return "#" + "".join(f"{int(round(float(c.get(k) or 0) * 255)):02X}" for k in ("red", "green", "blue"))
+    except Exception:
+        return "色"
 
 
 def _extract_range_direct(row_data, rr1, cc1, rr2, cc2):
@@ -1880,3 +1954,86 @@ def fetch_workbook_payload_for_diagnosis(mgr, st, sid, sheet_names=None, range_s
         return out
     except Exception:
         return []
+
+
+# ------------------------------------------------------------ 式の木（Excel マネージャーの trace の写し・11/27）
+_TRACE_STR_RE = re.compile(r'"(?:[^"]|"")*"')
+_TRACE_REF_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])(?:(?:'((?:[^']|'')+)'|([^\s'!(),=+\-*/&^<>:;{}\"]+))!)?"
+    r"(\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?)(?![\w(])")
+
+
+def _trace_refs(formula, cur_sheet):
+    """式の中の参照を [(シート, 'A1' か 'A1:B9')] に（文字列の中は見ない・同じ物は 1 回）"""
+    body = _TRACE_STR_RE.sub('""', str(formula or ""))
+    out = []
+    for m in _TRACE_REF_RE.finditer(body):
+        sh = (m.group(1) or "").replace("''", "'") or m.group(2) or cur_sheet
+        a1 = m.group(3).replace("$", "").upper()
+        if (sh, a1) not in out:
+            out.append((sh, a1))
+    return out
+
+
+def trace(mgr, st, sid, sheet, cell, depth=3, max_nodes=40):
+    """セルの式がどこから来ているかを、シートをまたいで木で返す（行のリスト）。
+    1 セルは値と式、範囲は大きさ・式の数・数の和を出し、範囲の中の式は 3 つまで辿る。"""
+    runner = DirectRunner(mgr)
+    runner._token(st)
+    cache = {}
+
+    def grab(sh, a1):
+        key = (sh, a1)
+        if key not in cache:
+            rng = f"{q(sh)}!{a1}"
+            res = {}
+            for opt in ("FORMULA", "FORMATTED_VALUE", "UNFORMATTED_VALUE"):
+                r = runner._call(st, "GET", SHEETS + sid + "/values:batchGet",
+                                 params=[("ranges", rng), ("valueRenderOption", opt)])
+                res[opt] = ((r.get("valueRanges") or [{}])[0].get("values")) or []
+            cache[key] = res
+        return cache[key]
+
+    lines, seen, count = [], set(), [0]
+
+    def cell_line(sh, a1, level):
+        if count[0] >= max_nodes:
+            return
+        count[0] += 1
+        ind = "  " * level
+        if (sh, a1) in seen:
+            lines.append(f"{ind}{sh}!{a1}（上に出た）")
+            return
+        seen.add((sh, a1))
+        g = grab(sh, a1)
+        f = str((g["FORMULA"][0][0] if g["FORMULA"] and g["FORMULA"][0] else "") or "")
+        v = str((g["FORMATTED_VALUE"][0][0] if g["FORMATTED_VALUE"] and g["FORMATTED_VALUE"][0] else "") or "")
+        lines.append(f"{ind}{sh}!{a1} = {v or '(空)'}" + (f"   式 {f}" if f.startswith("=") else ""))
+        if not f.startswith("=") or level >= depth:
+            return
+        for rsh, ra1 in _trace_refs(f, sh):
+            if ":" not in ra1:
+                cell_line(rsh, ra1, level + 1)
+                continue
+            if count[0] >= max_nodes:
+                return
+            count[0] += 1
+            g2 = grab(rsh, ra1)
+            r1, c1, _r2, _c2 = parse_a1(ra1)
+            n = sum(len(r) for r in g2["UNFORMATTED_VALUE"])
+            fcells = []
+            for i, row in enumerate(g2["FORMULA"]):
+                for j, x in enumerate(row):
+                    if str(x).startswith("="):
+                        fcells.append(f"{col_letter(c1 + j)}{r1 + i}")
+            nums = [x for row in g2["UNFORMATTED_VALUE"] for x in row if isinstance(x, (int, float)) and not isinstance(x, bool)]
+            texts = [x for row in g2["UNFORMATTED_VALUE"] for x in row if isinstance(x, str) and x.strip()]
+            lines.append(f"{'  ' * (level + 1)}{rsh}!{ra1}（値 {n} 個・数 {len(nums)} 個の和 {sum(nums):,.0f}"
+                         + (f"・文字 {len(texts)} 個（例 {texts[0]}）" if texts else "")
+                         + (f"・式 {len(fcells)} 個" if fcells else "") + "）")
+            for fa in fcells[:3]:
+                cell_line(rsh, fa, level + 2)
+    cell_line(sheet, cell, 0)
+    if count[0] >= max_nodes:
+        lines.append(f"（{max_nodes} か所で打ち切り）")
+    return lines

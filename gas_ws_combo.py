@@ -1781,8 +1781,23 @@ class ComboPostboxWatcher:
             except Exception as e:
                 return dict(meta, action="error", error=str(e))
 
-        prompt = self._build_prompt(item)
         is_read_only = (item.get("kind") == "read") or bool(item.get("readOnly"))
+        # 直す・作る頼みで棚当てが撃てなかった物は、GAS マネージャーの脳（ws_agent＝Excel マネージャーの agent の写し）に回す。
+        # 脳が材料を読み、先撃ち・AI・撃つ・関所まで回して、シートはその場で直る。サイドバーには報告の文を返す（11/27 シュウさん「つないで」）。
+        # 拡張が 65 秒で待ちを切るので、待てる秒は 55 秒・採点は時間が余るときだけ。aiMode="quick" なら前の 1 回聞きの道。
+        if (not is_read_only and item.get("ssId") and str(item.get("kind") or "sheet") in ("", "sheet", "ops")
+                and str(item.get("aiMode") or "").lower() != "quick" and os.environ.get("GAS_COMBO_AGENT", "1") != "0"):
+            try:
+                import gas_workspace
+                import gas_ws_agent
+                mgr = gas_workspace.WorkspaceManager(client=self.client) if getattr(self, "client", None) else gas_workspace.WorkspaceManager()
+                mgr.timing = False
+                ag = gas_ws_agent.Agent(mgr, model=req_model or "sonnet", max_turns=3, grade=True, budget_sec=55)
+                report = ag.run(item.get("ask") or "", target=item.get("ssId"), sheet=item.get("sheet") or "")
+                return {"reqId": req_id, "action": "reply", "ops": [], "note": "", "message": report, "agent": True}
+            except Exception as e:
+                print(f"[{self._ts_now()}][agent] 脳で回せませんでした（前の 1 回聞きの道に戻します）: {e}")
+        prompt = self._build_prompt(item)
         try:
             parsed = self._ask_via_claude(prompt, model=req_model or "sonnet")
             if is_read_only:

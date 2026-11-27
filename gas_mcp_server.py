@@ -30,17 +30,23 @@ from gas_client import GasClient
 import functools
 
 GAS_MANAGER_INSTRUCTIONS = (
-    "【GAS マネージャーは AI が主役】頼みを読んで、何をするかを決めるのは AI（あなた）。道具は材料・確かな手・検算と控えを出す。"
-    "スプレッドシート・文書の手は 2号機（ws_look / ws_find / ws_do / ws_undo）で撃つ（控え・検算・前→後が付き、ws_undo で戻せる）。"
-    "1) まず ws_look(target, sheet, range='A1:Z60') で中身とブック全体の健診（気づき）を読む。表の形・値・ほかのシートのずれを自分で読んで、頼みの意味と、人の判断が要る所を決める。"
-    "2) 手は自分で組む。ws_find で棚の札（引数・例）を引き、ws_do(ops=[{\"shelf\":…,引数}]) で撃つ。"
-    "列名・値・範囲は ws_look で見た実物から取る（頼みの言葉を値にしない。例: 「承認待ち」は列にある値そのものを使う）。"
-    "棚に無い手は shelf='api'（Sheets API の batchUpdate の requests）で組む。"
-    "ws_do(ask='頼みの文') は、言い方の決まった単純な頼みの近道（AI なしの GASコンボと同じ読み取り）。判断の要る頼み・複数の列・条件つきの頼みには使わず、使ったら返ってきた ops が頼みどおりかを必ず自分で確かめる。"
-    "3) 撃った後は返事の「検算」「前→後」「気づき」を読む。合わない・頼みと違うなら、言い訳せず ws_undo で戻して組み直す。"
-    "4) 使う人への返事: 何をどこに直したか（番地）・検算の数・気づきのうちその手に効く物（前に見つけたずれ・本当の値も）を添える。"
-    "読んで答えるときは根拠のセル番地と内訳・割合を添え、キャンセル・値引き・表記ゆれなどが効く場合はそれを反映した別の値もあわせて出す。"
-    "「直して」「出し直して」「整えて」は直す頼み: 気づいた崩れ（文字の数・和暦・全角・まちまちな書き方）は直して前→後を返す。人の判断が要る物（どちらを残すか・消すか）だけ聞く。"
+    "秀GASマネージャー（gas-manager）。スプレッドシート・文書の手は ws_look / ws_find / ws_do / ws_undo（控え・検算・前→後が付き、ws_undo で戻せる）。"
+    "相手は target（ID・URL・名前）、シートは sheet で毎回名指しする（ws_look で別のシートを読んだ後も、撃つシートを外さない）。\n"
+    "表を見る・答えるだけ → ws_look(target, sheet, range='A1:Z60')（中身とブック全体の健診＝気づき）。答えるときは根拠の番地と内訳・割合を添え、"
+    "キャンセル・否認・表記ゆれ・前に見つけたずれが効くときは、それを反映した別の値もあわせて出す。前の手の後の数は ws_look で読み直してから答える。\n"
+    "表を直す・作る・整える・集計する頼みは、自分で手を組む前に「棚」を使う（Excel マネージャーの seiri の先撃ちと同じ）:"
+    " 1. ws_do(ask='使う人の頼みの文そのまま', target, sheet) を 1 回（先撃ち）。棚当てが確かに撃てる所は道具が 1 回で撃ち、"
+    "表の汚れ（数の列の文字の数・前後の空白）も同じ呼び出しで直し、直した所・前→後・検算と、「残り」「次の手」を返す。撃てない頼みは撃たずに、表の中身と組みかけの ops を返す。"
+    " 2. 返事の「次の手」に従う。「なし」ならそれで仕上がり＝道具をこれ以上撃たずに報告する。"
+    "残りがあるときだけ、表の実物（列にある値そのもの・範囲）から ops を組み、ws_do(ops=[{\"shelf\":…,引数}], sheet) で撃つ"
+    "（札は ws_find・棚に無い設定は shelf='api'＝Sheets API の batchUpdate の requests・"
+    "棚にも api にも無い手は shelf='script'＝Apps Script の本文。ss と sheet が使え、触るシートを控えてから撃つので ws_undo で戻る。ほかのシートも触るなら sheets に並べる）。人の判断が要る物（どちらを残す・消す）は撃たずに番地で聞く。"
+    " 3. 撃った後は検算・前→後を読む。合わない・頼みと違うなら、言い訳せず ws_undo で戻して組み直す。"
+    " 4. 報告は要点だけ 3〜5 行（何をどこに直したかを番地で・検算の数・その手に効く気づき）。経過・秒数・長い説明は書かない。"
+    "「直して」「出し直して」「整えて」「きれいに」は直す頼み＝頼みの中の崩れ（文字の数・和暦・全角・まちまちな書き方）は直して前→後を返す。"
+    "値を消さない手は聞き返さず即撃つ。消す・上書きの ok=True は、場所が名指しで 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。"
+    "頼みを丸ごと道具に回させるとき（人がサイドバーや窓から頼む・自分で 1 手ずつ撃たない）は ws_agent(request, target, sheet)"
+    "＝Excel マネージャーの agent と同じ脳（材料→先撃ち→ヘッドレスの Claude Code→撃つ→関所と採点→報告・控え）。"
     "GASコンボのマイマクロは shelf([{shelf:'...'}, ...]) で既存棚を束ねる「まとめ棚」として作成でき、gas('combo quick <id> list|run <名前>') で MCP からも一覧・実行できる。"
     "棚の健全性検査は gas('ws-check')、外れ・API逃げ集計は gas('ws-misses') を使う。\n"
     "GASコードを直す1手目は gas_shelf(project=プロジェクト名, query=頼み文そのまま) のみ"
@@ -2995,11 +3001,14 @@ def _ws_run(fn, **kw):
 
 @mcp.tool()
 @safe_tool
-def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False, ask: str = "") -> str:
-    """AI の材料: スプレッドシート・文書の中身（値・式）と、ブック全体の健診（気づき＝ほかのシートのずれ・文字の数・表記ゆれ・状態の列・期間の欠け 等）を返し、今の相手として覚える。
-    頼みを受けたら最初に 1 回、range="A1:Z60" を渡して読み、頼みの意味と手を自分で決める。target=URL・ID・名前・"browser"・"recent"・空（今の相手）。sheet で読むシートを替える。
+def ws_look(target: str = "", sheet: str = "", range: str = "", image: bool = False, ask: str = "", trace: str = "") -> str:
+    """表を見る・答える（Excel マネージャーの materials に当たる）: スプレッドシート・文書の中身（値・式）と、ブック全体の健診（気づき＝ほかのシートのずれ・文字の数・表記ゆれ・状態の列・期間の欠け 等）を返す。
+    読むだけの問いは range="A1:Z60" で 1 回読んで、根拠の番地つきで答える。直す・作る頼みは先に ws_do(ask=頼みの文) の先撃ち。
+    target=URL・ID・名前・"browser"・"recent"・空（今の相手）。sheet で読むシートを名指しする（読んだシートが今の相手になるので、撃つときは ws_do に sheet を書く）。
+    脇の情報に、入力規則・条件付き書式（範囲・条件・色）・固定・フィルタと表示中の行・グラフ（種類・題・横軸と系列の元の範囲・置き場所）も出る＝撃った後の確かめはこれで値として読む。
+    trace="予算!I5" は式の木（Excel マネージャーの trace と同じ）: そのセルの式がどこから来ているかを、シートをまたいで深さ 3 まで返す（範囲は大きさ・数の和・文字の数を添える）。読むだけで今の相手は替えない。
     image=True は見た目の確認を頼まれたときだけ。"""
-    return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image, ask=ask)
+    return _ws_run(get_ws().look, target=target, sheet=sheet, range=range, image=image, ask=ask, trace=trace)
 
 @mcp.tool()
 @safe_tool
@@ -3010,12 +3019,14 @@ def ws_find(ask: str = "", kind: str = "") -> str:
 
 @mcp.tool()
 @safe_tool
-def ws_do(ask: str = "", ops: str = "", target: str = "", ok: bool = False) -> str:
-    """スプレッドシート・文書を作る・直す。AI が組んだ手を ops=[{"shelf":"棚",…引数}] で撃つのが本道（列名・値・範囲は ws_look で見た実物から取る）。棚に無い設定は shelf="api"（batchUpdate の requests）。
-    撃った後に、直した所・検算（合計・行数・式の数が合うか）・前→後・気づきを返す。合わない・頼みと違うなら ws_undo で戻して組み直す。
-    ask="頼みの文" は言い方の決まった単純な頼みの近道（道具が文を読んで棚と引数を組む）。判断の要る頼み・複数の列・条件つきには使わず、使ったら返ってきた ops が頼みどおりかを自分で確かめる。target=URL・ID・名前・"new:名前"（空なら今の相手）。
+def ws_do(ask: str = "", ops: str = "", target: str = "", ok: bool = False, sheet: str = "") -> str:
+    """スプレッドシート・文書を作る・直す。
+    1 手目は ask="使う人の頼みの文そのまま"（先撃ち＝Excel マネージャーの seiri と同じ）: 棚当てが確かに撃てる所を道具が 1 回で撃ち、直した所・前→後・検算と「残り」「次の手」を返す。撃てない頼みは撃たずに表の中身と組みかけの ops を返す。
+    次の手が「なし」なら仕上がり（これ以上撃たない）。残りだけ、表の実物（列にある値そのもの・範囲）から ops=[{"shelf":"棚",…引数}] を組んで撃つ（札は ws_find・棚に無い設定は shelf="api"＝batchUpdate の requests）。
+    sheet=撃つシートを毎回名指しする（ws_look で別のシートを読んだ後も外さない）。target=URL・ID・名前・"new:名前"（空なら今の相手）。
+    撃った後は検算・前→後を読み、合わない・頼みと違うなら ws_undo で戻して組み直す。
     値を消さない手（作成・書式・集計・整える等）は聞き返さず ok なしで即撃つ。消す・上書きの ok=True は、場所が名指しで 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。止まったら消える物を見せて聞く。"""
-    return _ws_run(get_ws().do, ops=ops, target=target, ok=ok, ask=ask)
+    return _ws_run(get_ws().do, ops=ops, target=target, ok=ok, ask=ask, sheet=sheet)
 
 @mcp.tool()
 @safe_tool
@@ -3023,8 +3034,24 @@ def ws_undo(to: str = "", list: bool = False, ok: bool = False) -> str:
     """直前の ws_do を控えから戻す（空=直前、to=番号、list=True で台帳）。人が後から手で直した所があれば止まる（ok=True で戻す）。新しく作ったファイルは消さない。"""
     return _ws_run(get_ws().undo, to=to, list=list, ok=ok)
 
+@mcp.tool()
+@safe_tool
+def ws_agent(request: str = "", target: str = "", sheet: str = "", model: str = "", max_turns: int = 4,
+             no_grade: bool = False, runs: bool = False) -> str:
+    """頼みの文 1 つを道具が回す脳（Excel マネージャーの agent と同じ）。材料（ws_look）→ 先撃ち（ws_do(ask)）→ ヘッドレスの Claude Code（既定 sonnet・鍵なし）に
+    聞く → 道具が撃つ → 結果を返す…を max_turns まで回し、関所（落とし物・仕上げ検査・別の会話の採点）を通して報告・控え・関所の通信簿を返す。
+    人の値を消す・上書きする手は、頼みに承認の言葉（消してよい・削除して 等）があるときだけ撃つ。無ければ【人に判断してほしいこと】に並べる。
+    runs=True で走行の台帳（いつ・どのシート・往復・秒・関所・控え）。no_grade=True で採点を止める。戻すのは ws_undo。"""
+    import gas_ws_agent
+    if runs:
+        return gas_ws_agent.runs()
+    if not str(request or "").strip():
+        return "request に使う人の頼みの文を渡してください。"
+    ag = gas_ws_agent.Agent(get_ws(), model=model or gas_ws_agent.DEFAULT_MODEL, max_turns=max_turns, grade=not no_grade)
+    return _ws_run(ag.run, request=request, target=target, sheet=sheet)
+
 # 表を直すだけの人向けの起こし方: 環境変数 GAS_MCP_ONLY=ws で ws の 4 本だけを出す（AI が読む道具の説明が 59 本→4 本に減り、速く安くなる）
-WS_TOOLS = ("ws_do", "ws_look", "ws_find", "ws_undo")
+WS_TOOLS = ("ws_do", "ws_look", "ws_find", "ws_undo", "ws_agent")
 # 標準露出を厳選 10 本に絞る（他機能は gas(command) 窓口から利用可能。GAS_MCP_ALL_TOOLS=1 で全 59 本を露出）
 CORE_MCP_TOOLS = (
     "gas_shelf",
@@ -3037,6 +3064,7 @@ CORE_MCP_TOOLS = (
     "ws_find",
     "ws_do",
     "ws_undo",
+    "ws_agent",
 )
 if os.environ.get("GAS_MCP_ONLY", "").strip().lower() == "ws":
     for _t in list(mcp._tool_manager.list_tools()):
