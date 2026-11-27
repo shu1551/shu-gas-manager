@@ -104,7 +104,7 @@ class _Timer:
         return time.perf_counter() - self.t0
 
 
-ENGINE_LAP_NAMES = [("lock", "鍵待ち"), ("cacheGet", "呼び直し確認"), ("open", "ファイルを開く"), ("seq", "台帳の番号"), ("backup", "控え"), ("finger0", "書く前の指紋"), ("ops", "棚の本体"),
+ENGINE_LAP_NAMES = [("lock", "鍵待ち"), ("cacheGet", "呼び直し確認"), ("open", "ファイルを開く"), ("expect", "形の確かめ"), ("seq", "台帳の番号"), ("backup", "控え"), ("finger0", "書く前の指紋"), ("err0", "撃つ前のエラー数え"), ("ops", "棚の本体"), ("err1", "撃った後のエラー数え"), ("table", "撃った後の表の読み直し"),
                     ("save", "文書の保存"), ("finger", "書いた後の指紋"), ("noop", "変更なしの判定"), ("discard", "控えの破棄"), ("ledger", "台帳の書き込み"),
                     ("bk_open", "控え:ブックを開く"), ("bk_list", "控え:タブ一覧"), ("bk_copy", "控え:シートの写し"), ("bk_name", "控え:名前付け"), ("bk_prune", "控え:古いタブを消す"), ("bk_side", "控え:脇の状態"), ("bk_lite", "控え:軽量")]
 
@@ -1142,6 +1142,35 @@ class WorkspaceManager:
                             "halfwidth": False, "dates": False, "tidy": False})
                 # ok は付けない（1 本でも ok があると、頼みの消す手まで確かめなしで撃たれる＝_do_res の決まり）
                 notes += [x for x in (num_hit, trim_hit) if x]
+        # 合計を直す頼みでは、式の列に値が直に書かれた行（=E{r}*F{r} の列の G9 に 1200 等）も式に戻す。
+        # 直書きが残ると合計が合わないまま「直した」になる。同じ形の式が明細の 6 割以上にある列だけを見る
+        if any(isinstance(o, dict) and o.get("shelf") == "total" for o in ops):
+            n_rows = r_b - r_a + 1
+            for c in ltb.get("columns") or []:
+                col = c.get("col")
+                if not col:
+                    continue
+                ci = gas_ws_direct.col_num(col)
+                pats, plain = {}, []
+                for rr in range(r_a, r_b + 1):
+                    cell = cells.get((rr, ci)) or {}
+                    fv = str(((cell.get("userEnteredValue") or {}).get("formulaValue")) or "")
+                    if fv:
+                        pat = re.sub(r"(?<![A-Z$])(\$?[A-Z]{1,3})" + str(rr) + r"(?!\d)", r"\1{r}", fv)
+                        if "{r}" in pat:
+                            pats[pat] = pats.get(pat, 0) + 1
+                    elif "numberValue" in ((cell.get("effectiveValue")) or {}):
+                        plain.append(rr)
+                if not pats or not plain:
+                    continue
+                pat, cnt = max(pats.items(), key=lambda kv: kv[1])
+                if cnt < max(3, 0.6 * n_rows):
+                    continue
+                fix = {f"{col}{rr}": pat.replace("{r}", str(rr)) for rr in plain}
+                add.append({"shelf": "write", "cells": fix})
+                for rr in plain[:3]:
+                    v = ((cells.get((rr, ci)) or {}).get("formattedValue")) or ""
+                    notes.append(f"{col}{rr}「{v}」（直に書かれた値）→ {fix[f'{col}{rr}']}（ほかの行と同じ式）")
         return add + list(ops), notes
 
     def _rest_lines(self, st2, res, sheet, errs, mismatch, shown_ins=()):
@@ -1150,8 +1179,18 @@ class WorkspaceManager:
         sid = (res.get("target") or res.get("created") or {}).get("id")
         diag = (((st2.get("book_diagnosis") or {}).get(sid) or {}).get("findings")) or []
         shown = set(shown_ins or ())
-        here = [d["text"] for d in diag if d.get("sheet") == sheet and d.get("text") not in shown]
-        other = [d["text"] for d in diag if d.get("sheet") != sheet and d.get("text") not in shown]
+        _bare = lambda x: re.sub(r"^\[[^\]]+\]\s*", "", str(x or ""))
+        shown |= {_bare(x) for x in shown}
+        here = [d["text"] for d in diag if d.get("sheet") == sheet and d.get("text") not in shown and _bare(d.get("text")) not in shown]
+        other = [d["text"] for d in diag if d.get("sheet") != sheet and d.get("text") not in shown and _bare(d.get("text")) not in shown]
+        # 一度伝えた健診の気づきは、同じブックの次の返事で繰り返さない（直って消えた物・新しく出た物だけが出る）
+        if sid:
+            here = self._filter_new_insights(st2, sid, "#book", here)
+            other = self._filter_new_insights(st2, sid, "#book", other)
+            try:
+                self._save(st2)
+            except Exception:
+                pass
         lines = ["--- 残り（ここだけ AI が見て決める） ---"]
         bad = list(errs) + [f"検算不一致: {m}" for m in mismatch]
         lines.append(("⚠ " + " ／ ".join(bad)) if bad else "エラー・検算の食い違い: なし")
@@ -1160,17 +1199,11 @@ class WorkspaceManager:
         if other:
             lines.append("ほかのシートの気づき: " + " ／ ".join(other[:4]))
         if bad:
-            lines.append("次の手: 上の ⚠ を見て、直すか ws_undo で戻すかを決める。直すなら ws_look で見た実物から ops を組み、"
-                         "sheet を名指しして撃つ。直した後に使う人へ報告する")
+            lines.append("次の手: ⚠ を直す ops を組んで撃つか、ws_undo で戻す")
         elif here:
-            lines.append("次の手: 頼みが「直して・整えて・きれいに・出し直して」で、この表の気づきがその頼みの中なら、"
-                         "ws_look で見た実物（列の値・範囲）から ops を組み、sheet を名指しして同じシートに撃つ。"
-                         "人の判断が要る物（どちらを残す・消す・どれが正しい）は撃たずに番地で聞く。"
-                         "頼みの外の気づきは直さず、返事に効く物だけ番地つきで添える。"
-                         "報告は何をどこに直したかを番地で 3〜5 行（検算の数を添える）")
+            lines.append("次の手: なし（頼みの中の気づきだけ直す・人の判断が要る物は番地で聞く・ほかは返事に添える）")
         else:
-            lines.append("次の手: なし＝これで仕上がり（先撃ちは 1 回で終える）。道具をこれ以上撃たない。"
-                         "報告は何をどこに直したかを番地で 3〜5 行（検算の数を添える）")
+            lines.append("次の手: なし＝これで仕上がり")
         return lines
 
     def _keeps_shape(self, op):

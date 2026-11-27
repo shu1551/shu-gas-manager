@@ -1597,7 +1597,7 @@ function insertColsAfterSafe_(ctx, sh, afterCol, count, optExclude) {
 var ERR_SCAN_SKIP = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|filter\.|tidy|sheet\.(color|hide|show|move|rename)|cols\.(hide|show)|rows\.(hide|show)|validation\.|checkbox|protect\.|name\.list|drive\.|folder|backup|find|cf\.list)/;
 var ERR_RE = /^#(REF!|VALUE!|DIV\/0!|N\/A|NAME\?|NUM!|NULL!|ERROR!)/;
 var FORMULA_DROP_OK = /^(rows\.delete|cols\.delete|dedupe|seiri|clear\.|sheet\.delete|formula\.tovalue|copy\.values|write|replace)/;   // 式が減ってよい（頼みがそういう物）
-var FORMULA_VAL_CHANGE_OK = /^(write|replace|seiri|text\.(clean|case|affix)|round|formula\.(guard|tovalue)|copy\.values|clear\.|rows\.(delete|insert|move|reverse)|cols\.(delete|move)|filter\.delete|dedupe|blank\.rows\.delete|sort|fill\.|date\.fix|phone\.fix|split\.col|subtotal|table\.new|sheet\.delete|api)/;
+var FORMULA_VAL_CHANGE_OK = /^(write|replace|seiri|calc\.col|number\.fix|match\.master|total|text\.(clean|case|affix)|round|formula\.(guard|tovalue)|copy\.values|clear\.|rows\.(delete|insert|move|reverse)|cols\.(delete|move)|filter\.delete|dedupe|blank\.rows\.delete|sort|fill\.|date\.fix|phone\.fix|split\.col|subtotal|table\.new|sheet\.delete|api)/;
 function errScanNeeded_(ops) {
   return ops.some(function (o) {
     var nm = String(o.shelf || '');

@@ -45,8 +45,7 @@ GAS_MANAGER_INSTRUCTIONS = (
     " 4. 報告は要点だけ 3〜5 行（何をどこに直したかを番地で・検算の数・その手に効く気づき）。経過・秒数・長い説明は書かない。"
     "「直して」「出し直して」「整えて」「きれいに」は直す頼み＝頼みの中の崩れ（文字の数・和暦・全角・まちまちな書き方）は直して前→後を返す。"
     "値を消さない手は聞き返さず即撃つ。消す・上書きの ok=True は、場所が名指しで 1 つに決まるか、見せた後に「消してよい」と言われたときだけ。"
-    "頼みを丸ごと道具に回させるとき（人がサイドバーや窓から頼む・自分で 1 手ずつ撃たない）は ws_agent(request, target, sheet)"
-    "＝Excel マネージャーの agent と同じ脳（材料→先撃ち→ヘッドレスの Claude Code→撃つ→関所と採点→報告・控え）。"
+    "頭は呼んでいる AI 自身。道具の中で別の AI を呼ぶ手は無い（ws_do が Python で一発で決め、AI は次の手だけを組む）。"
     "GASコンボのマイマクロは shelf([{shelf:'...'}, ...]) で既存棚を束ねる「まとめ棚」として作成でき、gas('combo quick <id> list|run <名前>') で MCP からも一覧・実行できる。"
     "棚の健全性検査は gas('ws-check')、外れ・API逃げ集計は gas('ws-misses') を使う。\n"
     "GASコードを直す1手目は gas_shelf(project=プロジェクト名, query=頼み文そのまま) のみ"
@@ -3034,8 +3033,8 @@ def ws_undo(to: str = "", list: bool = False, ok: bool = False) -> str:
     """直前の ws_do を控えから戻す（空=直前、to=番号、list=True で台帳）。人が後から手で直した所があれば止まる（ok=True で戻す）。新しく作ったファイルは消さない。"""
     return _ws_run(get_ws().undo, to=to, list=list, ok=ok)
 
-@mcp.tool()
-@safe_tool
+# ws_agent は MCP には出さない（呼んでいる AI がいるのに中で別の AI を回すと二重になり、遅く・使用量の上限で止まる）。
+# GASコンボのサイドバー（AI のいない受け手）の裏方として gas_ws_combo から直に使う
 def ws_agent(request: str = "", target: str = "", sheet: str = "", model: str = "", max_turns: int = 4,
              no_grade: bool = False, runs: bool = False) -> str:
     """頼みの文 1 つを道具が回す脳（Excel マネージャーの agent と同じ）。材料（ws_look）→ 先撃ち（ws_do(ask)）→ ヘッドレスの Claude Code（既定 sonnet・鍵なし）に
@@ -3051,7 +3050,7 @@ def ws_agent(request: str = "", target: str = "", sheet: str = "", model: str = 
     return _ws_run(ag.run, request=request, target=target, sheet=sheet)
 
 # 表を直すだけの人向けの起こし方: 環境変数 GAS_MCP_ONLY=ws で ws の 4 本だけを出す（AI が読む道具の説明が 59 本→4 本に減り、速く安くなる）
-WS_TOOLS = ("ws_do", "ws_look", "ws_find", "ws_undo", "ws_agent")
+WS_TOOLS = ("ws_do", "ws_look", "ws_find", "ws_undo")
 # 標準露出を厳選 10 本に絞る（他機能は gas(command) 窓口から利用可能。GAS_MCP_ALL_TOOLS=1 で全 59 本を露出）
 CORE_MCP_TOOLS = (
     "gas_shelf",
@@ -3064,7 +3063,6 @@ CORE_MCP_TOOLS = (
     "ws_find",
     "ws_do",
     "ws_undo",
-    "ws_agent",
 )
 if os.environ.get("GAS_MCP_ONLY", "").strip().lower() == "ws":
     for _t in list(mcp._tool_manager.list_tools()):
