@@ -294,6 +294,8 @@ SHELF['chart.new'] = function (ctx, op) {
   typeStr = typeStr || 'column';
   var b = sh.newChart().setChartType(typeMap[typeStr]);
   ranges.forEach(function (rg) { b.addRange(rg); });
+  if (typeof b.setNumHeaders === 'function') b.setNumHeaders(1);
+  if (typeStr !== 'pie' && typeof b.setOption === 'function') b.setOption('useFirstColumnAsDomain', true);
   if (op.transpose && typeof b.setTransposeRowsAndColumns === 'function') b.setTransposeRowsAndColumns(true);
   if (op.title) b.setOption('title', op.title);
   if (op.at) {

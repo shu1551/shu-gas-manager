@@ -3416,17 +3416,21 @@ const sh = {
   },
   newChart: () => {
     const pos = [];
+    const opts = {};
+    let numHeaders = 0;
+    let transposed = false;
     const b = {
       setChartType: () => b,
       addRange: () => b,
-      setTransposeRowsAndColumns: () => b,
-      setOption: () => b,
+      setNumHeaders: (n) => { numHeaders = n; return b; },
+      setTransposeRowsAndColumns: (v) => { transposed = !!v; return b; },
+      setOption: (k, v) => { opts[k] = v; return b; },
       setPosition: (r, c, ox, oy) => { pos.push([r, c, ox, oy]); return b; },
-      build: () => ({ pos })
+      build: () => ({ pos, opts, numHeaders, transposed })
     };
     return b;
   },
-  insertChart: (ch) => { placed.push(ch.pos); }
+  insertChart: (ch) => { placed.push(ch); }
 };
 const ctx = vm.createContext({
   Charts: { ChartType: { COLUMN: 'COLUMN', BAR: 'BAR', LINE: 'LINE', PIE: 'PIE', AREA: 'AREA', SCATTER: 'SCATTER' } },
@@ -3440,7 +3444,11 @@ ctx.SHELF['chart.new'](opCtx, { shelf: 'chart.new', type: 'line', range: 'A4:I7'
 process.stdout.write(JSON.stringify(placed));
 """
     res = _run_node_json(node_code, {"engine": engine_src})
-    assert res == [[[3, 12, 0, 0]]]  # L3 = row 3, col 12 (J=10 の 2 つ右)
+    assert len(res) == 1
+    assert res[0]["pos"] == [[3, 12, 0, 0]]  # L3 = row 3, col 12 (J=10 の 2 つ右)
+    assert res[0]["numHeaders"] == 1
+    assert res[0]["transposed"] is True
+    assert res[0]["opts"].get("useFirstColumnAsDomain") is True
 
 
 def test_sidebar_sheet_selection_not_overwritten_by_late_init_and_uses_ui_sheet():
@@ -3888,3 +3896,63 @@ process.stdout.write(JSON.stringify({
     assert res["runsAfterCount"] == 1
     assert res["runSheet"] == "売上"
     assert res["runAsk"] == "見出しを太字にして"
+
+
+def test_sidebar_postbox_warns_after_15s_without_reply():
+    """郵便受けに入れて15秒以上返事が無いとき、画面に停止中と対処法を出すこと。"""
+    files = combo_mod.build_combo_files(combo_lite=True)
+    sidebar_html = next(f["source"] for f in files if f["name"] == "ComboSidebar")
+    scripts = re.findall(r"<script>([\s\S]*?)</script>", sidebar_html)
+    node_code = r"""
+const fs = require('fs');
+const vm = require('vm');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+
+function makeEl(id) {
+  return {
+    id, value: '', checked: false, disabled: false, textContent: '', innerHTML: '',
+    style: {}, dataset: {}, children: [], listeners: {},
+    classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
+    addEventListener(ev, fn){ (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
+    appendChild(c){ this.children.push(c); return c; },
+    querySelectorAll(){ return []; },
+    querySelector(){ return null; },
+    focus(){}
+  };
+}
+const elsMap = {};
+const sandbox = {
+  console, Math, Date, JSON, Object, Array, String, Number, Boolean, RegExp, Error, parseInt, parseFloat, isNaN, isFinite,
+  encodeURIComponent, decodeURIComponent,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  performance: { now: () => 100 },
+  document: {
+    hidden: false,
+    getElementById(id) { if (!elsMap[id]) elsMap[id] = makeEl(id); return elsMap[id]; },
+    createElement(tag) { const el = makeEl(tag); el.tagName = tag.toUpperCase(); return el; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    addEventListener() {}
+  },
+  window: { location: { search: '' }, addEventListener() {} },
+  localStorage: { getItem(){ return null; }, setItem(){} }
+};
+sandbox.globalThis = sandbox;
+for (const sc of input.scripts) vm.runInNewContext(sc, sandbox);
+
+const dt = sandbox.__comboDirectTest;
+dt.state.pendingPostboxIds['REQ_1'] = { startedAt: Date.now() - 16000, label: 'この表の構成を教えて', warned: false };
+dt.runPollTick();
+
+const chatText = dt.els.chatLog.children.map(c => c.textContent + ' ' + (c.children || []).map(x => x.textContent).join(' ')).join('\n');
+process.stdout.write(JSON.stringify({
+  warned: dt.state.pendingPostboxIds['REQ_1'].warned,
+  status: dt.els.postboxStatusLabel.textContent,
+  chatText
+}));
+"""
+    res = _run_node_json(node_code, {"scripts": scripts})
+    assert res["warned"] is True
+    assert "15秒経過" in res["status"]
+    assert "15秒経過" in res["chatText"] and "--postbox" in res["chatText"]

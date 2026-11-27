@@ -3203,7 +3203,9 @@
         applyServerState(res, true, opts.payload && opts.payload.sheet);
 
         if (res.pendingPostbox) {
-          if (res.reqId) state.pendingPostboxIds[res.reqId] = true;
+          if (res.reqId) {
+            state.pendingPostboxIds[res.reqId] = { startedAt: Date.now(), label: opts.label || "", warned: false };
+          }
           els.postboxStatusLabel.textContent = "郵便受け: 待機中 (ID: " + (res.reqId || "-") + ")";
           var pText = res.text || "郵便受けに依頼を置きました。PC側の watch が処理するまで待機します。";
           appendLog(els.chatLog, "is-info", "[郵便受け待機] " + opts.label, pText + "\n(" + formatTiming(wallMs, res.gasMs) + ")");
@@ -4069,6 +4071,21 @@
     state.pollTimer = null;
     var hasPending = Object.keys(state.pendingPostboxIds).length > 0;
     if (!hasPending) return;
+    var nowMs = Date.now();
+    var pKeys = Object.keys(state.pendingPostboxIds);
+    for (var pi = 0; pi < pKeys.length; pi++) {
+      var pInfo = state.pendingPostboxIds[pKeys[pi]];
+      if (pInfo && typeof pInfo === "object" && !pInfo.warned && (nowMs - (pInfo.startedAt || nowMs)) >= 15000) {
+        pInfo.warned = true;
+        els.postboxStatusLabel.textContent = "郵便受け: 応答待ち (15秒経過)";
+        appendLog(
+          els.chatLog,
+          "is-err",
+          "⏳ 郵便受けの返事がありません（15秒経過）: " + (pInfo.label || pKeys[pi]),
+          "受け手（combo watch）が --postbox なしで動いているか、停止している可能性があります。\n対処: `py gas.py combo watch <script_id> --postbox` で受け手を起動し直すか、Chrome 拡張のサイドパネルから実行してください。"
+        );
+      }
+    }
     if (document.hidden || state.busy || state.polling) {
       schedulePoll(1500);
       return;
@@ -7094,6 +7111,7 @@
       parseImportMyMacros: parseImportMyMacros,
       applyServerState: applyServerState,
       applyExtSheet: applyExtSheet,
+      runPollTick: runPollTick,
       onRunAsk: onRunAsk,
       onLook: onLook,
       getSelectedSheet: getSelectedSheet,

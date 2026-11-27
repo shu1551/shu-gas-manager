@@ -2399,7 +2399,12 @@ class ComboPostboxWatcher:
         try:
             if direct_only:
                 while not stop_ev.is_set():
-                    stop_ev.wait(0.5)
+                    if kick.wait(0.5):
+                        kick.clear()
+                        try:
+                            self.poll_once()
+                        except Exception:
+                            pass
             else:
                 while (max_loops is None or loops < max_loops) and not stop_ev.is_set():
                     loops += 1

@@ -2711,6 +2711,7 @@
       parseImportMyMacros: parseImportMyMacros,
       applyServerState: applyServerState,
       applyExtSheet: applyExtSheet,
+      runPollTick: runPollTick,
       onRunAsk: onRunAsk,
       onLook: onLook,
       getSelectedSheet: getSelectedSheet,
