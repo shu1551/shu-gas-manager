@@ -441,6 +441,35 @@ def _extract_calc_expr(text, table):
             b = _clean_operand(m_span.group(2))
             if a and b:
                 return f"{b}-{a}"
+        m_pct_add = re.search(r"([^\s、,。をにが]{1,20}?)\s*(?:に|へ)\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:を)?(?:足[しす]|た[しす]|加算|上乗せ|増し)", cand_src)
+        if m_pct_add:
+            a = _clean_operand(m_pct_add.group(1))
+            if a:
+                fac = 1.0 + float(m_pct_add.group(2)) / 100.0
+                return f"{a}*{fac:.10g}"
+        m_pct_sub = re.search(r"([^\s、,。をにが]{1,20}?)\s*(?:から)\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:を)?(?:引[いけく]|ひ[いけく]|減算|割引)", cand_src)
+        if m_pct_sub:
+            a = _clean_operand(m_pct_sub.group(1))
+            if a:
+                fac = 1.0 - float(m_pct_sub.group(2)) / 100.0
+                return f"{a}*{fac:.10g}"
+        m_mul_n = re.search(r"([^\s、,。をにが]{1,20}?)(?:を|の)\s*([0-9]+(?:\.[0-9]+)?)\s*倍", cand_src)
+        if m_mul_n:
+            a = _clean_operand(m_mul_n.group(1))
+            if a:
+                return f"{a}*{m_mul_n.group(2)}"
+        m_wari = re.search(r"([^\s、,。をにが]{1,20}?)(?:を|の)\s*([0-9]+(?:\.[0-9]+)?)\s*割(増し?|引き?)", cand_src)
+        if m_wari:
+            a = _clean_operand(m_wari.group(1))
+            if a:
+                d_w = float(m_wari.group(2)) / 10.0
+                fac = (1.0 + d_w) if m_wari.group(3).startswith("増") else (1.0 - d_w)
+                return f"{a}*{fac:.10g}"
+        m_half = re.search(r"([^\s、,。をにが]{1,20}?)(?:を|の)\s*半分", cand_src)
+        if m_half:
+            a = _clean_operand(m_half.group(1))
+            if a:
+                return f"{a}/2"
     for cand_src in cands:
         m_solo = re.search(r"([^\s、,。をにで]{1,20}の(?:[0-9]+(?:\.[0-9]+)?乗|平方根))", cand_src)
         if m_solo:
@@ -506,7 +535,7 @@ _CMP_VALUE_SHELVES = {
 }
 _PCT_COL_RE = re.compile(r"(?:率|割合|構成比|達成|進捗|%|％)")
 _CALC_VERB_PREFIX_RE = re.compile(
-    r"^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算)(?:の|で))\s*"
+    r"^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算|[0-9]+(?:\.[0-9]+)?\s*倍|[0-9]+(?:\.[0-9]+)?\s*割(?:増し?|引き?)|半分)(?:の|で|した))\s*"
 )
 
 # 任意（非必須）の列引数へ無関係な列名が流れ込まないようにするキーワード条件（1 か所管理）
@@ -2886,10 +2915,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             )
             has_calc_cue = bool(
                 re.search(
-                    r"(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)",
+                    r"(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|/)[^\s、,。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)|[0-9]+(?:\.[0-9]+)?\s*倍|[0-9]+(?:\.[0-9]+)?\s*割(?:増|引)|(?:を|の)\s*半分",
                     nfkc(c),
                 )
-                and not re.search(r"構成比|割合|消費税|税込|税抜|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に", c)
+                and not re.search(r"構成比|割合|消費税|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に", c)
             )
             has_chart_cue = bool(
                 re.search(r"グラフ|棒グラフ|折れ線|円グラフ|散布図|面グラフ", c)
@@ -2958,7 +2987,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             )
             has_cols_insert_cue = bool(
                 re.search(r"(?:列|カラム).{0,10}(?:追加|挿入|増や|足[しす])", c)
-                and not re.search(r"合計|平均|件数|個数|計算|式|から|より|差|差分|年齢|勤続|経過|グラフ|削除|消", c)
+                and not re.search(r"合計|平均|件数|個数|計算|式|から|より|差|差分|年齢|勤続|経過|グラフ|削除|消|倍|半分|割増|割引|掛[けか]|足し|引き|割り|[%％]|平方根|乗", nfkc(c))
             )
             has_short_fmt_cue = bool(
                 (

@@ -645,7 +645,7 @@ var ComboPlanner = (function () {
     "cf.add": 1, "calc.if": 1, "rows.highlight": 1
   };
   var _PCT_COL_RE_JS = /(?:率|割合|構成比|達成|進捗|%|％)/;
-  var _CALC_VERB_PREFIX_RE_JS = /^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算)(?:の|で))\s*/;
+  var _CALC_VERB_PREFIX_RE_JS = /^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算|[0-9]+(?:\.[0-9]+)?\s*倍|[0-9]+(?:\.[0-9]+)?\s*割(?:増し?|引き?)|半分)(?:の|で|した))\s*/;
 
   // 任意（非必須）の列引数へ無関係な列名が流れ込まないようにするキーワード条件（1 か所管理）
   var _OPT_COL_CUES_JS = {
@@ -2622,6 +2622,35 @@ var ComboPlanner = (function () {
           var aSp = _cleanOp(mSpan[1]), bSp = _cleanOp(mSpan[2]);
           if (aSp && bSp) return bSp + "-" + aSp;
         }
+        var mPctAdd = /([^\s、,。をにが]{1,20}?)\s*(?:に|へ)\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:を)?(?:足[しす]|た[しす]|加算|上乗せ|増し)/.exec(cands[ci1]);
+        if (mPctAdd) {
+          var aPa = _cleanOp(mPctAdd[1]);
+          if (aPa) return aPa + "*" + Number((1.0 + parseFloat(mPctAdd[2]) / 100.0).toPrecision(10));
+        }
+        var mPctSub = /([^\s、,。をにが]{1,20}?)\s*(?:から)\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:を)?(?:引[いけく]|ひ[いけく]|減算|割引)/.exec(cands[ci1]);
+        if (mPctSub) {
+          var aPs = _cleanOp(mPctSub[1]);
+          if (aPs) return aPs + "*" + Number((1.0 - parseFloat(mPctSub[2]) / 100.0).toPrecision(10));
+        }
+        var mMulN = /([^\s、,。をにが]{1,20}?)(?:を|の)\s*([0-9]+(?:\.[0-9]+)?)\s*倍/.exec(cands[ci1]);
+        if (mMulN) {
+          var aMn = _cleanOp(mMulN[1]);
+          if (aMn) return aMn + "*" + mMulN[2];
+        }
+        var mWari = /([^\s、,。をにが]{1,20}?)(?:を|の)\s*([0-9]+(?:\.[0-9]+)?)\s*割(増し?|引き?)/.exec(cands[ci1]);
+        if (mWari) {
+          var aWr = _cleanOp(mWari[1]);
+          if (aWr) {
+            var dWr = parseFloat(mWari[2]) / 10.0;
+            var facWr = mWari[3].charAt(0) === "増" ? (1.0 + dWr) : (1.0 - dWr);
+            return aWr + "*" + Number(facWr.toPrecision(10));
+          }
+        }
+        var mHalf = /([^\s、,。をにが]{1,20}?)(?:を|の)\s*半分/.exec(cands[ci1]);
+        if (mHalf) {
+          var aHf = _cleanOp(mHalf[1]);
+          if (aHf) return aHf + "/2";
+        }
       }
       for (var ci2 = 0; ci2 < cands.length; ci2++) {
         var mSolo = /([^\s、,。をにで]{1,20}の(?:[0-9]+(?:\.[0-9]+)?乗|平方根))/.exec(cands[ci2]);
@@ -3744,8 +3773,8 @@ var ComboPlanner = (function () {
           /集計|合計|平均|件数/.test(c) &&
           !/ピボット|クロス|縦と横|小計|グラフ|並|ソート|抽出/.test(c);
         var hasCalcDiffCue = !!_calcDiffColsOfJs(nfkc(c), table) && !/シート|タブ|比較/.test(c);
-        var hasCalcCue = /(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|\/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:\/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)/.test(nfkc(c)) &&
-          !/構成比|割合|消費税|税込|税抜|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に/.test(c);
+        var hasCalcCue = /(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|\/)[^\s、。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:\/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)|[0-9]+(?:\.[0-9]+)?\s*倍|[0-9]+(?:\.[0-9]+)?\s*割(?:増|引)|(?:を|の)\s*半分/.test(nfkc(c)) &&
+          !/構成比|割合|消費税|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に/.test(c);
         var hasChartCue = /(?:グラフ|棒グラフ|折れ線|円グラフ|散布図|面グラフ)/.test(c) &&
           !/消|削除|なく|いらない/.test(c);
         var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄)/.test(c) ||
@@ -3862,7 +3891,7 @@ var ComboPlanner = (function () {
           ensureBoost("font.unify");
         } else if (hasTotalRowCue) {
           ensureBoost("total");
-        } else if (/(?:列|カラム).{0,10}(?:追加|挿入|増や|足[しす])/.test(c) && !/合計|平均|件数|個数|計算|式|から|より|差|差分|年齢|勤続|経過|グラフ|削除|消/.test(c)) {
+        } else if (/(?:列|カラム).{0,10}(?:追加|挿入|増や|足[しす])/.test(c) && !/合計|平均|件数|個数|計算|式|から|より|差|差分|年齢|勤続|経過|グラフ|削除|消|倍|半分|割増|割引|掛[けか]|足し|引き|割り|[%％]|平方根|乗/.test(nfkc(c))) {
           ensureBoost("cols.insert");
         } else if (hasStatRowCue) {
           ensureBoost("stat.row");

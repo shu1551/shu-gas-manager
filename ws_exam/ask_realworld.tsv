@@ -182,3 +182,9 @@ R	備考に「VIP」が入っている担当者と部門を一覧で教えて
 # 第16ラウンド: 件数グラフ(summary count→chart.new)・AからBまでの引き算・の掛け算
 1	部門ごとの行の件数をグラフにして	[{"shelf":"summary","by":"部門","func":"count"},{"shelf":"chart.new","range":"集計_部門別"}]
 1	数量と単価の掛け算の列を足して	[{"shelf":"calc.col","expr":"数量*単価"}]
+# 第17ラウンド: N倍・N割増し・半分・N%足し引き・定数引き算のcalc.col（cols.insert誤爆防止）
+1	単価を2倍した倍額の列を足して	[{"shelf":"calc.col","name":"倍額","expr":"単価*2"}]
+1	単価の1.1倍の税込単価の列を足して	[{"shelf":"calc.col","name":"税込単価","expr":"単価*1.1"}]
+1	単価に10%を足した税込価格の列を足して	[{"shelf":"calc.col","name":"税込価格","expr":"単価*1.1"}]
+1	単価から1000を引いた割引後単価の列を足して	[{"shelf":"calc.col","name":"割引後単価","expr":"単価-1000"}]
+1	単価の半分の半額の列を足して	[{"shelf":"calc.col","name":"半額","expr":"単価/2"}]
