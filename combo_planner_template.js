@@ -1131,7 +1131,7 @@ var ComboPlanner = (function () {
     var s = nfkc(String(expr)).trim()
       .replace(/×/g, "*").replace(/＊/g, "*")
       .replace(/÷/g, "/").replace(/／/g, "/")
-      .replace(/＋/g, "+").replace(/[−ー]/g, "-");
+      .replace(/＋/g, "+").replace(/−/g, "-");
     var parts = s.split(/([*/+\-()])/);
     var out = [];
     for (var i = 0; i < parts.length; i++) {
@@ -2498,7 +2498,7 @@ var ComboPlanner = (function () {
       var sortPairs = [];
       var nfkcTxt = nfkc(text);
       var descPatJs = "(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順";
-      var ascPatJs = "(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順";
+      var ascPatJs = "(?:小さい|少ない|低い|安い|古い|若い|早い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順";
       var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ|に(?=\s*[^\s、,の]{1,16}(?:の|が)))/);
       if (mGrp) {
         var rawGrp = mGrp[1].trim();
@@ -2776,6 +2776,9 @@ var ComboPlanner = (function () {
     }
 
     if (shelf.name === "summary" || shelf.name === "pivot.new") {
+      if (shelf.name === "summary" && !_hasOwn(op, "func") && /の(?:数|件数|回数|人数)|数え|カウント/.test(nfkc(text))) {
+        op.func = "count";
+      }
       if (shelf.name === "summary" && typeof op.by === "string") {
         var resBy = _resolveColRefJs(op.by, table);
         if (resBy) op.by = resBy;
@@ -3764,7 +3767,7 @@ var ComboPlanner = (function () {
           !/並べ|ソート|絞り込|フィルタ|消|削除|連続|下まで|埋め|経過|年齢|曜日/.test(c);
         var hasPhoneFixCue = /(?:電話|携帯|TEL|tel)/.test(c) &&
           /ハイフン|区切り|そろえ|揃え|統一|整形|形式|直し/.test(c) &&
-          !/全角|半角|空白|スペース|消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字/.test(c);
+          !/全角|半角|空白|スペース|消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字|桁区切|カンマ区切|3桁|三桁|円マーク|円表示|パーセント|%|％|書式|表示形式|太字|斜体|色|背景|中央|右揃|左揃|罫線/.test(c);
         var shortFmtOnlyReJs = /^(?:(?:タイトル|表題|見出し|ヘッダ|表全体|表|[^\s、。]{1,16}(?:の?列|の?欄)|[A-Z]{1,3}[0-9]*(?::[A-Z]{1,3}[0-9]*)?)(?:を|は|に)\s*)?(?:太字|斜体|イタリック|中央揃え|中央寄せ|真ん中揃え|真ん中寄せ|右揃え|右寄せ|左揃え|左寄せ|中央|真ん中|右|左|折り返し?|太字解除|斜体解除|折り返し解除|折り返しなし|罫線(?:なし|外枠)?|外枠|結合(?:解除)?|(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})(?:い|の)?(?:文字|背景|塗り)|(?:文字|フォント|背景|塗り)(?:は|を|に)?(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})|[0-9]+\s*(?:pt|ポイント)|(?:少し|もっと|だいぶ|かなり|ぐっと)?(?:大きく|小さく))(?:で|に|へ|も|は|を|にして|して)?$/;
         var cTrimFmt = nfkc(c).trim();
         var hasShortFmtCue = (shortFmtOnlyReJs.test(cTrimFmt) ||
@@ -3810,7 +3813,7 @@ var ComboPlanner = (function () {
           ensureBoost("calc.if");
         } else if (/経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数/.test(c) && !/順|並べ|ソート/.test(c) && !hasRowCfCue && !hasRowDelCond && !hasFilterWhereCue && _colNames(c, table).length <= 1 && _byName["date.age"]) {
           ensureBoost("date.age");
-        } else if (/(?:^|[\s、。]|から)(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)/.test(c) && !/経過|年齢|勤続|在籍|築年数|年数|月数|日数|年度別/.test(c) && _byName["date.parts"]) {
+        } else if ((/から\s*(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)/.test(c) || (/(?:^|[\s、。])(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)/.test(c) && /足[しす]|作っ|作る|追加|取り出|抜き出|抽出/.test(c))) && !/経過|年齢|勤続|在籍|築年数|年数|月数|日数|年度別|揃え|寄せ|太字|斜体|色|背景|罫線|表示形式|桁区切|パーセント|%|％/.test(c) && _byName["date.parts"]) {
           ensureBoost("date.parts");
         } else if (hasRowCfCue) {
           ensureBoost("cf.add");

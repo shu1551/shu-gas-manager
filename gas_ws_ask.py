@@ -1069,7 +1069,7 @@ def _normalize_calc_expr_str(expr, table):
     if not expr:
         return expr
     s = nfkc(str(expr)).strip()
-    s = s.replace("×", "*").replace("＊", "*").replace("÷", "/").replace("／", "/").replace("＋", "+").replace("−", "-").replace("ー", "-")
+    s = s.replace("×", "*").replace("＊", "*").replace("÷", "/").replace("／", "/").replace("＋", "+").replace("−", "-")
     parts = re.split(r"([*/+\-()])", s)
     out = []
     for p in parts:
@@ -2029,7 +2029,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         sort_pairs = []
         nfkc_t = nfkc(text)
         _desc_pat = r"(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順"
-        _asc_pat = r"(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順"
+        _asc_pat = r"(?:小さい|少ない|低い|安い|古い|若い|早い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順"
         # 「部署ごと、同部署内は社員番号の昇順」「社員名ごとに日付の古い順」の 1 列目（ごと）を拾う
         m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ|に(?=\s*[^\s、,の]{1,16}(?:の|が)))", nfkc_t)
         if m_grp:
@@ -2190,6 +2190,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         if op.get("expr") and op.get("name"):
             named = True
     if shelf["name"] in ("summary", "pivot.new"):
+        if shelf["name"] == "summary" and not op.get("func") and re.search(r"の(?:数|件数|回数|人数)|数え|カウント", nfkc(text)):
+            op["func"] = "count"
         if shelf["name"] == "summary" and isinstance(op.get("by"), str):
             res_by = _resolve_col_ref(op["by"], table)
             if res_by:
@@ -2937,7 +2939,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                     re.search(r"電話|携帯|TEL|tel", c)
                     and re.search(r"ハイフン|区切り|そろえ|揃え|統一|整形|形式|直し", c)
                 )
-                and not re.search(r"全角|半角|空白|スペース|消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字", c)
+                and not re.search(r"全角|半角|空白|スペース|消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字|桁区切|カンマ区切|3桁|三桁|円マーク|円表示|パーセント|%|％|書式|表示形式|太字|斜体|色|背景|中央|右揃|左揃|罫線", c)
             )
             _short_fmt_only_re = re.compile(
                 r"^(?:(?:タイトル|表題|見出し|ヘッダ|表全体|表|[^\s、。]{1,16}(?:の?列|の?欄)|[A-Z]{1,3}[0-9]*(?::[A-Z]{1,3}[0-9]*)?)(?:を|は|に)\s*)?"
@@ -3001,8 +3003,14 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             elif re.search(r"経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数", c) and not re.search(r"順|並べ|ソート", c) and not has_row_cf_cue and not has_row_del_cond and not has_filter_where_cue and len(_col_names(c, table)) <= 1 and "date.age" in finder.cat.by_name:
                 _ensure_boost("date.age")
             elif (
-                re.search(r"(?:^|[\s、。]|から)(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)", c)
-                and not re.search(r"経過|年齢|勤続|在籍|築年数|年数|月数|日数|年度別", c)
+                (
+                    re.search(r"から\s*(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)", c)
+                    or (
+                        re.search(r"(?:^|[\s、。])(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)", c)
+                        and re.search(r"足[しす]|作っ|作る|追加|取り出|抜き出|抽出", c)
+                    )
+                )
+                and not re.search(r"経過|年齢|勤続|在籍|築年数|年数|月数|日数|年度別|揃え|寄せ|太字|斜体|色|背景|罫線|表示形式|桁区切|パーセント|%|％", c)
                 and "date.parts" in finder.cat.by_name
             ):
                 _ensure_boost("date.parts")

@@ -176,3 +176,6 @@ R	備考に「VIP」が入っている担当者と部門を一覧で教えて
 # 第14ラウンド: 単位付き2条件AND・べき乗/平方根の計算式
 1	数量が10個以上で単価が1000円以上の行を黄色にして	[{"shelf":"cf.add","when":"formula","value":"=AND($E4>=10,$F4>=1000)","bg":"黄"}]
 1	売上金額を数量の2乗で割った指標の列を足して	[{"shelf":"calc.col","name":"指標","expr":"売上金額/POWER(数量,2)"}]
+# 第15ラウンド: 安い順desc=false・〈値〉の数summary count
+1	単価の安い順に並べて	[{"shelf":"sort","col":"単価","desc":false}]
+1	担当者ごとの完了の数を集計して	[{"shelf":"summary","by":"担当者","func":"count"}]
