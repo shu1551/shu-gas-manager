@@ -391,6 +391,7 @@ function comboInit(req) {
       return docOut;
     }
     var ss = comboOpenSs_(req);
+    var tOpen = Date.now();
     var selInfo = comboGetSelectionInfo_(ss, req);
     var sh = sheetOf_(ss, selInfo.sheet, '');
     var sheetInfos = ss.getSheets().map(function (s) {
@@ -402,6 +403,7 @@ function comboInit(req) {
       };
     });
     var sheets = sheetInfos.map(function (s) { return s.name; });
+    var tSheets = Date.now();
     var ssId = ss.getId();
     var ssName = ss.getName();
     var tb = findTable_(sh);
@@ -409,6 +411,7 @@ function comboInit(req) {
     var titleA1 = comboComputeTitleA1_(sh, tb);
     if (table && titleA1) table.title_a1 = titleA1;
     comboCachePut_(ssId, sh.getName(), table, sheets, tb, ssName, titleA1);
+    var tTable = Date.now();
     var out = {
       ok: true,
       target: {
@@ -428,6 +431,7 @@ function comboInit(req) {
       config: comboSanitizeConfig_(comboGetRawConfig_(allProps)),
       postboxPendingCount: comboPostboxPoll().count
     };
+    var tPost = Date.now();
     if (req.includeQuick) {
       out.quick = comboQuickList({
         force: !!req.forceQuick,
@@ -438,7 +442,20 @@ function comboInit(req) {
         clientStamp: req.clientStamp || ''
       });
     }
-    out.gasMs = Date.now() - t0;
+    var tQuick = Date.now();
+    if (req.includeLearned) {
+      out.learned = comboGetLearned().learned;
+    }
+    var tEnd = Date.now();
+    out.gasMs = tEnd - t0;
+    out.timings = {
+      openMs: tOpen - t0,
+      sheetsMs: tSheets - tOpen,
+      tableMs: tTable - tSheets,
+      metaPostboxMs: tPost - tTable,
+      quickMs: tQuick - tPost,
+      learnedMs: tEnd - tQuick
+    };
     return out;
   } catch (err) {
     return {

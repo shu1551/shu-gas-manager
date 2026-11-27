@@ -45,6 +45,8 @@
     _userSelectedSheet: "",
     lastServerSheet: "",
     hasExtSheet: false,
+    _pendingLookSheet: "",
+    _queuedRunAsk: "",
     table: null,
     selection: "",
     heading: "",
@@ -248,6 +250,18 @@
       setStatus(statusText || "実行中…", true);
     } else {
       setStatus("表示中: " + (TAB_NAMES[state.activeTab] || "自動"), false);
+      if (state._pendingLookSheet && typeof onLook === "function") {
+        var nextLook = state._pendingLookSheet;
+        state._pendingLookSheet = "";
+        onLook(nextLook, { silentSuccess: true, fast: true });
+        return;
+      }
+      if (state._queuedRunAsk && typeof onRunAsk === "function") {
+        var qAsk = state._queuedRunAsk;
+        state._queuedRunAsk = "";
+        els.askInput.value = qAsk;
+        onRunAsk();
+      }
     }
   }
 
@@ -626,6 +640,12 @@
     }
     if (res.config) {
       applyConfig(res.config);
+    }
+    if (res.learned && typeof res.learned === "object") {
+      state.learned = res.learned;
+      if (typeof Planner !== "undefined" && typeof Planner.setLearned === "function") {
+        Planner.setLearned(res.learned);
+      }
     }
     if (typeof res.oauthToken === "string" && res.oauthToken) {
       state.oauthToken = res.oauthToken;

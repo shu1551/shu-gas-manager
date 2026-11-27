@@ -342,9 +342,19 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
+const _lastSheetById = {};
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "GAS_COMBO_SYNC" && msg.payload) {
-    postToGasCombo(msg.payload).then((ok) => {
+    const p = msg.payload;
+    if (p.kind === "sheet" && p.id && p.sheet && _lastSheetById[p.id] !== p.sheet) {
+      _lastSheetById[p.id] = p.sheet;
+      try {
+        chrome.runtime.sendMessage({ type: "GAS_COMBO_SHEET_CHANGED", id: p.id, sheet: p.sheet }, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (_e) {}
+    }
+    postToGasCombo(p).then((ok) => {
       sendResponse({ ok });
     });
     return true;

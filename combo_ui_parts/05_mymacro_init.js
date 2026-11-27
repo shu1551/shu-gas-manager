@@ -2662,6 +2662,7 @@
           assumeActive: true,
           includeQuick: true,
           wantCodes: true,
+          includeLearned: true,
           clientStamp: quickClientStamp()
         },
         label: "初期化 / 再読込",
@@ -2672,7 +2673,7 @@
           if (res.postboxDone) handlePostboxDone(res.postboxDone);
           if (res && res.quick) applyQuickListRes(res.quick);
           else loadQuickList();
-          loadLearned();
+          if (!res || !res.learned) loadLearned();
           if (!res.config) {
             callGas("comboGetConfig", undefined, function(cfg) { applyConfig(cfg); });
           }

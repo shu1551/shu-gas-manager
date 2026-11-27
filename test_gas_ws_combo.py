@@ -3766,3 +3766,125 @@ process.stdout.write(JSON.stringify({
     assert res["keptSheet"] == "集計"
     assert res["switchedSheet"] == "売上"
     assert res["uiEnd"] == "売上"
+
+
+def test_sidebar_push_updates_sheet_before_server_responds_and_queues_run():
+    """拡張からのシート通知でサーバーを待たずに窓の選択が変わり、読込中の実行も捨てずに完了後撃つこと。"""
+    files = combo_mod.build_combo_files(combo_lite=True)
+    sidebar_html = next(f["source"] for f in files if f["name"] == "ComboSidebar")
+    scripts = re.findall(r"<script>([\s\S]*?)</script>", sidebar_html)
+    node_code = r"""
+const fs = require('fs');
+const vm = require('vm');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+
+function makeEl(id) {
+  return {
+    id, value: '', checked: false, disabled: false, textContent: '', innerHTML: '',
+    style: {}, dataset: {}, children: [], listeners: {},
+    classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
+    addEventListener(ev, fn){ (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
+    dispatch(ev, payload){ (this.listeners[ev] || []).forEach(fn => fn.call(this, payload || { target: this })); },
+    appendChild(c){
+      this.children.push(c);
+      if (this.tagName === 'SELECT' || this.id === 'sheetSelect' || this.id === 'settingsSheetSelect') {
+        if (c.selected || this.children.length === 1) this.value = c.value;
+      }
+      return c;
+    },
+    querySelectorAll(){ return []; },
+    querySelector(){ return null; },
+    focus(){}
+  };
+}
+const elsMap = {};
+const calls = [];
+const winListeners = {};
+let pendingLookOk = null;
+let extSheet = '月別';
+const sandbox = {
+  console, Math, Date, JSON, Object, Array, String, Number, Boolean, RegExp, Error, parseInt, parseFloat, isNaN, isFinite,
+  encodeURIComponent, decodeURIComponent,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  performance: { now: () => 100 },
+  document: {
+    getElementById(id) { if (!elsMap[id]) elsMap[id] = makeEl(id); return elsMap[id]; },
+    createElement(tag) { const el = makeEl(tag); el.tagName = tag.toUpperCase(); return el; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    addEventListener() {}
+  },
+  localStorage: { getItem(){ return null; }, setItem(){} },
+  google: {
+    script: {
+      run: (function mkRunner(okCb, errCb) {
+        return {
+          withSuccessHandler(fn) { return mkRunner(fn, errCb); },
+          withFailureHandler(fn) { return mkRunner(okCb, fn); },
+          comboInit(req) {
+            calls.push({ fn: 'comboInit', req });
+            if (okCb) okCb({ ok: true, target: { id: 'SS_1', kind: 'sheet', name: '売上表', sheet: '月別' }, sheets: ['売上', '名簿', '月別', '集計'], sheet: '月別', learned: {}, table: null });
+          },
+          comboLook(req) {
+            calls.push({ fn: 'comboLook', req });
+            pendingLookOk = okCb;
+          },
+          comboRunAsk(req) {
+            calls.push({ fn: 'comboRunAsk', req });
+            if (okCb) okCb({ ok: true, sheets: ['売上', '名簿', '月別', '集計'], sheet: req.sheet, text: 'ok' });
+          },
+          comboQuickList() {},
+          comboGetLearned(req) { if (okCb) okCb({ learned: {} }); },
+          comboGetConfig() {}
+        };
+      })(null, null)
+    }
+  }
+};
+sandbox.window = {
+  location: { search: '' },
+  addEventListener(ev, fn) { (winListeners[ev] = winListeners[ev] || []).push(fn); },
+  removeEventListener(ev, fn) { winListeners[ev] = (winListeners[ev] || []).filter(f => f !== fn); },
+  top: {
+    postMessage(msg) {
+      if (msg && msg.type === 'GAS_COMBO_GET_SEL') {
+        (winListeners.message || []).slice().forEach(fn => fn({ data: { type: 'GAS_COMBO_GET_SEL_DONE', ok: true, range: 'A1', sheet: extSheet } }));
+      }
+    }
+  }
+};
+sandbox.globalThis = sandbox;
+for (const sc of input.scripts) vm.runInNewContext(sc, sandbox);
+
+const dt = sandbox.__comboDirectTest;
+// 1. 拡張からシートタブ切り替え通知（GAS_COMBO_SHEET_PUSH: 売上）が届く
+extSheet = '売上';
+(winListeners.message || []).slice().forEach(fn => fn({ data: { type: 'GAS_COMBO_SHEET_PUSH', sheet: '売上' } }));
+
+// サーバー（comboLook）が返る前に、窓の選択は即「売上」に変わっていること
+const beforeServerReply = { ui: dt.els.sheetSelect.value, cur: dt.state.curSheet, busy: dt.state.busy };
+
+// 2. 読込中に実行を押しても捨てられずキューに入ること
+dt.els.askInput.value = '見出しを太字にして';
+dt.onRunAsk();
+const queuedCountBefore = calls.filter(c => c.fn === 'comboRunAsk').length;
+
+// 3. comboLook が完了すると、キューに入っていた実行が「売上」へ撃たれること
+pendingLookOk({ ok: true, sheets: ['売上', '名簿', '月別', '集計'], sheet: '売上', table: null });
+const runsAfter = calls.filter(c => c.fn === 'comboRunAsk');
+
+process.stdout.write(JSON.stringify({
+  beforeServerReply,
+  queuedCountBefore,
+  runsAfterCount: runsAfter.length,
+  runSheet: runsAfter[0] && runsAfter[0].req.sheet,
+  runAsk: runsAfter[0] && runsAfter[0].req.ask
+}));
+"""
+    res = _run_node_json(node_code, {"scripts": scripts})
+    assert res["beforeServerReply"] == {"ui": "売上", "cur": "売上", "busy": True}
+    assert res["queuedCountBefore"] == 0
+    assert res["runsAfterCount"] == 1
+    assert res["runSheet"] == "売上"
+    assert res["runAsk"] == "見出しを太字にして"

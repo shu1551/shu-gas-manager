@@ -74,15 +74,17 @@
   function onInit(silent) {
     var runInit = function(extSheet) {
       if (extSheet) applyExtSheet(extSheet);
+      var hasQuick = !!(state.quick && Array.isArray(state.quick.items) && state.quick.items.length);
       runServerAction({
         fnName: "comboInit",
         payload: {
           targetId: state.target.id || "",
           sheet: getSelectedSheet() || extSheet || "",
           assumeActive: true,
-          includeQuick: true,
+          includeQuick: !silent || !hasQuick,
           forceQuick: !silent,
-          wantCodes: true,
+          wantCodes: !silent || !hasQuick,
+          includeLearned: true,
           clientStamp: quickClientStamp()
         },
         label: "初期化 / 再読込",
@@ -92,8 +94,8 @@
         onSuccess: function(res) {
           if (res.postboxDone) handlePostboxDone(res.postboxDone);
           if (res && res.quick) applyQuickListRes(res.quick);
-          else loadQuickList();
-          loadLearned();
+          else if (!silent || !hasQuick) loadQuickList();
+          if (!res || !res.learned) loadLearned();
         }
       });
     };
@@ -106,18 +108,28 @@
     }
   }
 
-  function onLook(sheetOverride) {
+  function onLook(sheetOverride, opts) {
     var targetSheet = (typeof sheetOverride === "string") ? sheetOverride : (els.sheetSelect.value || state.curSheet || "");
+    if (state.busy) {
+      if (opts && opts.silentSuccess && targetSheet) {
+        state._pendingLookSheet = targetSheet;
+      } else {
+        appendLog(els.chatLog, "is-err", "⚠ 別の処理を実行中です", "完了までお待ちください。");
+      }
+      return;
+    }
     runServerAction({
       fnName: "comboLook",
       payload: {
         targetId: state.target.id || "",
         sheet: targetSheet,
-        assumeActive: true
+        assumeActive: true,
+        fast: !!(opts && opts.fast)
       },
       label: "読込 (comboLook)",
       statusText: "読込中…",
-      switchToChat: false
+      switchToChat: false,
+      silentSuccess: !!(opts && opts.silentSuccess)
     });
   }
 
@@ -267,7 +279,9 @@
     var txt = (els.askInput.value || "").trim();
     if (!txt) return;
     if (state.busy) {
-      appendLog(els.chatLog, "is-err", "⚠ 別の処理を実行中です", "完了までお待ちください。");
+      state._queuedRunAsk = txt;
+      els.askInput.value = "";
+      setStatus("読込完了後に実行します: " + txt, true);
       return;
     }
     var runAskBody = function() {
@@ -1043,6 +1057,16 @@
   });
   if (els.btnLook) els.btnLook.addEventListener("click", function() { onLook(); });
   if (els.btnRefresh) els.btnRefresh.addEventListener("click", function() { onInit(true); });
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("message", function(ev) {
+      var d = ev && ev.data;
+      if (!d || d.type !== "GAS_COMBO_SHEET_PUSH" || !d.sheet) return;
+      if (applyExtSheet(d.sheet)) {
+        onLook(d.sheet, { silentSuccess: true, fast: true });
+      }
+    });
+  }
 
   if (els.chatSubBar) {
     var cSubBtns = els.chatSubBar.querySelectorAll(".chat-sub-btn");

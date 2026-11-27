@@ -3,6 +3,38 @@
 const frame = document.getElementById("combo");
 const msg = document.getElementById("msg");
 let curId = "";
+let curFileId = "";
+let curUrlGid = "";
+let lastFrameSource = null;
+let lastFrameOrigin = "*";
+let lastPushedSheet = "";
+
+function pushSheetToFrame(sheet) {
+  const s = String(sheet || "").trim();
+  if (!s || s === lastPushedSheet) return;
+  lastPushedSheet = s;
+  try {
+    const tgt = lastFrameSource || (frame && frame.contentWindow);
+    if (tgt) tgt.postMessage({ type: "GAS_COMBO_SHEET_PUSH", sheet: s }, lastFrameOrigin || "*");
+  } catch (_e) {}
+}
+
+async function pushActiveTabSheet(tabId) {
+  if (!tabId) return;
+  try {
+    const r = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const tabEl = document.querySelector(".docs-sheet-active-tab .docs-sheet-tab-name")
+          || document.querySelector(".docs-sheet-tab[aria-selected='true'] .docs-sheet-tab-name")
+          || document.querySelector(".docs-sheet-active-tab");
+        return tabEl ? String(tabEl.textContent || "").trim() : "";
+      },
+    });
+    const sheet = (r && r[0] && r[0].result) || "";
+    if (sheet) pushSheetToFrame(sheet);
+  } catch (_e) {}
+}
 
 // 拡張のファイル（フォルダの今の中身）の指紋。道具が拡張を直したかを見分ける（自分で入れ直しはしない）
 const STAMP_FILES = ["manifest.json", "background.js", "content.js", "direct_bridge.js", "sidepanel.js", "sidepanel.html"];
@@ -47,15 +79,27 @@ async function base() {
 
 async function refresh() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const m = String((tab && tab.url) || "").match(/docs\.google\.com\/(spreadsheets|document)\/d\/([\w-]+)/);
+  const u = String((tab && tab.url) || "");
+  const m = u.match(/docs\.google\.com\/(spreadsheets|document)\/d\/([\w-]+)/);
   if (!m) { if (!curId) show("スプレッドシートまたはドキュメントのタブで開くと、そのファイルを相手に GASコンボが使えます。"); return; }
   const kind = m[1] === "document" ? "doc" : "sheet";
   const fileId = m[2];
   const sig = kind + ":" + fileId;
-  if (sig === curId) return;
+  const mg = u.match(/[#?&]gid=([0-9]+)/);
+  const gid = mg ? mg[1] : "";
+  if (sig === curId) {
+    if (kind === "sheet" && gid !== curUrlGid) {
+      curUrlGid = gid;
+      if (tab && tab.id) pushActiveTabSheet(tab.id);
+    }
+    return;
+  }
   const b = await base();
   if (!b) { show("GASコンボの画面の番地がまだありません。AI に「GASコンボを入れて」と頼む（py gas.py combo addon）と番地が入るので、その後このサイドパネルを閉じて開き直してください。"); return; }
   curId = sig;
+  curFileId = fileId;
+  curUrlGid = gid;
+  lastPushedSheet = "";
   frame.src = b + (b.indexOf("?") >= 0 ? "&" : "?") + "id=" + encodeURIComponent(fileId) + "&kind=" + encodeURIComponent(kind) + "&z=1";
   msg.style.display = "none";
   frame.style.display = "block";
@@ -89,6 +133,10 @@ window.addEventListener("message", async (ev) => {
     if (!t || d.token !== t) return;
   }
   const targetOrigin = ev.origin && ev.origin !== "null" ? ev.origin : "*";
+  if (ev.source) {
+    lastFrameSource = ev.source;
+    lastFrameOrigin = targetOrigin;
+  }
   if (d.type === "GAS_COMBO_PING_LOCAL") {
     const reqId = String(d.reqId || "");
     const replyDone = (obj) => {
@@ -211,6 +259,12 @@ window.addEventListener("message", async (ev) => {
     const ok = !!(r && r[0] && r[0].result);
     reply(ok, ok ? "" : "シートの名前ボックスが見つかりません");
   }).catch((e) => reply(false, String((e && e.message) || e)));
+});
+
+chrome.runtime.onMessage.addListener((m) => {
+  if (m && m.type === "GAS_COMBO_SHEET_CHANGED" && m.sheet && (!curFileId || !m.id || m.id === curFileId)) {
+    pushSheetToFrame(m.sheet);
+  }
 });
 
 chrome.tabs.onActivated.addListener(refresh);

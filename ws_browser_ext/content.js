@@ -163,10 +163,24 @@
   document.addEventListener("mouseup", () => scheduleSync(50), true);
   document.addEventListener("keyup", () => scheduleSync(50), true);
   window.addEventListener("focus", () => scheduleSync(40, true));
-  window.addEventListener("hashchange", () => scheduleSync(80, true));
+  window.addEventListener("hashchange", () => scheduleSync(20, true));
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") scheduleSync(40, true);
   });
+
+  // シートタブの切り替え（DOMのactive/aria-selected変化）をその場で拾う
+  let lastObservedSheet = "";
+  const sheetTabTarget = document.querySelector(".docs-sheet-container") || document.querySelector("#docs-chrome") || document.body;
+  if (sheetTabTarget && typeof MutationObserver === "function") {
+    const mo = new MutationObserver(() => {
+      const cur = getActiveSheetName();
+      if (cur && cur !== lastObservedSheet) {
+        lastObservedSheet = cur;
+        scheduleSync(15, true);
+      }
+    });
+    mo.observe(sheetTabTarget, { subtree: true, attributes: true, attributeFilter: ["class", "aria-selected"] });
+  }
 
   // バックグラウンドからのタブ切替PINGに応答する
   try {
