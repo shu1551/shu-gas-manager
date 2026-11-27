@@ -688,6 +688,40 @@ var ComboPlanner = (function () {
     return null;
   }
 
+  // 「〈日付の列〉から N 日／週間／か月／年 後・前」→ [式, 列名]（Python _date_shift_of と同じ）
+  function _dateShiftOfJs(text, table) {
+    var m = /([^\s、。をにがはで]{1,16}?)(?:列)?(?:から|の)([0-9]+)\s*(日|週間|週|か月|ヶ月|カ月|ヵ月|ケ月|月|年)(後|前)/.exec(nfkc(text));
+    if (!m) return null;
+    var hasCols = !!(table && Array.isArray(table.columns) && table.columns.length);
+    var col = hasCols ? _resolveColRefJs(m[1].trim(), table) : m[1].trim();
+    if (!col) return null;
+    var n = parseInt(m[2], 10), unit = m[3], d = m[4], sign = d === "後" ? "+" : "-", expr;
+    if (unit === "日") expr = col + sign + n;
+    else if (unit === "週間" || unit === "週") expr = col + sign + (n * 7);
+    else expr = "EDATE(" + col + "," + (sign === "+" ? "" : "-") + (unit === "年" ? n * 12 : n) + ")";
+    return [expr, n + unit + d];
+  }
+
+  // 表の列名（「メモ」「コメント」等）を伏せる。除外語の判定が列名に引っかからないように（Python _mask_col_names と同じ）
+  function _maskColNamesJs(text, table) {
+    if (!table || !Array.isArray(table.columns)) return text;
+    var names = table.columns.map(function (c) { return String((c && c.name) || ""); }).filter(function (n) { return n.length >= 2; });
+    names.sort(function (a, b) { return b.length - a.length; });
+    var out = text;
+    names.forEach(function (n) { out = out.split(n).join("□"); });
+    return out;
+  }
+
+  // 行ごとの条件付き書式で「空欄」「今日より前」等を文字のまま式に入れない（Python _cf_blank_today_expr と同じ）
+  function _cfBlankTodayExprJs(text, refL, r1) {
+    var t = nfkc(text), c = "$" + refL + r1;
+    if (/(?:空欄|空白)(?:以外|ではない|でない|じゃない)|入力済/.test(t)) return "=" + c + "<>\"\"";
+    if (/空欄|空白|未入力|入力されていない/.test(t)) return "=" + c + "=\"\"";
+    if (/今日(?:より前|以前|を過ぎ|が過ぎ)|期限切れ|期限が切れ|期限を過ぎ/.test(t)) return "=AND(ISNUMBER(" + c + ")," + c + (t.indexOf("以前") >= 0 ? "<=" : "<") + "TODAY())";
+    if (/今日(?:より後|以降|より先)/.test(t)) return "=AND(ISNUMBER(" + c + ")," + c + (t.indexOf("以降") >= 0 ? ">=" : ">") + "TODAY())";
+    return "";
+  }
+
   function _colContainsOfJs(text, table) {
     var tN = nfkc(text);
     var hasCols = !!(table && Array.isArray(table.columns) && table.columns.length);
@@ -2227,8 +2261,9 @@ var ComboPlanner = (function () {
           var clCc = _letterOf(table, colContCf[0]);
           if (clCc) expr = "=ISNUMBER(SEARCH(\"" + String(colContCf[1]).replace(/"/g, "\"\"") + "\",$" + clCc + cfR1 + "))";
         }
+        if (!expr && refL) expr = _cfBlankTodayExprJs(text, refL, cfR1);
         if (!expr && refL) {
-          var dCfAtom = (!_isEmptyVal(rawVCf) && normVCf === null) ? _dateCmpToFormulaAtomJs(rawVCf, table) : null;
+          var dCfAtom =(!_isEmptyVal(rawVCf) && normVCf === null) ? _dateCmpToFormulaAtomJs(rawVCf, table) : null;
           if (op.when === "between" && typeof rawVCf === "string" && rawVCf.indexOf("..") >= 0) {
             var pCf = rawVCf.split("..");
             var da1 = _dateCmpToFormulaAtomJs(pCf[0], table), da2 = _dateCmpToFormulaAtomJs(pCf[1], table);
@@ -2288,6 +2323,10 @@ var ComboPlanner = (function () {
         op.when = "contains";
         op.value = colContCf[1];
         named = true;
+      }
+      if (/赤字|赤い文字|文字を赤/.test(text) && op.bg === "赤" && !/背景|塗/.test(text)) {
+        op.color = op.bg;   // 「〜の行を赤字に」は文字の色
+        delete op.bg;
       }
       if (!op.bg && !op.color && /(?:色[を]?付|色[を]?つ|目立)/.test(text)) {
         op.bg = "薄黄";
@@ -2549,6 +2588,11 @@ var ComboPlanner = (function () {
             else if (!/足し|追加|作/.test(tNfkcAt)) op.at = rawAt;
           }
         }
+      }
+      var dShift = _dateShiftOfJs(text, table);
+      if (dShift && !_hasOwn(op, "expr")) {
+        op.expr = dShift[0];
+        op.name = dShift[1];
       }
       if (!_hasOwn(op, "expr")) {
         var extExpr = _extractCalcExprJs(text, table);
@@ -3348,7 +3392,7 @@ var ComboPlanner = (function () {
     }
 
     var qAll = norm(askText, _synonyms);
-    p.guide = _matchGuide(qAll);
+    p.guide = _matchGuide(norm(_maskColNamesJs(askText, table), _synonyms));   // 列名（「メール」「画像」等）で案内を出さない
 
     var rawCl = _clauses(askText);
     if (!rawCl.length) rawCl = [nfkc(askText)];
@@ -3465,15 +3509,16 @@ var ComboPlanner = (function () {
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c);
         var hasRowCfCue = (_ROW_CF_THING_RE_JS.test(cNfkcCf) || (_DATE_CMP_CUE_RE_JS.test(cNfkcCf) && /(?:のセル|セルを|セルに)/.test(c))) &&
           hasRowCfCond &&
-          !/消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|赤字|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ/.test(c) &&
-          (_colorHits(c).length > 0 || /太字|太く|色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
+          !/消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ/.test(c) &&
+          !(c.indexOf("赤字") >= 0 && !/の行|行を|行全体/.test(c)) &&
+          (_colorHits(c).length > 0 || /太字|太く|色[を]?付|色[を]?つ|目立|ハイライト|赤字/.test(c));
         var hasRowDelCond = /(?:の行|行を|行に|行は|行だけ|た行|る行|いない行|ない行|データ|明細|レコード|案件|商品)/.test(c) &&
           (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) ||
             _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
             !!_colContainsOfJs(nfkc(c), table) ||
             /[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|データ|明細|レコード|案件|商品)/.test(c)) &&
           /消|削除/.test(c) &&
-          !/重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則/.test(c) &&
+          !/重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則/.test(_maskColNamesJs(c, table)) &&
           _rowsOf(c).length === 0;
         var mColDel = /([^\s、。のをにはが]{2,16}?)の?(?:列|カラム)/.exec(c);
         var cNfkcCd = nfkc(c);
@@ -3550,6 +3595,8 @@ var ComboPlanner = (function () {
           ensureBoost("group.remove");
         } else if (hasRemoveAct && /グラフ|棒グラフ|折れ線|円グラフ/.test(c)) {
           ensureBoost("chart.delete");
+        } else if (hasRemoveAct && /重複|ダブ/.test(c) && !/色|目立|ハイライト|印|数え|何件/.test(c) && _byName["dedupe"]) {
+          ensureBoost("dedupe");
         } else if (hasRowDelCond) {
           ensureBoost("filter.delete");
         } else if (hasColsDelCue) {
@@ -3562,6 +3609,8 @@ var ComboPlanner = (function () {
           ensureBoost("filter.where");
         } else if (hasFilterExtractCue) {
           ensureBoost("filter.extract");
+        } else if (_dateShiftOfJs(c, table) && /列|欄/.test(c)) {
+          ensureBoost("calc.col");
         } else if (hasCalcDiffCue) {
           ensureBoost("calc.diff");
         } else if (hasCalcCue) {

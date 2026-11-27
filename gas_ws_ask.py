@@ -519,6 +519,55 @@ _ROW_CF_THING_RE = re.compile(
     r"|(?:以上|以下|未満|より大き(?:い|く)?|より小さ(?:い|く)?|より前|より後|以前|以降|を超え?|上回[るっ]|下回[るっ]|届か(?:ない)?|届いてい?ない|以外|ではない|でない|じゃない|になって(?:いない|ない|いる|る)|マイナス|負の値)(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
     r"|(?:書かれ|記載され|入力され|入っ|含まれ|含[むみ]|とある)(?:てい?る|た)?(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
 )
+def _mask_col_names(text, table):
+    """表の列名（「メモ」「コメント」等）を伏せる。除外語の判定が列名に引っかからないように"""
+    if not table or not table.get("columns"):
+        return text
+    out = text
+    for nm in sorted((str(c.get("name") or "") for c in table["columns"]), key=len, reverse=True):
+        if len(nm) >= 2:
+            out = out.replace(nm, "□")
+    return out
+
+
+_DATE_SHIFT_RE = re.compile(r"([^\s、。をにがはで]{1,16}?)(?:列)?(?:から|の)([0-9]+)\s*(日|週間|週|か月|ヶ月|カ月|ヵ月|ケ月|月|年)(後|前)")
+
+
+def _date_shift_of(text, table):
+    """「〈日付の列〉から N 日／週間／か月／年 後・前」→ (式, 列名)。日・週は足し引き、月・年は EDATE"""
+    m = _DATE_SHIFT_RE.search(nfkc(text))
+    if not m:
+        return None
+    col = _resolve_col_ref(m.group(1).strip(), table) if table and table.get("columns") else m.group(1).strip()
+    if not col:
+        return None
+    n, unit, d = int(m.group(2)), m.group(3), m.group(4)
+    sign = "+" if d == "後" else "-"
+    if unit == "日":
+        expr = f"{col}{sign}{n}"
+    elif unit in ("週間", "週"):
+        expr = f"{col}{sign}{n * 7}"
+    else:
+        months = n * 12 if unit == "年" else n
+        expr = f"EDATE({col},{'' if sign == '+' else '-'}{months})"
+    return expr, f"{n}{unit}{d}"
+
+
+def _cf_blank_today_expr(text, ref_l, r1):
+    """行ごとの条件付き書式で「空欄」「今日より前」等を文字のまま式に入れない（空欄は ""・今日は TODAY()）"""
+    t = nfkc(text)
+    c = f"${ref_l}{r1}"
+    if re.search(r"(?:空欄|空白)(?:以外|ではない|でない|じゃない)|入力済", t):
+        return f'={c}<>""'
+    if re.search(r"空欄|空白|未入力|入力されていない", t):
+        return f'={c}=""'
+    if re.search(r"今日(?:より前|以前|を過ぎ|が過ぎ)|期限切れ|期限が切れ|期限を過ぎ", t):
+        return f"=AND(ISNUMBER({c}),{c}<TODAY())" if "以前" not in t else f"=AND(ISNUMBER({c}),{c}<=TODAY())"
+    if re.search(r"今日(?:より後|以降|より先)", t):
+        return f"=AND(ISNUMBER({c}),{c}>TODAY())" if "以降" not in t else f"=AND(ISNUMBER({c}),{c}>=TODAY())"
+    return ""
+
+
 _COND_EQ_THING_RE = re.compile(
     r"([^\s、。をにで]{1,16}?)(?:列)?(?:が|は)[『「]?([^』」\s、。の]+?)[』」]?(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}"
 )
@@ -1722,6 +1771,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     escaped_cc = col_cont_cf[1].replace('"', '""')
                     expr = f'=ISNUMBER(SEARCH("{escaped_cc}",${cl_cc}{cf_r1}))'
             if not expr and ref_l:
+                expr = _cf_blank_today_expr(text, ref_l, cf_r1)
+            if not expr and ref_l:
                 w = op.get("when")
                 d_cf_atom = _date_cmp_to_formula_atom(raw_v_cf, table) if (raw_v_cf not in (None, "") and norm_v_cf is None) else None
                 if w == "between" and isinstance(raw_v_cf, str) and ".." in raw_v_cf:
@@ -1796,6 +1847,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op["when"] = "contains"
             op["value"] = col_cont_cf[1]
             named = True
+        if re.search(r"赤字|赤い文字|文字を赤", text) and op.get("bg") == "赤" and not re.search(r"背景|塗", text):
+            op["color"] = op.pop("bg")   # 「〜の行を赤字に」は文字の色
         if not op.get("bg") and not op.get("color") and re.search(r"色[を]?付|色[を]?つ|目立", text):
             op["bg"] = "薄黄"
     if shelf["name"] == "renumber" and "col" not in op and table:
@@ -1949,6 +2002,9 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         op["at"] = res_at
                     elif not re.search(r"足し|追加|作", t_nfkc):
                         op["at"] = raw_at
+        d_shift = _date_shift_of(text, table)
+        if d_shift and "expr" not in op:
+            op["expr"], op["name"] = d_shift
         if "expr" not in op:
             ext_expr = _extract_calc_expr(text, table)
             if ext_expr:
@@ -2481,7 +2537,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         p.reasons.append("頼みの文が空です")
         return p
     q_all = gas_ws_find.norm(ask, finder.syn)
-    p.guide = [text for nwords, text in finder._guide_norm if any(nw in q_all for nw in nwords)]
+    q_guide = gas_ws_find.norm(_mask_col_names(ask, table), finder.syn)   # 列名（「メール」「画像」等）で案内を出さない
+    p.guide = [text for nwords, text in finder._guide_norm if any(nw in q_guide for nw in nwords)]
     raw_cl = clauses(ask) or [nfkc(ask)]
     cl = []
     for _c in raw_cl:
@@ -2593,8 +2650,9 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             has_row_cf_cue = bool(
                 (_ROW_CF_THING_RE.search(_c_nfkc_cf) or (_DATE_CMP_CUE_RE.search(_c_nfkc_cf) and re.search(r"のセル|セルを|セルに", c)))
                 and has_row_cf_cond
-                and not re.search(r"消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|赤字|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
-                and (_color_hits(c) or re.search(r"太字|太く|色[を]?付|色[を]?つ|目立|ハイライト", c))
+                and not re.search(r"消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
+                and not ("赤字" in c and not re.search(r"の行|行を|行全体", c))
+                and (_color_hits(c) or re.search(r"太字|太く|色[を]?付|色[を]?つ|目立|ハイライト|赤字", c))
             )
             has_row_del_cond = bool(
                 re.search(r"の行|行を|行に|行は|行だけ|た行|る行|いない行|ない行|データ|明細|レコード|案件|商品", c)
@@ -2605,7 +2663,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                     or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|データ|明細|レコード|案件|商品)", c)
                 )
                 and re.search(r"消|削除", c)
-                and not re.search(r"重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則", c)
+                and not re.search(r"重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則", _mask_col_names(c, table))
                 and not _rows_of(c)
             )
             _m_col_del = re.search(r"([^\s、。のをにはが]{2,16}?)の?(?:列|カラム)", c)
@@ -2732,6 +2790,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("group.remove")
             elif has_remove_act and re.search(r"グラフ|棒グラフ|折れ線|円グラフ", c):
                 _ensure_boost("chart.delete")
+            elif has_remove_act and re.search(r"重複|ダブ", c) and not re.search(r"色|目立|ハイライト|印|数え|何件", c) and "dedupe" in finder.cat.by_name:
+                _ensure_boost("dedupe")
             elif has_row_del_cond:
                 _ensure_boost("filter.delete")
             elif has_cols_del_cue:
@@ -2744,6 +2804,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("filter.where")
             elif has_filter_extract_cue:
                 _ensure_boost("filter.extract")
+            elif _date_shift_of(c, table) and re.search(r"列|欄", c):
+                _ensure_boost("calc.col")
             elif has_calc_diff_cue:
                 _ensure_boost("calc.diff")
             elif has_calc_cue:
