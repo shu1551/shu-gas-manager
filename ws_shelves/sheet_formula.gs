@@ -74,13 +74,55 @@ SHELF['calc.col'] = function (ctx, op) {
   // 見出し名を長い順にソートして、列記号に置換
   var sortedHdrs = hdrs.slice().sort(function (a, b) { return b.length - a.length; });
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) {
+  // 2 段見出しの表で親グループ（親・子）の計算列を足すときは、表の右端ではなくその組の中（末尾の右隣）に挿入する
+  var insertInGroup = false, groupParent = '', groupFirstCol = 0, groupLastCol = 0;
+  if (!op.at && (t.headerRows || 1) >= 2) {
+    var refNames = [], scanExpr = expr;
+    sortedHdrs.forEach(function (h) {
+      if (h && scanExpr.indexOf(h) >= 0) {
+        refNames.push(h);
+        scanExpr = scanExpr.split(h).join(' ');
+      }
+    });
+    if (refNames.length >= 2) {
+      var pMap = {}, allGrouped = true;
+      refNames.forEach(function (rn) {
+        var dot = rn.indexOf('・');
+        if (dot > 0) pMap[rn.slice(0, dot)] = true;
+        else allGrouped = false;
+      });
+      var pKeys = Object.keys(pMap);
+      if (allGrouped && pKeys.length === 1) {
+        groupParent = pKeys[0];
+        for (var gi = 0; gi < hdrs.length; gi++) {
+          if (String(hdrs[gi] || '').indexOf(groupParent + '・') === 0) {
+            var cPos = t.firstCol + gi;
+            if (!groupFirstCol || cPos < groupFirstCol) groupFirstCol = cPos;
+            if (cPos > groupLastCol) groupLastCol = cPos;
+          }
+        }
+        if (groupFirstCol && groupLastCol) {
+          insertInGroup = true;
+          atCol = groupLastCol + 1;
+        }
+      }
+    }
+  }
+  var needInsertBefore = false;
+  if (insertInGroup) {
+    if (atCol <= t.lastCol) needInsertBefore = true;
+  } else if (op.at && atCol <= t.lastCol) {
     var existingHdr = String(hdrs[atCol - t.firstCol] || '').trim();
     if (existingHdr !== String(op.name || '').trim()) {
-      sh.insertColumnsBefore(atCol, 1);
-      if (_TBL_CACHE) _TBL_CACHE = null;
-      t = needTable_(sh); // テーブル再取得
+      needInsertBefore = true;
     }
+  }
+  if (needInsertBefore) {
+    sh.insertColumnsBefore(atCol, 1);
+    if (_TBL_CACHE) _TBL_CACHE = null;
+    t = needTable_(sh); // テーブル再取得
+    hdrs = headerNames_(t);
+    sortedHdrs = hdrs.slice().sort(function (a, b) { return b.length - a.length; });
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
 
@@ -100,17 +142,55 @@ SHELF['calc.col'] = function (ctx, op) {
     return f.charAt(0) === '=' ? f : '=' + f;
   };
 
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, op.name, t.headerRows || 1);
+  if (insertInGroup) {
+    // 親見出しを上段で拡張結合し、下段に子見出し（例: 「小計」）を配置する
+    var subName = String(op.name || '').trim();
+    if (subName.indexOf(groupParent + '・') === 0) subName = subName.slice(groupParent.length + 1).trim();
+    else if (subName.indexOf(groupParent) === 0 && subName.length > groupParent.length) subName = subName.slice(groupParent.length).trim();
+    if (!subName) subName = String(op.name || '').trim();
+    var topSpan = sh.getRange(t.headerRow, groupFirstCol, 1, atCol - groupFirstCol + 1);
+    if (typeof topSpan.breakApart === 'function') { try { topSpan.breakApart(); } catch (eBg) {} }
+    try {
+      sh.getRange(t.headerRow, groupFirstCol, 1, 1).copyTo(sh.getRange(t.headerRow, atCol, 1, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    } catch (eCp1) {}
+    sh.getRange(t.headerRow, groupFirstCol).setValue(groupParent).setHorizontalAlignment('center');
+    if (typeof topSpan.merge === 'function') { try { topSpan.merge(); } catch (eMg) {} }
+    try {
+      sh.getRange(t.headerRow + 1, groupLastCol, 1, 1).copyTo(sh.getRange(t.headerRow + 1, atCol, 1, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    } catch (eCp2) {}
+    sh.getRange(t.headerRow + 1, atCol).setValue(subName).setHorizontalAlignment('center');
+  } else {
+    copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, op.name, t.headerRows || 1);
+  }
 
-  // データ行の数式を設定
+  // データ行の数式を設定（左隣から書式も引き継ぐ）
   var numRows = t.lastData - t.firstData + 1;
+  var tmplDataCol = insertInGroup ? groupLastCol : Math.max(t.firstCol, atCol - 1);
   if (numRows > 0) {
+    if (tmplDataCol !== atCol) {
+      try {
+        sh.getRange(t.firstData, tmplDataCol, numRows, 1).copyTo(sh.getRange(t.firstData, atCol, numRows, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+      } catch (eCpD) {}
+    }
     var formulas = [];
     for (var r = t.firstData; r <= t.lastData; r++) {
       formulas.push([makeFormula(r)]);
     }
     setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
   }
+  // 合計行がある表では、追加した計算列の合計行にも式と書式を入れる
+  if (t.totalRow) {
+    if (tmplDataCol !== atCol) {
+      try {
+        sh.getRange(t.totalRow, tmplDataCol, 1, 1).copyTo(sh.getRange(t.totalRow, atCol, 1, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+      } catch (eCpT) {}
+    }
+    var totFormula = (expr.indexOf('/') >= 0 || numRows <= 0)
+      ? makeFormula(t.totalRow)
+      : ('=SUM(' + colLetter_(atCol) + t.firstData + ':' + colLetter_(atCol) + t.lastData + ')');
+    setFormulasAllRows_(ctx, sh, t.totalRow, atCol, [[totFormula]]);
+  }
+  if (_TBL_CACHE) _TBL_CACHE = null;
   chg_(ctx, sh, colLetter_(atCol) + '列', '計算列「' + op.name + '」を追加');
 };
 

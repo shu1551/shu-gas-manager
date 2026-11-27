@@ -661,6 +661,21 @@ var ComboPlanner = (function () {
   var _COL_PROP_OBJ_RE_JS = /(?:列|カラム)の(?!削除|消去|除去|一番|右|左|先頭|末尾|最後|最初)[^\s、。のをにはが]{1,16}を/;
   var _COL_DIRECT_DEL_RE_JS = /(?:列|カラム)(?:を|ごと|丸ごと|まるごと|まるっと|の(?:削除|消去|除去)|(?:は|が)?(?:いらない|要らない|不要|削除|消))/;
 
+  // 条件つき書式（行ごと）の対象名詞型（「〈列〉が〈条件〉の〈何か〉を〈書式〉に」、ただし「セル」は列単体のまま維持）
+  var _ROW_CF_THING_RE_JS = /行全体|の行(?:に|を|全部|だけ|は)?|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃|太字)|いない行|ない行|(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)|(?:以上|以下|未満|より大き(?:い|く)?|より小さ(?:い|く)?|より前|より後|以前|以降|を超え?|上回[るっ]|下回[るっ]|届か(?:ない)?|届いてい?ない|以外|ではない|でない|じゃない|になって(?:いない|ない|いる|る)|マイナス|負の値)(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)/;
+  var _COND_EQ_THING_RE_JS = /([^\s、。をにで]{1,16}?)(?:列)?(?:が|は)[『「]?([^』」\s、。の]+?)[』」]?(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}/;
+
+  function _condColOfJs(text, table) {
+    var tN = nfkc(text);
+    var re = /([^\s、。をにで]{1,16}?)(?:列)?(?:が|は)/g;
+    var m;
+    while ((m = re.exec(tN)) !== null) {
+      var res = _resolveColRefJs(m[1].trim(), table);
+      if (res) return res;
+    }
+    return null;
+  }
+
   // 日付比較の 1 か所定義（西暦・和暦・年なし月日）
   var _DATE_TOK_PAT_JS =
     "(?<![0-9A-Za-z/])(" +
@@ -1250,6 +1265,10 @@ var ComboPlanner = (function () {
           }
         }
         if (!overlap) {
+          if (word === "白" && ((pos > 0 && "空余明面告".indexOf(text.charAt(pos - 1)) >= 0) || (pos + 1 < text.length && text.charAt(pos + 1) === "紙"))) {
+            start = pos + 1;
+            continue;
+          }
           for (var k3 = pos; k3 < pos + word.length; k3++) taken[k3] = true;
           out.push([pos, pos + word.length, val]);
         }
@@ -1720,6 +1739,12 @@ var ComboPlanner = (function () {
         if (/(?<!より)大きく|拡大して/.test(nfkc(scan))) op.size_delta = stepSz;
         else if (/(?<!より)小さく|縮小して/.test(nfkc(scan))) op.size_delta = -stepSz;
       }
+      if (!_hasOwn(op, "align")) {
+        var tAl = nfkc(text).trim();
+        if (/(?:^|[\s、,])(?:中央|真ん中)(?:に|へ|にして)?$/.test(tAl)) op.align = "center";
+        else if (/(?:^|[\s、,])右(?:に|へ|にして)?$/.test(tAl)) op.align = "right";
+        else if (/(?:^|[\s、,])左(?:に|へ|にして)?$/.test(tAl)) op.align = "left";
+      }
     }
     if (shelf.name === "validation.list") {
       var cleanedValItems = _cleanValidationItemsJs(text, origQuotesList, op.items);
@@ -1877,8 +1902,11 @@ var ComboPlanner = (function () {
         addMiss("未対応の書式指示（下線・取り消し線・回転等）");
       }
       if (shN === "format") {
+        var mEqF = _COND_EQ_THING_RE_JS.exec(scanN);
+        var hasEqColF = !!(mEqF && (!tbl || !Array.isArray(tbl.columns) || !tbl.columns.length || _resolveColRefJs(mEqF[1], tbl)));
         var hasRowCond = /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(scanN) ||
-          /(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN) ||
+          hasEqColF ||
+          /(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない|になっている|になってる).{0,8}(?:の行|行を|行に|行全体|のセル|セルを|(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}(?:を|に|は))/.test(scanN) ||
           (_DATE_CMP_CUE_RE_JS.test(scanN) && /(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN));
         if (hasRowCond) addMiss("条件付き書式（cf.add）の条件");
         if (/固定|フリーズ/.test(scanN)) addMiss("固定（freeze）の指定");
@@ -1886,7 +1914,7 @@ var ComboPlanner = (function () {
         if (/フィルタ|絞り込/.test(scanN)) addMiss("絞り込み（filter）の指定");
         if (scanN.indexOf("太字") >= 0 && !_hasOwn(opObj, "bold")) addMiss("太字（bold）");
         if (/斜体|イタリック/.test(scanN) && !_hasOwn(opObj, "italic")) addMiss("斜体（italic）");
-        if (/中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ/.test(scanN) && !_hasOwn(opObj, "align")) addMiss("配置（align）");
+        if (/中央揃え|中央寄せ|中央に|真ん中に|右揃え|右寄せ|左揃え|左寄せ/.test(scanN) && !_hasOwn(opObj, "align")) addMiss("配置（align）");
         if (scanN.indexOf("折り返") >= 0 && !_hasOwn(opObj, "wrap")) addMiss("折り返し（wrap）");
         if (/罫線|外枠/.test(scanN) && !_hasOwn(opObj, "borders")) addMiss("罫線（borders）");
         if (/結合|マージ/.test(scanN) && !_hasOwn(opObj, "merge")) addMiss("結合（merge）");
@@ -2103,11 +2131,12 @@ var ComboPlanner = (function () {
       _resolveCmpValueJs(op, text);
     }
     if (shelf.name === "cf.add" && op.when !== "formula" && table && table.first_col && table.last_col) {
-      if (/(?:行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃)|いない行|ない行)/.test(text)) {
+      if (!/のセル|セルを|セルに/.test(text) && _ROW_CF_THING_RE_JS.test(nfkc(text))) {
         var spCf = _dataSpan(table);
         var cfR1 = spCf ? spCf[0] : ((table.header_row || 1) + 1);
         var cfR2 = spCf ? spCf[1] : cfR1;
-        var refL = (names.length && _letterOf(table, names[0])) || (letters.length ? letters[0] : "");
+        var condColCf = _condColOfJs(scan, table);
+        var refL = (condColCf && _letterOf(table, condColCf)) || (names.length && _letterOf(table, names[0])) || (letters.length ? letters[0] : "");
         if (!refL) {
           var uCf = _resolveUniqueColsJs(scan, table, false, []);
           if (uCf.length) refL = _letterOf(table, uCf[0]) || "";
@@ -2143,7 +2172,7 @@ var ComboPlanner = (function () {
             if (normVCf !== null) expr = "=$" + refL + cfR1 + "=" + normVCf;
             else expr = "=$" + refL + cfR1 + "=\"" + String(rawVCf).replace(/"/g, "\"\"") + "\"";
           } else if (!op.when) {
-            var mEqRow = /([^\s、。]+?)(?:が|は)[『「]?([^』」\s、。の]+?)[』」]?の行/.exec(nfkc(text));
+            var mEqRow = _COND_EQ_THING_RE_JS.exec(nfkc(text));
             if (mEqRow) {
               var rvEq = mEqRow[2].trim();
               var nvEq = _normFilterNumJs(rvEq);
@@ -2557,6 +2586,10 @@ var ComboPlanner = (function () {
 
     if (shelf.name === "seiri") {
       if (!_OPT_COL_CUES_JS.renumber.test(nfkc(text))) delete op.renumber;
+      else if (op.col && !_hasOwn(op, "renumber") && !op.trim && !op.halfwidth) {
+        op.renumber = op.col;
+        delete op.col;
+      }
     }
 
     if (shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") {
@@ -3089,7 +3122,7 @@ var ComboPlanner = (function () {
     var isBareTidy = (
       ops.length === 1 && ops[0] &&
       (ops[0].shelf === "tidy" || ops[0].shelf === "seiri") &&
-      !ops[0].range && !ops[0].blank_rows && !ops[0].dedupe && !ops[0].halfwidth &&
+      !ops[0].range && !ops[0].col && !ops[0].blank_rows && !ops[0].dedupe && !ops[0].halfwidth &&
       !ops[0].trim && !ops[0].numbers && !ops[0].dates && !ops[0].renumber
     );
     if (!isBareTidy && ops.length) return null;
@@ -3181,7 +3214,7 @@ var ComboPlanner = (function () {
     for (var ci = 0; ci < cl.length; ci++) {
       var cRaw = cl[ci];
       var c = _expandSelectionPronouns(cRaw, lastScope);
-      if (kind !== "doc" && table && /(?:小計|合計)(?:の?列)?を?(?:足|追加|作|入れ)/.test(c) && !/一番下|最後の行|末尾の行|表の下|合計行|別シート/.test(c)) {
+      if (kind !== "doc" && table && /(?:小計|合計)(?:の?列|列)?(?:を(?:列として)?)?(?:足|追加|作|入れ)/.test(c) && !/一番下|最後の行|末尾の行|表の下|合計行|別シート/.test(c)) {
         var hgMapJs = _headerGroupsJs(table);
         var hgKeys = Object.keys(hgMapJs);
         if (hgKeys.length) {
@@ -3260,13 +3293,17 @@ var ComboPlanner = (function () {
           !/ごと|別に|別シート|合計|ピボット|クロス/.test(c);
         var hasPaintFmtCue = _colorHits(c).length > 0 && c.indexOf("塗") >= 0 &&
           !/条件|以上|以下|未満|上回|下回|届か|届いてい?ない|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行/.test(c);
-        var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了)/.test(c) ||
-          _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
+        var cNfkcCf = nfkc(c);
+        var mEqCf = _COND_EQ_THING_RE_JS.exec(cNfkcCf);
+        var hasEqColCf = !!(mEqCf && (!table || !Array.isArray(table.columns) || !table.columns.length || _resolveColRefJs(mEqCf[1], table)));
+        var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|になっている|になってる|ではない|でない|じゃない|以外|空欄|空白|欠席|完了)/.test(c) ||
+          _DATE_CMP_CUE_RE_JS.test(cNfkcCf) ||
+          hasEqColCf ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c);
-        var hasRowCfCue = (/(?:行全体|の行|行を|行に|いない行|ない行)/.test(c) || (_DATE_CMP_CUE_RE_JS.test(nfkc(c)) && /(?:のセル|セルを|セルに)/.test(c))) &&
+        var hasRowCfCue = (_ROW_CF_THING_RE_JS.test(cNfkcCf) || (_DATE_CMP_CUE_RE_JS.test(cNfkcCf) && /(?:のセル|セルを|セルに)/.test(c))) &&
           hasRowCfCond &&
-          !/消|削除|重複|ダブ|固定色/.test(c) &&
-          (_colorHits(c).length > 0 || /色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
+          !/消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|赤字|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ/.test(c) &&
+          (_colorHits(c).length > 0 || /太字|太く|色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
         var hasRowDelCond = /(?:の行|行を|行に|行は|いない行|ない行|データ)/.test(c) &&
           (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) ||
             _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
@@ -3307,12 +3344,12 @@ var ComboPlanner = (function () {
           !/並べ|ソート|絞り込|フィルタ|消|削除|連続|下まで|埋め|経過|年齢|曜日/.test(c);
         var hasPhoneFixCue = /(?:電話|携帯|TEL|tel)/.test(c) &&
           /ハイフン|区切り|そろえ|揃え|統一|整形|形式|直し/.test(c) &&
-          !/消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字/.test(c);
-        var shortFmtOnlyReJs = /^(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し?|太字解除|斜体解除|折り返し解除|折り返しなし|罫線(?:なし|外枠)?|外枠|結合(?:解除)?|(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})(?:い|の)?(?:文字|背景|塗り)|(?:文字|フォント|背景|塗り)(?:は|を|に)?(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})|[0-9]+\s*(?:pt|ポイント)|(?:少し|もっと)?(?:大きく|小さく))(?:で|に|も|は|を|にして)?$/;
+          !/全角|半角|空白|スペース|消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字/.test(c);
+        var shortFmtOnlyReJs = /^(?:(?:タイトル|表題|見出し|ヘッダ|表全体|表|[^\s、。]{1,16}(?:の?列|の?欄)|[A-Z]{1,3}[0-9]*(?::[A-Z]{1,3}[0-9]*)?)(?:を|は|に)\s*)?(?:太字|斜体|イタリック|中央揃え|中央寄せ|真ん中揃え|真ん中寄せ|右揃え|右寄せ|左揃え|左寄せ|中央|真ん中|右|左|折り返し?|太字解除|斜体解除|折り返し解除|折り返しなし|罫線(?:なし|外枠)?|外枠|結合(?:解除)?|(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})(?:い|の)?(?:文字|背景|塗り)|(?:文字|フォント|背景|塗り)(?:は|を|に)?(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})|[0-9]+\s*(?:pt|ポイント)|(?:少し|もっと|だいぶ|かなり|ぐっと)?(?:大きく|小さく))(?:で|に|へ|も|は|を|にして|して)?$/;
         var cTrimFmt = nfkc(c).trim();
-        var hasShortFmtCue = shortFmtOnlyReJs.test(cTrimFmt) ||
-          (/(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し)(?:で|に|も|は|を)?$/.test(cTrimFmt) &&
-            !/消|削除|解除|外|条件|以上|以下|未満|上回|下回|届か|以外|じゃない|固定|並|ソート|フィルタ|絞り|グラフ|集計|合計|平均|行を|の行/.test(c));
+        var hasShortFmtCue = (shortFmtOnlyReJs.test(cTrimFmt) ||
+          /(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し)(?:で|に|も|は|を)?$/.test(cTrimFmt)) &&
+          !/消|削除|解除|外|追加|挿入|移動|コピー|条件|以上|以下|未満|より|を超|上回|下回|届か|以外|じゃない|になって|固定|並|ソート|フィルタ|絞り|グラフ|集計|合計|平均|行を|の行/.test(c);
         var hasRemoveAct = /外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア|オフ|OFF/.test(c);
 
         var ensureBoost = function (nm) {
@@ -3545,12 +3582,15 @@ var ComboPlanner = (function () {
       if (p.ops.length && p.ops[p.ops.length - 1].shelf === top.name) {
         var prev = p.ops[p.ops.length - 1];
         var carryKeys = ["header", "title", "range", "col"];
-        for (var cki = 0; cki < carryKeys.length; cki++) {
-          var sk = carryKeys[cki];
-          if (_hasOwn(prev, sk) && !_hasOwn(op, sk)) {
-            op[sk] = prev[sk];
-            named = true;
-            missing = _filterMissing(missing, ["range", "col", "header", "title"]);
+        var hasOwnScope = carryKeys.some(function (k) { return _hasOwn(op, k); });
+        if (!hasOwnScope) {
+          for (var cki = 0; cki < carryKeys.length; cki++) {
+            var sk = carryKeys[cki];
+            if (_hasOwn(prev, sk)) {
+              op[sk] = prev[sk];
+              named = true;
+              missing = _filterMissing(missing, ["range", "col", "header", "title"]);
+            }
           }
         }
         if (top.name === "format") {

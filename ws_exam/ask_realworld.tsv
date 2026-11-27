@@ -108,7 +108,7 @@ C	この名簿を見やすく整えて
 # 項目6: 動詞の無い書式節（「太字」等）の拾い上げ
 1	見出しを濃い青の背景に白文字、太字、中央揃えにして	[{"shelf":"format","header":true,"bg":"濃青","color":"白"},{"shelf":"format","header":true,"bold":true},{"shelf":"format","header":true,"align":"center"}]
 # 段A: seiri誤引数流れ防止・find疑問文ガード・日付比較（より前・より後・以前・以降・から・まで）
-1	備考の前後の空白を取って	[{"shelf":"seiri","trim":true,"ok":true}]
+1	備考の前後の空白を取って	[{"shelf":"seiri","col":"備考","trim":true,"ok":true}]
 R	このシートにはどんな項目が入っていますか？
 1	日付が11月15日より前の行だけ表示して	[{"shelf":"filter.where","col":"日付","when":"lt","value":"11/15"}]
 1	日付が2026/11/15以降の行だけ絞り込んで	[{"shelf":"filter.where","col":"日付","when":"ge","value":"2026-11-15"}]
@@ -116,6 +116,10 @@ R	このシートにはどんな項目が入っていますか？
 1	日付が2026-11-15より後のセルを赤い背景にして	[{"shelf":"cf.add","range":"A4:A9","when":"gt","value":"2026-11-15","bg":"赤"}]
 1	日付が11月1日から11月15日までの行だけ表示して	[{"shelf":"filter.where","col":"日付","when":"between","value":"11/01..11/15"}]
 # cols.delete 誤爆防止（「〈列〉の列の〈中身〉を消して」は列削除にしない）
-1	備考の列の空白を消して	[{"shelf":"seiri","trim":true,"ok":true}]
+1	備考の列の空白を消して	[{"shelf":"seiri","col":"備考","trim":true,"ok":true}]
 0	金額の列のエラーを消して	
 0	単価の列の0を消して	
+# 段B: 条件つき書式（〈列〉が〈条件〉の〈何か〉）・先頭対象引き継ぎ・単一列seiri
+1	単価が10万以上の商品を太字にして	[{"shelf":"cf.add","range":"A4:I9","when":"formula","value":"=$F4>=100000","bold":true}]
+1	タイトルを大きく、赤文字、中央に	[{"shelf":"format","title":true,"size_delta":2},{"shelf":"format","title":true,"color":"赤"},{"shelf":"format","title":true,"align":"center"}]
+1	備考の全角を半角にして	[{"shelf":"seiri","col":"備考","halfwidth":true,"ok":true}]

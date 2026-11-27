@@ -357,84 +357,99 @@ function deleteRowRuns_(sh, rowNums) {
 // 題: 表のデータを整理する
 // 分類: 整える
 // 語: データを整理|空白を除|前後の空白|空白を消|スペースを消|スペースを取り除|前後のスペース|全角を半角|全角の数字|数字を半角|数字を数値に|空行を詰|重複を消|きれいに整|汚れを直|余分な空白|全角数字|空白行|空行を全部|空白や全角|整理して|きれいにして|きれいに整えて
-// 違い: 前後の空白・全角半角・数字文字の掃除と見た目整え（tidy）をまとめて行う。見た目だけと限らない「表をきれいに整えて」はこれ。blank_rows/dedupe を付けない限り行削除はしないので ok 不要で即撃てる。見た目だけなら tidy
-// 引数: trim=真偽, halfwidth=真偽, numbers=真偽, dates=真偽, blank_rows=真偽, dedupe=真偽, renumber=列, tidy=真偽
-// 頼み: blank_rows=true<空行|空いている行 ; dedupe=true<重複 ; halfwidth=true<全角 ; trim=true<前後の空白|余分な空白|余分なスペース|前後のスペース|空白を消|空白を除|スペースを消|スペースを取り除
+// 違い: 前後の空白・全角半角・数字文字の掃除と見た目整え（tidy）をまとめて行う。見た目だけと限らない「表をきれいに整えて」はこれ。col を指定するとその列だけ掃除する（他列・表全体の書式は変えない）。blank_rows/dedupe を付けない限り行削除はしないので ok 不要で即撃てる。見た目だけなら tidy
+// 引数: col=列, trim=真偽, halfwidth=真偽, numbers=真偽, dates=真偽, blank_rows=真偽, dedupe=真偽, renumber=列, tidy=真偽
+// 頼み: blank_rows=true<空行|空いている行 ; dedupe=true<重複 ; halfwidth=true<全角 ; trim=true<前後の空白|余分な空白|余分なスペース|前後のスペース|空白を消|空白を除|空白を取|スペースを消|スペースを取り除|スペースを取
 // 例: 「全角の数字を半角に直して」 → {"shelf":"seiri"}
 // 例: 「空行を詰めて重複行も消して」 → {"shelf":"seiri","blank_rows":true,"dedupe":true}
 // 危ない: 消す
 // 触る: 値 書式 幅 固定
 SHELF['seiri'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
-  var rg = sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1);
-  var vals = rg.getValues(), forms = rg.getFormulas(), fixed = [], textKeep = {}, nTrim = 0, nHalf = 0, nNum = 0, nDate = 0;
-  var doTrim = op.trim !== false, doHalf = op.halfwidth !== false, doNum = op.numbers !== false, doDate = op.dates !== false;
-  var hNamesS = (typeof headerNames_ === 'function') ? headerNames_(t) : [];
-  var codeHeadRe = /(?:郵便|〒|電話|携帯|TEL|FAX|社員番号|社員ID|会員番号|会員ID|顧客番号|顧客ID|管理番号|注文番号|伝票番号|口座番号|商品コード|コード|品番|型番)/i;
-  var keepTextCol = [];
-  for (var c0 = 0; c0 < (vals[0] ? vals[0].length : 0); c0++) {
-    var hLabel = String(hNamesS[c0] !== undefined ? hNamesS[c0] : (vals[0][c0] || '')).trim();
-    var isKeepC = codeHeadRe.test(hLabel);
-    if (!isKeepC) {
-      for (var r0 = 1; r0 < vals.length; r0++) {
-        var cv0 = vals[r0][c0];
-        if (!forms[r0][c0] && typeof cv0 === 'string' && /^\s*[+-]?[0０][0-9０-９]/.test(cv0)) {
-          isKeepC = true;
-          break;
-        }
-      }
-    }
-    keepTextCol.push(isKeepC);
-  }
-  for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
-    var v = vals[r][c];
-    if (forms[r][c] || typeof v !== 'string') continue;
-    var nv = v;
-    if (doHalf) { var h = nv.replace(/[！-～]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); }).replace(/　/g, ' '); if (h !== nv) { nv = h; nHalf++; } }
-    if (doTrim) { var tr = nv.replace(/^[\s　]+|[\s　]+$/g, ''); if (tr !== nv) { nv = tr; nTrim++; } }
-    var isCodeLike = keepTextCol[c] || /^[+-]?0\d/.test(nv);
-    if (doNum && r > 0 && !isCodeLike && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(nv)) { nv = Number(nv.replace(/,/g, '')); nNum++; }
-    else if (doDate && r > 0 && !isCodeLike && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
-    if (nv !== v) {
-      var a1k = a1_(t.headerRow + r, t.firstCol + c);
-      vals[r][c] = nv;
-      fixed.push(a1k);
-      if (r > 0 && typeof nv === 'string' && needsPlainTextFmt_(nv, keepTextCol[c])) {
-        textKeep[a1k] = 1;
-      }
-    }
-  }
-  if (fixed.length) {
-    // 式のセルは触らず、値のセルだけ書く
-    // 直したセルだけを、列ごとに縦に連続した範囲にまとめて setValues（1 セルずつ書かない）
-    var changedSet = {}; fixed.forEach(function (a) { changedSet[a] = 1; });
-    for (var c2 = 0; c2 < vals[0].length; c2++) {
-      var r2 = 0;
-      while (r2 < vals.length) {
-        if (!changedSet[a1_(t.headerRow + r2, t.firstCol + c2)]) { r2++; continue; }
-        var r3 = r2; while (r3 + 1 < vals.length && changedSet[a1_(t.headerRow + r3 + 1, t.firstCol + c2)]) r3++;
-        var subRg = sh.getRange(t.headerRow + r2, t.firstCol + c2, r3 - r2 + 1, 1);
-        var hasTextInSub = false;
-        for (var rk = r2; rk <= r3; rk++) {
-          if (textKeep[a1_(t.headerRow + rk, t.firstCol + c2)]) { hasTextInSub = true; break; }
-        }
-        if (hasTextInSub) {
-          if (typeof subRg.getNumberFormats === 'function' && typeof subRg.setNumberFormats === 'function') {
-            var subFmts = subRg.getNumberFormats();
-            for (var rk2 = r2; rk2 <= r3; rk2++) {
-              if (textKeep[a1_(t.headerRow + rk2, t.firstCol + c2)]) subFmts[rk2 - r2][0] = '@';
-            }
-            subRg.setNumberFormats(subFmts);
-          } else if (typeof subRg.setNumberFormat === 'function') {
-            subRg.setNumberFormat('@');
+  var singleCi = op.col ? colIndexOf_(t, op.col) : 0;
+  var startRow = singleCi ? t.firstData : t.headerRow;
+  var startCol = singleCi ? singleCi : t.firstCol;
+  var numRowsS = Math.max(0, t.lastData - startRow + 1);
+  var numColsS = singleCi ? 1 : (t.lastCol - t.firstCol + 1);
+  var dataRowOff = singleCi ? 0 : 1;
+  var fixed = [], textKeep = {}, nTrim = 0, nHalf = 0, nNum = 0, nDate = 0;
+  var explicitOps = (op.trim === true || op.halfwidth === true || op.numbers === true || op.dates === true);
+  var doTrim = singleCi && explicitOps ? (op.trim === true) : (op.trim !== false);
+  var doHalf = singleCi && explicitOps ? (op.halfwidth === true) : (op.halfwidth !== false);
+  var doNum = singleCi && explicitOps ? (op.numbers === true || (op.halfwidth === true && op.numbers !== false)) : (op.numbers !== false);
+  var doDate = singleCi && explicitOps ? (op.dates === true) : (op.dates !== false);
+  if (numRowsS > 0 && numColsS > 0) {
+    var rg = sh.getRange(startRow, startCol, numRowsS, numColsS);
+    var vals = rg.getValues(), forms = rg.getFormulas();
+    var hNamesS = (typeof headerNames_ === 'function') ? headerNames_(t) : [];
+    var codeHeadRe = /(?:郵便|〒|電話|携帯|TEL|FAX|社員番号|社員ID|会員番号|会員ID|顧客番号|顧客ID|管理番号|注文番号|伝票番号|口座番号|商品コード|コード|品番|型番)/i;
+    var keepTextCol = [];
+    for (var c0 = 0; c0 < numColsS; c0++) {
+      var hdrIdx0 = singleCi ? (singleCi - t.firstCol) : c0;
+      var hLabel = String(hNamesS[hdrIdx0] !== undefined ? hNamesS[hdrIdx0] : (singleCi ? op.col : (vals[0][c0] || ''))).trim();
+      var isKeepC = codeHeadRe.test(hLabel);
+      if (!isKeepC) {
+        for (var r0 = dataRowOff; r0 < vals.length; r0++) {
+          var cv0 = vals[r0][c0];
+          if (!forms[r0][c0] && typeof cv0 === 'string' && /^\s*[+-]?[0０][0-9０-９]/.test(cv0)) {
+            isKeepC = true;
+            break;
           }
         }
-        subRg.setValues(vals.slice(r2, r3 + 1).map(function (row) { return [row[c2]]; }));
-        r2 = r3 + 1;
+      }
+      keepTextCol.push(isKeepC);
+    }
+    for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
+      var v = vals[r][c];
+      if (forms[r][c] || typeof v !== 'string') continue;
+      var isDataR = r >= dataRowOff;
+      var nv = v;
+      if (doHalf) { var h = nv.replace(/[！-～]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); }).replace(/　/g, ' '); if (h !== nv) { nv = h; nHalf++; } }
+      if (doTrim) { var tr = nv.replace(/^[\s　]+|[\s　]+$/g, ''); if (tr !== nv) { nv = tr; nTrim++; } }
+      var isCodeLike = keepTextCol[c] || /^[+-]?0\d/.test(nv);
+      if (doNum && isDataR && !isCodeLike && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(nv)) { nv = Number(nv.replace(/,/g, '')); nNum++; }
+      else if (doDate && isDataR && !isCodeLike && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
+      if (nv !== v) {
+        var a1k = a1_(startRow + r, startCol + c);
+        vals[r][c] = nv;
+        fixed.push(a1k);
+        if (isDataR && typeof nv === 'string' && needsPlainTextFmt_(nv, keepTextCol[c])) {
+          textKeep[a1k] = 1;
+        }
       }
     }
-    chg_(ctx, sh, fixed.slice(0, 4).join('・') + (fixed.length > 4 ? ' ほか' + (fixed.length - 4) + ' 件' : ''), '空白' + nTrim + '・全角→半角' + nHalf + '・数値化' + nNum + (nDate ? '・日付化' + nDate : ''));
-    if (_TBL_CACHE) _TBL_CACHE = { _once: true };   // 値を書いたので表の読み取り結果を捨てる
+    if (fixed.length) {
+      // 式のセルは触らず、値のセルだけ書く
+      // 直したセルだけを、列ごとに縦に連続した範囲にまとめて setValues（1 セルずつ書かない）
+      var changedSet = {}; fixed.forEach(function (a) { changedSet[a] = 1; });
+      for (var c2 = 0; c2 < vals[0].length; c2++) {
+        var r2 = 0;
+        while (r2 < vals.length) {
+          if (!changedSet[a1_(startRow + r2, startCol + c2)]) { r2++; continue; }
+          var r3 = r2; while (r3 + 1 < vals.length && changedSet[a1_(startRow + r3 + 1, startCol + c2)]) r3++;
+          var subRg = sh.getRange(startRow + r2, startCol + c2, r3 - r2 + 1, 1);
+          var hasTextInSub = false;
+          for (var rk = r2; rk <= r3; rk++) {
+            if (textKeep[a1_(startRow + rk, startCol + c2)]) { hasTextInSub = true; break; }
+          }
+          if (hasTextInSub) {
+            if (typeof subRg.getNumberFormats === 'function' && typeof subRg.setNumberFormats === 'function') {
+              var subFmts = subRg.getNumberFormats();
+              for (var rk2 = r2; rk2 <= r3; rk2++) {
+                if (textKeep[a1_(startRow + rk2, startCol + c2)]) subFmts[rk2 - r2][0] = '@';
+              }
+              subRg.setNumberFormats(subFmts);
+            } else if (typeof subRg.setNumberFormat === 'function') {
+              subRg.setNumberFormat('@');
+            }
+          }
+          subRg.setValues(vals.slice(r2, r3 + 1).map(function (row) { return [row[c2]]; }));
+          r2 = r3 + 1;
+        }
+      }
+      chg_(ctx, sh, fixed.slice(0, 4).join('・') + (fixed.length > 4 ? ' ほか' + (fixed.length - 4) + ' 件' : ''), (singleCi ? (op.col + '列: ') : '') + '空白' + nTrim + '・全角→半角' + nHalf + '・数値化' + nNum + (nDate ? '・日付化' + nDate : ''));
+      if (_TBL_CACHE) _TBL_CACHE = { _once: true };   // 値を書いたので表の読み取り結果を捨てる
+    }
   }
   // 空行を詰める＊ / 重複行を消す＊
   var t2 = op.blank_rows ? findTable_(sh) : null;   // 空行・重複を扱わないときは読み直さない（速さのため）
@@ -467,7 +482,8 @@ SHELF['seiri'] = function (ctx, op) {
     }
   }
   if (op.renumber) SHELF['renumber'](ctx, { shelf: 'renumber', col: op.renumber, sheet: op.sheet });
-  if (op.tidy !== false) { tidyRange_(ctx, sh, null); chg_(ctx, sh, '', '書式をそろえた'); }   // 書式をそろえるので「変更なし」とは言わない（指紋が変わるため）
+  var doTidyS = op.tidy !== undefined ? (op.tidy !== false) : !singleCi;
+  if (doTidyS) { tidyRange_(ctx, sh, null); chg_(ctx, sh, '', '書式をそろえた'); }   // 書式をそろえるので「変更なし」とは言わない（指紋が変わるため）
   if (!ctx.changed.length) note_(ctx, '直す所はありませんでした');
 };
 

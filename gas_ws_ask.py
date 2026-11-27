@@ -316,6 +316,10 @@ def _color_hits(text):
             if i < 0:
                 break
             if not any(taken[i:i + len(word)]):
+                # 「空白」「余白」「白紙」「面白い」等の熟語中の「白」は色ではない
+                if word == "白" and ((i > 0 and text[i - 1] in "空余明面告") or (i + 1 < len(text) and text[i + 1] in "紙")):
+                    start = i + 1
+                    continue
                 for k in range(i, i + len(word)):
                     taken[k] = True
                 out.append((i, i + len(word), val))
@@ -507,6 +511,26 @@ _COL_PROP_OBJ_RE = re.compile(
 _COL_DIRECT_DEL_RE = re.compile(
     r"(?:列|カラム)(?:を|ごと|丸ごと|まるごと|まるっと|の(?:削除|消去|除去)|(?:は|が)?(?:いらない|要らない|不要|削除|消))"
 )
+
+# 条件つき書式（行ごと）の対象名詞型（「〈列〉が〈条件〉の〈何か〉を〈書式〉に」、ただし「セル」は列単体のまま維持）
+_ROW_CF_THING_RE = re.compile(
+    r"行全体|の行(?:に|を|全部|だけ|は)?|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃|太字)|いない行|ない行"
+    r"|(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
+    r"|(?:以上|以下|未満|より大き(?:い|く)?|より小さ(?:い|く)?|より前|より後|以前|以降|を超え?|上回[るっ]|下回[るっ]|届か(?:ない)?|届いてい?ない|以外|ではない|でない|じゃない|になって(?:いない|ない|いる|る)|マイナス|負の値)(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
+)
+_COND_EQ_THING_RE = re.compile(
+    r"([^\s、。をにで]{1,16}?)(?:列)?(?:が|は)[『「]?([^』」\s、。の]+?)[』」]?(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}"
+)
+
+
+def _cond_col_of(text, table):
+    """文中の「〈列〉が／は…」から条件対象列を _resolve_col_ref 1 か所で解決して返す。"""
+    t_n = nfkc(text)
+    for m in re.finditer(r"([^\s、。をにで]{1,16}?)(?:列)?(?:が|は)", t_n):
+        res = _resolve_col_ref(m.group(1).strip(), table)
+        if res:
+            return res
+    return None
 
 # 日付比較の 1 か所定義（西暦・和暦・年なし月日）
 _DATE_TOK_PAT = (
@@ -1044,9 +1068,12 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
 
     # 3. format 棚での取りこぼし・誤爆防止
     if sh_name == "format":
+        _m_eq_f = _COND_EQ_THING_RE.search(scan_n)
+        _has_eq_col_f = bool(_m_eq_f and (not table or not table.get("columns") or _resolve_col_ref(_m_eq_f.group(1), table)))
         has_row_cond = bool(
             re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", scan_n)
-            or re.search(r"(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)", scan_n)
+            or _has_eq_col_f
+            or re.search(r"(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない|になっている|になってる).{0,8}(?:の行|行を|行に|行全体|のセル|セルを|(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}(?:を|に|は))", scan_n)
             or (_DATE_CMP_CUE_RE.search(scan_n) and re.search(r"の行|行を|行に|行全体|のセル|セルを", scan_n))
         )
         if has_row_cond:
@@ -1061,7 +1088,7 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
             _add_miss("太字（bold）")
         if re.search(r"斜体|イタリック", scan_n) and "italic" not in op:
             _add_miss("斜体（italic）")
-        if re.search(r"中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ", scan_n) and "align" not in op:
+        if re.search(r"中央揃え|中央寄せ|中央に|真ん中に|右揃え|右寄せ|左揃え|左寄せ", scan_n) and "align" not in op:
             _add_miss("配置（align）")
         if "折り返" in scan_n and "wrap" not in op:
             _add_miss("折り返し（wrap）")
@@ -1442,6 +1469,14 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 op["size_delta"] = step_sz
             elif re.search(r"(?<!より)小さく|縮小して", nfkc(scan)):
                 op["size_delta"] = -step_sz
+        if "align" not in op:
+            t_al = nfkc(text).strip()
+            if re.search(r"(?:^|[\s、,])(?:中央|真ん中)(?:に|へ|にして)?$", t_al):
+                op["align"] = "center"
+            elif re.search(r"(?:^|[\s、,])右(?:に|へ|にして)?$", t_al):
+                op["align"] = "right"
+            elif re.search(r"(?:^|[\s、,])左(?:に|へ|にして)?$", t_al):
+                op["align"] = "left"
     if shelf["name"] == "validation.list":
         cleaned_items = _clean_validation_items(text, orig_quotes_list, op.get("items"))
         if cleaned_items:
@@ -1449,11 +1484,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     if shelf["name"] in _CMP_VALUE_SHELVES and op.get("when") != "formula":
         _resolve_cmp_value(op, text)
     if shelf["name"] == "cf.add" and op.get("when") != "formula" and table and table.get("first_col") and table.get("last_col"):
-        if re.search(r"行全体|の行(?:に|を|全部|だけ)|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃)|いない行|ない行", text):
+        if not re.search(r"のセル|セルを|セルに", text) and _ROW_CF_THING_RE.search(nfkc(text)):
             sp_cf = _data_span(table)
             cf_r1 = sp_cf[0] if sp_cf else ((table.get("header_row") or 1) + 1)
             cf_r2 = sp_cf[1] if sp_cf else cf_r1
-            ref_l = (_letter_of(table, names[0]) if names else None) or (letters[0] if letters else "")
+            cond_col_cf = _cond_col_of(scan, table)
+            ref_l = (_letter_of(table, cond_col_cf) if cond_col_cf else None) or (_letter_of(table, names[0]) if names else None) or (letters[0] if letters else "")
             if not ref_l:
                 u_cf = _resolve_unique_cols(scan, table)
                 if u_cf:
@@ -1503,7 +1539,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         escaped_v = str(raw_v_cf).replace('"', '""')
                         expr = f'=${ref_l}{cf_r1}="{escaped_v}"'
                 elif not w:
-                    m_eq_row = re.search(r"([^\s、。]+?)(?:が|は)[『「]?([^』」\s、。の]+?)[』」]?の行", nfkc(text))
+                    m_eq_row = _COND_EQ_THING_RE.search(nfkc(text))
                     if m_eq_row:
                         rv_eq = m_eq_row.group(2).strip()
                         nv_eq = _normalize_filter_number(rv_eq)
@@ -1780,6 +1816,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     if shelf["name"] == "seiri":
         if not _OPT_COL_CUES["renumber"].search(nfkc(text)):
             op.pop("renumber", None)
+        elif op.get("col") and "renumber" not in op and not op.get("trim") and not op.get("halfwidth"):
+            op["renumber"] = op.pop("col")
     if shelf["name"] in ("filter.where", "filter.delete", "filter.extract"):
         if shelf["name"] == "filter.extract" and op.get("into") == "別":
             op.pop("into", None)
@@ -2123,7 +2161,7 @@ def _ambiguous_tidy_choices(ask, ops, kind=""):
     is_bare_tidy = (
         len(ops) == 1
         and ops[0].get("shelf") in ("tidy", "seiri")
-        and not any(k in ops[0] for k in ("range", "blank_rows", "dedupe", "halfwidth", "trim", "numbers", "dates", "renumber"))
+        and not any(k in ops[0] for k in ("range", "col", "blank_rows", "dedupe", "halfwidth", "trim", "numbers", "dates", "renumber"))
     )
     if not is_bare_tidy and ops:
         return None
@@ -2180,8 +2218,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
     last_incomplete = None
     for c_raw in cl:
         c = _expand_selection_pronouns(c_raw, last_scope)
-        # 2 段見出しの親グループ小計・合計列（「上期と下期の小計の列を足して」等）
-        if kind != "doc" and table and re.search(r"(?:小計|合計)(?:の?列)?を?(?:足|追加|作|入れ)", c) and not re.search(r"一番下|最後の行|末尾の行|表の下|合計行|別シート", c):
+        # 2 段見出しの親グループ小計・合計列（「上期と下期の小計の列を足して」「下期の小計を列として追加して」等）
+        if kind != "doc" and table and re.search(r"(?:小計|合計)(?:の?列|列)?(?:を(?:列として)?)?(?:足|追加|作|入れ)", c) and not re.search(r"一番下|最後の行|末尾の行|表の下|合計行|別シート", c):
             hg_map = _header_groups(table)
             if hg_map:
                 c_nfkc_g = nfkc(c)
@@ -2258,16 +2296,20 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and "塗" in c
                 and not re.search(r"条件|以上|以下|未満|上回|下回|届か|届いてい?ない|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行", c)
             )
+            _c_nfkc_cf = nfkc(c)
+            _m_eq_cf = _COND_EQ_THING_RE.search(_c_nfkc_cf)
+            _has_eq_col_cf = bool(_m_eq_cf and (not table or not table.get("columns") or _resolve_col_ref(_m_eq_cf.group(1), table)))
             has_row_cf_cond = bool(
-                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
-                or _DATE_CMP_CUE_RE.search(nfkc(c))
+                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|になっている|になってる|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
+                or _DATE_CMP_CUE_RE.search(_c_nfkc_cf)
+                or _has_eq_col_cf
                 or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
             )
             has_row_cf_cue = bool(
-                (re.search(r"行全体|の行|行を|行に|いない行|ない行", c) or (_DATE_CMP_CUE_RE.search(nfkc(c)) and re.search(r"のセル|セルを|セルに", c)))
+                (_ROW_CF_THING_RE.search(_c_nfkc_cf) or (_DATE_CMP_CUE_RE.search(_c_nfkc_cf) and re.search(r"のセル|セルを|セルに", c)))
                 and has_row_cf_cond
-                and not re.search(r"消|削除|重複|ダブ|固定色", c)
-                and (_color_hits(c) or re.search(r"色[を]?付|色[を]?つ|目立|ハイライト", c))
+                and not re.search(r"消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|赤字|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
+                and (_color_hits(c) or re.search(r"太字|太く|色[を]?付|色[を]?つ|目立|ハイライト", c))
             )
             has_row_del_cond = bool(
                 re.search(r"の行|行を|行に|行は|いない行|ない行|データ", c)
@@ -2345,21 +2387,22 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                     re.search(r"電話|携帯|TEL|tel", c)
                     and re.search(r"ハイフン|区切り|そろえ|揃え|統一|整形|形式|直し", c)
                 )
-                and not re.search(r"消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字", c)
+                and not re.search(r"全角|半角|空白|スペース|消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字", c)
             )
             _short_fmt_only_re = re.compile(
-                r"^(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し?|"
+                r"^(?:(?:タイトル|表題|見出し|ヘッダ|表全体|表|[^\s、。]{1,16}(?:の?列|の?欄)|[A-Z]{1,3}[0-9]*(?::[A-Z]{1,3}[0-9]*)?)(?:を|は|に)\s*)?"
+                r"(?:太字|斜体|イタリック|中央揃え|中央寄せ|真ん中揃え|真ん中寄せ|右揃え|右寄せ|左揃え|左寄せ|中央|真ん中|右|左|折り返し?|"
                 r"太字解除|斜体解除|折り返し解除|折り返しなし|罫線(?:なし|外枠)?|外枠|結合(?:解除)?|"
                 r"(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})(?:い|の)?(?:文字|背景|塗り)|"
                 r"(?:文字|フォント|背景|塗り)(?:は|を|に)?(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})|"
-                r"[0-9]+\s*(?:pt|ポイント)|(?:少し|もっと)?(?:大きく|小さく))(?:で|に|も|は|を|にして)?$"
+                r"[0-9]+\s*(?:pt|ポイント)|(?:少し|もっと|だいぶ|かなり|ぐっと)?(?:大きく|小さく))(?:で|に|へ|も|は|を|にして|して)?$"
             )
             has_short_fmt_cue = bool(
-                _short_fmt_only_re.match(nfkc(c).strip())
-                or (
-                    re.search(r"(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し)(?:で|に|も|は|を)?$", nfkc(c).strip())
-                    and not re.search(r"消|削除|解除|外|条件|以上|以下|未満|上回|下回|届か|以外|じゃない|固定|並|ソート|フィルタ|絞り|グラフ|集計|合計|平均|行を|の行", c)
+                (
+                    _short_fmt_only_re.match(nfkc(c).strip())
+                    or re.search(r"(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し)(?:で|に|も|は|を)?$", nfkc(c).strip())
                 )
+                and not re.search(r"消|削除|解除|外|追加|挿入|移動|コピー|条件|以上|以下|未満|より|を超|上回|下回|届か|以外|じゃない|になって|固定|並|ソート|フィルタ|絞り|グラフ|集計|合計|平均|行を|の行", c)
             )
             has_remove_act = bool(re.search(r"外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア|オフ|OFF", c))
 
@@ -2526,11 +2569,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         op, missing, named = build_op(top, c, table, sheets, cur_sheet)
         if p.ops and p.ops[-1].get("shelf") == top["name"]:
             prev = p.ops[-1]
-            for scope_k in ("header", "title", "range", "col"):
-                if scope_k in prev and scope_k not in op:
-                    op[scope_k] = prev[scope_k]
-                    named = True
-                    missing = [m for m in missing if not any(x in m for x in ("range", "col", "header", "title"))]
+            if not any(k in op for k in ("header", "title", "range", "col")):
+                for scope_k in ("header", "title", "range", "col"):
+                    if scope_k in prev:
+                        op[scope_k] = prev[scope_k]
+                        named = True
+                        missing = [m for m in missing if not any(x in m for x in ("range", "col", "header", "title"))]
             if top["name"] == "format":
                 if re.search(r"色[もを]付[け言]|色[もを]つ[け言]|色[もを]塗", c) and not op.get("bg") and not op.get("color"):
                     op["bg"] = "青"
