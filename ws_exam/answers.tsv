@@ -11,7 +11,7 @@ C列の重複消して連番ふり直して	seiri,dedupe,replace,renumber,cf.dup
 さっきの戻して	
 A列とB列入れ替えて	cols.move,transpose,doc.move,width,doc.template
 合計のとこ太字で黄色に	format,calc.running
-他の人が触れないようにして、でもB2:B20だけは打てるように	protect.sheet,count.if,date.fix
+他の人が触れないようにして、でもB2:B20だけは打てるように	protect.sheet,count.if,checkbox.toggle
 これ見やすくして	tidy
 月ごとの売上の推移を出して	chart.new,calc.percent,calc.rank,doc.from.sheet,filter.where
 プルダウンで未着手・進行中・完了を選べるようにして、完了は灰色に	validation.list,validation.clear
@@ -86,7 +86,7 @@ A列とB列入れ替えて	cols.move,transpose,doc.move,width,doc.template
 他のシートがあるか確認したい	sheet.list,protect.sheet,protect.list,sheet.add,sheet.show
 ブックにどんなシートがあるか知りたい	sheet.list,formula.list,sheet.add,sheet.show,sheet.toc
 全シート名 何枚シート シートの一覧	sheet.list,sheet.rename,formula.list,sheet.toc,unique.list
-見出しが氏名と電話番号の表を新しく作って	table.new,format,doc.table.style,doc.header,text.join
+見出しが氏名と電話番号の表を新しく作って	table.new,phone.fix,format,doc.table.style,doc.header
 名簿みたいな一覧表を用意して	table.new,unique.list
 名前と金額の表ほしいんだけど	table.new,doc.table.cell,format,sort,top.n
 テーブル 新規 作成 見出し 合計行付き	table.new,format,total,doc.outline,summary
@@ -202,17 +202,17 @@ Excel出力 エクセル出力 xlsx保存	export.xlsx,export.pdf,export.csv
 空白を取り除いてデータを整理して	seiri,dedupe,cols.delete,audit.check,rows.sample
 空行を詰めて	seiri,blank.rows.delete
 重複 削除 整理	dedupe,seiri
-番号の列を1から振り直して	renumber,replace,zero.pad,fill.series,cols.insert
-No列を連番に直して	renumber,replace,doc.replace,seiri,number.fix
+番号の列を1から振り直して	renumber,replace,zero.pad,fill.series,date.fix
+No列を連番に直して	renumber,replace,doc.replace,seiri,date.fix
 通し番号をつけ直して	renumber,replace,fill.series,doc.list
 番号 連番 振り直し	renumber,fill.series
 重複した行を削除して	dedupe,rows.delete,doc.table.row,filter.delete,blank.rows.delete
-同じ行がダブっているのを取り除いて	dedupe,cf.dup,cols.delete,rows.delete
+同じ行がダブっているのを取り除いて	dedupe,cf.dup,cols.delete,seiri,rows.delete
 ダブりを消しといて	dedupe,clear.values,cf.dup
 重複行 削除 クレンジング	dedupe,rows.delete,doc.table.row,seiri,filter.delete
 名前の列を姓と名に分割して	split.col,text.join,split.rows,sheet.split
 C列をカンマで区切って別の列に分けて	split.col,format,split.rows,doc.pagebreak,calc.col
-D列の名前をスペースで姓と名に分けといて	split.col,text.clean,split.rows,sheet.split,doc.pagebreak
+D列の名前をスペースで姓と名に分けといて	split.col,text.clean,seiri,split.rows,sheet.split
 列 分割 区切り テキスト分流	split.col,text.clean,split.rows,number.fix,text.extract
 この表のエラーや重複や空欄を診断して	audit.check,doc.table,doc.table.cell,doc.table.row,doc.table.style
 データの品質チェックをして異常をチェックして	audit.check,formula.list,checkbox,checkbox.toggle,seiri
@@ -224,7 +224,7 @@ D列の名前をスペースで姓と名に分けといて	split.col,text.clean,
 結合解除 値埋め セル結合をほどく	merge.unmerge,format,fill.blank,link.clear,blank.fill.zero
 空白セルを上の値で穴埋めして	fill.blank,write,blank.fill.zero,doc.table.cell,filter.where
 A列の空欄を上の値で埋めて	fill.blank,write,blank.fill.zero,width,fill.series
-表のブランクを埋めて穴埋めして	fill.blank,blank.rows.delete,blank.fill.zero,seiri
+表のブランクを埋めて穴埋めして	fill.blank,seiri,blank.rows.delete,blank.fill.zero
 穴埋め 空白セル 上の値で埋める	fill.blank,write,blank.fill.zero,doc.table.cell,filter.where
 金額列の文字の数字を本物の数値に直して	number.fix,replace,seiri,format.negred,doc.replace
 文字列の数字を数値に変換して	number.fix,seiri,formula.tovalue,text.case,validation.number
@@ -243,7 +243,7 @@ A列の空欄を上の値で埋めて	fill.blank,write,blank.fill.zero,width,fil
 途中の空いている行を消して空き行を消して	blank.rows.delete,seiri,rows.delete,doc.table.row,renumber
 空行を削除 空白行を消す 空行を詰める	blank.rows.delete,seiri,rows.delete,dedupe,doc.table.row
 備考列のセル内改行と連続空白を掃除して	text.clean,split.rows,doc.table,fill.blank,blank.fill.zero
-セルの改行をスペースに直して余分なスペースを掃除して	text.clean,replace,seiri,split.col,doc.replace
+セルの改行をスペースに直して余分なスペースを掃除して	text.clean,seiri,replace,split.col,doc.replace
 不可視文字やゴミ文字を消してテキストを掃除して	text.clean,number.fix,text.extract,drive.trash,doc.table.row
 セル内改行 連続空白 不可視文字 テキスト掃除	text.clean,number.fix,text.extract,split.rows,blank.fill.zero
 社員コード列を5桁で先頭0埋めして桁をそろえて	zero.pad
@@ -252,10 +252,10 @@ IDの先頭に0を付けてゼロパディングして	zero.pad,text.affix,doc.m
 ゼロ埋め ゼロパディング 先頭0 桁数をそろえる	zero.pad,text.mask
 数量列の空欄を0で一括埋めして	blank.fill.zero,fill.blank,blank.rows.delete,link.set,link.extract
 空白セルを0で埋めて未入力を埋めて	blank.fill.zero,fill.blank,text.clean,protect.formulas,write
-金額列のブランクに0を入れて空欄を埋めて	blank.fill.zero,fill.blank,write,total,number.fix
+金額列のブランクに0を入れて空欄を埋めて	blank.fill.zero,fill.blank,write,seiri,total
 空欄を0 空白を0 未入力を埋める	blank.fill.zero,fill.blank
 氏名列を先頭1文字だけ残して伏せ字にして	text.mask,split.col,text.affix,doc.font,text.join
-電話番号列をアスタリスクで隠してマスキングして	text.mask,doc.list,zero.pad,lookup.add,calc.rank
+電話番号列をアスタリスクで隠してマスキングして	text.mask,phone.fix,doc.list,zero.pad,lookup.add
 個人情報を隠すため文字の一部を隠して伏字にして	text.mask,doc.font,number.fix,doc.style,text.case
 伏せ字 マスキング 個人情報を隠す	text.mask,calc.rank
 備考列からメールアドレスを隣の列へ抽出して	text.extract,dedupe,link.extract,filter.extract,rows.sample
@@ -270,6 +270,10 @@ IDの先頭に0を付けてゼロパディングして	zero.pad,text.affix,doc.m
 名前の読みをひらがなに統一してフリガナを統一して	text.kana,font.unify
 カタカナに変換 ひらがなに変換 カタカナに統一	text.kana,text.case,formula.tovalue,font.unify,date.fix
 ひらがなに統一 フリガナ かな変換 カナ変換	text.kana,font.unify,text.case
+電話番号の列をハイフン区切りにそろえて	phone.fix,renumber,format,doc.pagebreak,zero.pad
+C列の携帯番号にハイフンを入れて統一して	phone.fix,write,cf.dup,doc.table,doc.header
+電話番号をハイフン付きに	phone.fix,doc.list
+電話の形式をハイフンで区切る	phone.fix,format
 見出しと箇条書きの文書を作って	doc.new,format,doc.section,doc.outline,doc.insert
 議事録を書いて	write,doc.new,doc.copy,table.template
 見積書の文章をつくって	doc.new,doc.export.pdf,doc.replace,doc.outline,doc.table.cell
@@ -384,7 +388,7 @@ A1に3って書いといて	protect.range,write,copy.format,transpose,date.today
 文字 置き換え 検索 一括	replace,doc.replace,find,doc.table.cell,formula.tovalue
 セルから合計という文字を検索して	doc.find,find,doc.table.cell,text.clean,format
 未払いがどのセルにあるか探して	find,doc.find,api,doc.table,doc.table.cell
-完了って入っているセルはどこ？	find,cf.add,text.clean
+完了って入っているセルはどこ？	find,cf.add,text.clean,date.fix
 文字 検索 セル 番地	find,doc.table.cell,text.clean,format,clear.values
 F2からG10の値をクリアして	clear.values,write,clear.all,clear.format,copy.values
 B列の中身を空っぽにして	clear.values,width,doc.table,doc.table.cell,drive.list
@@ -511,7 +515,7 @@ B列とC列の間に空の列を足して	cols.insert,calc.col,width,calc.diff,r
 列 追加 挿入	cols.insert,doc.insert,doc.toc,calc.col,rows.insert
 B列を削除して	cols.delete,doc.table.row,dedupe,filter.delete,name.delete
 この列いらないから消して	cols.delete,rows.delete,renumber
-D列は不要なので取り除いて	cols.delete,rows.delete,dedupe,doc.delete,rows.trim
+D列は不要なので取り除いて	cols.delete,rows.delete,dedupe,doc.delete,seiri
 列 削除 消去	cols.delete
 A列とB列を入れ替えて	cols.move,transpose,doc.move,width,doc.template
 E列をA列の位置に動かして	cols.move,width,fill.blank,link.clear,rows.move
@@ -572,7 +576,7 @@ B列の重複してるとこ赤くして	cf.dup,format,unique.list,dedupe,width
 売上列にカラースケールを付けて	cf.scale,split.col,calc.col,calc.rank,validation.list
 金額の大きいほど濃い青のグラデーションにして	cf.scale,sort,format,doc.style,doc.table.cell
 F2:F20をヒートマップみたいに色の濃淡つけて	cf.scale,protect.sheet,name.add,top.n,checkbox.toggle
-カラースケール グラデーション ヒートマップ	cf.scale,top.n,sheet.snapshot,audit.check,rows.sample
+カラースケール グラデーション ヒートマップ	cf.scale,top.n,sheet.snapshot,seiri,audit.check
 設定されている条件付き書式を外して	cf.clear,cf.list,cf.add,format,count.if
 表全体の自動でついた色を消して	cf.clear,clear.format,cf.add,bg.clear,banding.remove
 F列の条件付き書式を削除して	cf.clear,cf.add,format,cf.list,filter.delete
@@ -699,8 +703,8 @@ ROUND ラウンド 端数処理	round,count.if
 住所の各列を1つにつなげて	text.join,cols.insert
 文字列 結合 列 つなげる	text.join,split.col,text.case,format,date.fix
 列をつないで 列を連結 結合	text.join
-品番を大文字にそろえて	text.case,doc.font,text.affix,format,date.fix
-英字を小文字に変換して	text.case,date.fix,number.fix,format,doc.replace
+品番を大文字にそろえて	text.case,doc.font,text.affix,format,number.fix
+英字を小文字に変換して	text.case,number.fix,format,date.fix,doc.replace
 大文字 小文字 変換	text.case,date.fix,number.fix
 半角 全角 統一	text.case,seiri
 金額の上位5件を別シートに抽出して	filter.extract,top.n,rows.sample,unique.list,formula.list
@@ -728,7 +732,7 @@ ROUND ラウンド 端数処理	round,count.if
 どこに式が入っているか数式をチェックして式を一覧にして	formula.list,cf.add,audit.check,checkbox,checkbox.toggle
 数式一覧 式を一覧 関数一覧	formula.list,cf.list
 生年月日から満年齢を計算して年齢を出して	date.age,format,calc.col,calc.diff,date.parts
-入社日から勤続年数と経過年数を出して	date.age,date.diff
+入社日から勤続年数と経過年数を出して	date.age,date.diff,date.fix
 満年齢を足して 経過年数	date.age,date.diff
 年齢 勤続年数 経過月数 計算	date.age,date.diff
 金額列から消費税を計算して税込金額の列を足して	calc.tax,calc.col,calc.diff,calc.running,date.parts
@@ -742,7 +746,7 @@ A列とB列の2つの列を比べて差分を判定し突合して	col.compare,c
 棚に無いけど、1 行目のセルを青い背景にして	api,format,doc.table
 見出しと箇条書きの文書を書いて	doc.new,format,write,doc.section,doc.outline
 最後に1行足して	doc.append,rows.insert,doc.insert,doc.table.row,stat.row
-山田を山田（総務）に直して	doc.replace,replace,seiri,renumber,number.fix
+山田を山田（総務）に直して	doc.replace,replace,seiri,renumber,date.fix
 「概要」の節を書き直して	doc.section,replace
 文末に2列の表を入れて	doc.table,write,doc.from.sheet,doc.append,cf.weekend
 1つ目の表の2行1列を直して	doc.table,replace,rows.insert,doc.table.cell,doc.table.row
@@ -755,7 +759,7 @@ A列とB列の2つの列を比べて差分を判定し突合して	col.compare,c
 補足の節を消して	doc.delete
 次回予定を先頭に持ってきて	doc.move,zero.pad,text.affix,sheet.move
 表に1行足して	doc.table.row,rows.insert,doc.append,doc.insert,stat.row
-締め切りの日付を赤い太字にして	doc.font,format,date.fix,date.diff,borders.group
+締め切りの日付を赤い太字にして	doc.font,format,date.diff,borders.group,date.fix
 題を中央にして	doc.align
 表の見出しに色を付けて	doc.table.style,format,doc.header,sheet.color,doc.style
 議事の前で改ページして	doc.pagebreak,doc.header,print.setup
@@ -776,7 +780,7 @@ B列からD列だけ体裁を整えて	tidy,doc.style,group.cols
 表にフィルタを付けて	filter.on,filter.where,filter.off,format,fill.down
 A1からE50にフィルタを設定して	filter.on,filter.where,filter.off,clear.format,fill.down
 メールアドレス列が同じ重複行を消して	dedupe,text.extract,rows.delete,seiri,doc.table.row
-氏名列を姓と名にスペースで分けて	split.col,text.clean,text.join,doc.pagebreak,text.mask
+氏名列を姓と名にスペースで分けて	split.col,seiri,text.clean,text.join,doc.pagebreak
 住所列をカンマで列に分割して	format,split.col,split.rows,sheet.split
 フィルタを解除して全部表示に戻して	filter.off,format,filter.where,filter.on,sheet.gridlines
 表の途中の空行を一括で詰めて	blank.rows.delete,seiri,filter.delete,rows.trim,replace
@@ -789,7 +793,7 @@ A1からE50にフィルタを設定して	filter.on,filter.where,filter.off,clea
 今月と前月の差と伸び率の列を足して	calc.diff,calc.col,date.parts,date.diff,calc.percent
 金額の累計を出して	calc.running,total,summary,top.n,format
 売上の多い順に順位を付けて	calc.rank,sort,cf.add,doc.from.sheet,calc.percent
-B2:B10で「営業」の件数を数えて	count.if,protect.sheet,copy,copy.values,date.fix
+B2:B10で「営業」の件数を数えて	count.if,protect.sheet,copy,copy.values,filter.where
 部署ごとの人数を数えて	count.if,summary,sheet.split
 得意先ごとに小計を入れて	subtotal,write,summary,unique.list,total
 #DIV/0! が出ないようにして	formula.guard
@@ -858,7 +862,9 @@ A1:B10をD1:E10に値だけ貼り付けて	copy.values,copy,copy.format,formula.
 A1:B10の値をD1へ値貼り付けして	copy.values,copy,formula.tovalue,write,copy.format
 A1の書式をB1:E1にコピーして	copy,copy.format,format,copy.values,fill.down
 10から5刻みで番号を埋めて	fill.series,zero.pad
-B2:B30の日付が文字になっているので日付にして	date.fix,doc.font,count.if,protect.sheet,format
+入社日をすべて yyyy/mm/dd の形にそろえて	format,date.fix,date.age
+電話番号をハイフン区切りにそろえて	phone.fix,doc.pagebreak,split.rows,format,borders.group
+携帯番号をハイフン付きの書式に揃えて	phone.fix,format,copy.format,doc.style,doc.list
 A2からA31まで5月の日付を埋めて	fill.date,doc.font,date.parts,date.diff,date.fix
 毎週月曜の日付を下に連続で入れて	fill.date,write,date.fix,date.today,doc.font
 C2の計算式をC2:C50まで下へコピーして	fill.down,copy,formula.tovalue,copy.format,doc.copy

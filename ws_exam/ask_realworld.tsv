@@ -105,3 +105,5 @@ C	この名簿を見やすく整えて
 1	日付をすべて yyyy/mm/dd の形にそろえて	[{"shelf":"date.fix","col":"日付","format":"yyyy/mm/dd"}]
 1	日付の和暦を西暦の日付に変換して	[{"shelf":"date.fix","col":"日付"}]
 1	B列の電話番号をハイフン区切りにそろえて	[{"shelf":"phone.fix","col":"B"}]
+# 項目6: 動詞の無い書式節（「太字」等）の拾い上げ
+1	見出しを濃い青の背景に白文字、太字、中央揃えにして	[{"shelf":"format","header":true,"bg":"濃青","color":"白"},{"shelf":"format","header":true,"bold":true},{"shelf":"format","header":true,"align":"center"}]

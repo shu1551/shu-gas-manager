@@ -3060,6 +3060,11 @@ var ComboPlanner = (function () {
         var hasPhoneFixCue = /(?:電話|携帯|TEL|tel)/.test(c) &&
           /ハイフン|区切り|そろえ|揃え|統一|整形|形式|直し/.test(c) &&
           !/消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字/.test(c);
+        var shortFmtOnlyReJs = /^(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し?|太字解除|斜体解除|折り返し解除|折り返しなし|罫線(?:なし|外枠)?|外枠|結合(?:解除)?|(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})(?:い|の)?(?:文字|背景|塗り)|(?:文字|フォント|背景|塗り)(?:は|を|に)?(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})|[0-9]+\s*(?:pt|ポイント)|(?:少し|もっと)?(?:大きく|小さく))(?:で|に|も|は|を|にして)?$/;
+        var cTrimFmt = nfkc(c).trim();
+        var hasShortFmtCue = shortFmtOnlyReJs.test(cTrimFmt) ||
+          (/(?:太字|斜体|イタリック|中央揃え|中央寄せ|右揃え|右寄せ|左揃え|左寄せ|折り返し)(?:で|に|も|は|を)?$/.test(cTrimFmt) &&
+            !/消|削除|解除|外|条件|以上|以下|未満|上回|下回|届か|以外|じゃない|固定|並|ソート|フィルタ|絞り|グラフ|集計|合計|平均|行を|の行/.test(c));
         var hasRemoveAct = /外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア|オフ|OFF/.test(c);
 
         var ensureBoost = function (nm) {
@@ -3122,7 +3127,7 @@ var ComboPlanner = (function () {
           ensureBoost("total");
         } else if (hasStatRowCue) {
           ensureBoost("stat.row");
-        } else if (hasPaintFmtCue) {
+        } else if (hasPaintFmtCue || hasShortFmtCue) {
           ensureBoost("format");
         } else if (hasFmtCue && !/分け|取り出|抽出|列を足|列を作|経過|日数|年齢|勤続|本物の日付|ちゃんとした日付|文字列を日付|日付に変換|マイナス|赤字|三角|千円|百万/.test(c)) {
           ensureBoost("format");
