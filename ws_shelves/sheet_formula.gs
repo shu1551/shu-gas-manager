@@ -349,18 +349,30 @@ SHELF['stat.row'] = function (ctx, op) {
 // 棚: lookup.add
 // 題: 別の表から列を引いて足す
 // 分類: 集計
-// 語: 引いてきて|VLOOKUP|XLOOKUP|マスタから|別のシートから|参照して列|対応する値|表から引っ張|から単価を|マスタ 参照 列|別シートから参照|マスタから引
-// 違い: 単純な計算なら calc.col。集計なら count.if または summary
-// 引数: from_sheet*=文字, val_col*=列, key_col=列, my_key=列, name=文字, at=列
-// 頼み: at~([A-Z]{1,3})列に ; from_sheet~([^\s]+マスタ)から ; val_col~から([^\sを]+)を引いて ; val_col~([^\sを]+)を引いて ; name~で([^\sを]+)の列
+// 語: 引いてきて|VLOOKUP|XLOOKUP|マスタから|別のシートから|参照して列|対応する値|表から引っ張|から単価を|マスタ 参照 列|別シートから参照|マスタから引|ごとの最終|ごとの最新|ごとの最初|ごとの直近|ごとの最後の
+// 違い: 単純な計算なら calc.col。集計表を別に作るなら summary。行ごとに別の表の最新・最古・合計・件数を引くなら agg を付ける
+// 引数: from_sheet=文字, val_col*=列, key_col=列, my_key=列, name=文字, at=列, agg=選択(first/max/min/sum/count)=first
+// 頼み: at~([A-Z]{1,3})列に ; from_sheet~([^\s]+マスタ)から ; val_col~から([^\sを]+)を引いて ; val_col~([^\sを]+)を引いて ; name~で([^\sを]+)の列 ; agg=max<ごとの最終|ごとの最新|ごとの直近|ごとの最後の ; agg=min<ごとの最初|ごとの最古 ; val_col~ごとの(?:最終|最新|直近|最後の|最初の?|最古の?)([^\sの]+?)の列 ; name~ごとの((?:最終|最新|直近|最初|最古)[^\sの]+?)の列
 // 例: 「商品マスタから単価を引いてきて」 → {"shelf":"lookup.add","from_sheet":"商品マスタ","val_col":"単価"}
+// 例: 「顧客ごとの最終受注日の列を足して」 → {"shelf":"lookup.add","val_col":"受注日","agg":"max","name":"最終受注日"}
 // 触る: 値 書式
 SHELF['lookup.add'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
-  need_(op, ['from_sheet', 'val_col']);
-  var srcSh = sheetOf_(ctx.ss, op.from_sheet, null);
-  var srcT = needTable_(srcSh);
+  need_(op, ['val_col']);
+  var srcSh = null, srcT = null;
+  if (op.from_sheet) { srcSh = sheetOf_(ctx.ss, op.from_sheet, null); srcT = needTable_(srcSh); }
+  else {
+    // 引く先の名指しが無ければ、val_col の見出しを持つほかのシート
+    ctx.ss.getSheets().some(function (s) {
+      if (s.getSheetId() === sh.getSheetId() || s.getName() === '_GASクイックの控え') return false;
+      var st = findTable_(s); if (!st) return false;
+      if (headerNames_(st).indexOf(String(op.val_col)) >= 0) { srcSh = s; srcT = st; return true; }
+      return false;
+    });
+    if (!srcT) throw new ArgError('「' + op.val_col + '」の列を持つ表が見つかりません。from_sheet で名指ししてください');
+  }
   var vci = colIndexOf_(srcT, op.val_col);
+  var agg = String(op.agg || 'first').toLowerCase();
 
   // キー列の特定
   var keyCol = op.key_col ? colIndexOf_(srcT, op.key_col) : null;
@@ -404,11 +416,21 @@ SHELF['lookup.add'] = function (ctx, op) {
     var formulas = [];
     for (var r = t.firstData; r <= t.lastData; r++) {
       var myKeyCell = colLetter_(myKey) + r;
-      formulas.push(['=XLOOKUP(' + myKeyCell + ',' + keyRange + ',' + valRange + ',"")']);
+      var aggF = { max: 'MAXIFS', min: 'MINIFS', sum: 'SUMIFS' }[agg];
+      if (aggF) formulas.push(['=IF(COUNTIF(' + keyRange + ',' + myKeyCell + ')=0,"",' + aggF + '(' + valRange + ',' + keyRange + ',' + myKeyCell + '))']);
+      else if (agg === 'count') formulas.push(['=COUNTIF(' + keyRange + ',' + myKeyCell + ')']);
+      else formulas.push(['=XLOOKUP(' + myKeyCell + ',' + keyRange + ',' + valRange + ',"")']);
     }
     setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
+    // 最新・最古は元の列の表示形式（日付など）を引き継ぐ
+    if ((agg === 'max' || agg === 'min') && typeof sh.getRange(t.firstData, atCol, numRows, 1).setNumberFormat === 'function') {
+      var srcCell = srcSh.getRange(srcT.firstData, vci), srcFmt = srcCell.getNumberFormat();
+      if ((!srcFmt || srcFmt === 'General') && srcCell.getValue() instanceof Date) srcFmt = 'yyyy/mm/dd';
+      if (srcFmt && srcFmt !== 'General') sh.getRange(t.firstData, atCol, numRows, 1).setNumberFormat(srcFmt);
+    }
   }
-  chg_(ctx, sh, colLetter_(atCol) + '列', '「' + srcSh.getName() + '」から「' + name + '」を引いて追加');
+  var aggLabel = { max: '（最大＝最新）', min: '（最小＝最古）', sum: '（合計）', count: '（件数）' }[agg] || '';
+  chg_(ctx, sh, colLetter_(atCol) + '列', '「' + srcSh.getName() + '」から「' + name + '」を引いて追加' + aggLabel);
 };
 
 // 棚: calc.diff

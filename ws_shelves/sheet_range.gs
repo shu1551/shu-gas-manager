@@ -71,6 +71,70 @@ DYNAMIC['replace'] = {
   }
 };
 
+// 棚: match.master
+// 題: 列の表記ゆれをマスタの書き方に合わせて直す
+// 分類: 範囲
+// 語: 表記ゆれを|表記ゆれ|に合わせて直|表に合わせて|マスタに合わせ|の書き方に合わせ|名前をマスタに|表記を合わせ|表記をそろえ
+// 違い: 決まった文字の置き換えなら replace。全角半角や空白だけなら seiri。マスタから別の列を引くなら lookup.add
+// 引数: col=列, from_sheet=文字, from_col=列
+// 頼み: from_sheet~([^\s、をのにで]+?)(?:の表|表|シート|マスタ)に合わせ ; col~の([^\sのを]+?)の表記 ; col~([^\sのを]+?)の表記ゆれ
+// 例: 「顧客名の表記ゆれを顧客表に合わせて直して」 → {"shelf":"match.master","col":"顧客名","from_sheet":"顧客"}
+// 触る: 値
+SHELF['match.master'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), t = needTable_(sh);
+  var myHdrs = headerNames_(t);
+  // 合わせる先の表: 名指しが無ければ、同じ見出しの列を持つほかのシート
+  var srcSh = null, srcT = null;
+  if (op.from_sheet) { srcSh = sheetOf_(ctx.ss, op.from_sheet, null); srcT = needTable_(srcSh); }
+  var ci = op.col ? colIndexOf_(t, op.col) : 0, sci = 0;
+  var cands = op.from_sheet ? [srcSh] : ctx.ss.getSheets().filter(function (s) { return s.getSheetId() !== sh.getSheetId() && s.getName() !== '_GASクイックの控え'; });
+  for (var k = 0; k < cands.length && !sci; k++) {
+    var st = cands[k] === srcSh ? srcT : findTable_(cands[k]);
+    if (!st) continue;
+    var sh2 = headerNames_(st);
+    var want = ci ? [myHdrs[ci - t.firstCol]] : myHdrs;
+    for (var w = 0; w < want.length; w++) {
+      var j = sh2.indexOf(want[w]);
+      if (want[w] && j >= 0) { srcSh = cands[k]; srcT = st; sci = st.firstCol + j; if (!ci) ci = t.firstCol + myHdrs.indexOf(want[w]); break; }
+    }
+  }
+  if (op.from_col && srcT) sci = colIndexOf_(srcT, op.from_col);
+  if (!srcT) throw new ArgError('合わせる先の表が見つかりません。from_sheet で名指ししてください');
+  if (!sci) { sci = srcT.firstCol; }
+  if (!ci) throw new ArgError('直す列が決まりません。col で名指ししてください');
+  var keyOf = function (v) {
+    var s = String(v == null ? '' : v);
+    if (s.normalize) s = s.normalize('NFKC');
+    return s.replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)|㈱|㈲/g, '').replace(/[\s()（）［］\[\]・,，.、。]/g, '').toLowerCase();
+  };
+  var master = {}, dupKey = {};
+  srcSh.getRange(srcT.firstData, sci, Math.max(0, srcT.lastData - srcT.firstData + 1), 1).getValues().forEach(function (r) {
+    var v = String(r[0] == null ? '' : r[0]).trim(); if (!v) return;
+    var kk = keyOf(v); if (master[kk] && master[kk] !== v) dupKey[kk] = 1; else master[kk] = v;
+  });
+  var n = t.lastData - t.firstData + 1;
+  if (n <= 0) { note_(ctx, '直す行がありません'); return; }
+  var rg = sh.getRange(t.firstData, ci, n, 1), vals = rg.getValues(), forms = rg.getFormulas();
+  var fixed = [], pairs = [], missing = [];
+  for (var r = 0; r < n; r++) {
+    if (forms[r][0]) continue;
+    var v = vals[r][0]; if (typeof v !== 'string' || !v.trim()) continue;
+    var kk = keyOf(v);
+    if (dupKey[kk]) continue;   // マスタの側で 2 つに割れている物は人の判断
+    var mv = master[kk];
+    if (mv === undefined) { if (missing.indexOf(v.trim()) < 0) missing.push(v.trim()); continue; }
+    if (mv !== v) { vals[r][0] = mv; fixed.push(a1_(t.firstData + r, ci)); pairs.push(v + '→' + mv); }
+  }
+  var srcLabel = '「' + srcSh.getName() + '」の' + (headerNames_(srcT)[sci - srcT.firstCol] || colLetter_(sci) + '列');
+  if (fixed.length) {
+    rg.setValues(vals);
+    chg_(ctx, sh, fixed.slice(0, 4).join('・') + (fixed.length > 4 ? ' ほか' + (fixed.length - 4) + ' 件' : ''), srcLabel + 'に合わせた（' + pairs.slice(0, 4).join('、') + '）');
+  } else {
+    note_(ctx, srcLabel + 'と食い違う書き方はありませんでした（変更なし）');
+  }
+  if (missing.length) note_(ctx, srcLabel + 'に無い値（触っていません）: ' + missing.slice(0, 6).join('・'));
+};
+
 // 棚: find
 // 題: 値を探して番地を返す
 // 分類: 範囲

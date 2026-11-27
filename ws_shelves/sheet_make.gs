@@ -214,6 +214,14 @@ SHELF['summary'] = function (ctx, op) {
   if (sumPreview.length) note_(ctx, '集計結果: ' + sumPreview.join(' ／ ') + (keys.length > 3 ? ' ほか' + (keys.length - 3) + '件' : ''));
   if (hasSpaceTrim) note_(ctx, '「' + byName + '」列の前後の空白を無視してまとめました');
   if (cancelCols.length) note_(ctx, '※「' + cancelCols[0] + '」列にキャンセル等の行を含んでいます');
+  // 書き方の違いで同じ物が別の行に割れていないか（(株)と株式会社・全角半角・括弧）。直さずに知らせ、直す手（match.master）を添える
+  var normKey = function (v) {
+    var s = String(v == null ? '' : v); if (s.normalize) s = s.normalize('NFKC');
+    return s.replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)|㈱|㈲/g, '').replace(/[\s()（）［］\[\]・,，.、。]/g, '').toLowerCase();
+  };
+  var nkSeen = {}, splits = [];
+  keys.forEach(function (k) { var nk = normKey(k); if (nkSeen[nk] !== undefined && nkSeen[nk] !== k) splits.push('「' + nkSeen[nk] + '」と「' + k + '」'); else nkSeen[nk] = k; });
+  if (splits.length) note_(ctx, '⚠ 書き方の違いで別の行に割れています: ' + splits.slice(0, 3).join('・') + '（同じ物なら match.master で元の表の書き方にそろえてから集計し直す）');
   note_(ctx, '別の棚からこの表を参照するときは range:"' + into + '"（または "' + into + '!' + a1_(1, 1, grid.length, grid[0].length) + '"）');
   tidyRange_(ctx, dst, null);
 };
