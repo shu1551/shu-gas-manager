@@ -1592,6 +1592,23 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         if u_del:
             op["cols"] = u_del
             named = True
+    if shelf["name"] == "date.fix":
+        if "format" not in op:
+            if re.search(r"yyyy-mm-dd", text, re.IGNORECASE):
+                op["format"] = "yyyy-mm-dd"
+            elif re.search(r"yyyy/mm/dd|年/月/日|年月日の?形|年月日形式", text, re.IGNORECASE):
+                op["format"] = "yyyy/mm/dd"
+        if "col" not in op and "range" not in op and table:
+            d_cands = [c["name"] for c in table.get("columns") or [] if c.get("name") and not c.get("number") and re.search(r"日付|日$|date", str(c["name"]), re.IGNORECASE)]
+            if len(d_cands) == 1:
+                op["col"] = d_cands[0]
+                named = True
+    if shelf["name"] == "phone.fix":
+        if "col" not in op and "range" not in op and table:
+            p_cands = [c["name"] for c in table.get("columns") or [] if c.get("name") and re.search(r"電話|携帯|tel|phone", str(c["name"]), re.IGNORECASE)]
+            if len(p_cands) == 1:
+                op["col"] = p_cands[0]
+                named = True
     if shelf["name"] == "width":
         if "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
             op["auto"] = [op.pop("col")]
@@ -2072,6 +2089,27 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 re.search(r"罫線|外枠|格子", c)
                 and not re.search(r"整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線", c)
             )
+            has_seiri_clean_cue = bool(
+                re.search(r"(?:前後|余分な?|両端|先頭|末尾)の?(?:空白|スペース).*(?:消|削除|取り除|除去|詰め|トリム)|(?:空白|スペース)を(?:消|削除|取り除|除去|トリム)|全角(?:の?(?:英?数字|文字))?を半角", c)
+                and not re.search(r"空行|空白行|空白の行|空いてる行|空いている行|空き行|改行|不可視文字|ゴミ文字|セル内改行|穴埋め|上の値|以外の|じゃない|の行を消|の行を削除", c)
+            )
+            has_date_fix_cue = bool(
+                (
+                    "和暦" in c
+                    or (
+                        re.search(r"日付|入社日|生年月日|登録日|更新日|期限|yyyy/mm/dd|yyyy-mm-dd|年月日の?形", c, re.IGNORECASE)
+                        and re.search(r"そろえ|揃え|統一|変換|本物の日付|ちゃんとした日付|西暦", c)
+                    )
+                )
+                and not re.search(r"並べ|ソート|絞り込|フィルタ|消|削除|連続|下まで|埋め|経過|年齢|曜日", c)
+            )
+            has_phone_fix_cue = bool(
+                (
+                    re.search(r"電話|携帯|TEL|tel", c)
+                    and re.search(r"ハイフン|区切り|そろえ|揃え|統一|整形|形式|直し", c)
+                )
+                and not re.search(r"消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字", c)
+            )
             has_remove_act = bool(re.search(r"外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア|オフ|OFF", c))
 
             def _ensure_boost(name):
@@ -2115,6 +2153,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("freeze")
             elif has_blank_del_cue and ("blank.rows.delete" in cand_names or "seiri" in cand_names):
                 _ensure_boost("blank.rows.delete")
+            elif has_phone_fix_cue:
+                _ensure_boost("phone.fix")
+            elif has_date_fix_cue:
+                _ensure_boost("date.fix")
+            elif has_seiri_clean_cue:
+                _ensure_boost("seiri")
             elif has_border_fmt_cue:
                 _ensure_boost("format")
             elif has_cols_hide_cue:

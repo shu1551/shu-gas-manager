@@ -306,15 +306,15 @@ SHELF['fill.series'] = function (ctx, op) {
 };
 
 // 棚: date.fix
-// 題: 文字で入った日付を本物の日付に直す
+// 題: 文字・和暦の日付を本物の日付に直してそろえる
 // 分類: 範囲
-// 語: ちゃんとした日付|本物の日付|日付に直|日付にして|日付にしておいて|文字の日付|文字で入って|日付じゃなく|日付として扱|日付型|日付と認識|日付の文字列|文字列を日付|日付に変換
-// 違い: 日付の見せ方（「11月4日(水)」など）を変えるだけなら format の number_format。日付を下へ連続で入れるなら fill.date
-// 引数: col=列, range=範囲
+// 語: ちゃんとした日付|本物の日付|日付に直|日付にして|日付にしておいて|文字の日付|文字で入って|日付じゃなく|日付として扱|日付型|日付と認識|日付の文字列|文字列を日付|日付に変換|和暦|西暦の日付|日付をそろ|日付を揃
+// 違い: 日付の見せ方（「11月4日(水)」など）を変えるだけなら format の number_format。和暦（R5.4.1・令和5年4月1日）や文字日付を本物の日付へ変換して揃えるならこの棚。日付を下へ連続で入れるなら fill.date
+// 引数: col=列, range=範囲, format=文字
 // どれか: col range
 // 例: 「日付の列に文字で入っている日付を、ちゃんとした日付にして」 → {"shelf":"date.fix","col":"日付"}
-// 例: 「B2:B30の日付が文字になっているので日付にして」 → {"shelf":"date.fix","range":"B2:B30"}
-// 触る: 値
+// 例: 「入社日をすべて yyyy/mm/dd の形にそろえて」 → {"shelf":"date.fix","col":"入社日","format":"yyyy/mm/dd"}
+// 触る: 値 書式
 // 控え: 今
 SHELF['date.fix'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), rg, t = null;
@@ -324,30 +324,114 @@ SHELF['date.fix'] = function (ctx, op) {
   var vals = rg.getValues(), forms = rg.getFormulas(), fmts = rg.getNumberFormats();
   var startR = rg.getRow(), startC = rg.getColumn();
   // 年を書いていない日付（「11月4日」）は、同じ列の本物の日付の年に合わせる（無ければ今年）
-  var year = new Date().getFullYear(), dateFmt = '';
+  var year = new Date().getFullYear(), dateFmt = op.format ? String(op.format) : '';
   for (var r0 = 0; r0 < vals.length; r0++) for (var c0 = 0; c0 < vals[r0].length; c0++) {
     var v0 = vals[r0][c0];
     if (v0 instanceof Date && !isNaN(v0.getTime())) { year = v0.getFullYear(); if (!dateFmt && fmts[r0][c0] && fmts[r0][c0] !== '@') dateFmt = fmts[r0][c0]; }
   }
-  var z2h = function (x) { return x.replace(/[０-９]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); }).replace(/[／－．]/g, function (ch) { return { '／': '/', '－': '-', '．': '.' }[ch]; }); };
+  var targetFmt = dateFmt || 'yyyy/mm/dd';
+  var z2h = function (x) {
+    return x
+      .replace(/[０-９Ａ-Ｚａ-ｚ]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+      .replace(/[／－―ー‐．]/g, function (ch) { return ch === '／' ? '/' : (ch === '．' ? '.' : '-'); });
+  };
   var mk = function (y, m, d) { var dt = new Date(y, m - 1, d); return (dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d) ? dt : null; };
-  var fixed = [];
+  var eraBase = { '令和': 2018, 'R': 2018, '平成': 1988, 'H': 1988, '昭和': 1925, 'S': 1925, '大正': 1911, 'T': 1911, '明治': 1867, 'M': 1867 };
+  var fixed = [], fmtOnly = 0;
   for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
     var v = vals[r][c];
-    if (forms[r][c] || typeof v !== 'string' || !v.trim()) continue;
+    if (forms[r][c]) continue;
+    if (v instanceof Date && !isNaN(v.getTime())) {
+      if (op.format && fmts[r][c] !== targetFmt) { fmts[r][c] = targetFmt; fmtOnly++; }
+      continue;
+    }
+    if (typeof v !== 'string' || !v.trim()) continue;
     var s = z2h(v.trim()).replace(/\s*[(（][^)）]*[)）]\s*$/, '');      // 後ろの（水）は外して読む
-    var m = s.match(/^(\d{4})\s*[\/\-.年]\s*(\d{1,2})\s*[\/\-.月]\s*(\d{1,2})\s*日?$/), dt = null;
-    if (m) dt = mk(+m[1], +m[2], +m[3]);
-    else if ((m = s.match(/^(\d{1,2})\s*[\/月]\s*(\d{1,2})\s*日?$/))) dt = mk(year, +m[1], +m[2]);
+    var dt = null, m;
+    if ((m = s.match(/^(\d{4})\s*[\/\-.年]\s*(\d{1,2})\s*[\/\-.月]\s*(\d{1,2})\s*日?$/))) {
+      dt = mk(+m[1], +m[2], +m[3]);
+    } else if ((m = s.match(/^(令和|平成|昭和|大正|明治|[RrHhSsTtMm])\s*(元|\d{1,2})\s*[\/\-.年]\s*(\d{1,2})\s*[\/\-.月]\s*(\d{1,2})\s*日?$/))) {
+      var b = eraBase[m[1].toUpperCase()];
+      var ey = m[2] === '元' ? 1 : +m[2];
+      if (b && ey >= 1 && ey <= 99) dt = mk(b + ey, +m[3], +m[4]);
+    } else if ((m = s.match(/^(\d{1,2})\s*[\/月]\s*(\d{1,2})\s*日?$/))) {
+      dt = mk(year, +m[1], +m[2]);
+    }
     if (!dt) continue;
     vals[r][c] = dt;
-    if (!fmts[r][c] || fmts[r][c] === '@' || fmts[r][c] === 'General') fmts[r][c] = dateFmt || 'yyyy/mm/dd';
+    if (op.format || !fmts[r][c] || fmts[r][c] === '@' || fmts[r][c] === 'General') fmts[r][c] = targetFmt;
     fixed.push(a1_(startR + r, startC + c));
   }
-  if (!fixed.length) { note_(ctx, '文字で入った日付は見つかりませんでした（' + rg.getA1Notation() + '）'); return; }
+  if (!fixed.length && !fmtOnly) { note_(ctx, '変換対象の日付は見つかりませんでした（' + rg.getA1Notation() + '）'); return; }
+  rg.setNumberFormats(fmts);
+  if (fixed.length) rg.setValues(vals);
+  chg_(ctx, sh, fixed.length ? (fixed.slice(0, 5).join('・') + (fixed.length > 5 ? ' ほか ' + (fixed.length - 5) + ' 件' : '')) : rg.getA1Notation(),
+    '日付を変換・統一（変換 ' + fixed.length + ' 件' + (fmtOnly ? '・書式統一 ' + fmtOnly + ' 件' : '') + '）');
+};
+
+// 棚: phone.fix
+// 題: 電話番号をハイフン区切りにそろえる
+// 分類: 整える
+// 語: 電話番号|携帯番号|ハイフン区切り|ハイフン付き|ハイフンで区切|ハイフンを入れ|電話の形式|番号をハイフン
+// 違い: 0埋めなら zero.pad、日付の統一なら date.fix、一般的な文字掃除なら seiri
+// 引数: col=列, range=範囲
+// どれか: col range
+// 例: 「電話番号をハイフン区切りにそろえて」 → {"shelf":"phone.fix","col":"電話番号"}
+// 例: 「携帯番号をハイフン付きの書式に揃えて」 → {"shelf":"phone.fix","col":"携帯番号"}
+// 触る: 値 書式
+// 控え: 今
+SHELF['phone.fix'] = function (ctx, op) {
+  var sh = sheetCtx_(ctx, op), rg, t = null;
+  if (op.col) { t = needTable_(sh); var ci = colIndexOf_(t, op.col); rg = sh.getRange(t.firstData, ci, t.lastData - t.firstData + 1, 1); }
+  else if (op.range) rg = sh.getRange(op.range);
+  else throw new ArgError('棚「phone.fix」に col か range が要ります');
+  var vals = rg.getValues(), forms = rg.getFormulas(), fmts = rg.getNumberFormats();
+  var startR = rg.getRow(), startC = rg.getColumn();
+  var fmtPhone = function (raw) {
+    var s;
+    if (typeof raw === 'number' && isFinite(raw) && Math.floor(raw) === raw && raw > 0) {
+      s = String(raw);
+      if (s.length === 9 || s.length === 10) s = '0' + s;
+    } else if (typeof raw === 'string') {
+      s = raw.trim();
+    } else {
+      return null;
+    }
+    if (!s) return null;
+    var h = s
+      .replace(/[０-９]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+      .replace(/[－ー―‐−]/g, '-')
+      .replace(/[（]/g, '(').replace(/[）]/g, ')')
+      .replace(/　/g, ' ');
+    var digits = h.replace(/[^\d]/g, '');
+    if (digits.length < 10 || digits.length > 11 || digits.charAt(0) !== '0') return null;
+    if (digits.length === 11) {
+      if (/^0800/.test(digits)) return digits.slice(0, 4) + '-' + digits.slice(4, 7) + '-' + digits.slice(7);
+      return digits.slice(0, 3) + '-' + digits.slice(3, 7) + '-' + digits.slice(7);
+    }
+    if (/^0120/.test(digits)) return digits.slice(0, 4) + '-' + digits.slice(4, 7) + '-' + digits.slice(7);
+    if (/^0[36]/.test(digits)) return digits.slice(0, 2) + '-' + digits.slice(2, 6) + '-' + digits.slice(6);
+    var grp = h.replace(/[()]/g, ' ').trim().split(/[\s\-]+/).filter(function (x) { return /^\d+$/.test(x); });
+    if (grp.length === 3 && grp.join('') === digits && grp[0].length >= 2 && grp[0].length <= 5 && grp[2].length === 4) {
+      return grp.join('-');
+    }
+    return digits.slice(0, 3) + '-' + digits.slice(3, 6) + '-' + digits.slice(6);
+  };
+  var fixed = [];
+  for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
+    if (forms[r][c]) continue;
+    var formatted = fmtPhone(vals[r][c]);
+    if (!formatted) continue;
+    if (String(vals[r][c]) !== formatted || fmts[r][c] !== '@') {
+      vals[r][c] = formatted;
+      fmts[r][c] = '@';
+      fixed.push(a1_(startR + r, startC + c));
+    }
+  }
+  if (!fixed.length) { note_(ctx, '整形対象の電話番号は見つかりませんでした（' + rg.getA1Notation() + '）'); return; }
   rg.setNumberFormats(fmts);
   rg.setValues(vals);
-  chg_(ctx, sh, fixed.slice(0, 5).join('・') + (fixed.length > 5 ? ' ほか ' + (fixed.length - 5) + ' 件' : ''), '文字の日付を日付に（' + fixed.length + ' 件）');
+  chg_(ctx, sh, fixed.slice(0, 5).join('・') + (fixed.length > 5 ? ' ほか ' + (fixed.length - 5) + ' 件' : ''), '電話番号をハイフン区切りに統一（' + fixed.length + ' 件）');
 };
 
 // 棚: fill.date

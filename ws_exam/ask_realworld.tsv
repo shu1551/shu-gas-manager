@@ -100,3 +100,8 @@ R	11月の数字が一番大きい部門はどこ？
 # 項目4: 曖昧な整え（3択で聞き返す）＋限定指定は即実行
 C	この名簿を見やすく整えて
 1	見た目だけ整えて	[{"shelf":"tidy"}]
+# 項目5: 掃除の穴（前後空白・和暦日付変換・電話番号ハイフン区切り）
+1	前後の空白を消して、全角の数字を半角にして	[{"shelf":"seiri","trim":true,"ok":true},{"shelf":"seiri","halfwidth":true,"ok":true}]
+1	日付をすべて yyyy/mm/dd の形にそろえて	[{"shelf":"date.fix","col":"日付","format":"yyyy/mm/dd"}]
+1	日付の和暦を西暦の日付に変換して	[{"shelf":"date.fix","col":"日付"}]
+1	B列の電話番号をハイフン区切りにそろえて	[{"shelf":"phone.fix","col":"B"}]

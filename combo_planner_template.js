@@ -2388,6 +2388,30 @@ var ComboPlanner = (function () {
         named = true;
       }
     }
+    if (shelf.name === "date.fix") {
+      if (!_hasOwn(op, "format")) {
+        if (/yyyy-mm-dd/i.test(text)) op.format = "yyyy-mm-dd";
+        else if (/yyyy\/mm\/dd|年\/月\/日|年月日の?形|年月日形式/i.test(text)) op.format = "yyyy/mm/dd";
+      }
+      if (!_hasOwn(op, "col") && !_hasOwn(op, "range") && table && Array.isArray(table.columns)) {
+        var dCands = [];
+        for (var dci2 = 0; dci2 < table.columns.length; dci2++) {
+          var dc2 = table.columns[dci2];
+          if (dc2 && dc2.name && !dc2.number && /(?:日付|日$|date)/i.test(String(dc2.name))) dCands.push(dc2.name);
+        }
+        if (dCands.length === 1) { op.col = dCands[0]; named = true; }
+      }
+    }
+    if (shelf.name === "phone.fix") {
+      if (!_hasOwn(op, "col") && !_hasOwn(op, "range") && table && Array.isArray(table.columns)) {
+        var pCands = [];
+        for (var pci2 = 0; pci2 < table.columns.length; pci2++) {
+          var pc2 = table.columns[pci2];
+          if (pc2 && pc2.name && /(?:電話|携帯|tel|phone)/i.test(String(pc2.name))) pCands.push(pc2.name);
+        }
+        if (pCands.length === 1) { op.col = pCands[0]; named = true; }
+      }
+    }
 
     var missing = [];
     _validateAndResolveColArgsJs(shelf, op, table, missing);
@@ -3027,6 +3051,15 @@ var ComboPlanner = (function () {
           !/重複|ダブ|全角|半角|整え|きれい|掃除|トリム|余分な空白|末尾|軽く|下まで|余白/.test(c);
         var hasBorderFmtCue = /罫線|外枠|格子/.test(c) &&
           !/整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線/.test(c);
+        var hasSeiriCleanCue = /(?:前後|余分な?|両端|先頭|末尾)の?(?:空白|スペース).*(?:消|削除|取り除|除去|詰め|トリム)|(?:空白|スペース)を(?:消|削除|取り除|除去|トリム)|全角(?:の?(?:英?数字|文字))?を半角/.test(c) &&
+          !/空行|空白行|空白の行|空いてる行|空いている行|空き行|改行|不可視文字|ゴミ文字|セル内改行|穴埋め|上の値|以外の|じゃない|の行を消|の行を削除/.test(c);
+        var hasDateFixCue = (c.indexOf("和暦") >= 0 ||
+          (/(?:日付|入社日|生年月日|登録日|更新日|期限|yyyy\/mm\/dd|yyyy-mm-dd|年月日の?形)/i.test(c) &&
+            /そろえ|揃え|統一|変換|本物の日付|ちゃんとした日付|西暦/.test(c))) &&
+          !/並べ|ソート|絞り込|フィルタ|消|削除|連続|下まで|埋め|経過|年齢|曜日/.test(c);
+        var hasPhoneFixCue = /(?:電話|携帯|TEL|tel)/.test(c) &&
+          /ハイフン|区切り|そろえ|揃え|統一|整形|形式|直し/.test(c) &&
+          !/消|削除|非表示|隠|並|ソート|フィルタ|絞り込|マスク|伏せ字/.test(c);
         var hasRemoveAct = /外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア|オフ|OFF/.test(c);
 
         var ensureBoost = function (nm) {
@@ -3071,6 +3104,12 @@ var ComboPlanner = (function () {
           ensureBoost("freeze");
         } else if (hasBlankDelCue && (candMap["blank.rows.delete"] || candMap["seiri"])) {
           ensureBoost("blank.rows.delete");
+        } else if (hasPhoneFixCue) {
+          ensureBoost("phone.fix");
+        } else if (hasDateFixCue) {
+          ensureBoost("date.fix");
+        } else if (hasSeiriCleanCue) {
+          ensureBoost("seiri");
         } else if (hasBorderFmtCue) {
           ensureBoost("format");
         } else if (hasColsHideCue) {

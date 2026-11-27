@@ -17,10 +17,27 @@ function filterSpanOf_(sh) {
 }
 // 文字列の日付（2026-11-01 / 2026/11/1 / 2026年11月1日 / 2026.11.01）を本物の Date に直す
 function parseDateText_(s) {
-  var m = /^(\d{4})[\/\-\.年](\d{1,2})[\/\-\.月](\d{1,2})日?$/.exec(s);
-  if (!m) return null;
-  var y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
-  if (y < 1900 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  if (typeof s !== 'string') return null;
+  var t = s.trim()
+    .replace(/[０-９Ａ-Ｚａ-ｚ]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+    .replace(/[／－―ー‐．]/g, function (ch) { return ch === '／' ? '/' : (ch === '．' ? '.' : '-'); })
+    .replace(/\s*[(（][^)）]*[)）]\s*$/, '');
+  var y, mo, d;
+  var m = /^(\d{4})\s*[\/\-\.年]\s*(\d{1,2})\s*[\/\-\.月]\s*(\d{1,2})\s*日?$/.exec(t);
+  if (m) {
+    y = parseInt(m[1], 10); mo = parseInt(m[2], 10); d = parseInt(m[3], 10);
+  } else {
+    var mw = /^(令和|平成|昭和|大正|明治|[RrHhSsTtMm])\s*(元|\d{1,2})\s*[\/\-\.年]\s*(\d{1,2})\s*[\/\-\.月]\s*(\d{1,2})\s*日?$/.exec(t);
+    if (!mw) return null;
+    var era = mw[1].toUpperCase();
+    var baseMap = { '令和': 2018, 'R': 2018, '平成': 1988, 'H': 1988, '昭和': 1925, 'S': 1925, '大正': 1911, 'T': 1911, '明治': 1867, 'M': 1867 };
+    var base = baseMap[era];
+    if (!base) return null;
+    var ey = mw[2] === '元' ? 1 : parseInt(mw[2], 10);
+    if (!ey || ey < 1 || ey > 99) return null;
+    y = base + ey; mo = parseInt(mw[3], 10); d = parseInt(mw[4], 10);
+  }
+  if (y < 1868 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
   var dt = new Date(y, mo - 1, d);
   if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
   return dt;
@@ -287,10 +304,10 @@ function deleteRowRuns_(sh, rowNums) {
 // 棚: seiri
 // 題: 表のデータを整理する
 // 分類: 整える
-// 語: データを整理|空白を除|全角を半角|全角の数字|数字を半角|数字を数値に|空行を詰|重複を消|きれいに整|汚れを直|余分な空白|全角数字|空白行|空行を全部|空白や全角|整理して|きれいにして|きれいに整えて
+// 語: データを整理|空白を除|前後の空白|空白を消|スペースを消|スペースを取り除|前後のスペース|全角を半角|全角の数字|数字を半角|数字を数値に|空行を詰|重複を消|きれいに整|汚れを直|余分な空白|全角数字|空白行|空行を全部|空白や全角|整理して|きれいにして|きれいに整えて
 // 違い: 前後の空白・全角半角・数字文字の掃除と見た目整え（tidy）をまとめて行う。見た目だけと限らない「表をきれいに整えて」はこれ。blank_rows/dedupe を付けない限り行削除はしないので ok 不要で即撃てる。見た目だけなら tidy
 // 引数: trim=真偽, halfwidth=真偽, numbers=真偽, dates=真偽, blank_rows=真偽, dedupe=真偽, renumber=列, tidy=真偽
-// 頼み: blank_rows=true<空行|空いている行 ; dedupe=true<重複 ; halfwidth=true<全角
+// 頼み: blank_rows=true<空行|空いている行 ; dedupe=true<重複 ; halfwidth=true<全角 ; trim=true<前後の空白|余分な空白|余分なスペース|前後のスペース|空白を消|空白を除|スペースを消|スペースを取り除
 // 例: 「全角の数字を半角に直して」 → {"shelf":"seiri"}
 // 例: 「空行を詰めて重複行も消して」 → {"shelf":"seiri","blank_rows":true,"dedupe":true}
 // 危ない: 消す
