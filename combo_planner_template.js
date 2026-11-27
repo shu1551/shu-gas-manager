@@ -727,14 +727,25 @@ var ComboPlanner = (function () {
     return "";
   }
 
+  // 「2020年以降」→ ["ge", "2020/01/01"] 等（Python _year_cmp_of と同じ）
+  function _yearCmpOfJs(text) {
+    var m = /((?:19|20)[0-9]{2})年(以前|まで|以降|から|より前|より後|より新しい|より古い)/.exec(nfkc(text));
+    if (!m) return null;
+    var y = m[1];
+    return ({"以降": ["ge", y + "/01/01"], "から": ["ge", y + "/01/01"], "より後": ["gt", y + "/12/31"], "より新しい": ["gt", y + "/12/31"],
+             "以前": ["le", y + "/12/31"], "まで": ["le", y + "/12/31"], "より前": ["lt", y + "/01/01"], "より古い": ["lt", y + "/01/01"]})[m[2]];
+  }
+
   // 1 つの条件 → 式の中身（= なし）。読めなければ ""（Python _cf_atom と同じ）
   function _cfAtomJs(cond, refL, r1) {
     var e = _cfBlankTodayExprJs(cond, refL, r1);
     if (e) return e.slice(1);
     var c = "$" + refL + r1;
-    var m = /(-?[0-9][0-9,\.]*)\s*(?:円|個|件|人|点|日|%)?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)/.exec(nfkc(cond));
+    var m = /(-?[0-9][0-9,\.]*)\s*([万億千]?)\s*(?:円|個|件|人|点|日|%)?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)/.exec(nfkc(cond));
     if (m) {
-      var n = m[1].replace(/,/g, ""), w = m[2];
+      var n = m[1].replace(/,/g, ""), w = m[3];
+      var mul = ({"万": 10000, "億": 100000000, "千": 1000})[m[2] || ""] || 1;
+      if (mul !== 1) n = String(parseFloat(n) * mul);
       var sym = w === "以上" ? ">=" : w === "以下" ? "<=" : (w === "未満" || w === "より小さい" || w === "を下回る") ? "<" : ">";
       return c + sym + n;
     }
@@ -2862,6 +2873,15 @@ var ComboPlanner = (function () {
       }
     }
 
+    if (shelf.name === "date.age" && !_hasOwn(op, "name")) {
+      var mAge = /(勤続年数|勤続月数|在籍年数|経過年数|経過月数|経過日数|築年数|年齢)/.exec(text);
+      if (mAge && mAge[1] !== "年齢") {
+        op.name = mAge[1];
+        if (/月数$/.test(mAge[1]) && !_hasOwn(op, "unit")) op.unit = "months";
+        else if (/日数$/.test(mAge[1]) && !_hasOwn(op, "unit")) op.unit = "days";
+      }
+    }
+
     if (shelf.name === "seiri") {
       if (!_OPT_COL_CUES_JS.renumber.test(nfkc(text))) delete op.renumber;
       else if (op.col && !_hasOwn(op, "renumber") && !op.trim && !op.halfwidth) {
@@ -2902,6 +2922,14 @@ var ComboPlanner = (function () {
       }
       if (op.when === "ne") delete op.equals;
       _resolveCmpValueJs(op, text);
+      if (!_hasOwn(op, "when")) {
+        var yc = _yearCmpOfJs(text);
+        if (yc) {
+          op.when = yc[0];
+          op.value = yc[1];
+          delete op.equals;
+        }
+      }
       if (!_hasOwn(op, "col") && table && table.columns) {
         var cols = [];
         var dateCandsF = [];

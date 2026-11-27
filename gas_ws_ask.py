@@ -602,7 +602,18 @@ def _cf_blank_today_expr(text, ref_l, r1):
     return ""
 
 
-_CF_NUM_CMP_RE = re.compile(r"(-?[0-9][0-9,\.]*)\s*(?:円|個|件|人|点|日|%)?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)")
+_CF_NUM_CMP_RE = re.compile(r"(-?[0-9][0-9,\.]*)\s*([万億千]?)\s*(?:円|個|件|人|点|日|%)?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)")
+_YEAR_CMP_RE = re.compile(r"((?:19|20)[0-9]{2})年(以前|まで|以降|から|より前|より後|より新しい|より古い)")
+
+
+def _year_cmp_of(text):
+    """「2020年以降」→ ("ge", "2020/01/01") 等（絞り込み・消す・抽出の when/value）"""
+    m = _YEAR_CMP_RE.search(nfkc(text))
+    if not m:
+        return None
+    y, w = m.group(1), m.group(2)
+    return {"以降": ("ge", f"{y}/01/01"), "から": ("ge", f"{y}/01/01"), "より後": ("gt", f"{y}/12/31"), "より新しい": ("gt", f"{y}/12/31"),
+            "以前": ("le", f"{y}/12/31"), "まで": ("le", f"{y}/12/31"), "より前": ("lt", f"{y}/01/01"), "より古い": ("lt", f"{y}/01/01")}[w]
 
 
 def _cf_atom(cond, ref_l, r1):
@@ -614,7 +625,11 @@ def _cf_atom(cond, ref_l, r1):
     m = _CF_NUM_CMP_RE.search(nfkc(cond))
     if m:
         n = m.group(1).replace(",", "")
-        w = m.group(2)
+        mul = {"万": 10000, "億": 100000000, "千": 1000}.get(m.group(2) or "", 1)
+        if mul != 1:
+            v = float(n) * mul
+            n = str(int(v)) if v == int(v) else str(v)
+        w = m.group(3)
         sym = ">=" if w == "以上" else "<=" if w == "以下" else "<" if w in ("未満", "より小さい", "を下回る") else ">"
         return f"{c}{sym}{n}"
     lit = nfkc(cond).strip().strip("「」『』")
@@ -2230,6 +2245,14 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                             op["range"] = ",".join(f"{x}{ch_r1}:{x}{ch_r2}" for x in ordered_ls)
                     if used_group_series and len(label_cols) == 1 and len(num_cols) >= 2 and re.search(r"推移|月別|折れ線|ごと|別", text):
                         op["transpose"] = True
+    if shelf["name"] == "date.age" and "name" not in op:
+        m_age = re.search(r"(勤続年数|勤続月数|在籍年数|経過年数|経過月数|経過日数|築年数|年齢)", text)
+        if m_age and m_age.group(1) != "年齢":
+            op["name"] = m_age.group(1)
+            if m_age.group(1).endswith("月数"):
+                op.setdefault("unit", "months")
+            elif m_age.group(1).endswith("日数"):
+                op.setdefault("unit", "days")
     if shelf["name"] == "seiri":
         if not _OPT_COL_CUES["renumber"].search(nfkc(text)):
             op.pop("renumber", None)
@@ -2264,6 +2287,11 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         if op.get("when") == "ne":
             op.pop("equals", None)
         _resolve_cmp_value(op, text)
+        if "when" not in op:
+            yc = _year_cmp_of(text)
+            if yc:
+                op["when"], op["value"] = yc
+                op.pop("equals", None)
         if "col" not in op and table:
             cols = [c["name"] for c in table.get("columns", [])]
             eq = op.get("equals", "")
