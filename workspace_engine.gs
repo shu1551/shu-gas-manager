@@ -1211,7 +1211,8 @@ function runDo_(req, T0) {
           entry.liteItems = liteItems;
           tm.finger0 = 0;
         } else {
-          entry.before = {}; names.forEach(function (sh0, idx) { var b0 = bk[idx]; entry.before[b0.id] = fingerSheet_(sh0, FP_VER, b0); });
+          // 指紋は「変わったか」を指紋でしか言えない手（書式など）のときだけ取る（速さのため・ほかの手は棚が変えた所を返す）
+          entry.before = {}; if (fingerOnly_(ops, kind)) names.forEach(function (sh0, idx) { var b0 = bk[idx]; entry.before[b0.id] = fingerSheet_(sh0, FP_VER, b0); });
         }
       } else { entry.doc = backupDoc_(ctx.doc, n); lap_(tm, 'backup'); entry.beforeDoc = fingerDoc_(ctx.doc); }
     }
@@ -1244,7 +1245,7 @@ function runDo_(req, T0) {
       if (kind === 'sheet') {
         entry.after = {};
         var keepName = !touchesItem_(ops, 'シート構成'), keepFix = !touchesItem_(ops, '固定');
-        (entry.sheets || []).forEach(function (b) {
+        if (fingerOnly_(ops, kind)) (entry.sheets || []).forEach(function (b) {
           var s = byId_(ctx.ss, b.id);
           if (s) entry.after[b.id] = fingerSheet_(s, FP_VER, { name: keepName ? b.name : undefined, frozenR: keepFix ? b.frozenR : undefined, frozenC: keepFix ? b.frozenC : undefined });
         });
@@ -1598,9 +1599,13 @@ var ERR_SCAN_SKIP = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|fil
 var ERR_RE = /^#(REF!|VALUE!|DIV\/0!|N\/A|NAME\?|NUM!|NULL!|ERROR!)/;
 var FORMULA_DROP_OK = /^(rows\.delete|cols\.delete|dedupe|seiri|clear\.|sheet\.delete|formula\.tovalue|copy\.values|write|replace)/;   // 式が減ってよい（頼みがそういう物）
 var FORMULA_VAL_CHANGE_OK = /^(write|replace|seiri|calc\.col|number\.fix|match\.master|total|text\.(clean|case|affix)|round|formula\.(guard|tovalue)|copy\.values|clear\.|rows\.(delete|insert|move|reverse)|cols\.(delete|move)|filter\.delete|dedupe|blank\.rows\.delete|sort|fill\.|date\.fix|phone\.fix|split\.col|subtotal|table\.new|sheet\.delete|api)/;
+// 撃つ前と後のエラー数え（ブック全体）は、列・行の形を動かす手のときだけ（既存の式の参照がずれる恐れがある）。
+// ほかの手の新しいエラーは、道具（Python）が撃った後の表の読み直しで見る（速さのため）
+var ERR_SCAN_ONLY = /^(cols\.(insert|move|delete)|rows(\.(insert|delete|move))?$|split\.col|transpose|sheet\.(delete|rename|merge|split)|filter\.delete|dedupe|blank\.rows\.delete|rows\.trim|api|script)/;
 function errScanNeeded_(ops) {
   return ops.some(function (o) {
     var nm = String(o.shelf || '');
+    if (!ERR_SCAN_ONLY.test(nm) && !o.at) return false;
     if (ERR_SCAN_SKIP.test(nm)) return false;
     if (typeof CATALOG !== 'undefined' && CATALOG && CATALOG[nm]) {
       var touch = CATALOG[nm].touch || [];

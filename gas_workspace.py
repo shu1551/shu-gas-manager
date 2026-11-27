@@ -1045,7 +1045,12 @@ class WorkspaceManager:
             # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
             keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
             extra = {} if keeps_shape else {"want_table": True}
-            if table and kind == "sheet" and not is_new and not keeps_shape:
+            # 先撃ちの汚れの直しがこの呼び出しで今の表を読んでいて、覚えた形と同じなら、エンジンでの形の確かめは省く（約 0.5 秒）
+            lt = getattr(self, "_light_table", None)
+            fresh_same = bool(lt and table and str(lt.get("header_row")) == str(table.get("header_row"))
+                              and str(lt.get("data")) == str(table.get("data"))
+                              and [c.get("name") for c in lt.get("columns") or []] == [c.get("name") for c in table.get("columns") or []])
+            if table and kind == "sheet" and not is_new and not keeps_shape and not fresh_same:
                 extra["expect"] = table
             st2, res, key = self._do_res(p.ops, target, ok, tim, extra)
             if res.get("stale") and attempt == 0:
@@ -1099,6 +1104,8 @@ class WorkspaceManager:
             out_lines.append("気づき: " + " ／ ".join(merged_ins[:2]))
         if tail:
             out_lines.append(" ／ ".join(tail))
+        if res.get("py_new_errors"):
+            errs = list(errs) + ["新しいエラー: " + "・".join(res["py_new_errors"]) + "（撃つ前には無かった物）"]
         out_lines += self._rest_lines(st2, res, tgt_out.get("sheet") or cur_sh, errs, verify.get("mismatch") or [], merged_ins)
         return "\n".join(out_lines)
 
@@ -1107,10 +1114,12 @@ class WorkspaceManager:
     def _autofix_ops(self, st, tgt, sheet, ops):
         """先撃ちの頼みの手の前に、汚れを直す seiri の手（列ごと）を足す。戻り値 (ops, 番地つきの一言[])"""
         import gas_ws_direct
+        self._light_table = None
         light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), sheet, "A1:Z60")
         if not light or not light.get("table"):
             return ops, []
         ltb = light["table"]
+        self._light_table = ltb
         dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
         if not dr_m:
             return ops, []
@@ -1403,6 +1412,13 @@ class WorkspaceManager:
                         if not keeps_shape:
                             b_map = self._load_sheet_vals(st2, sid_out, sh_for_ins)
                             bnd = self._sheet_vals_bounds(st2, sid_out, sh_for_ins)
+                            if b_map and res.get("changed"):
+                                # 撃った後に新しく出たエラー（エンジンのブック全体の数えを省いた分を、ここで今の表について見る）
+                                _err = lambda v: isinstance(v, str) and v.strip().upper() in ("#VALUE!", "#REF!", "#DIV/0!", "#N/A", "#NAME?", "#NUM!", "#NULL!", "#ERROR!") or (isinstance(v, str) and v.startswith("#VALUE"))
+                                new_errs = [f"{sh_for_ins}!{gas_ws_direct.col_letter(k[1])}{k[0]} {v}"
+                                            for k, v in a_map.items() if _err(v) and not _err(b_map.get(k))]
+                                if new_errs and not any(str(x).startswith("新しいエラー") for x in (res.get("notes") or [])):
+                                    res["py_new_errors"] = new_errs[:5]
                             if b_map and not diff_cells and res.get("changed"):
                                 a_cmp = a_map if not bnd else {k: v for k, v in a_map.items()
                                                                if bnd[0] <= k[0] <= bnd[2] and bnd[1] <= k[1] <= bnd[3]}
