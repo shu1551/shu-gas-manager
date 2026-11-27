@@ -1806,6 +1806,54 @@ _READ_ONLY_QUERY_RE = re.compile(
 )
 
 
+def _chart_summary_ops(op, clause, table):
+    """明細表に対する「〜ごとの／〜別の」グラフ依頼を summary → chart.new の 2 手へ変換する。該当しなければ None。"""
+    if not table or not table.get("columns") or op.get("edit") or op.get("transpose"):
+        return None
+    if _all_explicit_ranges(clause):
+        return None
+    c_n = nfkc(clause)
+    if not re.search(r"(?:ごと(?:に|の)|別(?:に|で|の))", c_n):
+        return None
+    # 軸列（by）を解決
+    by_col = None
+    m_by = re.search(r"([^\s・、をにのはが]{1,16}?)(?:ごと(?:に|の)|別(?:に|で|の))", c_n)
+    if m_by:
+        by_col = _resolve_col_ref(m_by.group(1).strip(), table)
+    if not by_col:
+        return None
+    # 値列（values）を解決
+    func = "count" if re.search(r"件数|人数", c_n) else ("avg" if "平均" in c_n else None)
+    val_cols = []
+    if func == "count":
+        val_cols = [by_col]
+    else:
+        for nm in _col_names(clause, table):
+            if nm != by_col and (not _has_number_meta(table) or _is_number_col(table, nm)) and nm not in val_cols:
+                val_cols.append(nm)
+        if not val_cols:
+            for uc in _resolve_unique_cols(clause, table, number_only=_has_number_meta(table), exclude=(by_col,)):
+                if uc not in val_cols:
+                    val_cols.append(uc)
+        if not val_cols:
+            fb = _single_numeric_fallback(table, exclude=(by_col,))
+            if fb:
+                val_cols.append(fb)
+    if not val_cols:
+        return None
+    into_name = f"集計_{by_col}別"
+    sum_op = {"shelf": "summary", "by": by_col, "values": val_cols, "into": into_name, "ok": True}
+    if func:
+        sum_op["func"] = func
+    if op.get("sheet"):
+        sum_op["sheet"] = op["sheet"]
+    ch_op = {"shelf": "chart.new", "type": op.get("type") or "column", "range": into_name}
+    for k in ("title", "at", "sheet"):
+        if op.get(k) is not None:
+            ch_op[k] = op[k]
+    return [sum_op, ch_op]
+
+
 def _is_read_only_ask(ask):
     """棚が撃てなかった依頼のうち、変更動詞が無く問いの形になっている「読むだけ」かを判定する。"""
     t = nfkc(ask or "").strip()
@@ -2160,6 +2208,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             named = named or added
             if top["danger"] and named and not VAGUE.search(nfkc(c_raw)) and not missing:
                 op["ok"] = True
+        if top["name"] == "chart.new" and not missing:
+            agg_ops = _chart_summary_ops(op, c, table)
+            if agg_ops:
+                p.ops.extend(agg_ops)
+                last_incomplete = None
+                continue
         p.ops.append(op)
         if missing:
             miss_start = len(p.missing)

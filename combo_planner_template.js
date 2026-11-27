@@ -2741,6 +2741,76 @@ var ComboPlanner = (function () {
   var _READ_ONLY_MUTATE_RE_JS = /並べて|並べ替|ソート|絞り込|フィルタ|抽出|消して|消す|削除|取り除|捨て|外して|外す|解除|塗|色[をに]?付|色[をに]?つ|色[をに]?変|色にして|太字|斜体|罫線|固定|フリーズ|非表示|隠して|再表示|追加|足して|作って|作成|入れて|入力|書[きくい]|書き換|置換|直して|そろえて|揃えて|整えて|変換|グラフ|ピボット|集計表|別シート|コピー|複製|移動|変更|保護|結合|幅を|高さを|広げて|狭めて|大きくして|小さくして|プルダウン|リストを作|ハイライト|目立たせ|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$/;
   var _READ_ONLY_QUERY_RE_JS = /[?？]|どこ|どれ|だれ|誰|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|ありますか|あるか|いるか|ですか|でしょうか|どうなって|教えて|知りたい|確認したい|構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ/;
 
+  function _chartSummaryOpsJs(op, clause, table) {
+    if (!table || !Array.isArray(table.columns) || !table.columns.length || op.edit || op.transpose) return null;
+    if (_allExplicitRanges(clause).length) return null;
+    var cN = nfkc(clause);
+    if (!/(?:ごと(?:に|の)|別(?:に|で|の))/.test(cN)) return null;
+    var byCol = null;
+    var mBy = /([^\s・、をにのはが]{1,16}?)(?:ごと(?:に|の)|別(?:に|で|の))/.exec(cN);
+    if (mBy) byCol = _resolveColRefJs(mBy[1].trim(), table);
+    if (!byCol) return null;
+    var hasNum = false;
+    for (var i = 0; i < table.columns.length; i++) {
+      if (table.columns[i] && table.columns[i].number) { hasNum = true; break; }
+    }
+    var isNum = function (colRef) {
+      var r = _resolveColRefJs(colRef, table);
+      if (!r) return false;
+      for (var k = 0; k < table.columns.length; k++) {
+        if (table.columns[k] && (table.columns[k].name === r || table.columns[k].col === r)) return !!table.columns[k].number;
+      }
+      return false;
+    };
+    var func = /件数|人数/.test(cN) ? "count" : (cN.indexOf("平均") >= 0 ? "avg" : null);
+    var valCols = [];
+    if (func === "count") {
+      valCols = [byCol];
+    } else {
+      var cNames = _colNames(clause, table);
+      for (var ni = 0; ni < cNames.length; ni++) {
+        if (cNames[ni] !== byCol && (!hasNum || isNum(cNames[ni])) && valCols.indexOf(cNames[ni]) < 0) valCols.push(cNames[ni]);
+      }
+      if (!valCols.length) {
+        // 省略列名の一意解決
+        var cands = [];
+        for (var ci = 0; ci < table.columns.length; ci++) {
+          var cn = String((table.columns[ci] && table.columns[ci].name) || "").trim();
+          if (!cn || cn === byCol) continue;
+          if (hasNum && !table.columns[ci].number) continue;
+          cands.push(cn);
+        }
+        var work = cN.split(nfkc(byCol)).join(" ");
+        var tokRe = /[一-龥ァ-ヶA-Za-z0-9]{2,}/g;
+        var tm;
+        while ((tm = tokRe.exec(work)) !== null) {
+          var tok = tm[0].replace(/(?:別表|別|毎|列|欄)$/, "");
+          if (tok.length < 2 || _COL_TOKEN_STOP_TOP[tok] || tok === byCol) continue;
+          var hits = cands.filter(function (nm) { return nm.indexOf(tok) >= 0; });
+          if (hits.length === 1 && valCols.indexOf(hits[0]) < 0) valCols.push(hits[0]);
+        }
+      }
+      if (!valCols.length && hasNum) {
+        var nums = [];
+        for (var fi = 0; fi < table.columns.length; fi++) {
+          var fc = table.columns[fi];
+          if (fc && fc.number && fc.name !== byCol && !/^(?:no\.?|番号|id)$/i.test(String(fc.name || "").trim())) nums.push(fc.name);
+        }
+        if (nums.length === 1) valCols.push(nums[0]);
+      }
+    }
+    if (!valCols.length) return null;
+    var intoName = "集計_" + byCol + "別";
+    var sumOp = { shelf: "summary", by: byCol, values: valCols, into: intoName, ok: true };
+    if (func) sumOp.func = func;
+    if (op.sheet) sumOp.sheet = op.sheet;
+    var chOp = { shelf: "chart.new", type: op.type || "column", range: intoName };
+    if (op.title !== undefined) chOp.title = op.title;
+    if (op.at !== undefined) chOp.at = op.at;
+    if (op.sheet !== undefined) chOp.sheet = op.sheet;
+    return [sumOp, chOp];
+  }
+
   function _isReadOnlyAskJs(askText) {
     var t = nfkc(askText || "").trim();
     if (!t) return false;
@@ -3174,6 +3244,14 @@ var ComboPlanner = (function () {
         }
       }
 
+      if (top.name === "chart.new" && !missing.length) {
+        var aggOpsJs = _chartSummaryOpsJs(op, c, table);
+        if (aggOpsJs) {
+          for (var aoi = 0; aoi < aggOpsJs.length; aoi++) p.ops.push(aggOpsJs[aoi]);
+          lastIncomplete = null;
+          continue;
+        }
+      }
       p.ops.push(op);
       if (missing.length) {
         var missStart = p.missing.length;

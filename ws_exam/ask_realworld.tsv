@@ -33,7 +33,7 @@
 # 第2ラウンド（番頭テスト20本：誤爆5件・未到達9件・通過6件）
 1	担当者が田中の行だけ見せて	[{"shelf":"filter.where","col":"担当者","equals":"田中"}]
 1	部門別に売上を集計して	[{"shelf":"summary","by":"部門","values":["売上金額"]}]
-1	売上金額を部門ごとにグラフにして	[{"shelf":"chart.new","type":"column","range":"B3:B9,G3:G9"}]
+1	売上金額を部門ごとにグラフにして	[{"shelf":"summary","by":"部門","values":["売上金額"],"into":"集計_部門別","ok":true},{"shelf":"chart.new","type":"column","range":"集計_部門別"}]
 1	進捗率が100%の行を緑色にして	[{"shelf":"cf.add","range":"A4:I9","when":"formula","value":"=$H4=1","bg":"緑"}]
 1	タイトルを赤文字で大きくして	[{"shelf":"format","title":true,"color":"赤","size_delta":2}]
 1	見出しを太字にして、文字を白、背景を緑にして	[{"shelf":"format","header":true,"bold":true},{"shelf":"format","header":true,"color":"白"},{"shelf":"format","header":true,"bg":"緑"}]
@@ -56,7 +56,7 @@
 0	数量の列に数量と単価を掛けた数式を入れて	上書き不可
 1	金額が10万円以下の行だけ残して	[{"shelf":"filter.where","col":"売上金額","when":"le","value":"100000"}]
 0	存在しない列が10万円以下の行だけ残して	表に無い列名
-1	担当者別の売上を棒グラフにして	[{"shelf":"chart.new","type":"column","range":"C3:C9,G3:G9"}]
+1	担当者別の売上を棒グラフにして	[{"shelf":"summary","by":"担当者","values":["売上金額"],"into":"集計_担当者別","ok":true},{"shelf":"chart.new","type":"column","range":"集計_担当者別"}]
 1	売上金額を3桁区切りに	[{"shelf":"format","range":"G4:G9","number_format":"#,##0"}]
 1	表の1行おきのしましまを外して	[{"shelf":"banding.remove"}]
 1	部門の列に「第一営業部・第二営業部・DX推進部」のプルダウンを作って	[{"shelf":"validation.list","range":"B4:B9","items":["第一営業部","第二営業部","DX推進部"]}]
@@ -74,7 +74,7 @@
 1	進捗率が50%未満の行を削除して	[{"shelf":"filter.delete","col":"進捗率","when":"lt","value":"0.5","ok":true}]
 0	進捗率が50未満の行を削除して	%列
 1	売上から単価を引いた差額の列を作って	[{"shelf":"calc.col","name":"差額","expr":"売上金額-単価"}]
-1	担当ごとの売上をグラフにして	[{"shelf":"chart.new","type":"column","range":"C3:C9,G3:G9"}]
+1	担当ごとの売上をグラフにして	[{"shelf":"summary","by":"担当者","values":["売上金額"],"into":"集計_担当者別","ok":true},{"shelf":"chart.new","type":"column","range":"集計_担当者別"}]
 1	部門ごとに売上金額を合計して	[{"shelf":"summary","by":"部門","values":["売上金額"]}]
 1	金額の合計を一番下に出して	[{"shelf":"total","cols":["売上金額"]}]
 1	単価の列を薄い青で塗って	[{"shelf":"format","range":"F4:F9","bg":"薄青"}]
@@ -95,3 +95,5 @@ R	11月の数字が一番大きい部門はどこ？
 1	備考の列を消してもらえますか？	[{"shelf":"cols.delete","cols":["備考"],"ok":true}]
 1	日付の新しい順に並べ替えられますか？	[{"shelf":"sort","col":"日付","desc":true}]
 1	部門ごとの売上を別シートにまとめてくれる？	[{"shelf":"summary","by":"部門","values":["売上金額"]}]
+# 項目3: 〜ごとのグラフ（集計表を作ってからグラフ）
+1	担当者ごとの売上を棒グラフにして	[{"shelf":"summary","by":"担当者","values":["売上金額"],"into":"集計_担当者別","ok":true},{"shelf":"chart.new","type":"column","range":"集計_担当者別"}]

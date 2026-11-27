@@ -210,7 +210,7 @@ SHELF['pivot.new'] = function (ctx, op) {
 // 題: グラフを作る・直す
 // 分類: 集計
 // 語: グラフを作|グラフにして|グラフを入れ|棒グラフ|折れ線|円グラフ|推移|グラフのタイトル
-// 違い: タイトルや種類を変えるときは chart.delete で消して作り直さず、{"shelf":"chart.new","edit":true,"title":"..."} で既存グラフを変更する（target 指定可）。「〇〇ごとの△△をグラフにして」でも集計表作成の頼みが無ければ summary で新シートを足さず元表 2 列（例 "C1:C21,G1:G21"）でそのまま描く。ピボットは pivot.new
+// 違い: タイトルや種類を変えるときは chart.delete で消して作り直さず、{"shelf":"chart.new","edit":true,"title":"..."} で既存グラフを変更する（target 指定可）。明細表の「〇〇ごとの△△をグラフにして」は summary で集計表を作ってからその集計シート（range:"集計_〇〇別"）で描く。ピボットは pivot.new
 // 引数: range=範囲, type=選択(column/bar/line/pie/area/scatter)=column, title=文字, at=範囲, target=文字, edit=真偽, transpose=真偽
 // 頼み: type=bar<横棒 ; type=line<折れ線 ; type=pie<円グラフ ; type=area<面グラフ ; type=scatter<散布図 ; type=column<棒グラフ|縦棒|グラフ ; title~タイトルを[『「]([^』」]+)[』」] ; title~グラフ[^、。]*タイトルを([^』」\s、。]+?)(?:に|へ) ; edit=true<グラフのタイトル|今あるグラフ|既存のグラフ
 // 例: 「売上の推移を折れ線グラフにして」 → {"shelf":"chart.new","type":"line","title":"売上推移"}
