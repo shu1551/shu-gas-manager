@@ -878,6 +878,82 @@ class WorkspaceManager:
                                 )
                 except Exception:
                     pass
+            # 絞り込み（絞る分類で equals/value を持つ棚）で完全一致 0 件になる場合は、実際の列値と突き合わせて補正または候補を返す
+            if kind == "sheet" and not is_new and any(
+                isinstance(o, dict) and (self.catalog.by_name.get(o.get("shelf")) or {}).get("cat") == "絞る"
+                and (o.get("equals") is not None or o.get("value") is not None)
+                for o in p.ops
+            ):
+                try:
+                    import gas_ws_direct
+                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), cur_sh, "A1:Z60")
+                    if light and light.get("table"):
+                        ltb = light["table"]
+                        dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
+                        if dr_m:
+                            r_a, r_b = int(dr_m.group(1)), int(dr_m.group(2))
+                            ent_l = light["snap"].sheet(cur_sh)
+                            cells_l = ent_l.get("cells") or {}
+                            for f_op in p.ops:
+                                if not isinstance(f_op, dict) or (self.catalog.by_name.get(f_op.get("shelf")) or {}).get("cat") != "絞る":
+                                    continue
+                                f_when = str(f_op.get("when") or "eq").lower()
+                                f_val = f_op.get("equals") if f_op.get("equals") is not None else f_op.get("value")
+                                if f_when not in ("eq", "ne") or f_val is None or not f_op.get("col"):
+                                    continue
+                                f_val_s = str(f_val).strip()
+                                f_ci = gas_ws_direct.DirectRunner._col_of(ltb, f_op["col"])
+                                col_vals = []
+                                for rr in range(r_a, r_b + 1):
+                                    tv = gas_ws_direct.Snapshot.value_text(cells_l.get((rr, f_ci))).strip()
+                                    if tv and tv not in col_vals:
+                                        col_vals.append(tv)
+                                if col_vals and f_val_s not in col_vals:
+                                    cands = [cv for cv in col_vals if f_val_s in cv or cv in f_val_s]
+                                    if len(cands) == 1:
+                                        if f_op.get("equals") is not None:
+                                            f_op["equals"] = cands[0]
+                                        else:
+                                            f_op["value"] = cands[0]
+                                    else:
+                                        show_cands = "・".join((cands or col_vals)[:8])
+                                        return (
+                                            f"{self._title(tgt)}\n"
+                                            f"確認: 「{f_op['col']}」列に「{f_val_s}」と完全一致する行がありません（0件になります）。\n"
+                                            f"この列にある値: {show_cands}\n"
+                                            "どの値で絞り込むか指定してください（まだシートは変更していません）。"
+                                        )
+                except Exception:
+                    pass
+            # total のとき、対象列に「12,000円」などの文字の数が含まれていれば seiri で数値化してから合計を出し直す
+            if kind == "sheet" and not is_new and len(p.ops) == 1 and p.ops[0].get("shelf") == "total":
+                try:
+                    import gas_ws_direct
+                    t_op = p.ops[0]
+                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), cur_sh, "A1:Z60")
+                    if light and light.get("table"):
+                        ltb = light["table"]
+                        dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
+                        if dr_m:
+                            r_a, r_b = int(dr_m.group(1)), int(dr_m.group(2))
+                            ent_l = light["snap"].sheet(cur_sh)
+                            cells_l = ent_l.get("cells") or {}
+                            chk_cols = t_op.get("cols") or ([t_op["col"]] if t_op.get("col") else [c["col"] for c in (ltb.get("columns") or []) if c.get("number")])
+                            fix_cols = []
+                            for cc_name in chk_cols:
+                                c_num = gas_ws_direct.DirectRunner._col_of(ltb, cc_name)
+                                for rr in range(r_a, r_b + 1):
+                                    cell_d = cells_l.get((rr, c_num)) or {}
+                                    ev = cell_d.get("effectiveValue") or {}
+                                    if "stringValue" in ev:
+                                        sv = str(ev["stringValue"]).strip()
+                                        if re.fullmatch(r"[¥￥$]?\s*-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?\s*(?:円|個|件|本|枚|台)?", sv):
+                                            fix_cols.append(cc_name)
+                                            break
+                            if fix_cols:
+                                p.ops = [{"shelf": "seiri", "col": fc, "numbers": True, "tidy": False, "ok": True} for fc in fix_cols] + p.ops
+                except Exception:
+                    pass
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
             # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
             keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
@@ -947,25 +1023,23 @@ class WorkspaceManager:
                                 verify = gas_ws_insights.verify_after_do(light["table"], v_grid, f_grid, ops=p.ops)
                 except Exception:
                     insights = insights or []
-        # 記憶済みのブック健診から、この手に効く項目だけ最大2件補う
+        # 記憶済みのブック健診から、この手に効く項目（ずれ・欠け）を持ち越して必ず添える
         diag_all = ((st2.get("book_diagnosis") or {}).get(sid_out) or {}).get("findings") or []
+        sticky_insights = []
         if diag_all and sid_out:
-            op_shs = {str(o.get("shelf") or "") for o in p.ops if isinstance(o, dict)}
+            op_cats = {(self.catalog.by_name.get(o.get("shelf")) or {}).get("cat") for o in p.ops if isinstance(o, dict)}
             want_tags = set()
-            if op_shs & {"summary", "top.n", "chart.new", "pivot.new"}:
-                want_tags.update({"key_whitespace_split", "status_in_total", "note_contradiction"})
-            elif op_shs & {"calc.col", "total"}:
-                want_tags.update({"note_contradiction", "calc_mismatch"})
-            elif op_shs & {"dedupe"}:
-                want_tags.add("key_dup_diff")
-            elif op_shs & {"filter", "filter.where", "sort"}:
+            if op_cats & {"集計", "計算"}:
+                want_tags.update({"cross_sheet_mismatch", "key_whitespace_split", "status_in_total", "note_contradiction", "calc_mismatch", "period_structure", "blank_col"})
+            elif "絞る" in op_cats:
                 want_tags.add("sum_subtotal")
+            elif any(isinstance(o, dict) and o.get("shelf") == "dedupe" for o in p.ops):
+                want_tags.add("key_dup_diff")
             if want_tags:
-                extra_diag = [
+                sticky_insights = [
                     d["text"] for d in diag_all
-                    if d.get("tag") in want_tags and d.get("sheet") == sh_for_ins
-                ]
-                insights = list(insights or []) + extra_diag
+                    if d.get("tag") in want_tags and (d.get("sheet") == sh_for_ins or d.get("tag") == "cross_sheet_mismatch")
+                ][:2]
         if diff_cells:
             out_lines.append("変更前→後: " + " ／ ".join(diff_cells))
         if verify.get("mismatch"):
@@ -974,10 +1048,10 @@ class WorkspaceManager:
             tail.append("検算が合いません。確認するか ws_undo で戻してください")
         elif verify.get("checks"):
             out_lines.append("検算: " + " ／ ".join(verify["checks"]))
-        if insights:
-            insights = self._filter_new_insights(st2, sid_out, sh_for_ins, insights)
-            if insights:
-                out_lines.append("気づき: " + " ／ ".join(insights[:2]))
+        filtered_ins = self._filter_new_insights(st2, sid_out, sh_for_ins, insights) if insights else []
+        merged_ins = list(dict.fromkeys(sticky_insights + filtered_ins))
+        if merged_ins:
+            out_lines.append("気づき: " + " ／ ".join(merged_ins[:2]))
         self._save(st2)
         out_lines.append(" ／ ".join(tail))
         return "\n".join(out_lines)
@@ -1478,7 +1552,12 @@ class WorkspaceManager:
                         if len(diag_map) > 5:
                             for old_sid in list(diag_map.keys())[:-5]:
                                 diag_map.pop(old_sid, None)
-                        ins.extend(f["text"] for f in findings[:6])
+                        ins.extend(f["text"] for f in findings[:8])
+                elif sid_lk and sid_lk in diag_map:
+                    # 2回目以降の別シート look では、そのシートに関する未提示の健診項目も出す
+                    for d in (diag_map[sid_lk].get("findings") or []):
+                        if d.get("sheet") == sh_lk:
+                            ins.append(d["text"])
                 if not ins:
                     ins = gas_ws_insights.analyze_from_look_res(res)
                 ins = self._filter_new_insights(st, sid_lk, sh_lk, ins)
@@ -1524,7 +1603,7 @@ class WorkspaceManager:
                     lines.append("\t".join(cells))
             if res.get("insights"):
                 lines.append("気づき:")
-                for ins in res["insights"][:6]:
+                for ins in res["insights"][:8]:
                     lines.append("- " + ins)
         else:
             lines.append(f"段落数 {res.get('paragraphs')}・見出し: " + (" / ".join(f"{h['no']}:{'#' * h['level']}{h['text']}" for h in res.get("headings", [])) or "なし"))
@@ -1574,7 +1653,11 @@ class WorkspaceManager:
         t = res.get("target") or {}
         if res.get("ok"):
             if t.get("id"):
+                prev_cur = st.get("target") or {}
+                kept_sheet = t.get("sheet") or (prev_cur.get("sheet") if prev_cur.get("id") == t.get("id") else "")
                 st["target"] = {k: t[k] for k in ("id", "name", "kind", "url") if t.get(k)}
+                if kept_sheet:
+                    st["target"]["sheet"] = kept_sheet
                 st.get("fails", {}).pop(t["id"], None)
                 self._save(st)
             return "\n".join([self._title(t), f"戻した: #{res['undone']}（{res.get('what', '')}）を取り消しました",

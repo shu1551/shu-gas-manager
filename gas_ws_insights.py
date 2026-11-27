@@ -512,7 +512,7 @@ def analyze_from_snapshot(snap, sheet_name, tb, ops=None, max_items=3):
 # 【1】ブック全体健診（全シート総当たり・8つの型）
 # ====================================================================
 _ERR_TOKENS = ("#REF!", "#NAME?", "#VALUE!", "#N/A", "#DIV/0!", "#NUM!", "#ERROR!")
-_CROSS_REF_RE = re.compile(r"(?:'([^']+)'|([A-Za-z0-9_\u3040-\u30ff\u4e00-\u9faf]+))![$]?[A-Z]{1,3}[$]?\d+")
+_CROSS_REF_RE = re.compile(r"(?:'([^']+)'|([A-Za-z0-9_\u3040-\u30ff\u4e00-\u9faf]+))![$]?[A-Z]{1,3}(?:[$]?\d+|:[A-Z]{1,3})")
 _KEY_HEAD_RE = re.compile(r"(?:コード|ID|番号|No|顧客|部門|部署|担当|商品|店舗|地域)", re.I)
 _UNIQUE_KEY_HEAD_RE = re.compile(r"(?:コード|ID|社員番号|会員番号|顧客番号|管理番号|注文番号|メール|mail)", re.I)
 _PCT_OFF_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]\s*(?:引|びき|オフ|OFF)", re.I)
@@ -705,6 +705,138 @@ def diagnose_workbook(sheets_payload):
         if int(tb.get("header_rows") or 1) > 1:
             hr = int(tb.get("header_row") or 1)
             add_f(sh, "period_structure", 4, f"[{sh}] 2段見出し（{hr}-{hr + int(tb['header_rows']) - 1}行目）の表です")
+
+        # --- 型7補足: 月の列・データ列が丸ごと空欄 ---
+        if last_data - first_data >= 1:
+            for c in col_infos:
+                if _MONTH_RE.search(c["name"]) or c["number"]:
+                    all_empty = all(str(gval(r, c["ci"]) or "").strip() == "" for r in range(first_data, last_data + 1))
+                    if all_empty:
+                        add_f(sh, "blank_col", 2, f"[{sh}] 「{c['name']}」列（{c['col']}列）がすべて空欄です")
+
+        # --- 型8補足: SUMIF/COUNTIF 等の他シート照合キーずれで 0 になっている ---
+        for r in range(first_data, last_data + 1):
+            for c in col_infos:
+                sf = gform(r, c["ci"])
+                if not sf.startswith("=") or not re.search(r"(?:SUM|COUNT|AVERAGE)IFS?\(", sf, re.I):
+                    continue
+                m_ref = _CROSS_REF_RE.search(sf)
+                if not m_ref:
+                    continue
+                ref_sh = m_ref.group(1) or m_ref.group(2)
+                val_num = _to_float(gval(r, c["ci"]))
+                if val_num is None or abs(val_num) > 1e-6:
+                    continue
+                # 同じ行の先頭文字列（キー候補）が参照先シートの文字列に完全一致しないが部分一致するか
+                ref_sp = next((x for x in sheets_payload if str(x.get("sheet") or "") == ref_sh), None)
+                if not ref_sp or not ref_sp.get("values"):
+                    continue
+                ref_strings = {
+                    str(rv).strip()
+                    for rrow in ref_sp["values"]
+                    for rv in rrow
+                    if isinstance(rv, str) and rv.strip()
+                }
+                for kc in col_infos:
+                    if kc["number"]:
+                        continue
+                    k_val = str(gval(r, kc["ci"]) or "").strip()
+                    if not k_val or k_val in ref_strings:
+                        continue
+                    partial = [rs for rs in ref_strings if k_val in rs or rs in k_val]
+                    if partial:
+                        add_f(
+                            sh,
+                            "cross_sheet_mismatch",
+                            1,
+                            f"[{sh}] {c['col']}{r}（{c['name']}）が 0 になっています: 「{k_val}」（{kc['col']}{r}）が「{ref_sh}」側の「{partial[0]}」等と表記がずれています",
+                        )
+                        break
+
+    # --- ブック横断チェック: 申請者/担当者等がマスタシートにいない・期間ずれ ---
+    master_sets = {}
+    sheet_months_info = {}
+    for sp in sheets_payload:
+        sh = str(sp.get("sheet") or "")
+        tb = sp.get("table")
+        vals = sp.get("values") or []
+        if not tb or not vals:
+            continue
+        dr = _parse_data_range(tb)
+        if not dr:
+            continue
+        r1, r2 = dr
+        cols = tb.get("columns") or []
+        if re.search(r"社員|名簿|マスタ|顧客|メンバー", sh):
+            for c in cols:
+                cn = str(c.get("name") or "")
+                if not re.search(r"番号|ID|コード", cn, re.I) and re.search(r"氏名|名前|社員名|顧客名|名$", cn):
+                    ci = _col_num(c.get("col"))
+                    master_sets[sh] = {
+                        _nfkc_trim(str(vals[r - 1][ci - 1]))
+                        for r in range(r1, r2 + 1)
+                        if r - 1 < len(vals) and ci - 1 < len(vals[r - 1]) and str(vals[r - 1][ci - 1] or "").strip()
+                    }
+                    break
+        # 期間抽出（日付列の年月 or 月見出し）
+        m_cols = [int(_MONTH_RE.search(str(c.get("name") or "")).group(2)) for c in cols if _MONTH_RE.search(str(c.get("name") or ""))]
+        if m_cols:
+            sheet_months_info[sh] = ("header", sorted(set(m_cols)))
+        else:
+            d_months = set()
+            for c in cols:
+                if _DATE_HEAD_RE.search(str(c.get("name") or "")):
+                    ci = _col_num(c.get("col"))
+                    for r in range(r1, r2 + 1):
+                        if r - 1 < len(vals) and ci - 1 < len(vals[r - 1]):
+                            sv = str(vals[r - 1][ci - 1] or "")
+                            mm = re.match(r"^\d{4}[/-](\d{1,2})[/-]\d{1,2}", sv)
+                            if mm:
+                                d_months.add(int(mm.group(1)))
+            if d_months:
+                sheet_months_info[sh] = ("date", sorted(d_months))
+
+    if master_sets:
+        m_sh, m_names = next(iter(master_sets.items()))
+        for sp in sheets_payload:
+            sh = str(sp.get("sheet") or "")
+            if sh == m_sh:
+                continue
+            tb = sp.get("table")
+            vals = sp.get("values") or []
+            if not tb or not vals:
+                continue
+            dr = _parse_data_range(tb)
+            if not dr:
+                continue
+            r1, r2 = dr
+            for c in (tb.get("columns") or []):
+                cn = str(c.get("name") or "")
+                if re.search(r"申請者|担当者|社員|氏名|名前", cn):
+                    ci = _col_num(c.get("col"))
+                    missing_names = []
+                    for r in range(r1, r2 + 1):
+                        if r - 1 < len(vals) and ci - 1 < len(vals[r - 1]):
+                            raw_n = str(vals[r - 1][ci - 1] or "").strip()
+                            if raw_n and _nfkc_trim(raw_n) not in m_names:
+                                missing_names.append(f"{c.get('col')}{r}「{raw_n}」")
+                    if missing_names:
+                        add_f(sh, "cross_sheet_mismatch", 1, f"[{sh}] 「{cn}」に「{m_sh}」シートへ登録のない人がいます（{missing_names[0]}）")
+
+    if len(sheet_months_info) >= 2:
+        items_m = list(sheet_months_info.items())
+        for i in range(len(items_m)):
+            for j in range(i + 1, len(items_m)):
+                s1, (k1, m1) = items_m[i]
+                s2, (k2, m2) = items_m[j]
+                if set(m1) != set(m2) and (set(m1) - set(m2) or set(m2) - set(m1)):
+                    add_f(
+                        s1,
+                        "period_structure",
+                        2,
+                        f"[{s1}/{s2}] シート間で対象月の範囲がずれています（{s1}: {','.join(str(x)+'月' for x in m1)} ／ {s2}: {','.join(str(x)+'月' for x in m2)}）",
+                    )
+                    break
 
     findings.sort(key=lambda x: x["priority"])
     return findings

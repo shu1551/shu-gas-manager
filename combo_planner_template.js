@@ -2140,6 +2140,8 @@ var ComboPlanner = (function () {
           // 頼みに該当動作の語が無い任意列引数（at / renumber / number 等）には流さない
         } else if (shelf.name === "calc.col" && k === "at") {
           // calc.col の at は専用解析で決める
+        } else if (shelf.name === "seiri" && !/列|欄/.test(nfkc(text))) {
+          // 全体掃除では「〇〇の表」等で単一列に絞らない
         } else if (colPool.length && !(anyList.indexOf(k) >= 0 && hasAnyFilled())) {
           av = colPool.shift();
         }
@@ -3653,6 +3655,7 @@ var ComboPlanner = (function () {
       }
     }
     if (!valCols.length) return null;
+    if (!func && valCols.length >= 2 && !/集計|合計|平均/.test(cN)) return null;
     var intoName = "集計_" + byCol + "別";
     var sumOp = { shelf: "summary", by: byCol, values: valCols, into: intoName, ok: true };
     if (func) sumOp.func = func;

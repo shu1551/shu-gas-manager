@@ -231,3 +231,111 @@ def test_diagnose_workbook_8_types_and_verify_and_diff():
     # 差分
     diffs = I.diff_cell_values({(3, 4): "5,000"}, {(3, 4): "6,000"})
     assert diffs == ["D3: 5,000 → 6,000"]
+
+
+def test_cross_sheet_diagnosis_and_planner_fixes():
+    import gas_ws_ask as A
+    import gas_ws_find as F
+
+    # 1. 他シートの壊れ（SUMIF照合ずれで0、社員表不在、月列空欄、期間ずれ）
+    payload = [
+        {
+            "sheet": "経費",
+            "table": {
+                "header_row": 1,
+                "first_col": "A",
+                "last_col": "D",
+                "data": "2-3",
+                "columns": [
+                    {"col": "A", "name": "申請日", "number": False},
+                    {"col": "B", "name": "申請者", "number": False},
+                    {"col": "C", "name": "部署", "number": False},
+                    {"col": "D", "name": "金額", "number": True},
+                ],
+            },
+            "values": [
+                ["申請日", "申請者", "部署", "金額"],
+                ["2026/11/01", "佐藤", "開発部", 5000],
+                ["2026/10/30", "中村", "営業部", 3000],
+            ],
+            "formulas": [[""] * 4] * 3,
+            "side": [],
+        },
+        {
+            "sheet": "社員",
+            "table": {
+                "header_row": 1,
+                "first_col": "A",
+                "last_col": "B",
+                "data": "2-2",
+                "columns": [
+                    {"col": "A", "name": "社員番号", "number": False},
+                    {"col": "B", "name": "氏名", "number": False},
+                ],
+            },
+            "values": [["社員番号", "氏名"], ["E001", "佐藤"]],
+            "formulas": [[""] * 2] * 2,
+            "side": [],
+        },
+        {
+            "sheet": "予算",
+            "table": {
+                "header_row": 1,
+                "first_col": "A",
+                "last_col": "D",
+                "data": "2-3",
+                "columns": [
+                    {"col": "A", "name": "部署", "number": False},
+                    {"col": "B", "name": "4月", "number": True},
+                    {"col": "C", "name": "12月", "number": True},
+                    {"col": "D", "name": "実績", "number": True},
+                ],
+            },
+            "values": [
+                ["部署", "4月", "12月", "実績"],
+                ["開発", 10000, "", 0],
+                ["営業部", 20000, "", 3000],
+            ],
+            "formulas": [
+                ["", "", "", ""],
+                ["", "", "", "=SUMIF(経費!C:C,A2,経費!D:D)"],
+                ["", "", "", "=SUMIF(経費!C:C,A3,経費!D:D)"],
+            ],
+            "side": [],
+        },
+    ]
+    findings = I.diagnose_workbook(payload)
+    texts = "\n".join(f["text"] for f in findings)
+    assert "表記がずれています" in texts
+    assert "登録のない人がいます" in texts
+    assert "空欄です" in texts
+    assert "対象月の範囲がずれています" in texts
+
+    # 2. 全体系 seiri で列名部分一致しない
+    tb_emp = {
+        "header_row": 1,
+        "first_col": "A",
+        "last_col": "F",
+        "data": "2-7",
+        "columns": [{"col": "A", "name": "社員番号"}, {"col": "B", "name": "氏名"}],
+    }
+    p_s = A.plan("社員の表をきれいにして", F.Finder(), "sheet", tb_emp)
+    assert p_s.choices and p_s.choices[0]["ops"] == [{"shelf": "tidy"}]
+
+    # 3. 2列揃っているときは summary せず chart.new
+    tb_bud = {
+        "header_row": 1,
+        "first_col": "A",
+        "last_col": "I",
+        "data": "3-6",
+        "columns": [
+            {"col": "A", "name": "部署"},
+            {"col": "H", "name": "予算", "number": True},
+            {"col": "I", "name": "実績", "number": True},
+        ],
+    }
+    p_c = A.plan("部署ごとの予算と実績を棒グラフで並べて", F.Finder(), "sheet", tb_bud)
+    assert p_c.fire
+    assert len(p_c.ops) == 1
+    assert p_c.ops[0]["shelf"] == "chart.new"
+    assert "A1:A6" in p_c.ops[0]["range"] and "H1:I6" in p_c.ops[0]["range"]

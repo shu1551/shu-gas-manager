@@ -408,7 +408,8 @@ SHELF['seiri'] = function (ctx, op) {
       if (op.trim_inner) { var ti = nv.replace(/[\s　]+/g, ''); if (ti !== nv) { nv = ti; nTrim++; } }
       else if (doTrim) { var tr = nv.replace(/^[\s　]+|[\s　]+$/g, ''); if (tr !== nv) { nv = tr; nTrim++; } }
       var isCodeLike = keepTextCol[c] || /^[+-]?0\d/.test(nv);
-      if (doNum && isDataR && !isCodeLike && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(nv)) { nv = Number(nv.replace(/,/g, '')); nNum++; }
+      var numClean = isDataR && !isCodeLike ? nv.replace(/^[¥￥$]\s*/, '').replace(/\s*(?:円|個|件|本|枚|台)$/, '').trim() : '';
+      if (doNum && isDataR && !isCodeLike && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(numClean)) { nv = Number(numClean.replace(/,/g, '')); nNum++; }
       else if (doDate && isDataR && !isCodeLike && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
       if (nv !== v) {
         var a1k = a1_(startRow + r, startCol + c);

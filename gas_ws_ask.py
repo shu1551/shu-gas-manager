@@ -1858,6 +1858,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 pass
             elif shelf["name"] == "calc.col" and k == "at":
                 pass
+            elif shelf["name"] == "seiri" and not re.search(r"列|欄", nfkc(text)):
+                pass
             elif col_pool and not (k in shelf["any"] and any(op.get(x) not in (None, "", []) for x in shelf["any"])):
                 v = col_pool.pop(0)
         elif t == "列[]":
@@ -2775,6 +2777,8 @@ def _chart_summary_ops(op, clause, table):
             if fb:
                 val_cols.append(fb)
     if not val_cols:
+        return None
+    if not func and len(val_cols) >= 2 and not re.search(r"集計|合計|平均", c_n):
         return None
     into_name = f"集計_{by_col}別"
     sum_op = {"shelf": "summary", "by": by_col, "values": val_cols, "into": into_name, "ok": True}
