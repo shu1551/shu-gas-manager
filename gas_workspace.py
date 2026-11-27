@@ -1168,7 +1168,7 @@ class WorkspaceManager:
                 a0, b0 = int(mm.group(2)), int(mm.group(4))
                 if a0 == r_a and b0 < r_b:
                     tfix[f"{col}{tot_r}"] = f"=SUM({col}{r_a}:{col}{r_b})"
-                    notes.append(f"{col}{tot_r}「{fv}」（{b0 + 1}〜{r_b} 行目が漏れている）→ =SUM({col}{r_a}:{col}{r_b})")
+                    notes.append(f"{col}{tot_r}「{fv}」（{(str(r_b) if b0 + 1 == r_b else f'{b0 + 1}〜{r_b}')} 行目が漏れている）→ =SUM({col}{r_a}:{col}{r_b})")
             if tfix:
                 add.append({"shelf": "write", "cells": tfix})
         # 合計を直す頼みでは、式の列に値が直に書かれた行（=E{r}*F{r} の列の G9 に 1200 等）も式に戻す。
@@ -1406,6 +1406,46 @@ class WorkspaceManager:
         lines.append("上の表の中身と根拠セル・健診結果をもとに、シートを変更せずそのまま答えてください。")
         return "\n".join(lines)
 
+    def _sort_date_notes(self, st2, sid, sheet, ops):
+        """並べ替えた列の日付の崩れ（文字の日付・先の日付）を、その手の返事に毎回添える（健診の「一度だけ」とは別）"""
+        cols = [o.get("col") for o in (ops or []) if isinstance(o, dict) and o.get("shelf") == "sort" and o.get("col")]
+        if not cols or st2.get("direct_off") or not sid:
+            return []
+        try:
+            import gas_ws_direct, gas_ws_ask
+            from datetime import date, timedelta
+            light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid, sheet, "A1:Z60")
+            tb = (light or {}).get("table") or {}
+            m = re.fullmatch(r"(\d+)-(\d+)", str(tb.get("data") or ""))
+            if not m:
+                return []
+            cells = light["snap"].sheet(sheet).get("cells") or {}
+            out = []
+            for name in cols:
+                c = next((gas_ws_direct.col_num(x["col"]) for x in tb.get("columns") or [] if str(x.get("name")) == str(name)), None)
+                if not c:
+                    continue
+                L = gas_ws_direct.col_letter(c)
+                texts, fut, n_date = [], [], 0
+                for r in range(int(m.group(1)), int(m.group(2)) + 1):
+                    cell = cells.get((r, c)) or {}
+                    ev = cell.get("effectiveValue") or {}
+                    typ = (((cell.get("effectiveFormat") or {}).get("numberFormat")) or {}).get("type")
+                    if "numberValue" in ev and typ in ("DATE", "DATE_TIME"):
+                        n_date += 1
+                        d = date(1899, 12, 30) + timedelta(days=int(ev["numberValue"]))
+                        if d > date.today() + timedelta(days=31):
+                            fut.append(f"{L}{r} {d:%Y/%m/%d}")
+                    elif "stringValue" in ev and gas_ws_ask._parse_cmp_date_str(ev["stringValue"]):
+                        texts.append(f"{L}{r}「{ev['stringValue']}」")
+                if n_date and texts:
+                    out.append(f"文字の日付は日付として並ばず、末尾に回っています: {'・'.join(texts[:3])}（日付に直すなら date.fix）")
+                if fut:
+                    out.append(f"先の日付が並びに入っています: {'・'.join(fut[:3])}（入力の誤りの疑い）")
+            return out
+        except Exception:
+            return []
+
     def _enrich_do_res(self, st2, res, ops, cur_sh, keeps_shape=False):
         """ws_do(ask/ops) 共通で検算・変更前→後差分・健診のずれ持ち越しを res に付与する。"""
         if not res.get("ok") or res.get("local_only"):
@@ -1500,10 +1540,10 @@ class WorkspaceManager:
                     if d.get("tag") in want_tags and (d.get("sheet") == sh_for_ins or d.get("tag") == "cross_sheet_mismatch")
                 ][:2]
         filtered_ins = self._filter_new_insights(st2, sid_out, sh_for_ins, insights) if insights else []
-        merged_ins = list(dict.fromkeys(sticky_insights + filtered_ins))
+        merged_ins = list(dict.fromkeys(self._sort_date_notes(st2, sid_out, sh_for_ins, ops) + sticky_insights + filtered_ins))
         res["diff_cells"] = diff_cells
         res["verify"] = verify
-        res["insights"] = merged_ins[:2]
+        res["insights"] = merged_ins[:3]
         self._save(st2)
 
     def _do(self, ops, target, ok, tim):
