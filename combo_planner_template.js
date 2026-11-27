@@ -719,7 +719,72 @@ var ComboPlanner = (function () {
     if (/空欄|空白|未入力|入力されていない/.test(t)) return "=" + c + "=\"\"";
     if (/今日(?:より前|以前|を過ぎ|が過ぎ)|期限切れ|期限が切れ|期限を過ぎ/.test(t)) return "=AND(ISNUMBER(" + c + ")," + c + (t.indexOf("以前") >= 0 ? "<=" : "<") + "TODAY())";
     if (/今日(?:より後|以降|より先)/.test(t)) return "=AND(ISNUMBER(" + c + ")," + c + (t.indexOf("以降") >= 0 ? ">=" : ">") + "TODAY())";
+    var mY = /((?:19|20)[0-9]{2})年(以前|まで|以降|から|より前|より後|より新しい|より古い)/.exec(t);
+    if (mY) {
+      var symY = { "以前": "<=", "まで": "<=", "より前": "<", "より古い": "<", "以降": ">=", "から": ">=", "より後": ">", "より新しい": ">" }[mY[2]];
+      return "=AND(ISNUMBER(" + c + "),YEAR(" + c + ")" + symY + mY[1] + ")";
+    }
     return "";
+  }
+
+  // 1 つの条件 → 式の中身（= なし）。読めなければ ""（Python _cf_atom と同じ）
+  function _cfAtomJs(cond, refL, r1) {
+    var e = _cfBlankTodayExprJs(cond, refL, r1);
+    if (e) return e.slice(1);
+    var c = "$" + refL + r1;
+    var m = /(-?[0-9][0-9,\.]*)\s*(?:円|個|件|人|点|日|%)?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)/.exec(nfkc(cond));
+    if (m) {
+      var n = m[1].replace(/,/g, ""), w = m[2];
+      var sym = w === "以上" ? ">=" : w === "以下" ? "<=" : (w === "未満" || w === "より小さい" || w === "を下回る") ? "<" : ">";
+      return c + sym + n;
+    }
+    var lit = nfkc(cond).trim().replace(/^[「『]+|[」』]+$/g, "");
+    if (lit && /^[^\s、。をにがはでの]{1,16}$/.test(lit) && !/以上|以下|未満|より|超|以外|ない|前|後/.test(lit)) return c + "=\"" + lit + "\"";
+    return "";
+  }
+
+  // 「〈列A〉が〈条件〉で〈列B〉が〈条件〉の行」→ [式, 読めたか]（Python _cf_compound_expr と同じ）
+  function _cfCompoundExprJs(text, table) {
+    if (!table || !Array.isArray(table.columns) || !table.columns.length) return null;
+    var t = nfkc(text);
+    var m = /([^\s、。をに]{1,16}?)(?:列)?(?:が|は)(.+?)(?:で|かつ|且つ|、かつ|、)([^\s、。をに]{1,16}?)(?:列)?(?:が|は)(.+?)(?:の行|行を|行全体|行に)/.exec(t);
+    if (!m) return null;
+    var c1 = _resolveColRefJs(m[1], table), c2 = _resolveColRefJs(m[3], table);
+    if (!c1 || !c2 || c1 === c2) return null;
+    var l1 = _letterOf(table, c1), l2 = _letterOf(table, c2);
+    var sp = _dataSpan(table);
+    var r1 = sp ? sp[0] : ((table.header_row || 1) + 1);
+    var a1 = _cfAtomJs(m[2], l1, r1), a2 = _cfAtomJs(m[4], l2, r1);
+    if (a1 && a2) return ["=AND(" + a1 + "," + a2 + ")", true];
+    return ["", false];
+  }
+
+  // 「国語と数学と英語の合計の列」「3教科の平均の列」→ [式, 列名]（Python _multi_col_agg_of と同じ）
+  function _multiColAggOfJs(text, table) {
+    if (!table || !Array.isArray(table.columns) || !table.columns.length) return null;
+    var t = nfkc(text);
+    var mK = /の?(合計|和|平均)(?:点|値)?の?(?:列|欄)/.exec(t);
+    if (!mK) return null;
+    var kind = mK[1] === "平均" ? "平均" : "合計";
+    var head = t.slice(0, mK.index);
+    var nums = table.columns.filter(function (c) { return c && c.number; }).map(function (c) { return String(c.name || ""); });
+    var cols = [];
+    var mN = /([0-9]+|全|各)(?:教科|科目|項目|つの(?:点数|数値|列))/.exec(head);
+    if (mN) {
+      if (mN[1] === "全" || mN[1] === "各" || parseInt(mN[1], 10) === nums.length) cols = nums.slice();
+    } else {
+      var parts = head.split(/と|・|、|,/);
+      var nonEmpty = 0;
+      for (var i = 0; i < parts.length; i++) {
+        if (!parts[i].trim()) continue;
+        nonEmpty++;
+        var r = _resolveColRefJs(parts[i].trim(), table);
+        if (r && cols.indexOf(r) < 0) cols.push(r);
+      }
+      if (cols.length !== nonEmpty) return null;
+    }
+    if (cols.length < 2 || cols.some(function (c) { return nums.indexOf(c) < 0; })) return null;
+    return [kind === "合計" ? cols.join("+") : "AVERAGE(" + cols.join(",") + ")", kind];
   }
 
   function _colContainsOfJs(text, table) {
@@ -1979,7 +2044,7 @@ var ComboPlanner = (function () {
           // 既に範囲または「どれか」が埋まっている場合はスキップ
         } else if (explicitRange) {
           av = explicitRange;
-        } else if (wanted && (shelf.name === "clear.all" || shelf.name === "cf.dup") && table) {
+        } else if (wanted && (shelf.name === "clear.all" || shelf.name === "cf.dup") && table && !(shelf.name === "cf.dup" && colPool.length)) {   // 列の名指しがある重複はその列だけ
           var firstR = table.data ? String(table.data).split("-")[0] : String((table.header_row || 1) + 1);
           var lastR = table.data ? String(table.data).split("-").slice(-1)[0] : String((table.header_row || 1) + 1);
           av = table.first_col + firstR + ":" + table.last_col + lastR;
@@ -2261,6 +2326,11 @@ var ComboPlanner = (function () {
           var clCc = _letterOf(table, colContCf[0]);
           if (clCc) expr = "=ISNUMBER(SEARCH(\"" + String(colContCf[1]).replace(/"/g, "\"\"") + "\",$" + clCc + cfR1 + "))";
         }
+        var compCf = _cfCompoundExprJs(text, table);
+        if (compCf) {
+          expr = compCf[0];
+          if (!compCf[1]) refL = "";   // 2 つ目の条件が読めない＝1 つだけで撃たない
+        }
         if (!expr && refL) expr = _cfBlankTodayExprJs(text, refL, cfR1);
         if (!expr && refL) {
           var dCfAtom =(!_isEmptyVal(rawVCf) && normVCf === null) ? _dateCmpToFormulaAtomJs(rawVCf, table) : null;
@@ -2538,6 +2608,17 @@ var ComboPlanner = (function () {
         var nvF = parseInt(mFn[1] || mFn[2], 10);
         if (nvF > 0) fzCols = Math.max(fzCols, nvF);
       }
+      // 列名で名指し（「氏名の列まで固定」）→ その列の位置まで（Python と同じ）
+      var fzNames = ((table && Array.isArray(table.columns)) ? table.columns : []).map(function (c) { return String((c && c.name) || ""); });
+      fzNames.sort(function (a, b) { return b.length - a.length; });
+      fzNames.forEach(function (cn) {
+        if (!cn) return;
+        var esc = nfkc(cn).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (new RegExp(esc + "(?:の)?(?:列|欄)").test(tFz)) {
+          var lFz = _letterOf(table, cn);
+          if (lFz) fzCols = Math.max(fzCols, _colLetToNumJs(lFz));
+        }
+      });
       if (fzCols > 0) op.cols = fzCols;
     }
     if (shelf.name === "calc.diff") {
@@ -2589,7 +2670,7 @@ var ComboPlanner = (function () {
           }
         }
       }
-      var dShift = _dateShiftOfJs(text, table);
+      var dShift = _dateShiftOfJs(text, table) || _multiColAggOfJs(text, table);
       if (dShift && !_hasOwn(op, "expr")) {
         op.expr = dShift[0];
         op.name = dShift[1];
@@ -3609,8 +3690,10 @@ var ComboPlanner = (function () {
           ensureBoost("filter.where");
         } else if (hasFilterExtractCue) {
           ensureBoost("filter.extract");
-        } else if (_dateShiftOfJs(c, table) && /列|欄/.test(c)) {
+        } else if ((_dateShiftOfJs(c, table) && /列|欄/.test(c)) || _multiColAggOfJs(c, table)) {
           ensureBoost("calc.col");
+        } else if (/重複|ダブ/.test(c) && /調べ|確認|チェック|ないか|探し|見つけ|色|目立|ハイライト/.test(c) && !hasRemoveAct && _byName["cf.dup"]) {
+          ensureBoost("cf.dup");
         } else if (hasCalcDiffCue) {
           ensureBoost("calc.diff");
         } else if (hasCalcCue) {

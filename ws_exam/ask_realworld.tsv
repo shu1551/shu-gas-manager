@@ -147,3 +147,10 @@ R	備考に「VIP」が入っている担当者と部門を一覧で教えて
 1	担当者の重複を消して	[{"shelf":"dedupe","cols":["担当者"]}]
 1	日付から30日後の日付の列を足して	[{"shelf":"calc.col","expr":"日付+30"}]
 1	日付の3か月後の日付の列を作って	[{"shelf":"calc.col","expr":"EDATE(日付,3)"}]
+# 第10ラウンド: 年の比べ・2つ条件のAND・複数列の合計/平均の列・列名指しの重複の調べ・列名まで固定
+1	日付が2025年以前の行を灰色にして	[{"shelf":"cf.add","when":"formula","value":"=AND(ISNUMBER($A4),YEAR($A4)<=2025)"}]
+1	日付が今日より前で備考が空欄の行を赤くして	[{"shelf":"cf.add","when":"formula","value":"=AND(AND(ISNUMBER($A4),$A4<TODAY()),$I4=\"\")"}]
+1	数量と単価と売上金額の合計の列を足して	[{"shelf":"calc.col","expr":"数量+単価+売上金額"}]
+1	数量と単価の平均の列を作って	[{"shelf":"calc.col","expr":"AVERAGE(数量,単価)"}]
+1	担当者の重複がないか調べて	[{"shelf":"cf.dup","range":"C4:C9"}]
+1	見出し行と担当者の列まで固定して	[{"shelf":"freeze","rows":3,"cols":3}]

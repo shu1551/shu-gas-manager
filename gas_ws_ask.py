@@ -553,6 +553,36 @@ def _date_shift_of(text, table):
     return expr, f"{n}{unit}{d}"
 
 
+def _multi_col_agg_of(text, table):
+    """「国語と数学と英語の合計の列」「3教科の平均の列」→ (式, 列名)。数値の列だけ。読めなければ None"""
+    if not table or not table.get("columns"):
+        return None
+    t = nfkc(text)
+    m_kind = re.search(r"の?(合計|和|平均)(?:点|値)?の?(?:列|欄)", t)
+    if not m_kind:
+        return None
+    kind = "平均" if m_kind.group(1) == "平均" else "合計"
+    head = t[: m_kind.start()]
+    nums = [str(c.get("name") or "") for c in table["columns"] if c.get("number")]
+    cols = []
+    m_n = re.search(r"([0-9]+|全|各)(?:教科|科目|項目|つの(?:点数|数値|列))", head)
+    if m_n:
+        if m_n.group(1) in ("全", "各") or int(m_n.group(1)) == len(nums):
+            cols = nums
+    else:
+        parts = re.split(r"と|・|、|,", head)
+        for p in parts:
+            r = _resolve_col_ref(p.strip(), table)
+            if r and r not in cols:
+                cols.append(r)
+        if len(cols) != len([p for p in parts if p.strip()]):
+            return None
+    if len(cols) < 2 or any(c not in nums for c in cols):
+        return None
+    expr = "+".join(cols) if kind == "合計" else f"AVERAGE({','.join(cols)})"
+    return expr, kind
+
+
 def _cf_blank_today_expr(text, ref_l, r1):
     """行ごとの条件付き書式で「空欄」「今日より前」等を文字のまま式に入れない（空欄は ""・今日は TODAY()）"""
     t = nfkc(text)
@@ -565,7 +595,52 @@ def _cf_blank_today_expr(text, ref_l, r1):
         return f"=AND(ISNUMBER({c}),{c}<TODAY())" if "以前" not in t else f"=AND(ISNUMBER({c}),{c}<=TODAY())"
     if re.search(r"今日(?:より後|以降|より先)", t):
         return f"=AND(ISNUMBER({c}),{c}>TODAY())" if "以降" not in t else f"=AND(ISNUMBER({c}),{c}>=TODAY())"
+    m_y = re.search(r"((?:19|20)[0-9]{2})年(以前|まで|以降|から|より前|より後|より新しい|より古い)", t)
+    if m_y:
+        sym = {"以前": "<=", "まで": "<=", "より前": "<", "より古い": "<", "以降": ">=", "から": ">=", "より後": ">", "より新しい": ">"}[m_y.group(2)]
+        return f"=AND(ISNUMBER({c}),YEAR({c}){sym}{m_y.group(1)})"
     return ""
+
+
+_CF_NUM_CMP_RE = re.compile(r"(-?[0-9][0-9,\.]*)\s*(?:円|個|件|人|点|日|%)?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)")
+
+
+def _cf_atom(cond, ref_l, r1):
+    """1 つの条件（「今日より前」「空欄」「60点未満」「完了」）→ 式の中身（= なし）。読めなければ ''"""
+    e = _cf_blank_today_expr(cond, ref_l, r1)
+    if e:
+        return e[1:]
+    c = f"${ref_l}{r1}"
+    m = _CF_NUM_CMP_RE.search(nfkc(cond))
+    if m:
+        n = m.group(1).replace(",", "")
+        w = m.group(2)
+        sym = ">=" if w == "以上" else "<=" if w == "以下" else "<" if w in ("未満", "より小さい", "を下回る") else ">"
+        return f"{c}{sym}{n}"
+    lit = nfkc(cond).strip().strip("「」『』")
+    if lit and re.fullmatch(r"[^\s、。をにがはでの]{1,16}", lit) and not re.search(r"以上|以下|未満|より|超|以外|ない|前|後", lit):
+        return f'{c}="{lit}"'
+    return ""
+
+
+def _cf_compound_expr(text, table):
+    """「〈列A〉が〈条件〉で〈列B〉が〈条件〉の行」→ (式, 読めたか)。2 つの条件がどちらも列に当たるときだけ扱う"""
+    if not table or not table.get("columns"):
+        return None
+    t = nfkc(text)
+    m = re.search(r"([^\s、。をに]{1,16}?)(?:列)?(?:が|は)(.+?)(?:で|かつ|且つ|、かつ|、)([^\s、。をに]{1,16}?)(?:列)?(?:が|は)(.+?)(?:の行|行を|行全体|行に)", t)
+    if not m:
+        return None
+    c1, c2 = _resolve_col_ref(m.group(1), table), _resolve_col_ref(m.group(3), table)
+    if not c1 or not c2 or c1 == c2:
+        return None
+    l1, l2 = _letter_of(table, c1), _letter_of(table, c2)
+    sp = _data_span(table)
+    r1 = sp[0] if sp else ((table.get("header_row") or 1) + 1)
+    a1, a2 = _cf_atom(m.group(2), l1, r1), _cf_atom(m.group(4), l2, r1)
+    if a1 and a2:
+        return f"=AND({a1},{a2})", True
+    return "", False
 
 
 _COND_EQ_THING_RE = re.compile(
@@ -1647,7 +1722,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 pass
             elif explicit_range:
                 v = explicit_range
-            elif wanted and shelf["name"] in ("clear.all", "cf.dup") and table:
+            elif wanted and shelf["name"] in ("clear.all", "cf.dup") and table and not (shelf["name"] == "cf.dup" and col_pool):   # 列の名指しがある重複はその列だけ
                 first_r = table["data"].split("-")[0] if table.get("data") else str(table.get("header_row", 1) + 1)
                 last_r = table["data"].split("-")[-1] if table.get("data") else str(table.get("header_row", 1) + 1)
                 v = f"{table['first_col']}{first_r}:{table['last_col']}{last_r}"
@@ -1770,6 +1845,11 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 if cl_cc:
                     escaped_cc = col_cont_cf[1].replace('"', '""')
                     expr = f'=ISNUMBER(SEARCH("{escaped_cc}",${cl_cc}{cf_r1}))'
+            comp_cf = _cf_compound_expr(text, table)
+            if comp_cf is not None:
+                expr = comp_cf[0]
+                if not comp_cf[1]:
+                    ref_l = ""   # 2 つ目の条件が読めない＝1 つだけで撃たない
             if not expr and ref_l:
                 expr = _cf_blank_today_expr(text, ref_l, cf_r1)
             if not expr and ref_l:
@@ -1964,6 +2044,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             nv_f = int(m_fn.group(1) or m_fn.group(2))
             if nv_f > 0:
                 fz_cols = max(fz_cols, nv_f)
+        # 列名で名指し（「氏名の列まで固定」「商品名列まで」）→ その列の位置まで
+        for cn_fz in sorted((str(c.get("name") or "") for c in (table or {}).get("columns") or []), key=len, reverse=True):
+            if cn_fz and re.search(re.escape(nfkc(cn_fz)) + r"(?:の)?(?:列|欄)", t_fz):
+                l_fz = _letter_of(table, cn_fz)
+                if l_fz:
+                    fz_cols = max(fz_cols, _col_let_to_num(l_fz))
         if fz_cols > 0:
             op["cols"] = fz_cols
     if shelf["name"] == "calc.diff":
@@ -2002,7 +2088,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         op["at"] = res_at
                     elif not re.search(r"足し|追加|作", t_nfkc):
                         op["at"] = raw_at
-        d_shift = _date_shift_of(text, table)
+        d_shift = _date_shift_of(text, table) or _multi_col_agg_of(text, table)
         if d_shift and "expr" not in op:
             op["expr"], op["name"] = d_shift
         if "expr" not in op:
@@ -2804,8 +2890,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("filter.where")
             elif has_filter_extract_cue:
                 _ensure_boost("filter.extract")
-            elif _date_shift_of(c, table) and re.search(r"列|欄", c):
+            elif (_date_shift_of(c, table) and re.search(r"列|欄", c)) or _multi_col_agg_of(c, table):
                 _ensure_boost("calc.col")
+            elif re.search(r"重複|ダブ", c) and re.search(r"調べ|確認|チェック|ないか|探し|見つけ|色|目立|ハイライト", c) and not has_remove_act and "cf.dup" in finder.cat.by_name:
+                _ensure_boost("cf.dup")
             elif has_calc_diff_cue:
                 _ensure_boost("calc.diff")
             elif has_calc_cue:
