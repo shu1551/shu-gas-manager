@@ -440,6 +440,14 @@ def load_combo_phrases(path=None):
     return data if isinstance(data, dict) else {}
 
 
+DEFAULT_PUSH_CHECK_ASKS = (
+    "単価の列を削除して",
+    "日付から経過年数の列を足して",
+    "売上金額の大きい順に並べ替えて",
+    "売上金額の合計を表の一番下に出して",
+)
+
+
 def _planner_eval_many(asks, table=None):
     """頼みを何本でも node 1 回で棚当てに通し、[{ask, fire, ops, suggest, reasons}] を返す。"""
     import subprocess
@@ -448,13 +456,19 @@ def _planner_eval_many(asks, table=None):
                     "first_row": 4, "last_row": 9, "total_row": 9, "range": "A3:G9"}
     js = ("const vm=require('vm'),fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));"
           "const ctx=vm.createContext({});vm.runInContext(d.pj,ctx);const P=ctx.ComboPlanner;"
-          "process.stdout.write(JSON.stringify(d.asks.map(a=>{const p=P.plan(a,'sheet',d.t,['売上表'],'売上表',null);"
-          "return {ask:a,fire:!!p.fire,ops:p.ops,suggest:p.suggest||null,reasons:p.reasons};})));")
+          "process.stdout.write(JSON.stringify(d.asks.map(a=>{try{"
+          "const p=P.plan(a,'sheet',d.t,['売上表'],'売上表',null);"
+          "return {ask:a,fire:!!p.fire,ops:p.ops,suggest:p.suggest||null,reasons:p.reasons};}"
+          "catch(e){return {ask:a,error:(e&&e.message)?String(e.message):String(e)};}})));")
     r = subprocess.run(["node", "-e", js], input=json.dumps({"pj": planner, "asks": list(asks), "t": tbl}, ensure_ascii=False).encode("utf-8"),
                        capture_output=True, timeout=60)
     if r.returncode != 0:
         raise RuntimeError("棚当ての実行に失敗しました: " + r.stderr.decode("utf-8", "replace")[:400])
-    return json.loads(r.stdout.decode("utf-8"))
+    items = json.loads(r.stdout.decode("utf-8"))
+    errs = [f"「{x['ask']}」で例外: {x['error']}" for x in items if x.get("error")]
+    if errs:
+        raise RuntimeError("棚当てで例外が発生したため中止しました: " + " / ".join(errs))
+    return items
 
 
 def _publish_leak_check():
@@ -486,27 +500,29 @@ def _planner_eval(ask, table=None):
     return json.loads(r.stdout.decode("utf-8"))
 
 
-def push_combo_dev(client=None, state_path=None, asks=None):
+def push_combo_dev(client=None, state_path=None, asks=None, dry_run=False):
     """元（combo_*_template と言い方の表）を直したら、これ 1 回で届く。
     大元ライブラリとアドオンへ同時に送り、操作窓（/exec）の版だけ上げる。大元の版は上げない（アドオンは開発モードでつなぐ）。
     テンプレート（人がコピーする物）は版でつなぐので、配る節目に combo template で上げる。"""
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
     t0 = _time.time()
-    # 1. 確かめ: 渡した頼みが、どの棚にどの引数で当たるか（送る前に並べる）
+    # 1. 確かめ: 渡した頼み＋表ありの代表頼みが、どの棚にどの引数で当たるか（送る前に並べる）
     checks = []
-    if asks:
-        for r in _planner_eval_many(asks):
-            if r["fire"]:
-                checks.append("当たる: " + r["ask"] + " → " + json.dumps(r["ops"], ensure_ascii=False))
-            elif r.get("suggest"):
-                checks.append("候補: " + r["ask"] + " → " + json.dumps(r["suggest"], ensure_ascii=False) + "（［はい］で撃つ）")
-            else:
-                checks.append("当たらない: " + r["ask"] + "（" + "／".join(r.get("reasons") or []) + "）")
+    eval_asks = list(dict.fromkeys([*(asks or []), *DEFAULT_PUSH_CHECK_ASKS]))
+    for r in _planner_eval_many(eval_asks):
+        if r["fire"]:
+            checks.append("当たる: " + r["ask"] + " → " + json.dumps(r["ops"], ensure_ascii=False))
+        elif r.get("suggest"):
+            checks.append("候補: " + r["ask"] + " → " + json.dumps(r["suggest"], ensure_ascii=False) + "（［はい］で撃つ）")
+        else:
+            checks.append("当たらない: " + r["ask"] + "（" + "／".join(r.get("reasons") or []) + "）")
     # 2. 公開してはいけない物が混ざっていないか（混ざっていたら送らない）
     ok_leak, leak_line = _publish_leak_check()
     if not ok_leak:
         return {"ok": False, "mode": "push", "checks": checks, "leak": leak_line, "text": "公開前の点検で止めました（送っていません）"}
+    if dry_run:
+        return {"ok": True, "mode": "dry_run", "checks": checks, "leak": leak_line, "seconds": round(_time.time() - t0, 1)}
     if client is None:
         from gas_client import GasClient
         client = GasClient()

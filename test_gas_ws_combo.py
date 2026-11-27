@@ -3320,3 +3320,47 @@ process.stdout.write(JSON.stringify({ c1, c2, g1, g2, fbC, fbG, fbNeon, fbDirect
     assert res["fbC"] == "claude-haiku-5-5" and res["fbG"] == "gemini-5-hydrogen" and res["fbNeon"] == "gemini-4-neon"
     assert res["fbDirectN"] == "gemini-4-neon"
     assert res["fetchCount"] == 4
+
+
+def test_push_combo_dev_checks_table_asks_and_aborts_on_js_exception(tmp_path, monkeypatch):
+    """push_combo_dev は表ありの代表頼みを必ず通し、JS 例外時は例外文と頼みを示して配らず止まること。"""
+    st_p = tmp_path / ".combo_engine_state.json"
+    st_p.write_text(json.dumps({"combo_engine_sid": "LIB1", "addon_sid": "ADD1", "addon_webapp_dep": "DEP1"}), encoding="utf-8")
+
+    class _FailClient:
+        def __init__(self):
+            self.called = []
+        def _put_content(self, *a, **kw):
+            self.called.append(("put", a))
+        def deploy(self, *a, **kw):
+            self.called.append(("deploy", a))
+
+    fc = _FailClient()
+    # 1. 正常系 (dry_run=True): 表ありの代表頼みを通し、送信しない
+    dry = combo_mod.push_combo_dev(client=fc, state_path=st_p, dry_run=True)
+    assert dry["ok"] is True and dry["mode"] == "dry_run"
+    assert len(dry["checks"]) >= len(combo_mod.DEFAULT_PUSH_CHECK_ASKS)
+    assert any("日付から経過年数の列を足して" in c and "当たる:" in c for c in dry["checks"])
+    assert any("売上金額の大きい順に並べ替えて" in c and "当たる:" in c for c in dry["checks"])
+    assert fc.called == []
+
+    # 2. 例外系: _suggestOps 経由で buildOp が ReferenceError を投げても握りつぶされず push 全体が止まる
+    orig_build = combo_mod.build_combo_files
+    def _broken_build(*a, **kw):
+        files = orig_build(*a, **kw)
+        for f in files:
+            if f["name"] == "ComboPlanner":
+                f["source"] = f["source"].replace(
+                    "function buildOp(shelf, text, table, sheets, curSheet) {",
+                    "function buildOp(shelf, text, table, sheets, curSheet) { if (shelf && shelf.name === 'format') { return __broken_undef_var__; }",
+                    1,
+                )
+        return files
+
+    monkeypatch.setattr(combo_mod, "build_combo_files", _broken_build)
+    with pytest.raises(RuntimeError) as exc_info:
+        combo_mod.push_combo_dev(client=fc, state_path=st_p, asks=["あいうえお存在しない頼み"])
+    msg = str(exc_info.value)
+    assert "__broken_undef_var__" in msg
+    assert "あいうえお存在しない頼み" in msg
+    assert fc.called == []

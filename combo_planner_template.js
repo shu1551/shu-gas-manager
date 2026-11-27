@@ -4369,12 +4369,7 @@ var ComboPlanner = (function () {
     // 点が足りなくても、色・太字などの書式は引数が決まれば候補にする（値を消さない棚）
     if (kind !== "doc") add(_byName["format"]);
     for (var i = 0; i < cands.length; i++) {
-      var b;
-      try {
-        b = buildOp(cands[i], nfkc(askText), table, sheets, curSheet);
-      } catch (e) {
-        continue;
-      }
+      var b = buildOp(cands[i], nfkc(askText), table, sheets, curSheet);
       if (b && b.op && !b.missing.length && _hasNonMetaKeys(b.op)) {
         return [b.op];
       }
