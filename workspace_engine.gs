@@ -1212,7 +1212,7 @@ function runDo_(req, T0) {
     }
     ctx.bk = bk; lap_(tm, 'finger0');
     var errBefore = (file && kind === 'sheet' && !created && errScanNeeded_(ops)) ? errScan_(ctx.ss) : null;   // 撃った後に新しく出たエラー・消えた式を返すため、撃つ前を数えておく
-    if (errBefore) lap_(tm, 'err0');
+    if (errBefore) { ctx._colInsertBefore = errBefore; lap_(tm, 'err0'); }
     if (!isLite && _TBL_CACHE) _TBL_CACHE._once = true;
     for (var i = 0; i < ops.length; i++) {
       var op = ops[i], fn = SHELF[op.shelf];
@@ -1223,7 +1223,15 @@ function runDo_(req, T0) {
       if (!isLite) _TBL_CACHE = null;
     }
     lap_(tm, 'ops');
-    if (errBefore) { SpreadsheetApp.flush(); errReport_(ctx, ops, errBefore, errScan_(ctx.ss)); lap_(tm, 'err1'); }
+    if (errBefore) {
+      SpreadsheetApp.flush();
+      errReport_(ctx, ops, errBefore, errScan_(ctx.ss));
+      lap_(tm, 'err1');
+    } else if (ctx._colInsertGuard && ctx._colInsertBefore && file && kind === 'sheet') {
+      SpreadsheetApp.flush();
+      errReport_(ctx, ops, ctx._colInsertBefore, errScan_(ctx.ss));
+      lap_(tm, 'err1');
+    }
     if (file && kind === 'sheet' && (created || req.want_table || (useBackup && !(entry.sheets && entry.sheets.length)))) SpreadsheetApp.flush();
     if (file && kind === 'doc') { ctx.doc.saveAndClose(); ctx.doc = DocumentApp.openById(entry.id); file = ctx.doc; lap_(tm, 'save'); }
     if (useBackup) {
@@ -1347,11 +1355,244 @@ function isNoop_(ops, entry, ctx) {
   return sameFinger_(entry.beforeDoc, entry.afterDoc);
 }
 
-// ---------------------------------------------------------------- 撃った後の点検（新しく出たエラー・消えた式）
+// ---------------------------------------------------------------- 列挿入時の既存数式保護（自動範囲除外＋安全ガード）
+var SPLITTABLE_AGG_FUNCS_ = {
+  SUM: 1, AVERAGE: 1, AVERAGEA: 1, COUNT: 1, COUNTA: 1,
+  MIN: 1, MINA: 1, MAX: 1, MAXA: 1, MEDIAN: 1, PRODUCT: 1,
+  STDEV: 1, 'STDEV.S': 1, 'STDEV.P': 1, STDEVA: 1, STDEVP: 1, STDEVPA: 1,
+  VAR: 1, 'VAR.S': 1, 'VAR.P': 1, VARA: 1, VARP: 1, VARPA: 1,
+  SUMSQ: 1, SUBTOTAL: 1
+};
+var VOLATILE_FORMULA_RE_ = /\b(RAND|RANDBETWEEN|RANDARRAY|NOW|TODAY)\s*\(/i;
+
+function unquoteSheetPrefix_(prefix) {
+  if (!prefix) return '';
+  var s = prefix.slice(0, -1); // 末尾の ! を除く
+  if (s.length >= 2 && s.charAt(0) === "'" && s.charAt(s.length - 1) === "'") {
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  return s;
+}
+
+// 列挿入（atCol から count 列）で広がった既存数式から、新しく挿入された列を外す（例: =SUM(B5:H5) → =SUM(B5:D5,F5:H5)）
+function excludeInsertedColsFromFormula_(formula, atCol, count, targetSheetName, isSameSheet) {
+  var f = String(formula || '');
+  if (f.charAt(0) !== '=' || f.indexOf(':') < 0) return { formula: f, changed: false, skipped: false };
+  var insStart = atCol, insEnd = atCol + (count || 1) - 1;
+  var rangeRe = /^((?:'(?:[^']|'')+'|[A-Za-z0-9_\u0080-\uFFFF]+)!)?(\$?)([A-Za-z]{1,3})(\$?)(\d*):(\$?)([A-Za-z]{1,3})(\$?)(\d*)(?![A-Za-z0-9_!($])/;
+  var stack = [], out = '', changed = false, skipped = false;
+  var i = 0, len = f.length;
+  while (i < len) {
+    var ch = f.charAt(i);
+    if (ch === '"') {
+      var j = i + 1;
+      while (j < len) {
+        if (f.charAt(j) === '"') {
+          if (j + 1 < len && f.charAt(j + 1) === '"') { j += 2; continue; }
+          j++;
+          break;
+        }
+        j++;
+      }
+      out += f.slice(i, j);
+      i = j;
+      continue;
+    }
+    // 範囲参照（直前が識別子の一部でない位置でチェック）
+    var prevCh = i > 0 ? f.charAt(i - 1) : '';
+    var canStartRange = !prevCh || !/[A-Za-z0-9_$'!]/.test(prevCh);
+    if (canStartRange && (ch === "'" || ch === '$' || /[A-Za-z0-9_\u0080-\uFFFF]/.test(ch))) {
+      var m = rangeRe.exec(f.slice(i));
+      if (m && (!!m[5] === !!m[9])) {
+        var pref = m[1] || '';
+        var refSheet = pref ? unquoteSheetPrefix_(pref) : '';
+        var matchesSheet = pref ? (refSheet === String(targetSheetName || '')) : !!isSameSheet;
+        if (matchesSheet) {
+          var c1 = colNum_(m[3]), c2 = colNum_(m[7]);
+          var lo = Math.min(c1, c2), hi = Math.max(c1, c2);
+          if (lo <= insEnd && hi >= insStart) {
+            var top = stack.length ? stack[stack.length - 1] : null;
+            var canFn = !!(top && SPLITTABLE_AGG_FUNCS_[top.fn] && (top.fn !== 'SUBTOTAL' || top.argIdx >= 1));
+            var prevNonWs = f.slice(0, i).replace(/\s+$/, '').slice(-1);
+            var nextNonWs = f.slice(i + m[0].length).replace(/^\s+/, '').charAt(0);
+            var standalone = (prevNonWs === '(' || prevNonWs === ',') && (nextNonWs === ',' || nextNonWs === ')');
+            if (canFn && standalone) {
+              var d1 = m[2], dr1 = m[4], r1 = m[5], d2 = m[6], dr2 = m[8], r2 = m[9];
+              var fmtSeg = function (sc1, sc2) {
+                if (r1 && r1 === r2 && sc1 === sc2) return pref + d1 + colLetter_(sc1) + dr1 + r1;
+                return pref + d1 + colLetter_(sc1) + dr1 + r1 + ':' + d2 + colLetter_(sc2) + dr2 + r2;
+              };
+              var segs = [];
+              if (lo < insStart) segs.push(fmtSeg(lo, insStart - 1));
+              if (hi > insEnd) segs.push(fmtSeg(insEnd + 1, hi));
+              if (segs.length) {
+                out += segs.join(',');
+                changed = true;
+                i += m[0].length;
+                continue;
+              }
+            }
+            skipped = true;
+          }
+        }
+        out += m[0];
+        i += m[0].length;
+        continue;
+      }
+    }
+    if (ch === "'") {
+      // 単一セルへのシート参照（例: '月別2'!A1）などのクォートを安全に通過
+      var qj = i + 1;
+      while (qj < len) {
+        if (f.charAt(qj) === "'") {
+          if (qj + 1 < len && f.charAt(qj + 1) === "'") { qj += 2; continue; }
+          qj++;
+          break;
+        }
+        qj++;
+      }
+      out += f.slice(i, qj);
+      i = qj;
+      continue;
+    }
+    if (ch === '(') {
+      var beforeParen = f.slice(0, i).replace(/\s+$/, '');
+      var fnM = /([A-Za-z_][A-Za-z0-9_.]*)$/.exec(beforeParen);
+      stack.push({ fn: fnM ? fnM[1].toUpperCase() : '', argIdx: 0 });
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === ')') {
+      if (stack.length) stack.pop();
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === ',') {
+      if (stack.length) stack[stack.length - 1].argIdx++;
+      out += ch;
+      i++;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return { formula: out, changed: changed, skipped: skipped };
+}
+
+function fixFormulasAfterColInsert_(ctx, sh, atCol, count) {
+  var targetName = typeof sh.getName === 'function' ? sh.getName() : '';
+  var targetId = typeof sh.getSheetId === 'function' ? sh.getSheetId() : null;
+  var sheets = (ctx && ctx.ss && typeof ctx.ss.getSheets === 'function') ? ctx.ss.getSheets() : [sh];
+  var fixedCount = 0;
+  for (var si = 0; si < sheets.length; si++) {
+    var s = sheets[si];
+    if (!s || typeof s.getLastRow !== 'function' || typeof s.getLastColumn !== 'function') continue;
+    var isSame = (targetId !== null && typeof s.getSheetId === 'function') ? (s.getSheetId() === targetId) : (s === sh);
+    var lr = s.getLastRow(), lc = s.getLastColumn();
+    if (lr < 1 || lc < 1 || lr * lc > 60000) continue;
+    var rg = s.getRange(1, 1, lr, lc);
+    if (!rg || typeof rg.getFormulas !== 'function') continue;
+    var forms = rg.getFormulas();
+    var updates = [];
+    for (var r = 0; r < forms.length; r++) {
+      for (var c = 0; c < forms[r].length; c++) {
+        var f = forms[r][c];
+        if (!f || f.charAt(0) !== '=' || f.indexOf(':') < 0) continue;
+        if (!isSame && targetName && f.indexOf(targetName) < 0) continue;
+        var res = excludeInsertedColsFromFormula_(f, atCol, count, targetName, isSame);
+        if (res.changed) {
+          updates.push({ r: r + 1, c: c + 1, f: res.formula });
+        }
+      }
+    }
+    if (!updates.length) continue;
+    // 同じ列で連続する行はまとめて setFormulas し API 往復を抑える
+    updates.sort(function (a, b) { return a.c !== b.c ? (a.c - b.c) : (a.r - b.r); });
+    for (var ui = 0; ui < updates.length; ) {
+      var col = updates[ui].c, rs = updates[ui].r, re = rs;
+      var block = [[updates[ui].f]];
+      while (ui + 1 < updates.length && updates[ui + 1].c === col && updates[ui + 1].r === re + 1) {
+        ui++;
+        re = updates[ui].r;
+        block.push([updates[ui].f]);
+      }
+      var dstRg = s.getRange(rs, col, re - rs + 1, 1);
+      if (typeof dstRg.setFormulas === 'function') dstRg.setFormulas(block);
+      else if (typeof dstRg.setFormula === 'function') {
+        for (var bi = 0; bi < block.length; bi++) s.getRange(rs + bi, col).setFormula(block[bi][0]);
+      }
+      fixedCount += block.length;
+      ui++;
+    }
+  }
+  if (fixedCount > 0 && ctx && ctx.notes) {
+    note_(ctx, '既存の数式 ' + fixedCount + ' 件に新しい列が混ざらないよう範囲を調整しました');
+  }
+  return fixedCount;
+}
+
+function insertColsSafe_(ctx, sh, atCol, count, optExclude) {
+  var cnt = count || 1;
+  var exclude = optExclude !== false;
+  if (ctx) {
+    if (!ctx._colInsertGuard) {
+      ctx._colInsertGuard = true;
+      ctx._colInsertSheets = {};
+      if (ctx.ss && typeof ctx.ss.getSheets === 'function' && !ctx._colInsertBefore) {
+        ctx._colInsertBefore = errScan_(ctx.ss);
+      }
+    }
+    if (typeof sh.getSheetId === 'function') ctx._colInsertSheets[sh.getSheetId()] = true;
+  }
+  var hasLc = typeof sh.getLastColumn === 'function';
+  var lc = hasLc ? sh.getLastColumn() : 0;
+  if (!hasLc || atCol <= lc) {
+    sh.insertColumnsBefore(atCol, cnt);
+    if (ctx) {
+      if (!ctx._colInsertLog) ctx._colInsertLog = [];
+      ctx._colInsertLog.push({ sh: sh, atCol: atCol, count: cnt });
+    }
+    if (exclude) fixFormulasAfterColInsert_(ctx, sh, atCol, cnt);
+  } else if (typeof sh.getMaxColumns === 'function' && atCol + cnt - 1 > sh.getMaxColumns()) {
+    sh.insertColumnsAfter(sh.getMaxColumns(), (atCol + cnt - 1) - sh.getMaxColumns());
+  }
+  if (_TBL_CACHE) _TBL_CACHE = null;
+}
+
+function rollbackColInserts_(ctx) {
+  var log = (ctx && ctx._colInsertLog) || [];
+  if (!log.length) return false;
+  for (var i = log.length - 1; i >= 0; i--) {
+    var it = log[i];
+    if (it && it.sh && typeof it.sh.deleteColumns === 'function') {
+      it.sh.deleteColumns(it.atCol, it.count);
+    }
+  }
+  return true;
+}
+
+function insertColsAfterSafe_(ctx, sh, afterCol, count, optExclude) {
+  var cnt = count || 1;
+  var lc = typeof sh.getLastColumn === 'function' ? sh.getLastColumn() : 0;
+  if (afterCol < lc) {
+    insertColsSafe_(ctx, sh, afterCol + 1, cnt, optExclude);
+  } else {
+    if (typeof sh.insertColumnsAfter === 'function') sh.insertColumnsAfter(afterCol, cnt);
+    else if (typeof sh.insertColumnAfter === 'function') {
+      for (var k = 0; k < cnt; k++) sh.insertColumnAfter(afterCol);
+    }
+    if (_TBL_CACHE) _TBL_CACHE = null;
+  }
+}
+
+// ---------------------------------------------------------------- 撃った後の点検（新しく出たエラー・消えた式・式の値変化）
 // 書式だけを変える棚は値も式も変えないので数えない（速さのため）
 var ERR_SCAN_SKIP = /^(format|width|bg\.clear|banding\.|cf\.|freeze|unfreeze|filter\.|tidy|sheet\.(color|hide|show|move|rename)|cols\.(hide|show)|rows\.(hide|show)|validation\.|checkbox|protect\.|name\.list|drive\.|folder|backup|find|cf\.list)/;
 var ERR_RE = /^#(REF!|VALUE!|DIV\/0!|N\/A|NAME\?|NUM!|NULL!|ERROR!)/;
 var FORMULA_DROP_OK = /^(rows\.delete|cols\.delete|dedupe|seiri|clear\.|sheet\.delete|formula\.tovalue|copy\.values|write|replace)/;   // 式が減ってよい（頼みがそういう物）
+var FORMULA_VAL_CHANGE_OK = /^(write|replace|seiri|text\.(clean|case|affix)|round|formula\.(guard|tovalue)|copy\.values|clear\.|rows\.(delete|insert|move|reverse)|cols\.(delete|move)|filter\.delete|dedupe|blank\.rows\.delete|sort|fill\.|date\.fix|phone\.fix|split\.col|subtotal|table\.new|sheet\.delete|api)/;
 function errScanNeeded_(ops) {
   return ops.some(function (o) {
     var nm = String(o.shelf || '');
@@ -1363,34 +1604,199 @@ function errScanNeeded_(ops) {
     return true;
   });
 }
+function errValChangeOk_(ops) {
+  return (ops || []).some(function (o) {
+    var nm = String(o && o.shelf || '');
+    if (FORMULA_VAL_CHANGE_OK.test(nm)) return true;
+    if (nm === 'rows') {
+      var act = o.action || 'delete';
+      if (act !== 'insert' || !o.cols) return true;
+    }
+    return false;
+  });
+}
+function errScanHeaders_(vals, forms) {
+  var lr = vals.length, lc = (vals[0] && vals[0].length) || 0;
+  var out = new Array(lc);
+  for (var i = 0; i < lc; i++) out[i] = '';
+  if (lr < 1 || lc < 1) return out;
+  var nonEmpty = function (row) {
+    var n = 0;
+    for (var c = 0; c < row.length; c++) if (!isBlank_(row[c])) n++;
+    return n;
+  };
+  var isHeaderCell = function (v, f) {
+    if (isBlank_(v) || f) return false;
+    if (typeof v !== 'string') return false;
+    var s = v.trim();
+    if (!s || s.length > 40 || ERR_RE.test(s)) return false;
+    return true;
+  };
+  var isComplementaryTwoTier = function (rTop, rSub) {
+    if (rSub >= lr) return false;
+    var subNon = 0, subNum = 0, gapFilled = 0, firstSub = '';
+    for (var c = 0; c < lc; c++) {
+      var sv = vals[rSub][c], sf = forms[rSub] && forms[rSub][c];
+      if (!isBlank_(sv)) {
+        subNon++;
+        if (!firstSub) firstSub = String(sv).trim();
+        if (sf || typeof sv === 'number' || sv instanceof Date || Object.prototype.toString.call(sv) === '[object Date]') subNum++;
+        if (isBlank_(vals[rTop][c])) gapFilled++;
+      }
+    }
+    if (!subNon || subNum > 0 || /^(合計|総計|小計|計|total|sum)/i.test(firstSub)) return false;
+    return gapFilled >= 1;
+  };
+  var h = -1;
+  for (var r = 0; r < Math.min(lr, 15); r++) {
+    if (nonEmpty(vals[r]) >= 2) { h = r; break; }
+  }
+  for (var hs = 0; h >= 0 && hs < 10; hs++) {
+    if (isComplementaryTwoTier(h, h + 1)) break;
+    var nx = h + 1;
+    while (nx < lr && nonEmpty(vals[nx]) === 0) nx++;
+    if (nx < lr && nonEmpty(vals[nx]) >= 2 * nonEmpty(vals[h])) h = nx; else break;
+  }
+  if (h < 0) return out;
+  var twoTier = isComplementaryTwoTier(h, h + 1);
+  if (twoTier) {
+    var lastTop = '';
+    for (var c2 = 0; c2 < lc; c2++) {
+      var tv = isHeaderCell(vals[h][c2], forms[h] && forms[h][c2]) ? String(vals[h][c2]).trim() : '';
+      var sv2 = isHeaderCell(vals[h + 1][c2], forms[h + 1] && forms[h + 1][c2]) ? String(vals[h + 1][c2]).trim() : '';
+      if (tv) lastTop = tv;
+      else if (sv2 && lastTop) tv = lastTop;
+      if (tv && sv2 && tv !== sv2) out[c2] = tv + '・' + sv2;
+      else out[c2] = tv || sv2 || '';
+    }
+  } else {
+    for (var c1 = 0; c1 < lc; c1++) {
+      out[c1] = isHeaderCell(vals[h][c1], forms[h] && forms[h][c1]) ? String(vals[h][c1]).trim() : '';
+    }
+  }
+  return out;
+}
+function errValSame_(a, b) {
+  if (a === b) return true;
+  if (a instanceof Date || Object.prototype.toString.call(a) === '[object Date]') {
+    if (b instanceof Date || Object.prototype.toString.call(b) === '[object Date]') return a.getTime() === b.getTime();
+    return false;
+  }
+  if (typeof a === 'number' && typeof b === 'number') {
+    if (isNaN(a) && isNaN(b)) return true;
+    var tol = 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+    return Math.abs(a - b) <= tol;
+  }
+  return String(a == null ? '' : a) === String(b == null ? '' : b);
+}
+function errFmtVal_(v) {
+  if (typeof v === 'number' && isFinite(v)) {
+    var parts = String(Math.round(v * 10000) / 10000).split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.');
+  }
+  if (v instanceof Date || Object.prototype.toString.call(v) === '[object Date]') {
+    return v.getFullYear() + '/' + (v.getMonth() + 1) + '/' + v.getDate();
+  }
+  return String(v == null ? '' : v).slice(0, 24);
+}
+function errScanSheet_(sh) {
+  var lr = sh.getLastRow(), lc = sh.getLastColumn();
+  if (lr < 1 || lc < 1 || lr * lc > 60000) return null;          // 大きいシートは見ない（6 万セルまで）
+  var rg = sh.getRange(1, 1, lr, lc), v = rg.getValues(), f = rg.getFormulas(), errs = {}, fcol = {}, cols = {};
+  var hdrs = errScanHeaders_(v, f);
+  var hCount = {};
+  for (var hi = 0; hi < lc; hi++) {
+    if (hdrs[hi]) hCount[hdrs[hi]] = (hCount[hdrs[hi]] || 0) + 1;
+  }
+  var hSeen = {}, colMeta = [];
+  for (var ci = 0; ci < lc; ci++) {
+    var h = hdrs[ci];
+    var key, label;
+    if (h) {
+      hSeen[h] = (hSeen[h] || 0) + 1;
+      key = hCount[h] > 1 ? ('H:' + h + '#' + hSeen[h]) : ('H:' + h);
+      label = '「' + h + '」列';
+    } else {
+      key = 'C:' + ci;
+      label = colLetter_(ci + 1) + ' 列';
+    }
+    colMeta.push({ key: key, label: label, hasHeader: !!h });
+  }
+  for (var r = 0; r < lr; r++) for (var c = 0; c < lc; c++) {
+    var cellV = v[r][c], cellF = f[r][c];
+    var isErr = typeof cellV === 'string' && ERR_RE.test(cellV);
+    if (isErr) errs[a1_(r + 1, c + 1)] = cellV + (cellF ? '（' + cellF.slice(0, 40) + '）' : '');
+    if (cellF) {
+      fcol[c] = (fcol[c] || 0) + 1;
+      var cm = colMeta[c];
+      if (!cols[cm.key]) cols[cm.key] = { label: cm.label, count: 0, vals: {}, col: c };
+      cols[cm.key].count++;
+      if (!isErr && !VOLATILE_FORMULA_RE_.test(cellF)) {
+        cols[cm.key].vals[r + 1] = cellV;
+      }
+    }
+  }
+  return { name: sh.getName(), errs: errs, fcol: fcol, cols: cols };
+}
 function errScan_(ss) {
   var out = {};
   ss.getSheets().forEach(function (sh) {
-    var lr = sh.getLastRow(), lc = sh.getLastColumn();
-    if (lr < 1 || lc < 1 || lr * lc > 60000) return;           // 大きいシートは見ない（6 万セルまで）
-    var rg = sh.getRange(1, 1, lr, lc), v = rg.getValues(), f = rg.getFormulas(), errs = {}, fcol = {};
-    for (var r = 0; r < lr; r++) for (var c = 0; c < lc; c++) {
-      if (typeof v[r][c] === 'string' && ERR_RE.test(v[r][c])) errs[a1_(r + 1, c + 1)] = v[r][c] + (f[r][c] ? '（' + f[r][c].slice(0, 40) + '）' : '');
-      if (f[r][c]) fcol[c] = (fcol[c] || 0) + 1;
-    }
-    out[sh.getSheetId()] = { name: sh.getName(), errs: errs, fcol: fcol };
+    var sc = errScanSheet_(sh);
+    if (sc) out[sh.getSheetId()] = sc;
   });
   return out;
 }
 function errReport_(ctx, ops, before, after) {
-  var news = [], drops = [];
+  var news = [], drops = [], valChanges = [], colInsertDrifts = [];
   var dropOk = ops.some(function (o) { return FORMULA_DROP_OK.test(String(o.shelf || '')); });
+  var valOk = errValChangeOk_(ops);
+  var guardSheets = (ctx && ctx._colInsertGuard && ctx._colInsertSheets) ? ctx._colInsertSheets : null;
   Object.keys(after).forEach(function (id) {
-    var a = after[id], b = before[id] || { errs: {}, fcol: {} };
+    var a = after[id], b = before[id] || { errs: {}, fcol: {}, cols: {} };
     Object.keys(a.errs).forEach(function (k) { if (!(k in b.errs)) news.push(a.name + '!' + k + ' ' + a.errs[k]); });
-    if (!dropOk && before[id]) Object.keys(b.fcol).forEach(function (c) {
-      var n0 = b.fcol[c], n1 = a.fcol[c] || 0;
-      if (n1 < n0) drops.push(a.name + ' の ' + colLetter_(+c + 1) + ' 列の式が ' + n0 + ' → ' + n1 + ' 個');
-    });
+    if (before[id]) {
+      var bCols = b.cols || {}, aCols = a.cols || {};
+      var keys = Object.keys(bCols);
+      if (keys.length) {
+        keys.forEach(function (k) {
+          var bc = bCols[k], ac = aCols[k];
+          var n0 = bc.count || 0, n1 = ac ? (ac.count || 0) : 0;
+          if (!dropOk && n1 < n0) {
+            drops.push(a.name + ' の ' + bc.label + 'の式が ' + n0 + ' → ' + n1 + ' 個');
+          }
+          if (!valOk && ac && bc.vals && ac.vals) {
+            var diffs = [];
+            Object.keys(bc.vals).forEach(function (rKey) {
+              if (rKey in ac.vals && !errValSame_(bc.vals[rKey], ac.vals[rKey])) {
+                diffs.push({ r: rKey, v0: bc.vals[rKey], v1: ac.vals[rKey] });
+              }
+            });
+            if (diffs.length) {
+              var sample = errFmtVal_(diffs[0].v0) + ' → ' + errFmtVal_(diffs[0].v1);
+              var msg = a.name + ' の ' + bc.label + 'の式の値が変わった（' + sample + (diffs.length > 1 ? ' ほか ' + (diffs.length - 1) + ' 件' : '') + '）';
+              valChanges.push(msg);
+              if (guardSheets && (guardSheets[id] || Object.keys(guardSheets).length > 0)) {
+                colInsertDrifts.push(msg);
+              }
+            }
+          }
+        });
+      } else if (!dropOk) {
+        Object.keys(b.fcol || {}).forEach(function (c) {
+          var n0 = b.fcol[c], n1 = (a.fcol && a.fcol[c]) || 0;
+          if (n1 < n0) drops.push(a.name + ' の ' + colLetter_(+c + 1) + ' 列の式が ' + n0 + ' → ' + n1 + ' 個');
+        });
+      }
+    }
   });
-  ctx.newErrors = news.concat(drops);
+  ctx.newErrors = news.concat(drops).concat(valChanges);
   if (news.length) ctx.notes.push('新しいエラー: ' + news.slice(0, 5).join('・') + (news.length > 5 ? ' ほか ' + (news.length - 5) + ' 件' : '') + '（撃つ前には無かった物。直すか ws_undo で戻すかを決める）');
   if (drops.length) ctx.notes.push('式が減った: ' + drops.slice(0, 3).join('・') + '（式が値に化けていないか確かめる。戻すなら ws_undo）');
+  if (valChanges.length) ctx.notes.push('式の値が変わった: ' + valChanges.slice(0, 3).join('・') + '（意図しない二重計上や参照ズレがないか確かめる。戻すなら ws_undo）');
+  if (colInsertDrifts.length) {
+    throw new Error('列の挿入により既存の式の値が変わったため、元に戻して止めました: ' + colInsertDrifts.slice(0, 3).join('・'));
+  }
 }
 
 function tgt_(ctx, file) {

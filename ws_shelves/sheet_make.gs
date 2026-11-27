@@ -92,6 +92,11 @@ SHELF['total'] = function (ctx, op) {
   var fr = rowRg.getFormulas(), vr = rowRg.getValues(), nf = rowRg.getNumberFormats(), al = rowRg.getHorizontalAlignments(), fixed = [];
   cols.forEach(function (c) {
     var k = c - t.firstCol, f = '=SUM(' + colLetter_(c) + t.firstData + ':' + colLetter_(c) + t.lastData + ')';
+    // すでに合計行があり列の明示指定がないときは、縦SUM以外の既存式（割合・平均・横合計など）を勝手に潰さない
+    var curF = String(fr[0][k] || '').trim();
+    if (existed && !op.cols && curF && !/^=SUM\(\s*\$?[A-Z]{1,3}\$?\d+:\$?[A-Z]{1,3}\$?\d+\s*\)$/i.test(curF)) {
+      return;
+    }
     if (fr[0][k] !== f) { fr[0][k] = f; fixed.push(colLetter_(c)); }
     nf[0][k] = STYLE.numFmt; al[0][k] = 'right';
   });

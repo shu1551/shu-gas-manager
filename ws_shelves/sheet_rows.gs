@@ -50,7 +50,7 @@ SHELF['rows'] = function (ctx, op) {
     var at = op.at || list[0]; need_({ shelf: 'rows', at: at }, ['at']);
     var cnt = op.count || 1;
     var atNum = isCol ? resolveCol(at) : parseInt(at);
-    if (isCol) sh.insertColumnsBefore(atNum, cnt); else sh.insertRowsBefore(atNum, cnt);
+    if (isCol) insertColsSafe_(ctx, sh, atNum, cnt, false); else sh.insertRowsBefore(atNum, cnt);
     chg_(ctx, sh, (isCol ? (typeof at === 'number' ? colLetter_(at) : at) + '列の前' : at + '行目の前'), cnt + ' ' + (isCol ? '列' : '行') + '挿入');
   } else if (act === 'delete') {
     if (!list.length) throw new ArgError('棚「rows」に rows（行番号の配列）か cols が要ります');

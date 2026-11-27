@@ -1293,6 +1293,10 @@ function comboRunOps(req) {
 
     var finalSheet = ctx.curSheet || curSheet;
     var sheetInfos = null;
+    if (ctx._colInsertGuard && ctx._colInsertBefore && typeof errReport_ === 'function' && typeof errScan_ === 'function') {
+      SpreadsheetApp.flush();
+      errReport_(ctx, resolvedOps, ctx._colInsertBefore, errScan_(ss));
+    }
     if (!keepsShape) {
       SpreadsheetApp.flush();
       comboCacheInvalidate_(ssId, curSheet);
@@ -1344,10 +1348,15 @@ function comboRunOps(req) {
     out.gasMs = Date.now() - t0;
     return out;
   } catch (err) {
+    var colRestored = false;
+    if (ctx._colInsertGuard && typeof rollbackColInserts_ === 'function') {
+      try { colRestored = rollbackColInserts_(ctx); } catch (eRb) {}
+    }
     var errOut = {
       ok: false,
       error: String(err && err.message || err),
       where: '棚 #' + (ctx.opNo || 0) + ' ' + (ctx.opName || ''),
+      restored: colRestored,
       blocked: !!(err && err.isBlocked),
       needs_ok: !!(err && err.isBlocked),
       arg: !!(err && err.isArg),

@@ -385,6 +385,11 @@ class DirectRunner:
                 cnt = int(op.get("count") or 1)
                 if cnt < 1 or cnt > 50:
                     raise Skip("count 範囲外")
+                if s == "cols.insert" and tb:
+                    f_row, l_row = self._table_rows(tb)
+                    end_r = max(l_row, int(tb.get("total_row") or 0))
+                    if end_r >= f_row and (end_r - f_row + 1) <= 500:
+                        ranges.add(f"{q(sh)}!{tb['first_col']}{f_row}:{tb['last_col']}{end_r}")
             elif s == "cf.clear":
                 pass
             elif s == "width":
@@ -832,6 +837,12 @@ class DirectRunner:
                 at_num = (self._col_of(tb, op["at"]) if tb else col_num(op["at"])) if is_col_ins else int(op["at"])
                 if at_num < 1:
                     raise Skip("挿入位置が不正")
+                if is_col_ins and any(
+                    isinstance((cv.get("userEnteredValue") or {}).get("formulaValue"), str)
+                    and (cv.get("userEnteredValue") or {}).get("formulaValue", "").startswith("=")
+                    for cv in (ent.get("cells") or {}).values()
+                ):
+                    raise Skip("既存の数式を保護するためエンジンの道へ")
                 dim = "COLUMNS" if is_col_ins else "ROWS"
                 req.append({"insertDimension": {
                     "range": {"sheetId": sid, "dimension": dim, "startIndex": at_num - 1, "endIndex": at_num - 1 + cnt},

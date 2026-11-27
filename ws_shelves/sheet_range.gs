@@ -906,7 +906,7 @@ SHELF['link.extract'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
   var ci = colIndexOf_(t, op.col);
   var nr = Math.max(0, t.lastData - t.firstData + 1);
-  sh.insertColumnAfter(ci);
+  insertColsAfterSafe_(ctx, sh, ci, 1, true);
   var headName = op.name || 'URL';
   var dstHead = sh.getRange(t.headerRow, ci + 1);
   sh.getRange(t.headerRow, ci).copyTo(dstHead, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
@@ -1111,7 +1111,7 @@ SHELF['text.extract'] = function (ctx, op) {
   }
   var sh = sheetCtx_(ctx, op), t = needTable_(sh), ci = colIndexOf_(t, op.col);
   var nr = Math.max(0, t.lastData - t.firstData + 1);
-  sh.insertColumnAfter(ci);
+  insertColsAfterSafe_(ctx, sh, ci, 1, true);
   var defNames = { email: 'メール', url: 'URL', number: '数値', parens: '括弧内', regex: '抽出' };
   var headName = op.name || defNames[kind] || '抽出';
   var dstHead = sh.getRange(t.headerRow, ci + 1);

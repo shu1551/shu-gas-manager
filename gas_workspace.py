@@ -664,7 +664,7 @@ class WorkspaceManager:
             shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p0.ops)
             ch_text = " ／ ".join(res.get("changed") or []) or "なし"
             out_lines = [self._title(res.get("target") or {}), f"直した所: {ch_text}（撃った棚: {shown}）"]
-            errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った"))]
+            errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った", "式の値が変わった"))]
             rest = [x for x in (res.get("notes") or []) if x not in errs]
             out_lines += errs
             if rest:
@@ -758,7 +758,7 @@ class WorkspaceManager:
             tail.append("控えなし（backup=OFF）")
         if res.get("replayed"):
             tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
-        errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った"))]
+        errs = [x for x in (res.get("notes") or []) if x.startswith(("新しいエラー", "式が減った", "式の値が変わった"))]
         rest = [x for x in (res.get("notes") or []) if x not in errs]
         tail = errs + tail
         tail.append("直すか ws_undo で戻すかを決めてから使う人に報告する" if errs else "このまま使う人に報告して終える")

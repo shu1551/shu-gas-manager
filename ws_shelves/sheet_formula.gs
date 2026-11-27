@@ -118,8 +118,7 @@ SHELF['calc.col'] = function (ctx, op) {
     }
   }
   if (needInsertBefore) {
-    sh.insertColumnsBefore(atCol, 1);
-    if (_TBL_CACHE) _TBL_CACHE = null;
+    insertColsSafe_(ctx, sh, atCol, 1, true);
     t = needTable_(sh); // テーブル再取得
     hdrs = headerNames_(t);
     sortedHdrs = hdrs.slice().sort(function (a, b) { return b.length - a.length; });
@@ -209,9 +208,8 @@ SHELF['calc.percent'] = function (ctx, op) {
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
-    sh.insertColumnsBefore(atCol, 1);
+    insertColsSafe_(ctx, sh, atCol, 1, true);
     if (atCol <= ci) ci++;
-    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -324,13 +322,12 @@ SHELF['lookup.add'] = function (ctx, op) {
 
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
-    sh.insertColumnsBefore(atCol, 1);
+    insertColsSafe_(ctx, sh, atCol, 1, true);
     if (atCol <= myKey) myKey++;
     if (srcSh.getSheetId() === sh.getSheetId()) {
       if (atCol <= keyCol) keyCol++;
       if (atCol <= vci) vci++;
     }
-    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -369,7 +366,7 @@ SHELF['calc.diff'] = function (ctx, op) {
   need_(op, ['col_a', 'col_b']);
   var ca = colIndexOf_(t, op.col_a), cb = colIndexOf_(t, op.col_b);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ca) ca++; if (atCol <= cb) cb++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { insertColsSafe_(ctx, sh, atCol, 1, true); if (atCol <= ca) ca++; if (atCol <= cb) cb++; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var isRate = !!op.rate;
   var name = op.name || (isRate ? '増減率' : '差額');
@@ -403,7 +400,7 @@ SHELF['calc.running'] = function (ctx, op) {
   need_(op, ['col']);
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ci) ci++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { insertColsSafe_(ctx, sh, atCol, 1, true); if (atCol <= ci) ci++; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '累計';
   copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
@@ -433,7 +430,7 @@ SHELF['calc.rank'] = function (ctx, op) {
   need_(op, ['col']);
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ci) ci++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { insertColsSafe_(ctx, sh, atCol, 1, true); if (atCol <= ci) ci++; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '順位';
   copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
@@ -696,7 +693,7 @@ SHELF['date.parts'] = function (ctx, op) {
   need_(op, ['col', 'part']);
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ci) ci++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { insertColsSafe_(ctx, sh, atCol, 1, true); if (atCol <= ci) ci++; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var part = String(op.part).toLowerCase();
   var nameMap = { year: '年', month: '月', day: '日', weekday: '曜日', quarter: '四半期', fiscal: '年度' };
@@ -735,7 +732,7 @@ SHELF['text.join'] = function (ctx, op) {
   need_(op, ['cols']);
   var colList = (Array.isArray(op.cols) ? op.cols : [op.cols]).map(function (c) { return colIndexOf_(t, c); });
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); colList = colList.map(function (c) { return atCol <= c ? c + 1 : c; }); if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { insertColsSafe_(ctx, sh, atCol, 1, true); colList = colList.map(function (c) { return atCol <= c ? c + 1 : c; }); t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '結合';
   copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
@@ -884,7 +881,7 @@ SHELF['calc.if'] = function (ctx, op) {
   need_(op, ['col', 'when']);
   var ci = colIndexOf_(t, op.col);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
-  if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ci) ci++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
+  if (op.at && atCol <= t.lastCol) { insertColsSafe_(ctx, sh, atCol, 1, true); if (atCol <= ci) ci++; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '判定';
   copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
@@ -937,10 +934,9 @@ SHELF['date.diff'] = function (ctx, op) {
   var eCi = op.end_col ? colIndexOf_(t, op.end_col) : 0;
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
-    sh.insertColumnsBefore(atCol, 1);
+    insertColsSafe_(ctx, sh, atCol, 1, true);
     if (atCol <= sCi) sCi++;
     if (eCi && atCol <= eCi) eCi++;
-    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -1150,9 +1146,8 @@ SHELF['date.age'] = function (ctx, op) {
   var code = uMap[unit] || 'Y';
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
-    sh.insertColumnsBefore(atCol, 1);
+    insertColsSafe_(ctx, sh, atCol, 1, true);
     if (atCol <= ci) ci++;
-    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -1195,9 +1190,8 @@ SHELF['calc.tax'] = function (ctx, op) {
   var roundFn = roundMode === 'round' ? 'ROUND' : (roundMode === 'ceil' ? 'ROUNDUP' : 'ROUNDDOWN');
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
-    sh.insertColumnsBefore(atCol, 1);
+    insertColsSafe_(ctx, sh, atCol, 1, true);
     if (atCol <= ci) ci++;
-    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
@@ -1238,10 +1232,9 @@ SHELF['col.compare'] = function (ctx, op) {
   var ca = colIndexOf_(t, op.col_a), cb = colIndexOf_(t, op.col_b);
   var atCol = op.at ? colIndexOf_(t, op.at) : (t.lastCol + 1);
   if (op.at && atCol <= t.lastCol) {
-    sh.insertColumnsBefore(atCol, 1);
+    insertColsSafe_(ctx, sh, atCol, 1, true);
     if (atCol <= ca) ca++;
     if (atCol <= cb) cb++;
-    if (_TBL_CACHE) _TBL_CACHE = null;
     t = needTable_(sh);
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());

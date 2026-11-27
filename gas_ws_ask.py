@@ -2028,7 +2028,7 @@ def _apply_scope_fallback(op, missing, source_scope, shelf=None, clause=""):
     if sh_name in ("rows.delete", "cols.delete", "filter.delete"):
         if sh_name == "filter.delete":
             return missing, False
-        if re.search(r"(?:が|は|の).{0,16}(?:行|データ)|以上|以下|未満|超え?|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", clause):
+        if re.search(r"(?:が|は|の).{0,16}(?:行|データ|明細|レコード|案件|商品)|以上|以下|未満|超え?|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", clause):
             return missing, False
         if sh_name == "rows.delete" and not source_scope.get("row_select") and not _HERE_ROW_RE.search(clause):
             return missing, False
@@ -2312,11 +2312,11 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and (_color_hits(c) or re.search(r"太字|太く|色[を]?付|色[を]?つ|目立|ハイライト", c))
             )
             has_row_del_cond = bool(
-                re.search(r"の行|行を|行に|行は|いない行|ない行|データ", c)
+                re.search(r"の行|行を|行に|行は|いない行|ない行|データ|明細|レコード|案件|商品", c)
                 and (
                     re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", c)
                     or _DATE_CMP_CUE_RE.search(nfkc(c))
-                    or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
+                    or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|データ|明細|レコード|案件|商品)", c)
                 )
                 and re.search(r"消|削除", c)
                 and not re.search(r"重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則", c)
