@@ -165,3 +165,4 @@ R	備考に「VIP」が入っている担当者と部門を一覧で教えて
 1	4行目から9行目までの行の高さを24にして	[{"shelf":"width","rows":{"4:9":24}}]
 1	部門の列に「営業」「開発」のプルダウンを設定して	[{"shelf":"validation.list","range":"B4:B9","items":["営業","開発"]}]
 1	備考の列を削除して	[{"shelf":"cols.delete","cols":["備考"]}]
+1	メモという列を右端に追加して	[{"shelf":"cols.insert","at":"J"},{"shelf":"write","cells":{"J3":"メモ"}}]

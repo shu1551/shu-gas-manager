@@ -3018,6 +3018,23 @@ var ComboPlanner = (function () {
       }
     }
 
+    if (shelf.name === "cols.insert" && !_hasOwn(op, "at") && table) {
+      var tInsN = nfkc(text);
+      if (/右端|最後|末尾|一番右/.test(tInsN) && table.last_col) {
+        op.at = _colLetter(_colNum(table.last_col) + 1);
+        named = true;
+      } else if (/左端|先頭|一番左/.test(tInsN) && table.first_col) {
+        op.at = table.first_col;
+        named = true;
+      } else if (names.length) {
+        var refLIns = _letterOf(table, names[0]);
+        if (refLIns) {
+          op.at = /の?(?:右|後ろ|次|あと)/.test(tInsN) ? _colLetter(_colNum(refLIns) + 1) : refLIns;
+          named = true;
+        }
+      }
+    }
+
     var missing = [];
     _validateAndResolveColArgsJs(shelf, op, table, missing);
     for (var mi = 0; mi < argsList.length; mi++) {
@@ -3765,6 +3782,8 @@ var ComboPlanner = (function () {
           ensureBoost("font.unify");
         } else if (hasTotalRowCue) {
           ensureBoost("total");
+        } else if (/(?:列|カラム).{0,10}(?:追加|挿入|増や|足[しす])/.test(c) && !/合計|平均|件数|個数|計算|式|から|より|差|差分|年齢|勤続|経過|グラフ|削除|消/.test(c)) {
+          ensureBoost("cols.insert");
         } else if (hasStatRowCue) {
           ensureBoost("stat.row");
         } else if (hasPaintFmtCue || hasShortFmtCue) {
@@ -3971,6 +3990,18 @@ var ComboPlanner = (function () {
         }
       }
       p.ops.push(op);
+      if (top.name === "cols.insert" && !missing.length && op.at && table && table.header_row) {
+        var mNewCol = /(?:^|[\s、。])(?:[『「]([^』」\n]{1,20})[』」]|([^\s、。の]{1,20})という)(?:の?列|カラム)/.exec(nfkc(c));
+        if (mNewCol) {
+          var newColNm = (mNewCol[1] || mNewCol[2] || "").trim();
+          var atL = _letterOf(table, op.at) || (/^[A-Z]{1,3}$/.test(String(op.at)) ? String(op.at) : "");
+          if (newColNm && newColNm !== "新しい" && newColNm !== "空" && newColNm !== "空の" && atL) {
+            var wCells = {};
+            wCells[atL + table.header_row] = newColNm;
+            p.ops.push({ shelf: "write", cells: wCells });
+          }
+        }
+      }
       if (missing.length) {
         var missStart = p.missing.length;
         for (var mi2 = 0; mi2 < missing.length; mi2++) {

@@ -2349,6 +2349,22 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 if cols_auto:
                     op["auto"] = cols_auto
                     named = True
+    if shelf["name"] == "cols.insert" and "at" not in op and table:
+        t_ins_n = nfkc(text)
+        if re.search(r"右端|最後|末尾|一番右", t_ins_n) and table.get("last_col"):
+            op["at"] = _col_letter(_col_num(table["last_col"]) + 1)
+            named = True
+        elif re.search(r"左端|先頭|一番左", t_ins_n) and table.get("first_col"):
+            op["at"] = table["first_col"]
+            named = True
+        elif names:
+            ref_l_ins = _letter_of(table, names[0])
+            if ref_l_ins:
+                if re.search(r"の?(?:右|後ろ|次|あと)", t_ins_n):
+                    op["at"] = _col_letter(_col_num(ref_l_ins) + 1)
+                else:
+                    op["at"] = ref_l_ins
+                named = True
     missing = []
     _validate_and_resolve_col_args(shelf, op, table, missing)
     for k in (a["name"] for a in shelf["args"] if a["req"]):
@@ -2878,6 +2894,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 r"(?:文字|フォント|背景|塗り)(?:は|を|に)?(?:白|黒|赤|青|緑|黄|紫|灰|橙|紺|茶|桃|水色|濃い?[^\s、。]{1,3}|薄い?[^\s、。]{1,3})|"
                 r"[0-9]+\s*(?:pt|ポイント)|(?:少し|もっと|だいぶ|かなり|ぐっと)?(?:大きく|小さく))(?:で|に|へ|も|は|を|にして|して)?$"
             )
+            has_cols_insert_cue = bool(
+                re.search(r"(?:列|カラム).{0,10}(?:追加|挿入|増や|足[しす])", c)
+                and not re.search(r"合計|平均|件数|個数|計算|式|から|より|差|差分|年齢|勤続|経過|グラフ|削除|消", c)
+            )
             has_short_fmt_cue = bool(
                 (
                     _short_fmt_only_re.match(nfkc(c).strip())
@@ -2958,6 +2978,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("font.unify")
             elif has_total_row_cue:
                 _ensure_boost("total")
+            elif has_cols_insert_cue:
+                _ensure_boost("cols.insert")
             elif has_stat_row_cue:
                 _ensure_boost("stat.row")
             elif has_paint_fmt_cue or has_short_fmt_cue:
@@ -3087,6 +3109,13 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 last_incomplete = None
                 continue
         p.ops.append(op)
+        if top["name"] == "cols.insert" and not missing and op.get("at") and table and table.get("header_row"):
+            m_new_col = re.search(r"(?:^|[\s、。])(?:[『「]([^』」\n]{1,20})[』」]|([^\s、。の]{1,20})という)(?:の?列|カラム)", nfkc(c))
+            if m_new_col:
+                new_col_nm = (m_new_col.group(1) or m_new_col.group(2) or "").strip()
+                at_l = _letter_of(table, op["at"]) or (op["at"] if re.fullmatch(r"[A-Z]{1,3}", str(op["at"])) else "")
+                if new_col_nm and new_col_nm not in ("新しい", "空", "空の") and at_l:
+                    p.ops.append({"shelf": "write", "cells": {f"{at_l}{table['header_row']}": new_col_nm}})
         if missing:
             miss_start = len(p.missing)
             p.missing += [f"{top['name']}: " + m for m in missing]
