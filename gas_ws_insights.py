@@ -6,6 +6,12 @@
 """
 
 import re
+import hashlib as _hashlib
+# 健診の結果の版＝このファイルの中身から作る。直したら覚えていた健診を作り直す（古い誤った気づきを出し続けない）
+try:
+    DIAG_VERSION = _hashlib.sha1(open(__file__, 'rb').read()).hexdigest()[:12]
+except Exception:
+    DIAG_VERSION = 'unknown'
 
 _EMAIL_HEAD_RE = re.compile(r"(?:メール|mail|e-?mail|アドレス)", re.I)
 _PHONE_HEAD_RE = re.compile(r"(?:電話|携帯|tel|fax|連絡先)", re.I)
@@ -307,10 +313,13 @@ def analyze_table_insights(
     month_hits = []
     half_labels = set()
     for c in col_infos:
-        m = _MONTH_RE.search(c["name"])
-        if m:
-            if m.group(1):
-                half_labels.add(m.group(1))
+        # 2 段見出しは「上期（4〜6月）・4月」の形＝親の「6月」でなく、最後に出る月（子の見出し）を取る
+        ms = list(_MONTH_RE.finditer(c["name"]))
+        if ms:
+            m = ms[-1]
+            half = next((x.group(1) for x in ms if x.group(1)), None) or next((h for h in ("上期", "下期") if h in c["name"]), None)
+            if half:
+                half_labels.add(half)
             month_hits.append(int(m.group(2)))
     if len(month_hits) >= 2 and len(set(month_hits)) < 12:
         uniq_m = sorted(set(month_hits))
@@ -809,7 +818,8 @@ def diagnose_workbook(sheets_payload):
                     }
                     break
         # 期間抽出（月見出し、またはマスタ以外の明細シートの日付列の年月）
-        m_cols = [int(_MONTH_RE.search(str(c.get("name") or "")).group(2)) for c in cols if _MONTH_RE.search(str(c.get("name") or ""))]
+        # 2 段見出し「上期（4〜6月）・4月」は最後に出る月（子の見出し）を取る
+        m_cols = [int(list(_MONTH_RE.finditer(str(c.get("name") or "")))[-1].group(2)) for c in cols if _MONTH_RE.search(str(c.get("name") or ""))]
         if m_cols:
             sheet_months_info[sh] = ("header", sorted(set(m_cols)))
         elif not re.search(r"社員|名簿|マスタ|顧客|メンバー", sh):

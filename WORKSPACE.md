@@ -1,7 +1,7 @@
 # Workspace マネージャー 手順書
 
 スプレッドシートとドキュメントを会話で作る・直す道具。MCP は 4 本：`ws_look`（見る）・`ws_find`（棚の札を引く）・`ws_do`（作る・直す）・`ws_undo`（戻す）。
-通り道は専用の GAS エンジン（`shu-workspace-engine` = [workspace_engine.gs](workspace_engine.gs)）1 本。型（棚）はエンジンが持ち（`ws_shelves/*.gs`・頭の札が目録）、AI は札を見て **棚の名前と引数の JSON** だけ渡す。使い捨ての GAS コードは書かない。
+通り道は専用の GAS エンジン（`shu-workspace-engine` = [workspace_engine.gs](workspace_engine.gs)）1 本。型（棚）はエンジンが持ち（`ws_shelves/*.gs`・頭の札が目録）、AI は `ws_look` で中身と健診を読み、頼みの意味を自分で決め、札を見て **棚の名前と引数の JSON** を組んで渡す（AI が主役。`ws_do(ask)` の読み取りは単純な頼みの近道）。棚に無い手は api（batchUpdate）。どの手にも控え・検算が付く。
 
 ## 最初の 1 回
 初めて撃つと、エンジンが無ければ道具が作り（Drive に `shu-workspace-engine` を 1 つ）、許可待ちなら **URL と押す所を 3 行で返して止まる**。

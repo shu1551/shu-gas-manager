@@ -1165,13 +1165,14 @@ class WorkspaceManager:
             sid_ro = t_out.get("id") or tgt.get("id")
             if sid_ro and not st_ro.get("direct_off"):
                 diag_map = st_ro.setdefault("book_diagnosis", {})
-                if sid_ro not in diag_map or (diag_map.get(sid_ro) or {}).get("stale"):
-                    import gas_ws_direct, gas_ws_insights
+                import gas_ws_insights
+                if sid_ro not in diag_map or (diag_map.get(sid_ro) or {}).get("stale") or (diag_map.get(sid_ro) or {}).get("ver") != gas_ws_insights.DIAG_VERSION:
+                    import gas_ws_direct
                     sh_names = (tc or {}).get("sheets") or []
                     payload = gas_ws_direct.fetch_workbook_payload_for_diagnosis(self, st_ro, sid_ro, sheet_names=sh_names or None)
                     if payload:
                         findings = gas_ws_insights.diagnose_workbook(payload)
-                        diag_map[sid_ro] = {"findings": findings, "ts": time.time(), "stale": False}
+                        diag_map[sid_ro] = {"findings": findings, "ts": time.time(), "stale": False, "ver": gas_ws_insights.DIAG_VERSION}
                         self._save(st_ro)
                 diag_findings = ((diag_map.get(sid_ro) or {}).get("findings") or [])[:8]
         except Exception:
@@ -1253,7 +1254,8 @@ class WorkspaceManager:
                     except Exception:
                         pass
         diag_entry = (st2.get("book_diagnosis") or {}).get(sid_out) or {}
-        if diag_entry.get("stale") and not st2.get("direct_off") and sid_out:
+        import gas_ws_insights as _gwi
+        if (diag_entry.get("stale") or (diag_entry and diag_entry.get("ver") != _gwi.DIAG_VERSION)) and not st2.get("direct_off") and sid_out:
             try:
                 import gas_ws_direct, gas_ws_insights
                 tc_now = self._cached_table(st2, tgt_out) or {}
@@ -1262,6 +1264,7 @@ class WorkspaceManager:
                 if payload_d:
                     diag_entry["findings"] = gas_ws_insights.diagnose_workbook(payload_d)
                     diag_entry["stale"] = False
+                    diag_entry["ver"] = gas_ws_insights.DIAG_VERSION
                     diag_entry["ts"] = time.time()
             except Exception:
                 pass
@@ -1638,7 +1641,7 @@ class WorkspaceManager:
                 ins = []
                 # 初回ブック健診（全シート総当たり・1回だけ実行して記憶。stale なら再実行）
                 diag_map = st.setdefault("book_diagnosis", {})
-                if sid_lk and (sid_lk not in diag_map or (diag_map.get(sid_lk) or {}).get("stale")) and not st.get("direct_off"):
+                if sid_lk and (sid_lk not in diag_map or (diag_map.get(sid_lk) or {}).get("stale") or (diag_map.get(sid_lk) or {}).get("ver") != gas_ws_insights.DIAG_VERSION) and not st.get("direct_off"):
                     import gas_ws_direct
                     t0 = time.perf_counter()
                     sh_names = [s.get("name") for s in (res.get("sheets") or []) if s.get("name")]
@@ -1650,19 +1653,17 @@ class WorkspaceManager:
                             "ts": time.time(),
                             "elapsed": round(time.perf_counter() - t0, 2),
                             "stale": False,
+                            "ver": gas_ws_insights.DIAG_VERSION,
                         }
                         if len(diag_map) > 5:
                             for old_sid in list(diag_map.keys())[:-5]:
                                 diag_map.pop(old_sid, None)
                         ins.extend(f["text"] for f in findings[:8])
                 elif sid_lk and sid_lk in diag_map:
-                    # 2回目以降の別シート look では、そのシートに関する未提示の健診項目も出す
-                    for d in (diag_map[sid_lk].get("findings") or []):
-                        if d.get("sheet") == sh_lk:
-                            ins.append(d["text"])
+                    # ws_look は AI の材料＝毎回ブック全体の健診を重要度の順に渡す（一度伝えた物も省かない。省くのは ws_do の返事だけ）
+                    ins.extend(d["text"] for d in (diag_map[sid_lk].get("findings") or [])[:8])
                 if not ins:
                     ins = gas_ws_insights.analyze_from_look_res(res)
-                ins = self._filter_new_insights(st, sid_lk, sh_lk, ins)
                 if ins:
                     res["insights"] = ins
             except Exception:
