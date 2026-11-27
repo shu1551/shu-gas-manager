@@ -780,7 +780,7 @@ B列からD列だけ体裁を整えて	tidy,doc.style,group.cols
 表にフィルタを付けて	filter.on,filter.where,filter.off,format,fill.down
 A1からE50にフィルタを設定して	filter.on,filter.where,filter.off,clear.format,fill.down
 メールアドレス列が同じ重複行を消して	dedupe,text.extract,rows.delete,seiri,doc.table.row
-氏名列を姓と名にスペースで分けて	split.col,seiri,text.clean,text.join,doc.pagebreak
+氏名列を姓と名にスペースで分けて	split.col,text.join,seiri,text.clean,doc.pagebreak
 住所列をカンマで列に分割して	format,split.col,split.rows,sheet.split
 フィルタを解除して全部表示に戻して	filter.off,format,filter.where,filter.on,sheet.gridlines
 表の途中の空行を一括で詰めて	blank.rows.delete,seiri,filter.delete,rows.trim,replace
