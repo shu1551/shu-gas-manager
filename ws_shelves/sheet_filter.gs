@@ -42,6 +42,11 @@ function parseDateText_(s) {
   if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
   return dt;
 }
+// 日付をスプレッドシートのタイムゾーンずれ無しでセルへ書くためのスラッシュ文字列（yyyy/mm/dd）に統一する
+function formatDateCell_(dt) {
+  if (!(dt instanceof Date) || isNaN(dt.getTime())) return dt;
+  return dt.getFullYear() + '/' + ('0' + (dt.getMonth() + 1)).slice(-2) + '/' + ('0' + dt.getDate()).slice(-2);
+}
 // 比較用（filter.where / filter.delete / filter.extract / cf.add）の日付値（年あり・年なしMM/DD両対応）を解釈する
 function parseCmpDate_(val, fallbackYear) {
   if ((val instanceof Date || Object.prototype.toString.call(val) === '[object Date]') && !isNaN(val.getTime())) {
@@ -411,7 +416,7 @@ SHELF['seiri'] = function (ctx, op) {
       var isCodeLike = keepTextCol[c] || /^[+-]?0\d/.test(nv);
       var numClean = isDataR && !isCodeLike ? nv.replace(/^[¥￥$]\s*/, '').replace(/\s*(?:円|個|件|本|枚|台)$/, '').trim() : '';
       if (doNum && isDataR && !isCodeLike && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(numClean)) { nv = Number(numClean.replace(/,/g, '')); nNum++; }
-      else if (doDate && isDataR && !isCodeLike && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
+      else if (doDate && isDataR && !isCodeLike && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = formatDateCell_(dt); nDate++; } }
       if (nv !== v) {
         var a1k = a1_(startRow + r, startCol + c);
         vals[r][c] = nv;

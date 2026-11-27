@@ -2993,6 +2993,16 @@ var ComboPlanner = (function () {
             var fbCh = _singleNumericFallbackJs(table, chartCols);
             if (fbCh) numColsCh.push(fbCh);
           }
+        } else if (hasNumMetaCh && numColsCh.length === 1 && /並べて|並べた|比較|と[^\s、。]{1,12}を/.test(nfkc(text))) {
+          var pairCandJs = [];
+          for (var pci = 0; pci < (table.columns || []).length; pci++) {
+            var pc = table.columns[pci];
+            if (pc && pc.number && labelCols.indexOf(pc.name) < 0 && numColsCh.indexOf(pc.name) < 0 &&
+                /予算|年計|計画|目標|実績|見込|前年|前期/.test(String(pc.name || ""))) {
+              pairCandJs.push(pc.name);
+            }
+          }
+          if (pairCandJs.length === 1) numColsCh.push(pairCandJs[0]);
         }
         if (hasNumMetaCh && !numColsCh.length) {
           delete op.range;
@@ -3015,7 +3025,9 @@ var ComboPlanner = (function () {
           }
           var spCh = _dataSpan(table);
           if (orderedLs.length && spCh) {
-            var chR1 = parseInt(table.header_row || spCh[0], 10) + Math.max(1, parseInt(table.header_rows || 1, 10)) - 1;
+            var chR1 = usedGroupSeries
+              ? (parseInt(table.header_row || spCh[0], 10) + Math.max(1, parseInt(table.header_rows || 1, 10)) - 1)
+              : parseInt(table.header_row || spCh[0], 10);
             var chR2 = spCh[1];
             if (orderedLs.length === 1) {
               op.range = orderedLs[0] + chR1 + ":" + orderedLs[0] + chR2;
@@ -3076,6 +3088,12 @@ var ComboPlanner = (function () {
       }
     }
 
+    if (shelf.name === "filter.where") {
+      var eqV = op.equals, colV = op.col;
+      if (typeof eqV === "string" && typeof colV === "string" && eqV && colV && nfkc(text).indexOf(colV + eqV) >= 0) {
+        op.equals = colV + eqV;
+      }
+    }
     if (shelf.name === "date.parts" && !_hasOwn(op, "part")) {
       var tDp = nfkc(text);
       if (tDp.indexOf("四半期") >= 0) op.part = "quarter";
@@ -3795,6 +3813,15 @@ var ComboPlanner = (function () {
           }
         }
       }
+      var mCellSet = /(?<![A-Za-z0-9_])([A-Z]{1,3}[0-9]+)\s*を\s*([^\s、。]+?)\s*に(?:して|変えて|書き換えて|直して)/.exec(nfkc(c));
+      if (mCellSet && kind !== "doc") {
+        var cA1 = mCellSet[1], cVal = mCellSet[2];
+        var wOp = { shelf: "write", cells: {} };
+        wOp.cells[cA1] = /^-?[0-9]+$/.test(cVal) ? parseInt(cVal, 10) : cVal;
+        if (curSheet) wOp.sheet = curSheet;
+        p.ops.push(wOp);
+        continue;
+      }
       var scored = scoreAll(c, kind);
 
       if (lastIncomplete !== null && (
@@ -4305,6 +4332,16 @@ var ComboPlanner = (function () {
       dd.push(o);
     }
     p.ops = dd;
+    var askNfkc = nfkc(askText);
+    for (var fwi = 0; fwi < p.ops.length; fwi++) {
+      var oFw = p.ops[fwi];
+      if (oFw && oFw.shelf === "filter.where") {
+        var eqV2 = oFw.equals, colV2 = oFw.col;
+        if (typeof eqV2 === "string" && typeof colV2 === "string" && eqV2 && colV2 && askNfkc.indexOf(colV2 + eqV2) >= 0) {
+          oFw.equals = colV2 + eqV2;
+        }
+      }
+    }
     p.fire = (!fatalErr) && (!p.missing.length) && (p.ops.length > 0);
     // 守り: 読むだけの問い（変更動詞なし・問いの形）で、シートを触る棚が当たったら撃たない（読む棚だけは撃てる）
     if (p.fire && _isReadOnlyAskJs(askText) && p.ops.some(function (o) { var sh0 = _byName[o.shelf]; return sh0 && sh0.touch && sh0.touch.length; })) {

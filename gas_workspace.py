@@ -1158,20 +1158,20 @@ class WorkspaceManager:
             snip["table"] = tb_now
         t_out = snip.get("target") or tgt
         tb_now = snip.get("table")
-        # 読むだけ・チェック依頼でも初回ブック健診を実行・記憶し、他シートを含む要点を添える
+        # 読むだけ・チェック依頼でも初回ブック健診（または変更後の再健診）を実行・記憶し、他シートを含む要点を添える
         diag_findings = []
         try:
             st_ro = self._load()
             sid_ro = t_out.get("id") or tgt.get("id")
             if sid_ro and not st_ro.get("direct_off"):
                 diag_map = st_ro.setdefault("book_diagnosis", {})
-                if sid_ro not in diag_map:
+                if sid_ro not in diag_map or (diag_map.get(sid_ro) or {}).get("stale"):
                     import gas_ws_direct, gas_ws_insights
                     sh_names = (tc or {}).get("sheets") or []
                     payload = gas_ws_direct.fetch_workbook_payload_for_diagnosis(self, st_ro, sid_ro, sheet_names=sh_names or None)
                     if payload:
                         findings = gas_ws_insights.diagnose_workbook(payload)
-                        diag_map[sid_ro] = {"findings": findings, "ts": time.time()}
+                        diag_map[sid_ro] = {"findings": findings, "ts": time.time(), "stale": False}
                         self._save(st_ro)
                 diag_findings = ((diag_map.get(sid_ro) or {}).get("findings") or [])[:8]
         except Exception:
@@ -1225,14 +1225,47 @@ class WorkspaceManager:
                         v_grid, f_grid, a_map = gas_ws_direct.snapshot_to_grids(light["snap"], sh_for_ins, light["table"])
                         if not keeps_shape:
                             b_map = self._load_sheet_vals(st2, sid_out, sh_for_ins)
-                            if b_map and not diff_cells:
+                            if b_map and not diff_cells and res.get("changed"):
                                 diff_cells = gas_ws_insights.diff_cell_values(b_map, a_map)
                             self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map)
                             if not verify.get("checks") and not verify.get("mismatch"):
-                                verify = gas_ws_insights.verify_after_do(light["table"], v_grid, f_grid, ops=ops, before_map=b_map, after_map=a_map)
+                                verify = gas_ws_insights.verify_after_do(
+                                    light["table"],
+                                    v_grid,
+                                    f_grid,
+                                    ops=ops,
+                                    before_map=(b_map if res.get("changed") else None),
+                                    after_map=(a_map if res.get("changed") else None),
+                                )
                 except Exception:
                     insights = insights or []
-        diag_all = ((st2.get("book_diagnosis") or {}).get(sid_out) or {}).get("findings") or []
+            # Direct/Engine 問わず、値・行が変わる手を撃った後はブック健診を最新化対象にする
+            if not keeps_shape and res.get("changed"):
+                if (st2.get("book_diagnosis") or {}).get(sid_out):
+                    st2["book_diagnosis"][sid_out]["stale"] = True
+                if res.get("direct"):
+                    try:
+                        import gas_ws_direct
+                        light_d = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid_out, sh_for_ins, "A1:Z60")
+                        if light_d:
+                            _, _, a_map_d = gas_ws_direct.snapshot_to_grids(light_d["snap"], sh_for_ins, light_d["table"])
+                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map_d)
+                    except Exception:
+                        pass
+        diag_entry = (st2.get("book_diagnosis") or {}).get(sid_out) or {}
+        if diag_entry.get("stale") and not st2.get("direct_off") and sid_out:
+            try:
+                import gas_ws_direct, gas_ws_insights
+                tc_now = self._cached_table(st2, tgt_out) or {}
+                sh_names_d = tc_now.get("sheets") or []
+                payload_d = gas_ws_direct.fetch_workbook_payload_for_diagnosis(self, st2, sid_out, sheet_names=sh_names_d or None)
+                if payload_d:
+                    diag_entry["findings"] = gas_ws_insights.diagnose_workbook(payload_d)
+                    diag_entry["stale"] = False
+                    diag_entry["ts"] = time.time()
+            except Exception:
+                pass
+        diag_all = diag_entry.get("findings") or []
         sticky_insights = []
         if diag_all:
             op_cats = {(self.catalog.by_name.get(o.get("shelf")) or {}).get("cat") for o in (ops or []) if isinstance(o, dict)}
@@ -1603,9 +1636,9 @@ class WorkspaceManager:
             try:
                 import gas_ws_insights
                 ins = []
-                # 初回ブック健診（全シート総当たり・1回だけ実行して記憶）
+                # 初回ブック健診（全シート総当たり・1回だけ実行して記憶。stale なら再実行）
                 diag_map = st.setdefault("book_diagnosis", {})
-                if sid_lk and sid_lk not in diag_map and not st.get("direct_off"):
+                if sid_lk and (sid_lk not in diag_map or (diag_map.get(sid_lk) or {}).get("stale")) and not st.get("direct_off"):
                     import gas_ws_direct
                     t0 = time.perf_counter()
                     sh_names = [s.get("name") for s in (res.get("sheets") or []) if s.get("name")]
@@ -1616,6 +1649,7 @@ class WorkspaceManager:
                             "findings": findings,
                             "ts": time.time(),
                             "elapsed": round(time.perf_counter() - t0, 2),
+                            "stale": False,
                         }
                         if len(diag_map) > 5:
                             for old_sid in list(diag_map.keys())[:-5]:

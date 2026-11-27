@@ -1227,7 +1227,7 @@ class DirectRunner:
 
             detail_fields = (
                 "sheets(properties(sheetId,title),merges,"
-                "data(startRow,startColumn,rowMetadata(hiddenByUser),columnMetadata(hiddenByUser),"
+                "data(startRow,startColumn,rowMetadata(hiddenByUser,hiddenByFilter),columnMetadata(hiddenByUser),"
                 "rowData(values(formattedValue,effectiveValue,userEnteredValue,"
                 "effectiveFormat(numberFormat(type)),dataValidation))))"
             )
@@ -1686,7 +1686,8 @@ def _build_side_direct(meta_resp, sh_meta, grid_data):
         lines.append("フィルタ: " + _grid_a1(bf.get("range")) + (f"（{'・'.join(cr)} 列で絞り込み中）" if cr else ""))
 
     if grid_data:
-        hr = [i for i, m in enumerate(grid_data.get("rowMetadata") or []) if m and m.get("hiddenByUser")]
+        row_meta = grid_data.get("rowMetadata") or []
+        hr = [i for i, m in enumerate(row_meta) if m and m.get("hiddenByUser")]
         hc = [i for i, m in enumerate(grid_data.get("columnMetadata") or []) if m and m.get("hiddenByUser")]
         hp = []
         if hr:
@@ -1695,6 +1696,24 @@ def _build_side_direct(meta_resp, sh_meta, grid_data):
             hp.append("隠した列: " + "、".join(_cap_list(_col_runs(hc), 4)))
         if hp:
             lines.append(" ／ ".join(hp))
+        filt_hidden = [i + 1 for i, m in enumerate(row_meta) if (m or {}).get("hiddenByFilter")]
+        if filt_hidden:
+            # 表のデータ行範囲が分かれば表示中の行番号を出す
+            tb_f = None
+            try:
+                tb_f = _find_table_direct((grid_data or {}).get("rowData") or [])
+            except Exception:
+                tb_f = None
+            if tb_f and tb_f.get("data"):
+                d_parts = str(tb_f["data"]).split("-")
+                if len(d_parts) == 2:
+                    r_d1, r_d2 = int(d_parts[0]), int(d_parts[1])
+                    shown_data = [r for r in range(r_d1, r_d2 + 1) if r not in filt_hidden]
+                    lines.append(
+                        f"絞り込み表示中: {'・'.join(str(r) for r in shown_data[:10])}行目"
+                        + (f" ほか{len(shown_data) - 10}件" if len(shown_data) > 10 else "")
+                        + f"（全{r_d2 - r_d1 + 1}件中 {len(shown_data)}件）"
+                    )
 
     gp = []
     for g in (sh_meta or {}).get("rowGroups") or []:

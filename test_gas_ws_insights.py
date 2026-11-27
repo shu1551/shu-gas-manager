@@ -354,3 +354,28 @@ def test_cross_sheet_diagnosis_and_planner_fixes():
         after_map={(2, 2): "2022/03/31"},
     )
     assert not ver_d["ok"] and any("ずれています" in m for m in ver_d["mismatch"])
+
+    # 6. 2段見出しで「予算と実績を並べて」が 1行目始まりの複数列 chart.new になること
+    tb_2row = {
+        "header_row": 1,
+        "header_rows": 2,
+        "first_col": "A",
+        "last_col": "I",
+        "data": "3-6",
+        "columns": [
+            {"col": "A", "name": "部署"},
+            {"col": "G", "name": "下期・12月", "number": True},
+            {"col": "H", "name": "年計", "number": True},
+            {"col": "I", "name": "実績", "number": True},
+        ],
+    }
+    p_2c = A.plan("部署ごとの予算と実績を棒グラフで並べて", F.Finder(), "sheet", tb_2row)
+    assert p_2c.fire and p_2c.ops == [{"shelf": "chart.new", "type": "column", "range": "A1:A6,H1:I6"}]
+
+    # 7. filter.where の「承認待ち」復元 と write セル番地優先
+    tb_exp = {"header_row": 1, "first_col": "A", "last_col": "H", "data": "3-15", "columns": [{"col": "G", "name": "承認"}]}
+    p_fw = A.plan("承認待ちの行だけ表示して", F.Finder(), "sheet", tb_exp)
+    assert p_fw.fire and p_fw.ops[0]["equals"] == "承認待ち"
+
+    p_wr = A.plan("社員のD2を2022/04/01にして", F.Finder(), "sheet", tb_emp)
+    assert p_wr.fire and p_wr.ops[0]["shelf"] == "write" and p_wr.ops[0]["cells"] == {"D2": "2022/04/01"}

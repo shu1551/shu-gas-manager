@@ -358,8 +358,8 @@ SHELF['date.fix'] = function (ctx, op) {
       dt = mk(year, +m[1], +m[2]);
     }
     if (!dt) continue;
-    // GAS プロジェクトとスプレッドシートの時差で 1 日ずれるのを防ぐため、スラッシュ文字列で渡してシート側のタイムゾーンで日付化させる
-    vals[r][c] = dt.getFullYear() + '/' + ('0' + (dt.getMonth() + 1)).slice(-2) + '/' + ('0' + dt.getDate()).slice(-2);
+    // formatDateCell_ で共通化し、シート側のタイムゾーンで日付化させる
+    vals[r][c] = (typeof formatDateCell_ === 'function') ? formatDateCell_(dt) : (dt.getFullYear() + '/' + ('0' + (dt.getMonth() + 1)).slice(-2) + '/' + ('0' + dt.getDate()).slice(-2));
     if (op.format || !fmts[r][c] || fmts[r][c] === '@' || fmts[r][c] === 'General') fmts[r][c] = targetFmt;
     fixed.push(a1_(startR + r, startC + c));
   }

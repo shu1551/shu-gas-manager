@@ -228,19 +228,26 @@ SHELF['calc.col'] = function (ctx, op) {
     setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
     if (isTimeDiff) {
       try { sh.getRange(t.firstData, atCol, numRows, 1).setNumberFormat('[h]:mm'); } catch (eTf) {}
+    } else if (!isDateResult && /(?:率|割合|％|%)/.test(String(op.name || ''))) {
+      try { sh.getRange(t.firstData, atCol, numRows, 1).setNumberFormat('0.0%'); } catch (ePf) {}
     }
   }
-  // 合計行がある表では、追加した計算列の合計行にも式と書式を入れる（日付列は合計しない）
+  // 合計行がある表では、割合・単価の列は行の式、それ以外（金額など）は =SUM(...) を入れる
   if (t.totalRow && !isDateResult) {
     if (tmplDataCol !== atCol) {
       try {
         sh.getRange(t.totalRow, tmplDataCol, 1, 1).copyTo(sh.getRange(t.totalRow, atCol, 1, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
       } catch (eCpT) {}
     }
-    var totFormula = (expr.indexOf('/') >= 0 || numRows <= 0)
+    var isPctName = /(?:率|割合|％|%)/.test(String(op.name || ''));
+    var isRateExpr = isPctName || /(?:比|単価|平均)/.test(String(op.name || '')) || /\/\s*[A-Z]{1,3}(?![0-9.])/.test(makeFormula(t.firstData));
+    var totFormula = (isRateExpr || numRows <= 0)
       ? makeFormula(t.totalRow)
       : ('=SUM(' + colLetter_(atCol) + t.firstData + ':' + colLetter_(atCol) + t.lastData + ')');
     setFormulasAllRows_(ctx, sh, t.totalRow, atCol, [[totFormula]]);
+    if (isPctName) {
+      try { sh.getRange(t.totalRow, atCol, 1, 1).setNumberFormat('0.0%'); } catch (ePf2) {}
+    }
   }
   if (_TBL_CACHE) _TBL_CACHE = null;
   chg_(ctx, sh, colLetter_(atCol) + '列', '計算列「' + op.name + '」を追加');

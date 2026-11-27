@@ -2368,6 +2368,15 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     fb_c = _single_numeric_fallback(table, exclude=chart_cols)
                     if fb_c:
                         num_cols.append(fb_c)
+            elif has_num_meta and len(num_cols) == 1 and re.search(r"並べて|並べた|比較|と[^\s、。]{1,12}を", nfkc(text)):
+                # 「予算と実績を並べて」等で片方の列しか直接一致しない場合、年計/合計/予算/計画系の対となる数値列を補う
+                pair_cand = [
+                    c["name"] for c in (table.get("columns") or [])
+                    if c.get("number") and c.get("name") not in label_cols and c.get("name") not in num_cols
+                    and re.search(r"予算|年計|計画|目標|実績|見込|前年|前期", str(c.get("name") or ""))
+                ]
+                if len(pair_cand) == 1:
+                    num_cols.append(pair_cand[0])
             if has_num_meta and not num_cols:
                 op.pop("range", None)
                 if not (re.search(r"ごと(?:に|の)|別(?:に|で|の)", nfkc(text)) and re.search(r"件数|人数|回数|の数|回答数|カウント", nfkc(text))):
@@ -2383,7 +2392,10 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         ordered_ls.append(ol)
                 sp_ch = _data_span(table)
                 if ordered_ls and sp_ch:
-                    ch_r1 = int(table.get("header_row") or sp_ch[0]) + max(1, int(table.get("header_rows") or 1)) - 1
+                    if used_group_series:
+                        ch_r1 = int(table.get("header_row") or sp_ch[0]) + max(1, int(table.get("header_rows") or 1)) - 1
+                    else:
+                        ch_r1 = int(table.get("header_row") or sp_ch[0])
                     ch_r2 = sp_ch[1]
                     if len(ordered_ls) == 1:
                         op["range"] = f"{ordered_ls[0]}{ch_r1}:{ordered_ls[0]}{ch_r2}"
@@ -2405,6 +2417,11 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                             op["range"] = ",".join(runs)
                     if used_group_series and len(label_cols) == 1 and len(num_cols) >= 2 and re.search(r"推移|月別|折れ線|ごと|別", text):
                         op["transpose"] = True
+    if shelf["name"] == "filter.where":
+        eq_v = op.get("equals")
+        col_v = op.get("col")
+        if isinstance(eq_v, str) and isinstance(col_v, str) and eq_v and col_v and (col_v + eq_v) in nfkc(text):
+            op["equals"] = col_v + eq_v
     if shelf["name"] == "date.parts" and "part" not in op:
         t_dp = nfkc(text)
         if "四半期" in t_dp:
@@ -2921,6 +2938,15 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                         p.cards.pop()
                     last_incomplete = None
                 continue
+        # セル番地を明示した値変更（例:「社員のD2を2022/04/01にして」）は drive.rename ではなく write へ
+        m_cell_set = re.search(r"(?<![A-Za-z0-9_])([A-Z]{1,3}[0-9]+)\s*を\s*([^\s、。]+?)\s*に(?:して|変えて|書き換えて|直して)", nfkc(c))
+        if m_cell_set and kind != "doc":
+            c_a1, c_val = m_cell_set.group(1), m_cell_set.group(2)
+            w_op = {"shelf": "write", "cells": {c_a1: int(c_val) if re.fullmatch(r"-?[0-9]+", c_val) else c_val}}
+            if cur_sheet:
+                w_op["sheet"] = cur_sheet
+            p.ops.append(w_op)
+            continue
         # 型ベースの優先調停（スコア0でも明確な型の依頼を救済する）
         boost_name = ""
         top_base = scored[0][0] if scored else gas_ws_find.WEAK_SCORE
@@ -3353,6 +3379,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             continue
         dd.append(o)
     p.ops = dd
+    ask_nfkc = nfkc(ask)
+    for o_fw in p.ops:
+        if isinstance(o_fw, dict) and o_fw.get("shelf") == "filter.where":
+            eq_v, col_v = o_fw.get("equals"), o_fw.get("col")
+            if isinstance(eq_v, str) and isinstance(col_v, str) and eq_v and col_v and (col_v + eq_v) in ask_nfkc:
+                o_fw["equals"] = col_v + eq_v
     p.fire = (not fatal_err) and (not p.missing) and bool(p.ops)
     # 守り: 読むだけの問い（変更動詞なし・問いの形）で、シートを触る棚が当たったら撃たない（読む棚だけは撃てる）
     if p.fire and _is_read_only_ask(ask) and any(finder.cat.by_name[o["shelf"]].get("touch") for o in p.ops):

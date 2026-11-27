@@ -746,11 +746,40 @@ def diagnose_workbook(sheets_payload):
                         continue
                     partial = [rs for rs in ref_strings if k_val in rs or rs in k_val]
                     if partial:
+                        # 参照先シートから部分一致名（例: 開発部）の合計額を試算して添える
+                        est_hint = ""
+                        try:
+                            ref_tb = ref_sp.get("table")
+                            ref_dr = _parse_data_range(ref_tb) if ref_tb else None
+                            if ref_dr:
+                                r_k_cols = [
+                                    _col_num(rc.get("col")) for rc in (ref_tb.get("columns") or [])
+                                    if not rc.get("number")
+                                ]
+                                r_v_cols = [
+                                    _col_num(rc.get("col")) for rc in (ref_tb.get("columns") or [])
+                                    if rc.get("number") and _AMT_HEAD_RE.search(str(rc.get("name") or ""))
+                                ]
+                                if r_v_cols:
+                                    vc = r_v_cols[0]
+                                    p_sum = 0.0
+                                    p_cnt = 0
+                                    for rr in range(ref_dr[0], ref_dr[1] + 1):
+                                        rrow = ref_sp["values"][rr - 1] if rr - 1 < len(ref_sp["values"]) else []
+                                        if any(str(rrow[kc_i - 1] if kc_i - 1 < len(rrow) else "").strip() == partial[0] for kc_i in r_k_cols):
+                                            av = _to_float(rrow[vc - 1] if vc - 1 < len(rrow) else "")
+                                            if av is not None:
+                                                p_sum += av
+                                                p_cnt += 1
+                                    if p_cnt > 0:
+                                        est_hint = f"（一致させると {_fmt_num(p_sum)}）"
+                        except Exception:
+                            est_hint = ""
                         add_f(
                             sh,
                             "cross_sheet_mismatch",
                             1,
-                            f"[{sh}] {c['col']}{r}（{c['name']}）が 0 になっています: 「{k_val}」（{kc['col']}{r}）が「{ref_sh}」側の「{partial[0]}」等と表記がずれています",
+                            f"[{sh}] {c['col']}{r}（{c['name']}）が 0 になっています: 「{k_val}」（{kc['col']}{r}）が「{ref_sh}」側の「{partial[0]}」等と表記がずれています{est_hint}",
                         )
                         break
 
