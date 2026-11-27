@@ -3567,3 +3567,81 @@ process.stdout.write(JSON.stringify({ afterLateInit, sheet1: run1.req.sheet, she
     assert res["sheet1"] == "月別"
     assert res["sheet2"] == "集計"
     assert res["uiEnd"] == "集計"
+
+
+def test_sidebar_follows_server_sheet_switch_and_keeps_pick_when_unchanged():
+    """前回と同じサーバーシートなら窓の選択を守り、前回と違うシートが返ったら追従すること。"""
+    files = combo_mod.build_combo_files(combo_lite=True)
+    sidebar_html = next(f["source"] for f in files if f["name"] == "ComboSidebar")
+    scripts = re.findall(r"<script>([\s\S]*?)</script>", sidebar_html)
+    node_code = r"""
+const fs = require('fs');
+const vm = require('vm');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+
+function makeEl(id) {
+  return {
+    id, value: '', checked: false, disabled: false, textContent: '', innerHTML: '',
+    style: {}, dataset: {}, children: [], listeners: {},
+    classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
+    addEventListener(ev, fn){ (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
+    dispatch(ev){ (this.listeners[ev] || []).forEach(fn => fn.call(this, { target: this })); },
+    appendChild(c){
+      this.children.push(c);
+      if (this.tagName === 'SELECT' || this.id === 'sheetSelect' || this.id === 'settingsSheetSelect') {
+        if (c.selected || this.children.length === 1) this.value = c.value;
+      }
+      return c;
+    },
+    querySelectorAll(){ return []; },
+    querySelector(){ return null; },
+    focus(){}
+  };
+}
+const elsMap = {};
+const sandbox = {
+  console, Math, Date, JSON, Object, Array, String, Number, Boolean, RegExp, Error, parseInt, parseFloat, isNaN, isFinite,
+  encodeURIComponent, decodeURIComponent,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  performance: { now: () => 100 },
+  document: {
+    getElementById(id) { if (!elsMap[id]) elsMap[id] = makeEl(id); return elsMap[id]; },
+    createElement(tag) { const el = makeEl(tag); el.tagName = tag.toUpperCase(); return el; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    addEventListener() {}
+  },
+  window: { addEventListener() {}, location: { search: '' } },
+  localStorage: { getItem(){ return null; }, setItem(){} }
+};
+sandbox.globalThis = sandbox;
+for (const sc of input.scripts) vm.runInNewContext(sc, sandbox);
+
+const dt = sandbox.__comboDirectTest;
+// 1. 初回サーバー応答: 名簿
+dt.applyServerState({
+  ok: true,
+  target: { id: 'SS_1', kind: 'sheet', name: '売上表', sheet: '名簿' },
+  sheets: ['売上', '名簿', '月別'],
+  sheet: '名簿'
+}, true);
+
+// 2. 窓で「月別」を選ぶ（onLook 相当で requestedSheet='月別' として返る）
+dt.els.sheetSelect.value = '月別';
+dt.els.sheetSelect.dispatch('change');
+dt.applyServerState({ ok: true, sheets: ['売上', '名簿', '月別'], sheet: '月別' }, true, '月別');
+
+// 3. サーバーが前回と同じ「名簿」を返す → 人の選び「月別」を守る
+dt.applyServerState({ ok: true, sheets: ['売上', '名簿', '月別'], sheet: '名簿' }, true);
+const afterSame = { ui: dt.els.sheetSelect.value, cur: dt.state.curSheet, picked: dt.state._userSelectedSheet, lastSrv: dt.state.lastServerSheet };
+
+// 4. スプレッドシート側が切り替わり、サーバーが前回と違う「売上」を返す → 窓も「売上」に従う
+dt.applyServerState({ ok: true, sheets: ['売上', '名簿', '月別'], sheet: '売上' }, true);
+const afterSwitch = { ui: dt.els.sheetSelect.value, cur: dt.state.curSheet, picked: dt.state._userSelectedSheet, lastSrv: dt.state.lastServerSheet };
+
+process.stdout.write(JSON.stringify({ afterSame, afterSwitch }));
+"""
+    res = _run_node_json(node_code, {"scripts": scripts})
+    assert res["afterSame"] == {"ui": "月別", "cur": "月別", "picked": "月別", "lastSrv": "名簿"}
+    assert res["afterSwitch"] == {"ui": "売上", "cur": "売上", "picked": "", "lastSrv": "売上"}

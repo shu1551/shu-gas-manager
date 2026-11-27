@@ -43,6 +43,7 @@
     sheets: [],
     curSheet: "",
     _userSelectedSheet: "",
+    lastServerSheet: "",
     table: null,
     selection: "",
     heading: "",
@@ -530,16 +531,27 @@
     return p;
   }
 
-  function applyServerState(res, forceRefreshSnap) {
+  function applyServerState(res, forceRefreshSnap, requestedSheet) {
     if (!res || typeof res !== "object") return;
     var prevTargetId = (state.target && state.target.id) || "";
     var nextTargetId = (res.target && typeof res.target === "object" && res.target.id) ? res.target.id : prevTargetId;
     if (prevTargetId && nextTargetId && nextTargetId !== prevTargetId) {
       state._userSelectedSheet = "";
+      state.lastServerSheet = "";
     }
     var uiSel = (els.sheetSelect && typeof els.sheetSelect.value === "string") ? els.sheetSelect.value : "";
     var picked = state._userSelectedSheet || ((uiSel && uiSel !== state.curSheet) ? uiSel : "");
     var serverSheet = (typeof res.sheet === "string" && res.sheet) ? res.sheet : ((res.target && typeof res.target === "object" && res.target.sheet) ? res.target.sheet : "");
+    var prevServerSheet = state.lastServerSheet || "";
+    var isExplicitReq = !!(requestedSheet && serverSheet && requestedSheet === serverSheet);
+    var serverSwitched = !!(!isExplicitReq && prevServerSheet && serverSheet && serverSheet !== prevServerSheet);
+    if (serverSwitched) {
+      state._userSelectedSheet = "";
+      picked = "";
+    }
+    if (!isExplicitReq && serverSheet) {
+      state.lastServerSheet = serverSheet;
+    }
     if (res.target && typeof res.target === "object") {
       state.target = {
         id: res.target.id || state.target.id || "",

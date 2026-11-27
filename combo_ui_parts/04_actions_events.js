@@ -40,7 +40,7 @@
         }
 
         if (opts.onSuccess) opts.onSuccess(res, wallMs);
-        applyServerState(res, true);
+        applyServerState(res, true, opts.payload && opts.payload.sheet);
 
         if (res.pendingPostbox) {
           if (res.reqId) state.pendingPostboxIds[res.reqId] = true;
