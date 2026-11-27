@@ -3760,7 +3760,7 @@ var ComboPlanner = (function () {
           ensureBoost("cols.delete");
         } else if ((/(?:なら|であれば).*(?:そうでなければ|そうでなく|それ以外|さもなくば|そうでない場合|でなければ).*(?:列|欄)/.test(c) || /IF文|条件分岐|判定列/i.test(c)) && _byName["calc.if"]) {
           ensureBoost("calc.if");
-        } else if (/経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数/.test(c) && !hasRowCfCue && !hasRowDelCond && !hasFilterWhereCue && _colNamesJs(c, table).length <= 1 && _byName["date.age"]) {
+        } else if (/経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数/.test(c) && !hasRowCfCue && !hasRowDelCond && !hasFilterWhereCue && _colNames(c, table).length <= 1 && _byName["date.age"]) {
           ensureBoost("date.age");
         } else if (/(?:^|[\s、。]|から)(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)/.test(c) && !/経過|年齢|勤続|在籍|築年数|年数|月数|日数|年度別/.test(c) && _byName["date.parts"]) {
           ensureBoost("date.parts");
