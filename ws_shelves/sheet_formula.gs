@@ -431,6 +431,17 @@ SHELF['lookup.add'] = function (ctx, op) {
   }
   var aggLabel = { max: '（最大＝最新）', min: '（最小＝最古）', sum: '（合計）', count: '（件数）' }[agg] || '';
   chg_(ctx, sh, colLetter_(atCol) + '列', '「' + srcSh.getName() + '」から「' + name + '」を引いて追加' + aggLabel);
+  // 最新・最古は、元の日付に先の日付（入力の誤りの疑い）や文字の日付が混じると答えが狂うので、番地で知らせる
+  if (agg === 'max' || agg === 'min') {
+    var now = new Date(), odd = [], textD = [];
+    for (var sr = srcT.firstData; sr <= srcT.lastData; sr++) {
+      var sv = srcT.vals[sr - 1][vci - 1], kv = srcT.vals[sr - 1][keyCol - 1];
+      if (sv instanceof Date && sv.getTime() > now.getTime() + 31 * 86400000) odd.push(srcSh.getName() + '!' + a1_(sr, vci) + ' ' + Utilities.formatDate(sv, ctx.ss.getSpreadsheetTimeZone(), 'yyyy/MM/dd') + '（' + kv + '）');
+      else if (typeof sv === 'string' && sv.trim()) textD.push(srcSh.getName() + '!' + a1_(sr, vci) + '「' + sv + '」（' + kv + '）');
+    }
+    if (odd.length) note_(ctx, '⚠ 先の日付があり、' + name + 'に出ている疑いがあります: ' + odd.slice(0, 3).join('・') + '（入力の誤りなら元を直すと追従します）');
+    if (textD.length) note_(ctx, '⚠ 文字の日付は数えていません: ' + textD.slice(0, 3).join('・'));
+  }
 };
 
 // 棚: calc.diff

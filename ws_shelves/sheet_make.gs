@@ -154,14 +154,54 @@ SHELF['summary'] = function (ctx, op) {
     if (ks !== kt) hasSpaceTrim = true;
     if (!seen[kt]) { seen[kt] = 1; keys.push(kt); }
   }
+  // 書き方の違い（(株)と株式会社・全角半角・括弧）で同じ物が割れるなら 1 行にまとめて数える。
+  // 名前はマスタ（同じ見出しの列を持つほかのシート）の書き方、無ければ先に出た書き方。元の表は直さない
+  var normKey = function (v) {
+    var s = String(v == null ? '' : v); if (s.normalize) s = s.normalize('NFKC');
+    return s.replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)|㈱|㈲/g, '').replace(/[\s()（）［］\[\]・,，.、。]/g, '').toLowerCase();
+  };
+  var masterName = {};
+  ctx.ss.getSheets().some(function (s) {
+    if (s.getSheetId() === src.getSheetId() || s.getName() === into || s.getName() === '_GASクイックの控え') return false;
+    var mt = findTable_(s); if (!mt) return false;
+    var mj = headerNames_(mt).indexOf(byName); if (mj < 0) return false;
+    var cand = {}, dup = false;   // 同じ物が 2 回出る表（明細）はマスタではない
+    for (var mr = mt.firstData; mr <= mt.lastData; mr++) {
+      var mv = String(mt.vals[mr - 1][mt.firstCol + mj - 1] || '').trim(); if (!mv) continue;
+      var mk = normKey(mv); if (cand[mk] !== undefined) { dup = true; break; } cand[mk] = mv;
+    }
+    if (dup) return false;
+    masterName = cand;
+    return true;
+  });
+  var variants = {}, canon = [], merged = [];
+  keys.forEach(function (k) {
+    var nk = normKey(k);
+    if (!variants[nk]) { variants[nk] = []; canon.push(nk); }
+    variants[nk].push(k);
+  });
+  keys = canon.map(function (nk) {
+    var vs = variants[nk], name = masterName[nk] || vs[0];
+    if (vs.length > 1) merged.push(vs.filter(function (v) { return v !== name; }).map(function (v) { return '「' + v + '」'; }).join('・') + 'を「' + name + '」');
+    return name;
+  });
+  var variantsOf = function (i) { return variants[canon[i]]; };
+  var qs = function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; };
   var sq = q_(src.getName()), rng = function (c) { return sq + '!$' + colLetter_(c) + '$' + t.firstData + ':$' + colLetter_(c) + '$' + t.lastData; };
   var hdr = [String(hNamesSum[by - t.firstCol] || '')].concat(vals.map(function (c) { return String(hNamesSum[c - t.firstCol] || '') + (func === 'count' ? '(件数)' : func === 'avg' ? '(平均)' : ''); }));
   var grid = [hdr];
   keys.forEach(function (k, i) {
     var row = [k];
     vals.forEach(function (c) {
-      var rr = i + 2;
-      if (hasSpaceTrim) {
+      var rr = i + 2, vs = variantsOf(i);
+      if (vs.length > 1) {
+        var hit = '(' + vs.map(function (v) { return '(TRIM(' + rng(by) + ')=' + qs(String(v).trim()) + ')'; }).join('+') + ')';
+        row.push(
+          func === 'count' ? '=SUMPRODUCT(' + hit + '*1)' :
+          func === 'avg' ? '=IFERROR(SUMPRODUCT(' + hit + '*(' + rng(c) + '))/SUMPRODUCT(' + hit + '*1),0)' :
+          '=SUMPRODUCT(' + hit + '*(' + rng(c) + '))'
+        );
+      } else if (hasSpaceTrim) {
         row.push(
           func === 'count' ? '=SUMPRODUCT((TRIM(' + rng(by) + ')=$A' + rr + ')*1)' :
           func === 'avg' ? '=IFERROR(SUMPRODUCT((TRIM(' + rng(by) + ')=$A' + rr + ')*(' + rng(c) + '))/SUMPRODUCT((TRIM(' + rng(by) + ')=$A' + rr + ')*1),0)' :
@@ -214,14 +254,7 @@ SHELF['summary'] = function (ctx, op) {
   if (sumPreview.length) note_(ctx, '集計結果: ' + sumPreview.join(' ／ ') + (keys.length > 3 ? ' ほか' + (keys.length - 3) + '件' : ''));
   if (hasSpaceTrim) note_(ctx, '「' + byName + '」列の前後の空白を無視してまとめました');
   if (cancelCols.length) note_(ctx, '※「' + cancelCols[0] + '」列にキャンセル等の行を含んでいます');
-  // 書き方の違いで同じ物が別の行に割れていないか（(株)と株式会社・全角半角・括弧）。直さずに知らせ、直す手（match.master）を添える
-  var normKey = function (v) {
-    var s = String(v == null ? '' : v); if (s.normalize) s = s.normalize('NFKC');
-    return s.replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)|㈱|㈲/g, '').replace(/[\s()（）［］\[\]・,，.、。]/g, '').toLowerCase();
-  };
-  var nkSeen = {}, splits = [];
-  keys.forEach(function (k) { var nk = normKey(k); if (nkSeen[nk] !== undefined && nkSeen[nk] !== k) splits.push('「' + nkSeen[nk] + '」と「' + k + '」'); else nkSeen[nk] = k; });
-  if (splits.length) note_(ctx, '⚠ 書き方の違いで別の行に割れています: ' + splits.slice(0, 3).join('・') + '（同じ物なら match.master で元の表の書き方にそろえてから集計し直す）');
+  if (merged.length) note_(ctx, '書き方の違いをまとめて数えました: ' + merged.slice(0, 3).join('、') + '（元の表は直していません。そろえるなら match.master）');
   note_(ctx, '別の棚からこの表を参照するときは range:"' + into + '"（または "' + into + '!' + a1_(1, 1, grid.length, grid[0].length) + '"）');
   tidyRange_(ctx, dst, null);
 };
