@@ -950,6 +950,9 @@ class WorkspaceManager:
                             cells_l = ent_l.get("cells") or {}
                             key_cis = [gas_ws_direct.DirectRunner._col_of(ltb, c) for c in d_cols]
                             all_cis = [gas_ws_direct.col_num(c["col"]) for c in (ltb.get("columns") or [])]
+                            # 表の途中に空行があると、読みの表はそこで切れる（消す棚は空行の先まで消す）。キー列に値のある最後の行まで見る
+                            r_b = max([r_b] + [k[0] for k, cv in cells_l.items()
+                                               if k[1] in key_cis and gas_ws_direct.Snapshot.value_text(cv).strip()])
                             other_cis = [c for c in all_cis if c not in key_cis]
                             seen_k = {}
                             diff_hits = []

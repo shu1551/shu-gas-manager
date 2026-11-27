@@ -2958,12 +2958,52 @@ def _is_read_only_ask(ask):
 
 
 # ------------------------------------------------------------------ 頼み → ops
+def _early_calc_col(t, table):
+    """列名だけで決まる計算列の頼みを先に組む（当てが割れて撃てなかった形）"""
+    cols = [str(c.get("name") or "") for c in (table or {}).get("columns") or []]
+    if not cols:
+        return None
+    # ①「金額を数量×単価の式にして」＝既にある列を、列どうしの式で上書きする
+    m = re.search(r"^(.+?)(?:の列)?を(.+?[×*＊÷/／＋+\-−].+?)の(?:計算)?式に(?:して|直して|する|そろえ|揃え)", t)
+    if m and m.group(1).strip() in cols:
+        expr = m.group(2).strip()
+        terms = [x for x in re.split(r"[×*＊÷/／＋+\-−()（）\s]+", expr) if x]
+        if terms and all(x in cols or re.fullmatch(r"\d+(?:\.\d+)?", x) for x in terms):
+            tgt = m.group(1).strip()
+            return {"shelf": "calc.col", "at": tgt, "name": tgt, "expr": expr}
+    # ③「キャンセルの行を消して」＝状態などの列の値で条件を付けて消す（行番号で消す棚と割れない）。消す手なので撃つ前の確かめは道具がする
+    m3 = re.search(r"^([^\s、,。0-9０-９]{1,12}?)の行(?:を|だけ)?(?:全部|すべて)?(?:消して|削除して)", t)
+    if m3 and not re.search(r"行目|空|重複|同じ", m3.group(1)):
+        st_c = next((c for c in cols if re.search(r"状態|ステータス|状況|区分|承認", c)), None)
+        if st_c:
+            return {"shelf": "filter.delete", "col": st_c, "equals": m3.group(1)}
+    # ②「2026年度と2025年度の上期を比べた伸び率の列」＝2 段見出しの年度×四半期から、上期（Q1+Q2）・下期（Q3+Q4）の伸び率
+    ys = re.findall(r"(\d{4})年度?", t)
+    half = re.search(r"上期|下期|上半期|下半期", t)
+    if len(set(ys)) >= 2 and half and re.search(r"伸び率|増減率|成長率|伸び", t):
+        new_y, old_y = max(ys[:2]), min(ys[:2])
+        qs = [1, 2] if half.group(0).startswith("上") else [3, 4]
+
+        def qcol(y, q):
+            return next((c for c in cols if re.fullmatch(rf"{y}年度?\D*Q{q}", c)), None)
+        nc, oc = [qcol(new_y, q) for q in qs], [qcol(old_y, q) for q in qs]
+        if all(nc) and all(oc):
+            hn = "上期" if half.group(0).startswith("上") else "下期"
+            return {"shelf": "calc.col", "name": f"{hn}伸び率（{new_y}/{old_y}）",
+                    "expr": f"({'+'.join(nc)})/({'+'.join(oc)})-1"}
+    return None
+
+
 def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope=None):
     cur_sheet = cur_sheet or (sheets[0] if sheets else "")
     p = Plan()
     ask = (ask or "").strip()
     if not ask:
         p.reasons.append("頼みの文が空です")
+        return p
+    early = _early_calc_col(nfkc(ask), table) if kind in ("", "sheet") else None
+    if early:
+        p.ops, p.fire = [early], True
         return p
     q_all = gas_ws_find.norm(ask, finder.syn)
     q_guide = gas_ws_find.norm(_mask_col_names(ask, table), finder.syn)   # 列名（「メール」「画像」等）で案内を出さない

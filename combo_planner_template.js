@@ -3743,6 +3743,48 @@ var ComboPlanner = (function () {
     return "未確定: " + reason;
   }
 
+  // 列名だけで決まる頼みを先に組む（Python の gas_ws_ask._early_calc_col と同じ）
+  function _earlyCalcCol(t, table) {
+    var cols = ((table && table.columns) || []).map(function (c) { return String(c.name || ""); });
+    if (!cols.length) return null;
+    var m = /^(.+?)(?:の列)?を(.+?[×*＊÷/／＋+\-−].+?)の(?:計算)?式に(?:して|直して|する|そろえ|揃え)/.exec(t);
+    if (m && cols.indexOf(m[1].trim()) >= 0) {
+      var expr = m[2].trim();
+      var terms = expr.split(/[×*＊÷/／＋+\-−()（）\s]+/).filter(function (x) { return x; });
+      if (terms.length && terms.every(function (x) { return cols.indexOf(x) >= 0 || /^\d+(?:\.\d+)?$/.test(x); })) {
+        var tg = m[1].trim();
+        return { shelf: "calc.col", at: tg, name: tg, expr: expr };
+      }
+    }
+    var m3 = /^([^\s、,。0-9０-９]{1,12}?)の行(?:を|だけ)?(?:全部|すべて)?(?:消して|削除して)/.exec(t);
+    if (m3 && !/行目|空|重複|同じ/.test(m3[1])) {
+      var stC = null;
+      for (var i = 0; i < cols.length; i++) { if (/状態|ステータス|状況|区分|承認/.test(cols[i])) { stC = cols[i]; break; } }
+      if (stC) return { shelf: "filter.delete", col: stC, equals: m3[1] };
+    }
+    var ys = [], re = /(\d{4})年度?/g, mm;
+    while ((mm = re.exec(t)) !== null) ys.push(mm[1]);
+    var uniq = ys.filter(function (v, i2) { return ys.indexOf(v) === i2; });
+    var half = /上期|下期|上半期|下半期/.exec(t);
+    if (uniq.length >= 2 && half && /伸び率|増減率|成長率|伸び/.test(t)) {
+      var two = ys.slice(0, 2).sort();
+      var oldY = two[0], newY = two[1];
+      var upper = half[0].charAt(0) === "上";
+      var qs = upper ? [1, 2] : [3, 4];
+      var qcol = function (y, q) {
+        var rx = new RegExp("^" + y + "年度?\\D*Q" + q + "$");
+        for (var j = 0; j < cols.length; j++) if (rx.test(cols[j])) return cols[j];
+        return null;
+      };
+      var nc = qs.map(function (q) { return qcol(newY, q); }), oc = qs.map(function (q) { return qcol(oldY, q); });
+      if (nc.every(Boolean) && oc.every(Boolean)) {
+        var hn = upper ? "上期" : "下期";
+        return { shelf: "calc.col", name: hn + "伸び率（" + newY + "/" + oldY + "）", expr: "(" + nc.join("+") + ")/(" + oc.join("+") + ")-1" };
+      }
+    }
+    return null;
+  }
+
   function plan(askText, kind, table, sheets, curSheet, lastScope) {
     _ensureInit();
     kind = kind || "";
@@ -3764,6 +3806,13 @@ var ComboPlanner = (function () {
     askText = String(askText || "").trim();
     if (!askText) {
       p.reasons.push("頼みの文が空です");
+      p.previewText = _buildPreviewText(p);
+      return p;
+    }
+    var early = (kind === "" || kind === "sheet") ? _earlyCalcCol(nfkc(askText), table) : null;
+    if (early) {
+      p.ops = [early];
+      p.fire = true;
       p.previewText = _buildPreviewText(p);
       return p;
     }
