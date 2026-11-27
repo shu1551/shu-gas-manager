@@ -3441,3 +3441,129 @@ process.stdout.write(JSON.stringify(placed));
 """
     res = _run_node_json(node_code, {"engine": engine_src})
     assert res == [[[3, 12, 0, 0]]]  # L3 = row 3, col 12 (J=10 の 2 つ右)
+
+
+def test_sidebar_sheet_selection_not_overwritten_by_late_init_and_uses_ui_sheet():
+    """遅延完了する comboInit が人のシート選択を上書きせず、撃つ瞬間は画面の選択シートを使うこと。"""
+    files = combo_mod.build_combo_files(combo_lite=True)
+    sidebar_html = next(f["source"] for f in files if f["name"] == "ComboSidebar")
+    scripts = re.findall(r"<script>([\s\S]*?)</script>", sidebar_html)
+    assert len(scripts) >= 2
+    node_code = r"""
+const fs = require('fs');
+const vm = require('vm');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+
+function makeEl(id) {
+  return {
+    id,
+    value: '',
+    checked: false,
+    disabled: false,
+    textContent: '',
+    innerHTML: '',
+    style: {},
+    dataset: {},
+    children: [],
+    listeners: {},
+    classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
+    addEventListener(ev, fn){ (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
+    dispatch(ev){ (this.listeners[ev] || []).forEach(fn => fn.call(this, { target: this })); },
+    appendChild(c){
+      this.children.push(c);
+      if (this.tagName === 'SELECT' || this.id === 'sheetSelect' || this.id === 'settingsSheetSelect') {
+        if (c.selected || this.children.length === 1) this.value = c.value;
+      }
+      return c;
+    },
+    querySelectorAll(){ return []; },
+    querySelector(){ return null; },
+    focus(){}
+  };
+}
+const elsMap = {};
+const calls = [];
+let pendingInitOk = null;
+const sandbox = {
+  console, Math, Date, JSON, Object, Array, String, Number, Boolean, RegExp, Error, parseInt, parseFloat, isNaN, isFinite,
+  encodeURIComponent, decodeURIComponent,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  performance: { now: () => 100 },
+  document: {
+    getElementById(id) {
+      if (!elsMap[id]) elsMap[id] = makeEl(id);
+      return elsMap[id];
+    },
+    createElement(tag) { const el = makeEl(tag); el.tagName = tag.toUpperCase(); return el; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    addEventListener() {}
+  },
+  window: { addEventListener() {}, location: { search: '' } },
+  localStorage: { getItem(){ return null; }, setItem(){} },
+  google: {
+    script: {
+      run: (function mkRunner(okCb, errCb) {
+        return {
+          withSuccessHandler(fn) { return mkRunner(fn, errCb); },
+          withFailureHandler(fn) { return mkRunner(okCb, fn); },
+          comboInit(req) {
+            calls.push({ fn: 'comboInit', req });
+            pendingInitOk = okCb;
+          },
+          comboLook(req) {
+            calls.push({ fn: 'comboLook', req });
+            if (okCb) okCb({ ok: true, sheet: req.sheet, sheets: ['売上', '名簿', '月別', '集計', '集計_担当者別'], table: null });
+          },
+          comboRunAsk(req) {
+            calls.push({ fn: 'comboRunAsk', req });
+            if (okCb) okCb({ ok: true, sheet: req.sheet, text: 'ok' });
+          },
+          comboGetLearned(req) { if (okCb) okCb({ learned: {} }); }
+        };
+      })(null, null)
+    }
+  }
+};
+sandbox.globalThis = sandbox;
+for (const sc of input.scripts) vm.runInNewContext(sc, sandbox);
+
+const dt = sandbox.__comboDirectTest;
+// 初期化中にドロップダウンの候補が既にあり、人が「月別」を選んだ状態を模擬
+dt.state.sheets = ['売上', '名簿', '月別', '集計', '集計_担当者別'];
+dt.state.curSheet = '名簿';
+dt.syncSheetSelects();
+dt.els.sheetSelect.value = '月別';
+dt.els.sheetSelect.dispatch('change');
+
+// そこへ遅れて comboInit が「名簿」を返して完了する
+pendingInitOk({
+  ok: true,
+  target: { id: 'SS_1', kind: 'sheet', name: '売上表', sheet: '名簿' },
+  sheets: ['売上', '名簿', '月別', '集計', '集計_担当者別'],
+  sheet: '名簿',
+  table: { header_row: 1, first_col: 'A', last_col: 'F', data: '2-9', columns: [] }
+});
+
+const afterLateInit = { ui: dt.els.sheetSelect.value, cur: dt.state.curSheet };
+
+// 撃つ: 月別のまま comboRunAsk に渡ること
+dt.els.askInput.value = '部門ごとの月の推移を折れ線グラフにして';
+dt.onRunAsk();
+const run1 = calls.filter(c => c.fn === 'comboRunAsk').slice(-1)[0];
+
+// さらに state.curSheet が古くても画面上の選択値（集計）が撃つ先に使われること
+dt.state.curSheet = '名簿';
+dt.els.sheetSelect.value = '集計';
+dt.els.askInput.value = '見出しを太字にして';
+dt.onRunAsk();
+const run2 = calls.filter(c => c.fn === 'comboRunAsk').slice(-1)[0];
+
+process.stdout.write(JSON.stringify({ afterLateInit, sheet1: run1.req.sheet, sheet2: run2.req.sheet, uiEnd: dt.els.sheetSelect.value }));
+"""
+    res = _run_node_json(node_code, {"scripts": scripts})
+    assert res["afterLateInit"] == {"ui": "月別", "cur": "月別"}
+    assert res["sheet1"] == "月別"
+    assert res["sheet2"] == "集計"
+    assert res["uiEnd"] == "集計"

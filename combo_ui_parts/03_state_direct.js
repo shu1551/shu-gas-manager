@@ -42,6 +42,7 @@
     target: { id: "", name: "", kind: "sheet", url: "", sheet: "" },
     sheets: [],
     curSheet: "",
+    _userSelectedSheet: "",
     table: null,
     selection: "",
     heading: "",
@@ -419,6 +420,25 @@
     }
   }
 
+  function getSelectedSheet() {
+    var isDoc = state.target && state.target.kind === "doc";
+    if (isDoc) return "";
+    var v = (els.sheetSelect && typeof els.sheetSelect.value === "string") ? els.sheetSelect.value : "";
+    if (v && (!state.sheets || !state.sheets.length || state.sheets.indexOf(v) >= 0)) {
+      return v;
+    }
+    return state.curSheet || "";
+  }
+
+  function syncCurSheetFromUi() {
+    var sh = getSelectedSheet();
+    if (sh) {
+      state.curSheet = sh;
+      if (els.sheetSelect && els.sheetSelect.value === sh) state._userSelectedSheet = sh;
+    }
+    return sh;
+  }
+
   function updateSelectionLabel() {
     if (!els.chkSync.checked) {
       els.selLabel.textContent = "選択中: OFF（上部「連動」チェックで有効化）";
@@ -489,7 +509,7 @@
     }
     var kind = (state.target && state.target.kind) || "sheet";
     var ls = getActiveScope();
-    var p = Planner.plan(txt, kind, state.table, state.sheets, state.curSheet, ls);
+    var p = Planner.plan(txt, kind, state.table, state.sheets, syncCurSheetFromUi(), ls);
     if (p && p.fire) {
       var shortOps = formatOpsShort(p.ops);
       els.previewLabel.textContent = "棚ヒット: " + shortOps;
@@ -512,6 +532,14 @@
 
   function applyServerState(res, forceRefreshSnap) {
     if (!res || typeof res !== "object") return;
+    var prevTargetId = (state.target && state.target.id) || "";
+    var nextTargetId = (res.target && typeof res.target === "object" && res.target.id) ? res.target.id : prevTargetId;
+    if (prevTargetId && nextTargetId && nextTargetId !== prevTargetId) {
+      state._userSelectedSheet = "";
+    }
+    var uiSel = (els.sheetSelect && typeof els.sheetSelect.value === "string") ? els.sheetSelect.value : "";
+    var picked = state._userSelectedSheet || ((uiSel && uiSel !== state.curSheet) ? uiSel : "");
+    var serverSheet = (typeof res.sheet === "string" && res.sheet) ? res.sheet : ((res.target && typeof res.target === "object" && res.target.sheet) ? res.target.sheet : "");
     if (res.target && typeof res.target === "object") {
       state.target = {
         id: res.target.id || state.target.id || "",
@@ -520,18 +548,26 @@
         url: res.target.url || state.target.url || "",
         sheet: res.target.sheet || ""
       };
-      if (res.target.sheet) state.curSheet = res.target.sheet;
+      if (res.target.sheet && !picked) state.curSheet = res.target.sheet;
     }
     if (Array.isArray(res.sheets)) {
       state.sheets = res.sheets;
     }
-    if (typeof res.sheet === "string" && res.sheet) {
-      state.curSheet = res.sheet;
+    if (picked && (!state.sheets.length || state.sheets.indexOf(picked) >= 0)) {
+      state.curSheet = picked;
+    } else {
+      if (picked && state.sheets.length && state.sheets.indexOf(picked) < 0) {
+        state._userSelectedSheet = "";
+        picked = "";
+      }
+      if (typeof res.sheet === "string" && res.sheet) {
+        state.curSheet = res.sheet;
+      }
+      if (!state.curSheet && state.sheets.length) {
+        state.curSheet = state.sheets[0];
+      }
     }
-    if (!state.curSheet && state.sheets.length) {
-      state.curSheet = state.sheets[0];
-    }
-    if ("table" in res && res.table !== undefined) {
+    if ("table" in res && res.table !== undefined && (!picked || !serverSheet || serverSheet === picked)) {
       state.table = res.table;
     }
     if (typeof res.selection === "string") {
@@ -573,6 +609,10 @@
     updateSelectionLabel();
     updateInfoLabel();
     updatePreview();
+    if (picked && serverSheet && serverSheet !== picked && !state.busy && typeof onLook === "function") {
+      onLook(picked);
+      return;
+    }
     if (state.curSheet && state.oauthToken && state.target.id) {
       var curSnap = state.sheetSnapshot[state.curSheet];
       var needDim = getSnapshotDims(state.curSheet);
@@ -2010,7 +2050,7 @@
 
   function tryDirectSheetsApi(ops, label, isFromAsk, fallbackFn, extraOpts) {
     if (typeof fetch !== "function") return false;
-    var sheetName = state.curSheet || (state.target && state.target.sheet) || "";
+    var sheetName = syncCurSheetFromUi() || (state.target && state.target.sheet) || "";
     var plan = buildDirectBatchUpdate(ops, sheetName);
     if (!plan) {
       // 直結の道に乗れなかった理由が写しの失敗なら、会話の欄に 1 回だけ出す（黙って遅い道に回らない）

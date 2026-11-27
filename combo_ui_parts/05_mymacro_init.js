@@ -2697,7 +2697,12 @@
       submitQuickAi: submitQuickAi,
       QUICK_MY_TEMPLATES: QUICK_MY_TEMPLATES,
       exportMyMacrosData: exportMyMacrosData,
-      parseImportMyMacros: parseImportMyMacros
+      parseImportMyMacros: parseImportMyMacros,
+      applyServerState: applyServerState,
+      onRunAsk: onRunAsk,
+      onLook: onLook,
+      getSelectedSheet: getSelectedSheet,
+      syncSheetSelects: syncSheetSelects
     };
   }
 })();

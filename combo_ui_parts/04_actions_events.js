@@ -262,6 +262,7 @@
     }
     pushHistory(txt);
 
+    var activeSheet = syncCurSheetFromUi();
     var liveSelPrompt = !!(els.chkSync.checked && hasSelectionPronoun(txt));
     var planRes = updatePreview();
     var fireOps = (!liveSelPrompt && planRes && planRes.fire && Array.isArray(planRes.ops) && planRes.ops.length) ? planRes.ops : null;
@@ -282,8 +283,8 @@
       if (!aiAuto) {
         switchTab("chat");
         var tbSum = state.table
-          ? ("シート「" + (state.curSheet || "") + "」: 見出し " + state.table.header_row + (state.table.header_rows > 1 ? "-" + (state.table.header_row + state.table.header_rows - 1) : "") + "行目・明細 " + state.table.data + "行目\n列: " + (state.table.columns || []).map(function(c) { return c.col + "=" + c.name; }).join("、"))
-          : ("シート「" + (state.curSheet || "") + "」");
+          ? ("シート「" + activeSheet + "」: 見出し " + state.table.header_row + (state.table.header_rows > 1 ? "-" + (state.table.header_row + state.table.header_rows - 1) : "") + "行目・明細 " + state.table.data + "行目\n列: " + (state.table.columns || []).map(function(c) { return c.col + "=" + c.name; }).join("、"))
+          : ("シート「" + activeSheet + "」");
         appendLog(els.chatLog, "is-info", "📖 " + txt + "（読むだけ）", "シートは変更していません。\n" + tbSum + "\n（※「AI自動」をONにするとシートの中身を読んで質問に答えます）");
         return;
       }
@@ -303,7 +304,7 @@
       targetId: state.target.id || "",
       targetName: state.target.name || "",
       sheets: state.sheets || [],
-      sheet: liveSelPrompt ? "" : (state.curSheet || ""),
+      sheet: liveSelPrompt ? "" : activeSheet,
       table: state.table
     };
     if (!liveSelPrompt) {
@@ -373,7 +374,7 @@
           ask: txt,
           ssId: state.target.id || "",
           ssName: state.target.name || "",
-          sheet: state.curSheet || "",
+          sheet: activeSheet,
           selection: els.chkSync.checked ? (state.selection || "") : "",
           table: state.table,
           sheets: state.sheets || [],
@@ -448,7 +449,7 @@
       };
       // aiAuto=true で AI に渡すときだけ表の中身（最大100行×26列・値と式）を取得して添える
       setBusy(true, isReadOnly ? "📖 表の中身を取得中…" : "✨ 表の中身を確認中…");
-      fetchDirectTableSnippet(state.curSheet || "", state.table, function(sn) {
+      fetchDirectTableSnippet(activeSheet, state.table, function(sn) {
         sendDirectPayload(sn);
       });
     };
@@ -493,6 +494,7 @@
   }
 
   function onRunOps(ops, customLabel, opts) {
+    var activeSheet = syncCurSheetFromUi();
     if (Array.isArray(ops) && ops.length === 1 && ops[0] && ops[0].shelf) {
       quickRecordUsage({ src: "shelf", name: ops[0].shelf });
     }
@@ -523,7 +525,7 @@
           targetId: state.target.id || "",
           targetName: state.target.name || "",
           sheets: state.sheets || [],
-          sheet: state.curSheet || "",
+          sheet: activeSheet,
           selection: els.chkSync.checked ? (state.selection || "") : "",
           table: state.table
         },
@@ -589,7 +591,7 @@
         targetId: state.target.id || "",
         targetName: state.target.name || "",
         sheets: state.sheets || [],
-        sheet: state.curSheet || "",
+        sheet: syncCurSheetFromUi(),
         selection: els.chkSync.checked ? (state.selection || "") : "",
         table: state.table
       },
@@ -998,11 +1000,19 @@
     onRunOps([{ shelf: "backup", on: on }], "控え切替(" + (on ? "ON" : "OFF") + ")");
   });
 
+  function onSheetPicked(nextSheet) {
+    if (typeof nextSheet === "string" && nextSheet) {
+      state._userSelectedSheet = nextSheet;
+      state.curSheet = nextSheet;
+      updatePreview();
+    }
+    onLook(nextSheet);
+  }
   els.sheetSelect.addEventListener("change", function() {
-    onLook(els.sheetSelect.value);
+    onSheetPicked(els.sheetSelect.value);
   });
   els.settingsSheetSelect.addEventListener("change", function() {
-    onLook(els.settingsSheetSelect.value);
+    onSheetPicked(els.settingsSheetSelect.value);
   });
   if (els.btnLook) els.btnLook.addEventListener("click", function() { onLook(); });
   if (els.btnRefresh) els.btnRefresh.addEventListener("click", function() { onInit(true); });

@@ -880,6 +880,7 @@
     target: { id: "", name: "", kind: "sheet", url: "", sheet: "" },
     sheets: [],
     curSheet: "",
+    _userSelectedSheet: "",
     table: null,
     selection: "",
     heading: "",
@@ -1257,6 +1258,25 @@
     }
   }
 
+  function getSelectedSheet() {
+    var isDoc = state.target && state.target.kind === "doc";
+    if (isDoc) return "";
+    var v = (els.sheetSelect && typeof els.sheetSelect.value === "string") ? els.sheetSelect.value : "";
+    if (v && (!state.sheets || !state.sheets.length || state.sheets.indexOf(v) >= 0)) {
+      return v;
+    }
+    return state.curSheet || "";
+  }
+
+  function syncCurSheetFromUi() {
+    var sh = getSelectedSheet();
+    if (sh) {
+      state.curSheet = sh;
+      if (els.sheetSelect && els.sheetSelect.value === sh) state._userSelectedSheet = sh;
+    }
+    return sh;
+  }
+
   function updateSelectionLabel() {
     if (!els.chkSync.checked) {
       els.selLabel.textContent = "選択中: OFF（上部「連動」チェックで有効化）";
@@ -1327,7 +1347,7 @@
     }
     var kind = (state.target && state.target.kind) || "sheet";
     var ls = getActiveScope();
-    var p = Planner.plan(txt, kind, state.table, state.sheets, state.curSheet, ls);
+    var p = Planner.plan(txt, kind, state.table, state.sheets, syncCurSheetFromUi(), ls);
     if (p && p.fire) {
       var shortOps = formatOpsShort(p.ops);
       els.previewLabel.textContent = "棚ヒット: " + shortOps;
@@ -1350,6 +1370,14 @@
 
   function applyServerState(res, forceRefreshSnap) {
     if (!res || typeof res !== "object") return;
+    var prevTargetId = (state.target && state.target.id) || "";
+    var nextTargetId = (res.target && typeof res.target === "object" && res.target.id) ? res.target.id : prevTargetId;
+    if (prevTargetId && nextTargetId && nextTargetId !== prevTargetId) {
+      state._userSelectedSheet = "";
+    }
+    var uiSel = (els.sheetSelect && typeof els.sheetSelect.value === "string") ? els.sheetSelect.value : "";
+    var picked = state._userSelectedSheet || ((uiSel && uiSel !== state.curSheet) ? uiSel : "");
+    var serverSheet = (typeof res.sheet === "string" && res.sheet) ? res.sheet : ((res.target && typeof res.target === "object" && res.target.sheet) ? res.target.sheet : "");
     if (res.target && typeof res.target === "object") {
       state.target = {
         id: res.target.id || state.target.id || "",
@@ -1358,18 +1386,26 @@
         url: res.target.url || state.target.url || "",
         sheet: res.target.sheet || ""
       };
-      if (res.target.sheet) state.curSheet = res.target.sheet;
+      if (res.target.sheet && !picked) state.curSheet = res.target.sheet;
     }
     if (Array.isArray(res.sheets)) {
       state.sheets = res.sheets;
     }
-    if (typeof res.sheet === "string" && res.sheet) {
-      state.curSheet = res.sheet;
+    if (picked && (!state.sheets.length || state.sheets.indexOf(picked) >= 0)) {
+      state.curSheet = picked;
+    } else {
+      if (picked && state.sheets.length && state.sheets.indexOf(picked) < 0) {
+        state._userSelectedSheet = "";
+        picked = "";
+      }
+      if (typeof res.sheet === "string" && res.sheet) {
+        state.curSheet = res.sheet;
+      }
+      if (!state.curSheet && state.sheets.length) {
+        state.curSheet = state.sheets[0];
+      }
     }
-    if (!state.curSheet && state.sheets.length) {
-      state.curSheet = state.sheets[0];
-    }
-    if ("table" in res && res.table !== undefined) {
+    if ("table" in res && res.table !== undefined && (!picked || !serverSheet || serverSheet === picked)) {
       state.table = res.table;
     }
     if (typeof res.selection === "string") {
@@ -1411,6 +1447,10 @@
     updateSelectionLabel();
     updateInfoLabel();
     updatePreview();
+    if (picked && serverSheet && serverSheet !== picked && !state.busy && typeof onLook === "function") {
+      onLook(picked);
+      return;
+    }
     if (state.curSheet && state.oauthToken && state.target.id) {
       var curSnap = state.sheetSnapshot[state.curSheet];
       var needDim = getSnapshotDims(state.curSheet);
@@ -2848,7 +2888,7 @@
 
   function tryDirectSheetsApi(ops, label, isFromAsk, fallbackFn, extraOpts) {
     if (typeof fetch !== "function") return false;
-    var sheetName = state.curSheet || (state.target && state.target.sheet) || "";
+    var sheetName = syncCurSheetFromUi() || (state.target && state.target.sheet) || "";
     var plan = buildDirectBatchUpdate(ops, sheetName);
     if (!plan) {
       // 直結の道に乗れなかった理由が写しの失敗なら、会話の欄に 1 回だけ出す（黙って遅い道に回らない）
@@ -3323,6 +3363,7 @@
     }
     pushHistory(txt);
 
+    var activeSheet = syncCurSheetFromUi();
     var liveSelPrompt = !!(els.chkSync.checked && hasSelectionPronoun(txt));
     var planRes = updatePreview();
     var fireOps = (!liveSelPrompt && planRes && planRes.fire && Array.isArray(planRes.ops) && planRes.ops.length) ? planRes.ops : null;
@@ -3343,8 +3384,8 @@
       if (!aiAuto) {
         switchTab("chat");
         var tbSum = state.table
-          ? ("シート「" + (state.curSheet || "") + "」: 見出し " + state.table.header_row + (state.table.header_rows > 1 ? "-" + (state.table.header_row + state.table.header_rows - 1) : "") + "行目・明細 " + state.table.data + "行目\n列: " + (state.table.columns || []).map(function(c) { return c.col + "=" + c.name; }).join("、"))
-          : ("シート「" + (state.curSheet || "") + "」");
+          ? ("シート「" + activeSheet + "」: 見出し " + state.table.header_row + (state.table.header_rows > 1 ? "-" + (state.table.header_row + state.table.header_rows - 1) : "") + "行目・明細 " + state.table.data + "行目\n列: " + (state.table.columns || []).map(function(c) { return c.col + "=" + c.name; }).join("、"))
+          : ("シート「" + activeSheet + "」");
         appendLog(els.chatLog, "is-info", "📖 " + txt + "（読むだけ）", "シートは変更していません。\n" + tbSum + "\n（※「AI自動」をONにするとシートの中身を読んで質問に答えます）");
         return;
       }
@@ -3364,7 +3405,7 @@
       targetId: state.target.id || "",
       targetName: state.target.name || "",
       sheets: state.sheets || [],
-      sheet: liveSelPrompt ? "" : (state.curSheet || ""),
+      sheet: liveSelPrompt ? "" : activeSheet,
       table: state.table
     };
     if (!liveSelPrompt) {
@@ -3434,7 +3475,7 @@
           ask: txt,
           ssId: state.target.id || "",
           ssName: state.target.name || "",
-          sheet: state.curSheet || "",
+          sheet: activeSheet,
           selection: els.chkSync.checked ? (state.selection || "") : "",
           table: state.table,
           sheets: state.sheets || [],
@@ -3509,7 +3550,7 @@
       };
       // aiAuto=true で AI に渡すときだけ表の中身（最大100行×26列・値と式）を取得して添える
       setBusy(true, isReadOnly ? "📖 表の中身を取得中…" : "✨ 表の中身を確認中…");
-      fetchDirectTableSnippet(state.curSheet || "", state.table, function(sn) {
+      fetchDirectTableSnippet(activeSheet, state.table, function(sn) {
         sendDirectPayload(sn);
       });
     };
@@ -3554,6 +3595,7 @@
   }
 
   function onRunOps(ops, customLabel, opts) {
+    var activeSheet = syncCurSheetFromUi();
     if (Array.isArray(ops) && ops.length === 1 && ops[0] && ops[0].shelf) {
       quickRecordUsage({ src: "shelf", name: ops[0].shelf });
     }
@@ -3584,7 +3626,7 @@
           targetId: state.target.id || "",
           targetName: state.target.name || "",
           sheets: state.sheets || [],
-          sheet: state.curSheet || "",
+          sheet: activeSheet,
           selection: els.chkSync.checked ? (state.selection || "") : "",
           table: state.table
         },
@@ -3650,7 +3692,7 @@
         targetId: state.target.id || "",
         targetName: state.target.name || "",
         sheets: state.sheets || [],
-        sheet: state.curSheet || "",
+        sheet: syncCurSheetFromUi(),
         selection: els.chkSync.checked ? (state.selection || "") : "",
         table: state.table
       },
@@ -4059,11 +4101,19 @@
     onRunOps([{ shelf: "backup", on: on }], "控え切替(" + (on ? "ON" : "OFF") + ")");
   });
 
+  function onSheetPicked(nextSheet) {
+    if (typeof nextSheet === "string" && nextSheet) {
+      state._userSelectedSheet = nextSheet;
+      state.curSheet = nextSheet;
+      updatePreview();
+    }
+    onLook(nextSheet);
+  }
   els.sheetSelect.addEventListener("change", function() {
-    onLook(els.sheetSelect.value);
+    onSheetPicked(els.sheetSelect.value);
   });
   els.settingsSheetSelect.addEventListener("change", function() {
-    onLook(els.settingsSheetSelect.value);
+    onSheetPicked(els.settingsSheetSelect.value);
   });
   if (els.btnLook) els.btnLook.addEventListener("click", function() { onLook(); });
   if (els.btnRefresh) els.btnRefresh.addEventListener("click", function() { onInit(true); });
@@ -6920,7 +6970,12 @@
       submitQuickAi: submitQuickAi,
       QUICK_MY_TEMPLATES: QUICK_MY_TEMPLATES,
       exportMyMacrosData: exportMyMacrosData,
-      parseImportMyMacros: parseImportMyMacros
+      parseImportMyMacros: parseImportMyMacros,
+      applyServerState: applyServerState,
+      onRunAsk: onRunAsk,
+      onLook: onLook,
+      getSelectedSheet: getSelectedSheet,
+      syncSheetSelects: syncSheetSelects
     };
   }
 })();
