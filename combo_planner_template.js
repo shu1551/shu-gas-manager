@@ -1685,7 +1685,7 @@ var ComboPlanner = (function () {
       var cmpCol = opObj.col;
       var cmpNumStr = null;
       if (shN === "cf.add" && opObj.when === "formula" && typeof opObj.value === "string") {
-        var mFm = /\$([A-Z]{1,3})[0-9]+\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)/.exec(opObj.value);
+        var mFm = /\$([A-Z]{1,3})[0-9]+\)?\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)/.exec(opObj.value);
         if (mFm) {
           var fmColL = mFm[1];
           cmpNumStr = mFm[2];
@@ -1781,9 +1781,10 @@ var ComboPlanner = (function () {
       }
     }
     if (shN === "cols.delete") {
-      if (_COL_CONTENT_DEL_RE_JS.test(scanN) || _COL_PROP_OBJ_RE_JS.test(scanN)) {
+      var maskedDelN = nfkc(_maskColNamesJs(scan, tbl));
+      if (_COL_CONTENT_DEL_RE_JS.test(maskedDelN) || _COL_PROP_OBJ_RE_JS.test(maskedDelN)) {
         addMiss("列そのものではなく列の中身の語が含まれているため列削除しません");
-      } else if (/(?:列|カラム)/.test(scanN) && !_COL_DIRECT_DEL_RE_JS.test(scanN)) {
+      } else if (/(?:列|カラム)/.test(maskedDelN) && !_COL_DIRECT_DEL_RE_JS.test(maskedDelN)) {
         addMiss("列そのものが削除対象ではないため列削除しません");
       }
     }
@@ -2344,6 +2345,7 @@ var ComboPlanner = (function () {
         }
         if (!expr && refL) expr = _cfBlankTodayExprJs(text, refL, cfR1);
         if (!expr && refL) {
+          var cfValRef = /絶対値/.test(nfkc(text)) ? ("ABS($" + refL + cfR1 + ")") : ("$" + refL + cfR1);
           var dCfAtom =(!_isEmptyVal(rawVCf) && normVCf === null) ? _dateCmpToFormulaAtomJs(rawVCf, table) : null;
           if (op.when === "between" && typeof rawVCf === "string" && rawVCf.indexOf("..") >= 0) {
             var pCf = rawVCf.split("..");
@@ -2352,12 +2354,12 @@ var ComboPlanner = (function () {
           } else if (dCfAtom && (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le" || op.when === "eq" || op.when === "ne")) {
             var opSymCf = { gt: ">", ge: ">=", lt: "<", le: "<=", eq: "=", ne: "<>" }[op.when];
             expr = "=AND(ISNUMBER($" + refL + cfR1 + "),$" + refL + cfR1 + opSymCf + dCfAtom + ")";
-          } else if (op.when === "ge" && numVal !== "") expr = "=$" + refL + cfR1 + ">=" + numVal;
-          else if (op.when === "le" && numVal !== "") expr = "=$" + refL + cfR1 + "<=" + numVal;
-          else if (op.when === "gt" && numVal !== "") expr = "=$" + refL + cfR1 + ">" + numVal;
-          else if (op.when === "lt" && numVal !== "") expr = "=$" + refL + cfR1 + "<" + numVal;
+          } else if (op.when === "ge" && numVal !== "") expr = "=" + cfValRef + ">=" + numVal;
+          else if (op.when === "le" && numVal !== "") expr = "=" + cfValRef + "<=" + numVal;
+          else if (op.when === "gt" && numVal !== "") expr = "=" + cfValRef + ">" + numVal;
+          else if (op.when === "lt" && numVal !== "") expr = "=" + cfValRef + "<" + numVal;
           else if (op.when === "ne" && !_isEmptyVal(rawVCf)) {
-            if (normVCf !== null) expr = "=$" + refL + cfR1 + "<>" + normVCf;
+            if (normVCf !== null) expr = "=" + cfValRef + "<>" + normVCf;
             else expr = "=$" + refL + cfR1 + "<>\"" + String(rawVCf).replace(/"/g, "\"\"") + "\"";
           } else if (/マイナス|負の値/.test(text)) expr = "=$" + refL + cfR1 + "<0";
           else if (/([0-9][0-9,\.]*%?[万億]?)(?:になっていない|になってない|ではない|でない|じゃない|以外)/.test(nfkc(text))) {
@@ -2466,14 +2468,14 @@ var ComboPlanner = (function () {
       var nfkcTxt = nfkc(text);
       var descPatJs = "(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順";
       var ascPatJs = "(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順";
-      var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ)/);
+      var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ|に(?=\s*[^\s、,の]{1,16}(?:の|が)))/);
       if (mGrp) {
         var rawGrp = mGrp[1].trim();
         var mappedGrp = _resolveColRefJs(rawGrp, table);
         if (mappedGrp) sortPairs.push(mappedGrp);
         else extraMissing.push("表に無い列名（" + rawGrp + "）");
       }
-      var sortReG = new RegExp("(?:その中で\\s*|同じ[^\\s、,。]{1,12}の中は\\s*|同[^\\s、,。]{1,12}内は\\s*)?([^\\s、,のがは]{1,16})(?:の|が)(?:(" + descPatJs + ")|(" + ascPatJs + "))", "g");
+      var sortReG = new RegExp("(?:[^\\s、,の]{1,16}ごとに\\s*|その中で\\s*|同じ[^\\s、,。]{1,12}の中は\\s*|同[^\\s、,。]{1,12}内は\\s*)?([^\\s、,のがは]{1,16})(?:の|が)(?:(" + descPatJs + ")|(" + ascPatJs + "))", "g");
       var sm;
       while ((sm = sortReG.exec(nfkcTxt)) !== null) {
         var rawColS = sm[1].trim();
@@ -2859,6 +2861,19 @@ var ComboPlanner = (function () {
       }
     }
     if (shelf.name === "width") {
+      if (rows.length && !_hasOwn(op, "rows") && !_hasOwn(op, "width")) {
+        var mRh = /(?:行の高さを?|行高を?)\s*([0-9]+)/.exec(nfkc(text));
+        if (mRh) {
+          var isContigR = rows.length >= 2;
+          for (var rki = 1; rki < rows.length; rki++) {
+            if (rows[rki] !== rows[rki - 1] + 1) { isContigR = false; break; }
+          }
+          var rKey = isContigR ? (rows[0] + ":" + rows[rows.length - 1]) : rows.join(",");
+          op.rows = {};
+          op.rows[rKey] = parseInt(mRh[1], 10);
+          named = true;
+        }
+      }
       if (_hasOwn(op, "col") && !_hasOwn(op, "width") && !_hasOwn(op, "auto") && /(?:自動|中身に合|オートフィット)/.test(text)) {
         op.auto = [op.col];
         delete op.col;
@@ -2908,7 +2923,7 @@ var ComboPlanner = (function () {
       if (shelf.name === "filter.where") {
         var hasCmpCue = _hasOwn(op, "when") || !!colContF || /以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降/.test(text) || _DATE_CMP_CUE_RE_JS.test(nfkc(text));
         if (!hasCmpCue && !_hasOwn(op, "equals")) {
-          var mGen = /(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)/.exec(text.trim());
+          var mGen = /(?:が|は)\s*[『「]?([^』」\sの、。]+?)[』」]?の(?:もの|やつ|行|分|件|データ|項目|[^\s、。のをにはが]{1,12})(?:だけ|のみ)/.exec(text.trim());
           if (mGen) {
             op.equals = mGen[1].trim();
           } else {
@@ -3694,6 +3709,8 @@ var ComboPlanner = (function () {
           ensureBoost("cf.clear");
         } else if (hasRemoveAct && /プルダウン|入力規則/.test(c)) {
           ensureBoost("validation.clear");
+        } else if (!hasRemoveAct && /プルダウン|選択肢から選|リストから選/.test(c)) {
+          ensureBoost("validation.list");
         } else if (hasRemoveAct && /フィルタ|フィルター|絞り込み|▼/.test(c)) {
           ensureBoost("filter.off");
         } else if (hasRemoveAct && /固定|フリーズ|ウィンドウ枠/.test(c)) {

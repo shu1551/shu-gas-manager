@@ -1416,7 +1416,7 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
         cmp_col = op.get("col")
         cmp_num_str = None
         if sh_name == "cf.add" and op.get("when") == "formula" and isinstance(op.get("value"), str):
-            m_fm = re.search(r"\$([A-Z]{1,3})[0-9]+\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)", op["value"])
+            m_fm = re.search(r"\$([A-Z]{1,3})[0-9]+\)?\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)", op["value"])
             if m_fm:
                 col_l = m_fm.group(1)
                 cmp_num_str = m_fm.group(2)
@@ -1488,9 +1488,10 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
         if op.get("borders") not in (None, False, "none", "なし") and not re.search(r"罫線|枠線|外枠|格子", t_full_n):
             _add_miss("頼みに無い操作（borders）が混入しています")
     if sh_name == "cols.delete":
-        if _COL_CONTENT_DEL_RE.search(scan_n) or _COL_PROP_OBJ_RE.search(scan_n):
+        masked_del_n = nfkc(_mask_col_names(scan, table))
+        if _COL_CONTENT_DEL_RE.search(masked_del_n) or _COL_PROP_OBJ_RE.search(masked_del_n):
             _add_miss("列そのものではなく列の中身の語が含まれているため列削除しません")
-        elif re.search(r"列|カラム", scan_n) and not _COL_DIRECT_DEL_RE.search(scan_n):
+        elif re.search(r"列|カラム", masked_del_n) and not _COL_DIRECT_DEL_RE.search(masked_del_n):
             _add_miss("列そのものが削除対象ではないため列削除しません")
     if sh_name == "rows.delete":
         if re.search(r"(?:行目|行)の(?!削除|消去|除去)[^\s、。のをにはが]{1,12}を|中身|値だけ|値を|空白|スペース|改行|色|背景|書式|罫線|メモ|コメント|リンク", scan_n):
@@ -1870,6 +1871,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             if not expr and ref_l:
                 w = op.get("when")
                 d_cf_atom = _date_cmp_to_formula_atom(raw_v_cf, table) if (raw_v_cf not in (None, "") and norm_v_cf is None) else None
+                cf_val_ref = f"ABS(${ref_l}{cf_r1})" if re.search(r"絶対値", nfkc(text)) else f"${ref_l}{cf_r1}"
                 if w == "between" and isinstance(raw_v_cf, str) and ".." in raw_v_cf:
                     p1_cf, p2_cf = raw_v_cf.split("..", 1)
                     da1, da2 = _date_cmp_to_formula_atom(p1_cf, table), _date_cmp_to_formula_atom(p2_cf, table)
@@ -1879,16 +1881,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     op_sym_cf = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "=", "ne": "<>"}[w]
                     expr = f"=AND(ISNUMBER(${ref_l}{cf_r1}),${ref_l}{cf_r1}{op_sym_cf}{d_cf_atom})"
                 elif w == "ge" and num_val != "":
-                    expr = f"=${ref_l}{cf_r1}>={num_val}"
+                    expr = f"={cf_val_ref}>={num_val}"
                 elif w == "le" and num_val != "":
-                    expr = f"=${ref_l}{cf_r1}<={num_val}"
+                    expr = f"={cf_val_ref}<={num_val}"
                 elif w == "gt" and num_val != "":
-                    expr = f"=${ref_l}{cf_r1}>{num_val}"
+                    expr = f"={cf_val_ref}>{num_val}"
                 elif w == "lt" and num_val != "":
-                    expr = f"=${ref_l}{cf_r1}<{num_val}"
+                    expr = f"={cf_val_ref}<{num_val}"
                 elif w == "ne" and raw_v_cf not in (None, ""):
                     if norm_v_cf is not None:
-                        expr = f"=${ref_l}{cf_r1}<>{norm_v_cf}"
+                        expr = f"={cf_val_ref}<>{norm_v_cf}"
                     else:
                         escaped_v = str(raw_v_cf).replace('"', '""')
                         expr = f'=${ref_l}{cf_r1}<>"{escaped_v}"'
@@ -1985,8 +1987,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         nfkc_t = nfkc(text)
         _desc_pat = r"(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順"
         _asc_pat = r"(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順"
-        # 「部署ごと、同部署内は社員番号の昇順」「部署ごとにかためて…社員番号の若い順」の 1 列目（ごと）を拾う
-        m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ)", nfkc_t)
+        # 「部署ごと、同部署内は社員番号の昇順」「社員名ごとに日付の古い順」の 1 列目（ごと）を拾う
+        m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ|に(?=\s*[^\s、,の]{1,16}(?:の|が)))", nfkc_t)
         if m_grp:
             raw_g = m_grp.group(1).strip()
             col_g = _resolve_col_ref(raw_g, table)
@@ -1995,7 +1997,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             else:
                 extra_missing.append(f"表に無い列名（{raw_g}）")
         for sm in re.finditer(
-            r"(?:その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のがは]{1,16})(?:の|が)(?:(" + _desc_pat + r")|(" + _asc_pat + r"))",
+            r"(?:[^\s、,の]{1,16}ごとに\s*|その中で\s*|同じ[^\s、,。]{1,12}の中は\s*|同[^\s、,。]{1,12}内は\s*)?([^\s、,のがは]{1,16})(?:の|が)(?:(" + _desc_pat + r")|(" + _asc_pat + r"))",
             nfkc_t,
         ):
             raw_c = sm.group(1).strip()
@@ -2275,7 +2277,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         if shelf["name"] == "filter.where":
             has_cmp_cue = ("when" in op) or bool(col_cont_f) or bool(re.search(r"以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降", text)) or bool(_DATE_CMP_CUE_RE.search(nfkc(text)))
             if not has_cmp_cue and "equals" not in op:
-                m_gen = re.search(r"(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)", text.strip())
+                m_gen = re.search(r"(?:が|は)\s*[『「]?([^』」\sの、。]+?)[』」]?の(?:もの|やつ|行|分|件|データ|項目|[^\s、。のをにはが]{1,12})(?:だけ|のみ)", text.strip())
                 if m_gen:
                     op["equals"] = m_gen.group(1).strip()
                 else:
@@ -2333,6 +2335,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 op["col"] = p_cands[0]
                 named = True
     if shelf["name"] == "width":
+        if rows and "rows" not in op and "width" not in op:
+            m_rh = re.search(r"(?:行の高さを?|行高を?)\s*([0-9]+)", nfkc(text))
+            if m_rh:
+                r_key = f"{rows[0]}:{rows[-1]}" if len(rows) >= 2 and rows == list(range(rows[0], rows[-1] + 1)) else ",".join(str(x) for x in rows)
+                op["rows"] = {r_key: int(m_rh.group(1))}
+                named = True
         if "col" in op and "width" not in op and "auto" not in op and re.search(r"(?:自動|中身に合|オートフィット)", text):
             op["auto"] = [op.pop("col")]
         elif not any(k in op for k in ("auto", "cols", "col", "rows")) and not op.get("all_sheets") and re.search(r"(?:自動|中身に合|オートフィット|ちょうどよく|見切れ)", text):
@@ -2894,6 +2902,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("cf.clear")
             elif has_remove_act and re.search(r"プルダウン|入力規則", c):
                 _ensure_boost("validation.clear")
+            elif not has_remove_act and re.search(r"プルダウン|選択肢から選|リストから選", c):
+                _ensure_boost("validation.list")
             elif has_remove_act and re.search(r"フィルタ|フィルター|絞り込み|▼", c):
                 _ensure_boost("filter.off")
             elif has_remove_act and re.search(r"固定|フリーズ|ウィンドウ枠", c):
