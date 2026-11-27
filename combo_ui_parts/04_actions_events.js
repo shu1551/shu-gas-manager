@@ -309,6 +309,19 @@
     if (!liveSelPrompt) {
       payload.selection = els.chkSync.checked ? (state.selection || "") : "";
     }
+    var reportAiSolved = function(askText, solvedOps, noteText, srcName) {
+      if (!askText || !Array.isArray(solvedOps) || !solvedOps.length) return;
+      if (!canUseDirectLocalAi()) return;
+      try {
+        requestDirectAi({
+          kind: "ai_solved",
+          ask: askText,
+          ops: solvedOps,
+          note: noteText || "",
+          source: srcName || "combo_direct"
+        }, function() {});
+      } catch (_eLog) {}
+    };
     var runViaGasAsk = function() {
       state.directUndoStack = [];
       runServerAction({
@@ -316,7 +329,12 @@
         payload: payload,
         label: txt,
         statusText: statusText,
-        switchToChat: true
+        switchToChat: true,
+        onSuccess: function(res) {
+          if (res && res.ok && res.source === "ai_api" && Array.isArray(res.aiOps) && res.aiOps.length) {
+            reportAiSolved(txt, res.aiOps, res.aiNote || "", "combo_api");
+          }
+        }
       });
     };
     var appendApiRetryLog = function(head, errMsg) {
@@ -480,6 +498,19 @@
     }
     var label = customLabel || formatOpsShort(ops) || "ops実行";
     var switchChat = !(opts && opts.switchToChat === false);
+    var logSolvedIfAi = function() {
+      if (opts && opts.fromAi && Array.isArray(ops) && ops.length && canUseDirectLocalAi()) {
+        try {
+          requestDirectAi({
+            kind: "ai_solved",
+            ask: opts.aiAsk || label,
+            ops: ops,
+            note: opts.aiNote || "",
+            source: "combo_direct"
+          }, function() {});
+        } catch (_eLog2) {}
+      }
+    };
     var runViaGas = function() {
       state.directUndoStack = [];
       runServerAction({
@@ -498,14 +529,17 @@
         },
         label: label,
         statusText: "実行中…",
-        switchToChat: switchChat
+        switchToChat: switchChat,
+        onSuccess: function(res) {
+          if (res && res.ok) logSolvedIfAi();
+        }
       });
     };
     var forceEngineForAiGuard = !!(opts && opts.fromAi && Array.isArray(ops) && ops.some(function(o) {
       var sn = o && o.shelf;
       return sn === "cols.insert" || sn === "rows.insert" || sn === "clear.values" || sn === "write";
     }));
-    if (!forceEngineForAiGuard && !els.chkBackup.checked && tryDirectSheetsApi(ops, label, false, runViaGas, { switchToChat: switchChat })) {
+    if (!forceEngineForAiGuard && !els.chkBackup.checked && tryDirectSheetsApi(ops, label, false, runViaGas, { switchToChat: switchChat, onDirectDone: logSolvedIfAi })) {
       return;
     }
     runViaGas();

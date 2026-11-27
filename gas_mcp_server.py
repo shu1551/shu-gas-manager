@@ -2856,7 +2856,9 @@ def _gas_dispatch(command: str) -> str:
                 src_s = r[1] if len(r) > 1 else ""
                 ask_s = r[2] if len(r) > 2 else ""
                 rs = r[3] if len(r) > 3 else ""
-                lines.append(f"  - [{dt}][{src_s}] {ask_s} -> {rs}")
+                ops_s = r[5] if len(r) > 5 else ""
+                tail = f" ops={ops_s}" if (rs == "AIで通った" and ops_s) else ""
+                lines.append(f"  - [{dt}][{src_s}] {ask_s} -> {rs}{tail}")
         else:
             lines.append("\n[.ws_ask_misses.tsv] 記録はまだありません。")
         if suggest_mode:

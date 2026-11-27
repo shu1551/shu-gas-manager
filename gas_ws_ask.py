@@ -2797,3 +2797,31 @@ def log_ask_miss(ask, plan, source="mcp", path=None):
             f.write(row)
     except OSError:
         pass
+
+
+def log_ask_ai_solved(ask, ops, source="ai", note="", path=None):
+    """棚で止まった頼みが AI の ops で通ったとき、後で棚の型にするため .ws_ask_misses.tsv に印と ops を残す。"""
+    if os.environ.get("WS_NO_MISS_LOG") == "1":
+        return
+    clean_ask = " ".join(str(ask or "").split())
+    if len(clean_ask) < 2 or not isinstance(ops, list) or not ops:
+        return
+    p = Path(path) if path else ASK_MISSES_FILE
+    mark = "AIで通った"
+    note_s = " ".join(str(note or "").split())
+    clean_ops = [{k: v for k, v in o.items() if k != "ok"} if isinstance(o, dict) else o for o in ops]
+    ops_s = json.dumps(clean_ops, ensure_ascii=False, separators=(",", ":"))
+    try:
+        if p.exists():
+            lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if lines:
+                last_parts = lines[-1].split("\t")
+                if len(last_parts) >= 6 and last_parts[1] == source and last_parts[2] == clean_ask and last_parts[3] == mark and last_parts[5] == ops_s:
+                    return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = f"{ts}\t{source}\t{clean_ask}\t{mark}\t{note_s}\t{ops_s}\n"
+        with p.open("a", encoding="utf-8") as f:
+            f.write(row)
+    except OSError:
+        pass

@@ -659,6 +659,8 @@ class WorkspaceManager:
             tim.lap("当て")
             st2, res, key = self._do_res(p0.ops, target, ok, tim)
             text = self._finish_do(st2, res, key)
+            if res.get("ok") and st2.pop("last_unfired_ask", None) is not None:
+                self._save(st2)
             if not res.get("ok"):
                 return text
             shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p0.ops)
@@ -724,6 +726,12 @@ class WorkspaceManager:
                 if getattr(p, "choices", None):
                     return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
                 gas_ws_ask.log_ask_miss(ask, p, source="mcp", path=self.ask_misses_path)
+                try:
+                    st_u = self._load()
+                    st_u["last_unfired_ask"] = {"ask": ask, "id": tgt.get("id") or "", "ts": time.time()}
+                    self._save(st_u)
+                except Exception:
+                    pass
                 unfired_txt = self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
                 # 止まった頼みを呼び出し元 AI へ切れ目なく渡す: 表の中身（最大100行×26列・値と式）を添える
                 if (
@@ -759,6 +767,8 @@ class WorkspaceManager:
                 continue
             break
         text = self._finish_do(st2, res, key)
+        if res.get("ok") and st2.pop("last_unfired_ask", None) is not None:
+            self._save(st2)
         shown = ", ".join(o["shelf"] + "(" + ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in o.items() if k != "shelf") + ")" for o in p.ops)
         if not res.get("ok"):
             return text + "\n撃った棚: " + shown
@@ -923,6 +933,18 @@ class WorkspaceManager:
 
     def _do(self, ops, target, ok, tim):
         st, res, key = self._do_res(ops, target, ok, tim)
+        if res.get("ok") and not res.get("local_only"):
+            lu = st.get("last_unfired_ask")
+            if isinstance(lu, dict) and lu.get("ask") and (time.time() - float(lu.get("ts") or 0)) <= 300:
+                tid = (res.get("target") or res.get("created") or {}).get("id") or ""
+                if not lu.get("id") or not tid or lu.get("id") == tid:
+                    try:
+                        import gas_ws_ask
+                        parsed_ops = self.parse_ops(ops)
+                        gas_ws_ask.log_ask_ai_solved(lu["ask"], parsed_ops, source="mcp_ai", path=self.ask_misses_path)
+                    except Exception:
+                        pass
+                    st.pop("last_unfired_ask", None)
         return self._finish_do(st, res, key)
 
     def _do_res(self, ops, target, ok, tim, extra=None):

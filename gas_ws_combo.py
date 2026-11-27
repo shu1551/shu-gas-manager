@@ -2022,6 +2022,19 @@ class ComboPostboxWatcher:
 
     def resolve_direct(self, item, on_event=None):
         """Chrome 拡張からの直結リクエスト（127.0.0.1 /resolve）を処理して返す。"""
+        if isinstance(item, dict) and item.get("kind") == "ai_solved":
+            try:
+                import gas_ws_ask
+                gas_ws_ask.log_ask_ai_solved(
+                    item.get("ask") or "",
+                    item.get("ops") or [],
+                    source=str(item.get("source") or "combo_direct"),
+                    note=str(item.get("note") or ""),
+                )
+            except Exception:
+                pass
+            return {"ok": True, "direct": True, "logged": True}
+
         def _emit(ev):
             if callable(on_event):
                 try:
@@ -2183,6 +2196,17 @@ class ComboPostboxWatcher:
                      or (deliv_resp2.get("elapsed_ms") or deliv_resp2.get("duration_ms") if isinstance(deliv_resp2, dict) else 0)
                      or 0)
                 )
+            if isinstance(deliv, dict) and deliv.get("ok") is True and payload.get("action") == "ops" and payload.get("ops"):
+                try:
+                    import gas_ws_ask
+                    gas_ws_ask.log_ask_ai_solved(
+                        item.get("ask") or "",
+                        payload.get("ops"),
+                        source="combo_postbox",
+                        note=payload.get("note") or "",
+                    )
+                except Exception:
+                    pass
             timing = {
                 "poll_wall_ms": poll_wall_ms,
                 "poll_gas_ms": poll_gas_ms,
