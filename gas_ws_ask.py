@@ -531,8 +531,9 @@ _TWO_COL_CMP_RE = re.compile(
     r"と等しい|と同じ|と一致|と違う|と異なる|以外|ではない|でない|じゃない))"
 )
 _COL_CONTAINS_RE = re.compile(
-    r"([^\s、。をがはで]{1,16}?)(?:列)?(?:に|が|は)[『「]?([^』」\s、。をにがは]{1,20}?)[』」]?"
-    r"(?:(?:と|が)(?:書かれ|記載|入力され|入っ|含まれ)|を含[むみ]|とある)"
+    r"([^\s、。をがはで]{1,16}?)(?:列)?(?:に|が|は)"
+    r"(?:[『「]([^』」]{1,24}?)[』」]|([^』」\s、。をにがは]{1,20}?))"
+    r"(?:(?:と|が)(?:書かれ|記載|入力され|入っ|含まれ)(?!て?い?な|て?な|な|ず)|を含[むみん](?!で?い?な|で?な|な)|とある(?!わけではな))"
 )
 _CALC_DIFF_RE = re.compile(
     r"([^\s、。をにとがは]{1,16}?)(?:列)?と([^\s、。をにとがは]{1,16}?)(?:列)?の(?:差額?|差分|差と伸び率|伸び率|増減率)"
@@ -572,7 +573,8 @@ def _col_contains_of(text, table):
     t_n = nfkc(text)
     has_cols = bool(table and table.get("columns"))
     for m in _COL_CONTAINS_RE.finditer(t_n):
-        r1, word = m.group(1).strip(), m.group(2).strip()
+        r1 = m.group(1).strip()
+        word = (m.group(2) or m.group(3) or "").strip()
         if not word:
             continue
         if has_cols:
@@ -1159,7 +1161,7 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
             re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", scan_n)
             or _has_eq_col_f
             or _two_col_cmp_of(scan_n, table)
-            or _col_contains_of(scan_n, table)
+            or _col_contains_of(text, table)
             or re.search(r"(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない|になっている|になってる).{0,8}(?:の行|行を|行に|行全体|のセル|セルを|(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}(?:を|に|は))", scan_n)
             or (_DATE_CMP_CUE_RE.search(scan_n) and re.search(r"の行|行を|行に|行全体|のセル|セルを", scan_n))
         )
@@ -1199,11 +1201,11 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
 
     # 4. フィルタ系で条件語が落ちている／条件自体が空
     if sh_name in ("filter.where", "filter.delete", "filter.extract"):
-        if (re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", scan_n) or _DATE_CMP_CUE_RE.search(scan_n)) and not op.get("when"):
+        if (re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", scan_n) or _DATE_CMP_CUE_RE.search(scan_n) or _col_contains_of(text, table)) and not op.get("when"):
             _add_miss("条件（when）")
         if not op.get("when") and op.get("equals") in (None, "") and op.get("value") in (None, ""):
             _add_miss("絞り込み条件（equals/when）")
-        if op.get("when") in ("gt", "ge", "lt", "le", "ne", "between") and op.get("value") in (None, ""):
+        if op.get("when") in ("gt", "ge", "lt", "le", "ne", "between", "contains") and op.get("value") in (None, ""):
             _add_miss("value")
 
     # 5. 式を入れる棚で入れ先の列(at)が式・計算の入力列と同じなら撃たない（自己上書き・循環参照防止）
@@ -1263,7 +1265,7 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
                 if not _is_valid_col_val(body):
                     _add_miss(f"表に無い列名（{body}）")
         if sh_name == "calc.col" and op.get("expr"):
-            for tok in re.split(r"[*/+\-()]", nfkc(str(op["expr"]))):
+            for tok in re.split(r"[*/+\-(),]", re.sub(r"[A-Za-z]+(?=\()", " ", nfkc(str(op["expr"])))):
                 st = tok.strip()
                 if not st or re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", st):
                     continue
@@ -1836,7 +1838,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         _desc_pat = r"(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順"
         _asc_pat = r"(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順"
         # 「部署ごと、同部署内は社員番号の昇順」「部署ごとにかためて…社員番号の若い順」の 1 列目（ごと）を拾う
-        m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)", nfkc_t)
+        m_grp = re.search(r"([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ)", nfkc_t)
         if m_grp:
             raw_g = m_grp.group(1).strip()
             col_g = _resolve_col_ref(raw_g, table)
@@ -2094,11 +2096,19 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     if shelf["name"] in ("filter.where", "filter.delete", "filter.extract"):
         if shelf["name"] == "filter.extract" and op.get("into") == "別":
             op.pop("into", None)
+        col_cont_f = _col_contains_of(text, table)
+        if col_cont_f and op.get("when") in (None, "contains"):
+            op["col"] = col_cont_f[0]
+            op["when"] = "contains"
+            op["value"] = col_cont_f[1]
+            op.pop("equals", None)
+        if op.get("when") == "contains":
+            op.pop("equals", None)
         if "when" in op and "equals" in op and isinstance(op["equals"], str):
             if re.search(r"以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降", op["equals"]) or _DATE_CMP_CUE_RE.search(nfkc(op["equals"])):
                 op.pop("equals", None)
         if shelf["name"] == "filter.where":
-            has_cmp_cue = ("when" in op) or bool(re.search(r"以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降", text)) or bool(_DATE_CMP_CUE_RE.search(nfkc(text)))
+            has_cmp_cue = ("when" in op) or bool(col_cont_f) or bool(re.search(r"以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降", text)) or bool(_DATE_CMP_CUE_RE.search(nfkc(text)))
             if not has_cmp_cue and "equals" not in op:
                 m_gen = re.search(r"(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)", text.strip())
                 if m_gen:
@@ -2358,7 +2368,7 @@ _READ_ONLY_MUTATE_RE = re.compile(
     r"追加|足して|作って|作成|入れて|入力|書[きくい]|書き換|置換|直して|そろえて|揃えて|整えて|変換|"
     r"グラフ|ピボット|集計表|別シート|コピー|複製|移動|変更|保護|結合|幅を|高さを|広げて|狭めて|"
     r"大きくして|小さくして|プルダウン|リストを作|ハイライト|目立たせ|"
-    r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$"
+    r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$|(?<!教え)(?<!見せ)(?:てくれ|てもらえ|ていただ)|てほしい|て欲しい|お願い"
 )
 _READ_ONLY_QUERY_RE = re.compile(
     r"[?？]|どこ|どれ|だれ|誰|どんな|何が|何を|何が入|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|"
@@ -2587,10 +2597,11 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and (_color_hits(c) or re.search(r"太字|太く|色[を]?付|色[を]?つ|目立|ハイライト", c))
             )
             has_row_del_cond = bool(
-                re.search(r"の行|行を|行に|行は|いない行|ない行|データ|明細|レコード|案件|商品", c)
+                re.search(r"の行|行を|行に|行は|行だけ|た行|る行|いない行|ない行|データ|明細|レコード|案件|商品", c)
                 and (
                     re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", c)
                     or _DATE_CMP_CUE_RE.search(nfkc(c))
+                    or _col_contains_of(nfkc(c), table)
                     or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|データ|明細|レコード|案件|商品)", c)
                 )
                 and re.search(r"消|削除", c)
@@ -2601,7 +2612,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             _c_nfkc_cd = nfkc(c)
             has_cols_del_cue = bool(
                 _COL_DIRECT_DEL_RE.search(_c_nfkc_cd)
-                and re.search(r"消|削除|取り除|捨て", _c_nfkc_cd)
+                and re.search(r"消(?!費)|削除|取り除|捨て", _c_nfkc_cd)
                 and not _COL_CONTENT_DEL_RE.search(_c_nfkc_cd)
                 and not _COL_PROP_OBJ_RE.search(_c_nfkc_cd)
                 and bool(_col_names(c, table) or _col_letters(c) or (_m_col_del and _resolve_col_ref(_m_col_del.group(1), table)))
@@ -2630,10 +2641,21 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 (
                     re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", c)
                     or _DATE_CMP_CUE_RE.search(nfkc(c))
+                    or _col_contains_of(nfkc(c), table)
                     or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の[^\s、。のをにはが]{1,12}", c)
                 )
                 and re.search(r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
                 and not re.search(r"消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す", c, re.IGNORECASE)
+            )
+            has_filter_extract_cue = bool(
+                (
+                    re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", c)
+                    or _DATE_CMP_CUE_RE.search(nfkc(c))
+                    or _col_contains_of(nfkc(c), table)
+                    or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|データ|明細|レコード|案件|商品)", c)
+                )
+                and re.search(r"抽出", c)
+                and not re.search(r"上位|下位|トップ|ワースト|ベスト|URL|リンク|消|削除", c, re.IGNORECASE)
             )
             has_freeze_cue = bool(
                 re.search(r"固定|フリーズ", c)
@@ -2718,6 +2740,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("chart.new")
             elif has_filter_where_cue:
                 _ensure_boost("filter.where")
+            elif has_filter_extract_cue:
+                _ensure_boost("filter.extract")
             elif has_calc_diff_cue:
                 _ensure_boost("calc.diff")
             elif has_calc_cue:
@@ -2771,7 +2795,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                     boost_name = "number.fix"
                 elif "sheet.diff" in cand_names and re.search(r"シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート", c):
                     boost_name = "sheet.diff"
-                elif "sheet.list" in cand_names and re.search(r"教え|確認|見せて|あるか|どんなシート|何枚", c) and not re.search(r"目次|インデックス|作", c):
+                elif "sheet.list" in cand_names and re.search(r"教え|確認|見せて|あるか|どんなシート|何枚", c) and re.search(r"シート|タブ|何枚", c) and not re.search(r"目次|インデックス|作", c):
                     boost_name = "sheet.list"
                 elif "sheet.toc" in cand_names and re.search(r"目次|インデックスシート|シート一覧", c) and not re.search(r"教え|確認|見せて|あるか|どんな", c):
                     boost_name = "sheet.toc"
@@ -2908,6 +2932,9 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         dd.append(o)
     p.ops = dd
     p.fire = (not fatal_err) and (not p.missing) and bool(p.ops)
+    # 守り: 読むだけの問い（変更動詞なし・問いの形）で、シートを触る棚が当たったら撃たない（読む棚だけは撃てる）
+    if p.fire and _is_read_only_ask(ask) and any(finder.cat.by_name[o["shelf"]].get("touch") for o in p.ops):
+        p.fire = False
     amb_choices = _ambiguous_tidy_choices(ask, p.ops if p.fire else [], kind=kind)
     if amb_choices:
         p.fire = False

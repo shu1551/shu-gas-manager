@@ -273,11 +273,16 @@ function findTable_(sh) {
     if (nonEmpty(seg) > 0) last = r2;
   }
   var t = { sheet: sh, headerRow: h + 1, headerRows: headerRows, headerNames: headerNames, firstCol: fc + 1, lastCol: lcol + 1, firstData: dataStart0 + 1, lastData: last + 1, totalRow: 0, vals: vals };
-  // 合計行：最終行の最初の文字セルが 合計/計 など
-  if (last >= dataStart0) {
-    var first = '';   // 最終行の最初の文字のセル（ラベルは 2 列目より右にあることもある。「合計金額」が D 列、等）
-    for (var fcx = fc; fcx <= lcol; fcx++) { var fv = vals[last][fcx]; if (!isBlank_(fv)) { first = String(fv); break; } }
-    if (/^(合計|総計|小計|計|total|sum)/i.test(first.trim())) { t.totalRow = last + 1; t.lastData = last; }
+  // 合計行・末尾集計ブロック：最終行から上に向かって連続する 合計/小計/消費税 等を明細から除外する
+  var footerRe = /^(合計|総計|小計|税込合計|税抜合計|消費税|外税|内税|税額|値引き?|割引|計|平均|最大値?|最小値?|件数|total|subtotal|tax|sum)/i;
+  var footerEnd = last;
+  while (footerEnd >= dataStart0 + 1) {
+    var first = '';   // その行の最初の文字セル（ラベルは 2 列目より右にあることもある。「小計」「消費税(10%)」「合計」等）
+    for (var fcx = fc; fcx <= lcol; fcx++) { var fv = vals[footerEnd][fcx]; if (!isBlank_(fv)) { first = String(fv); break; } }
+    if (!footerRe.test(first.trim())) break;
+    if (!t.totalRow) t.totalRow = footerEnd + 1;
+    t.lastData = footerEnd;
+    footerEnd--;
   }
   if (_TBL_CACHE) _TBL_CACHE[sid] = { headerRow: t.headerRow, headerRows: t.headerRows, headerNames: t.headerNames.slice(), firstCol: t.firstCol, lastCol: t.lastCol, firstData: t.firstData, lastData: t.lastData, totalRow: t.totalRow, vals: t.vals };
   return t;

@@ -162,9 +162,46 @@ SHELF['calc.col'] = function (ctx, op) {
     copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, op.name, t.headerRows || 1);
   }
 
-  // データ行の数式を設定（左隣から書式も引き継ぐ）
+  // データ行の数式を設定（参照する日付・時刻列があればその書式を、無ければ左隣から書式を引き継ぐ）
   var numRows = t.lastData - t.firstData + 1;
-  var tmplDataCol = insertInGroup ? groupLastCol : Math.max(t.firstCol, atCol - 1);
+  var refColIndices = [];
+  var scanRefExpr = expr;
+  sortedHdrs.forEach(function (h) {
+    if (h && scanRefExpr.indexOf(h) >= 0) {
+      refColIndices.push(colIndexOf_(t, h));
+      scanRefExpr = scanRefExpr.split(h).join(' ');
+    }
+  });
+  var mLetRef = scanRefExpr.match(/(?<![A-Za-z0-9_$!])([A-Z]{1,3})(?![A-Za-z0-9_(])/g) || [];
+  mLetRef.forEach(function (clm) {
+    var cni = colNum_(clm);
+    if (cni >= t.firstCol && cni <= t.lastCol && refColIndices.indexOf(cni) < 0) refColIndices.push(cni);
+  });
+  var isDateResult = /\b(?:EDATE|DATE|EOMONTH|WORKDAY)\s*\(/i.test(expr);
+  var isTimeDiff = false;
+  var fmtSrcCol = 0;
+  if (numRows > 0 && refColIndices.length) {
+    var sampleDateCols = [], sampleTimeCols = [];
+    refColIndices.forEach(function (rci) {
+      var v0 = t.vals[t.firstData - 1] ? t.vals[t.firstData - 1][rci - 1] : '';
+      var h0 = String(hdrs[rci - t.firstCol] || '');
+      if (v0 instanceof Date || Object.prototype.toString.call(v0) === '[object Date]') {
+        if (/時刻|時間|開始|終了|出勤|退勤/.test(h0) || v0.getFullYear() <= 1900) sampleTimeCols.push(rci);
+        else sampleDateCols.push(rci);
+      } else if (/日付|日$|登録日|回答日|納期|期限/.test(h0)) {
+        sampleDateCols.push(rci);
+      } else if (/時刻|出勤|退勤/.test(h0)) {
+        sampleTimeCols.push(rci);
+      }
+    });
+    if (sampleTimeCols.length >= 2 && expr.indexOf('-') >= 0) {
+      isTimeDiff = true;
+    } else if (sampleDateCols.length === 1 && (isDateResult || /[+-]\s*[0-9]+/.test(expr))) {
+      isDateResult = true;
+      fmtSrcCol = sampleDateCols[0];
+    }
+  }
+  var tmplDataCol = fmtSrcCol || (insertInGroup ? groupLastCol : Math.max(t.firstCol, atCol - 1));
   if (numRows > 0) {
     if (tmplDataCol !== atCol) {
       try {
@@ -176,9 +213,12 @@ SHELF['calc.col'] = function (ctx, op) {
       formulas.push([makeFormula(r)]);
     }
     setFormulasAllRows_(ctx, sh, t.firstData, atCol, formulas);
+    if (isTimeDiff) {
+      try { sh.getRange(t.firstData, atCol, numRows, 1).setNumberFormat('[h]:mm'); } catch (eTf) {}
+    }
   }
-  // 合計行がある表では、追加した計算列の合計行にも式と書式を入れる
-  if (t.totalRow) {
+  // 合計行がある表では、追加した計算列の合計行にも式と書式を入れる（日付列は合計しない）
+  if (t.totalRow && !isDateResult) {
     if (tmplDataCol !== atCol) {
       try {
         sh.getRange(t.totalRow, tmplDataCol, 1, 1).copyTo(sh.getRange(t.totalRow, atCol, 1, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
@@ -708,7 +748,7 @@ SHELF['date.parts'] = function (ctx, op) {
       var f = part === 'year' ? ('=YEAR(' + cellRef + ')')
         : part === 'month' ? ('=MONTH(' + cellRef + ')')
         : part === 'day' ? ('=DAY(' + cellRef + ')')
-        : part === 'weekday' ? ('=TEXT(' + cellRef + ', "aaa")')
+        : part === 'weekday' ? ('=IF(' + cellRef + '="","",MID("日月火水木金土",WEEKDAY(' + cellRef + '),1))')
         : part === 'fiscal' ? ('=IF(MONTH(' + cellRef + ')>=4,YEAR(' + cellRef + '),YEAR(' + cellRef + ')-1)')
         : ('=ROUNDUP(MONTH(' + cellRef + ')/3, 0)');
       formulas.push([f]);
@@ -721,7 +761,7 @@ SHELF['date.parts'] = function (ctx, op) {
 // 棚: text.join
 // 題: 複数の列をつないで新しい列を作る
 // 分類: 集計
-// 語: 列をつないで|結合して1列に|文字列をつなげて|氏名の列を作って|列を連結|列を結合|つなげて|の列を結合|と名を結合
+// 語: 列をつないで|結合して1列に|文字列をつなげて|氏名の列を作って|列を連結|列を結合|つなげて|の列を結合|と名を結合|を結合した|結合した列
 // 違い: 列を分けるなら split.col。セルを結合するなら format（merge）
 // 引数: cols*=列[], sep=文字, name=文字, at=列
 // 頼み: cols~([^\sと]+)と([^\s]+)をつないで ; sep~[『「]([^』」]+)[』」]でつな

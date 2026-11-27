@@ -129,4 +129,14 @@ R	このシートにはどんな項目が入っていますか？
 1	売上金額が単価を下回る商品を薄い赤にして	[{"shelf":"cf.add","range":"A4:I9","when":"formula","value":"=$G4<$F4","bg":"薄赤"}]
 1	備考に遅刻と書かれている行を太字にして	[{"shelf":"cf.add","range":"A4:I9","when":"formula","value":"=ISNUMBER(SEARCH(\"遅刻\",$I4))","bold":true}]
 1	見出し行とA列・B列を固定して	[{"shelf":"freeze","rows":3,"cols":2}]
-1	売上金額と単価の差額の列を足して	[{"shelf":"calc.diff","col_a":"売上金額","col_b":"単価"}]	
+1	売上金額と単価の差額の列を足して	[{"shelf":"calc.diff","col_a":"売上金額","col_b":"単価"}]
+# 第8ラウンド段1: 含む語の絞り込み（filter.where・filter.delete・filter.extract 共通 _col_contains_of）
+1	備考に急ぎと書かれた行だけ表示して	[{"shelf":"filter.where","col":"備考","when":"contains","value":"急ぎ"}]
+1	備考に急ぎが入っている行を削除して	[{"shelf":"filter.delete","col":"備考","when":"contains","value":"急ぎ","ok":true}]
+1	備考に急ぎを含む行を別シートに抽出して	[{"shelf":"filter.extract","col":"備考","when":"contains","value":"急ぎ"}]
+# 第8ラウンド: 消費税の消を列削除にしない・読むだけの問いを撃たない・ごとに並べて複数キー・列結合
+1	売上金額に消費税10%を足した税込金額の列を追加して	[{"shelf":"calc.tax","mode":"in","rate":10,"col":"売上金額"}]
+1	部門ごとに並べて、同じ部門の中は担当者の昇順にして	[{"shelf":"sort","cols":["部門","担当者"]}]
+R	部門ごとの件数と一番高い商品名を教えてください
+R	備考に「VIP」が入っている担当者と部門を一覧で教えて
+1	部門と商品名を結合した「分類」の列を作って	[{"shelf":"text.join","cols":["部門","商品名"]}]

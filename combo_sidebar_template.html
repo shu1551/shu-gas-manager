@@ -1800,11 +1800,14 @@
     return snap.cells[r0][c0];
   }
 
-  function resolveTableRangeStr(includeHeader) {
+  // excludeTotal: 並べ替え・絞り込みは合計行を含めない（含めると合計行が明細に混ざり、SUM が #REF! になる）
+  function resolveTableRangeStr(includeHeader, excludeTotal) {
     if (!state.table || !state.table.first_col || !state.table.last_col) return "";
     var dm = String(state.table.data || "").match(/^([0-9]+)-([0-9]+)$/);
     var startRow = includeHeader ? Number(state.table.header_row || (dm ? dm[1] : 0)) : (dm ? parseInt(dm[1], 10) : 0);
-    var endRow = state.table.total_row ? Number(state.table.total_row) : (dm ? parseInt(dm[2], 10) : Number(state.table.last_row || startRow));
+    var endRow = state.table.total_row
+      ? (excludeTotal ? (dm ? parseInt(dm[2], 10) : Number(state.table.total_row) - 1) : Number(state.table.total_row))
+      : (dm ? parseInt(dm[2], 10) : Number(state.table.last_row || startRow));
     if (!startRow || !endRow || endRow < startRow) return "";
     return state.table.first_col + startRow + ":" + state.table.last_col + endRow;
   }
@@ -2375,7 +2378,7 @@
         changed.push(sheetName + " フィルター解除");
         whatList.push("filter.off");
       } else if (op.shelf === "filter.on") {
-        var fA1 = op.range ? String(op.range) : resolveTableRangeStr(true);
+        var fA1 = op.range ? String(op.range) : resolveTableRangeStr(true, true);
         var fRg = parseSimpleA1Range(fA1, sheetId);
         if (!fRg) return null;
         requests.push({ setBasicFilter: { filter: { range: fRg.gridRange } } });
@@ -2387,7 +2390,7 @@
         var sortColLetter = resolveColLetterFromTable(op.col);
         var sortColIdx = colToNum0(sortColLetter);
         if (sortColIdx < 0) return null;
-        var sA1 = op.range ? String(op.range) : resolveTableRangeStr(false);
+        var sA1 = op.range ? String(op.range) : resolveTableRangeStr(false, true);
         var sRg = parseSimpleA1Range(sA1, sheetId);
         if (!sRg) return null;
         requests.push({

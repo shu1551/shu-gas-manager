@@ -691,10 +691,10 @@ var ComboPlanner = (function () {
   function _colContainsOfJs(text, table) {
     var tN = nfkc(text);
     var hasCols = !!(table && Array.isArray(table.columns) && table.columns.length);
-    var re = /([^\s、。をがはで]{1,16}?)(?:列)?(?:に|が|は)[『「]?([^』」\s、。をにがは]{1,20}?)[』」]?(?:(?:と|が)(?:書かれ|記載|入力され|入っ|含まれ)|を含[むみ]|とある)/g;
+    var re = /([^\s、。をがはで]{1,16}?)(?:列)?(?:に|が|は)(?:[『「]([^』」]{1,24}?)[』」]|([^』」\s、。をにがは]{1,20}?))(?:(?:と|が)(?:書かれ|記載|入力され|入っ|含まれ)(?!て?い?な|て?な|な|ず)|を含[むみん](?!で?い?な|で?な|な)|とある(?!わけではな))/g;
     var m;
     while ((m = re.exec(tN)) !== null) {
-      var r1 = m[1].trim(), word = m[2].trim();
+      var r1 = m[1].trim(), word = (m[2] || m[3] || "").trim();
       if (!word) continue;
       if (hasCols) {
         var c1 = _resolveColRefJs(r1, table) || (r1.indexOf("の") >= 0 ? _resolveColRefJs(r1.slice(r1.lastIndexOf("の") + 1), table) : null);
@@ -1457,7 +1457,7 @@ var ComboPlanner = (function () {
       var hasRowCond = /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(scanN) ||
         hasEqColF ||
         !!_twoColCmpOfJs(scanN, tbl) ||
-        !!_colContainsOfJs(scanN, tbl) ||
+        !!_colContainsOfJs(txt, tbl) ||
         /(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない|になっている|になってる).{0,8}(?:の行|行を|行に|行全体|のセル|セルを|(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}(?:を|に|は))/.test(scanN) ||
         (_DATE_CMP_CUE_RE_JS.test(scanN) && /(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN));
       if (hasRowCond) addMiss("条件付き書式（cf.add）の条件");
@@ -1485,13 +1485,13 @@ var ComboPlanner = (function () {
       }
     }
     if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
-      if ((/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) || _DATE_CMP_CUE_RE_JS.test(scanN)) && !opObj.when) {
+      if ((/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) || _DATE_CMP_CUE_RE_JS.test(scanN) || !!_colContainsOfJs(txt, tbl)) && !opObj.when) {
         addMiss("条件（when）");
       }
       if (!opObj.when && _isEmptyVal(opObj.equals) && _isEmptyVal(opObj.value)) {
         addMiss("絞り込み条件（equals/when）");
       }
-      if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "ne" || opObj.when === "between") && _isEmptyVal(opObj.value)) {
+      if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "ne" || opObj.when === "between" || opObj.when === "contains") && _isEmptyVal(opObj.value)) {
         addMiss("value");
       }
     }
@@ -1562,7 +1562,7 @@ var ComboPlanner = (function () {
         }
       }
       if (shN === "calc.col" && opObj.expr) {
-        var eToks = nfkc(String(opObj.expr)).split(/[*/+\-()]/);
+        var eToks = nfkc(String(opObj.expr)).replace(/[A-Za-z]+(?=\()/g, " ").split(/[*/+\-(),]/);
         for (var eti = 0; eti < eToks.length; eti++) {
           var stE = eToks[eti].trim();
           if (!stE || /^-?[0-9]+(?:\.[0-9]+)?$/.test(stE)) continue;
@@ -2346,7 +2346,7 @@ var ComboPlanner = (function () {
       var nfkcTxt = nfkc(text);
       var descPatJs = "(?:大きい|多い|高い|新しい|遅い)(?:順|ものから|方から|ほうから|のから)|降順|逆順";
       var ascPatJs = "(?:小さい|少ない|低い|古い|若い)(?:順|ものから|方から|ほうから|のから)|昇順|五十音順|あいうえお順";
-      var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?かためて並べ)/);
+      var mGrp = nfkcTxt.match(/([^\s、,の]{1,16})ごと(?:[、,]|に?(?:かためて)?並べ)/);
       if (mGrp) {
         var rawGrp = mGrp[1].trim();
         var mappedGrp = _resolveColRefJs(rawGrp, table);
@@ -2747,13 +2747,21 @@ var ComboPlanner = (function () {
 
     if (shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") {
       if (shelf.name === "filter.extract" && op.into === "別") delete op.into;
+      var colContF = _colContainsOfJs(text, table);
+      if (colContF && (!op.when || op.when === "contains")) {
+        op.col = colContF[0];
+        op.when = "contains";
+        op.value = colContF[1];
+        delete op.equals;
+      }
+      if (op.when === "contains") delete op.equals;
       if (_hasOwn(op, "when") && _hasOwn(op, "equals") && typeof op.equals === "string") {
         if (/以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降/.test(op.equals) || _DATE_CMP_CUE_RE_JS.test(nfkc(op.equals))) {
           delete op.equals;
         }
       }
       if (shelf.name === "filter.where") {
-        var hasCmpCue = _hasOwn(op, "when") || /以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降/.test(text) || _DATE_CMP_CUE_RE_JS.test(nfkc(text));
+        var hasCmpCue = _hasOwn(op, "when") || !!colContF || /以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降/.test(text) || _DATE_CMP_CUE_RE_JS.test(nfkc(text));
         if (!hasCmpCue && !_hasOwn(op, "equals")) {
           var mGen = /(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)/.exec(text.trim());
           if (mGen) {
@@ -3191,7 +3199,7 @@ var ComboPlanner = (function () {
     return false;
   }
 
-  var _READ_ONLY_MUTATE_RE_JS = /並べて|並べ替|ソート|絞り込|フィルタ|抽出|消して|消す|削除|取り除|捨て|外して|外す|解除|塗|色[をに]?付|色[をに]?つ|色[をに]?変|色にして|太字|斜体|罫線|固定|フリーズ|非表示|隠して|再表示|追加|足して|作って|作成|入れて|入力|書[きくい]|書き換|置換|直して|そろえて|揃えて|整えて|変換|グラフ|ピボット|集計表|別シート|コピー|複製|移動|変更|保護|結合|幅を|高さを|広げて|狭めて|大きくして|小さくして|プルダウン|リストを作|ハイライト|目立たせ|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$/;
+  var _READ_ONLY_MUTATE_RE_JS = /並べて|並べ替|ソート|絞り込|フィルタ|抽出|消して|消す|削除|取り除|捨て|外して|外す|解除|塗|色[をに]?付|色[をに]?つ|色[をに]?変|色にして|太字|斜体|罫線|固定|フリーズ|非表示|隠して|再表示|追加|足して|作って|作成|入れて|入力|書[きくい]|書き換|置換|直して|そろえて|揃えて|整えて|変換|グラフ|ピボット|集計表|別シート|コピー|複製|移動|変更|保護|結合|幅を|高さを|広げて|狭めて|大きくして|小さくして|プルダウン|リストを作|ハイライト|目立たせ|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$|(?<!教え)(?<!見せ)(?:てくれ|てもらえ|ていただ)|てほしい|て欲しい|お願い/;
   var _READ_ONLY_QUERY_RE_JS = /[?？]|どこ|どれ|だれ|誰|どんな|何が|何を|何が入|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|ありますか|あるか|いるか|ですか|ますか|でしょうか|どうなって|教えて|知りたい|確認したい|構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ/;
 
   function _chartSummaryOpsJs(op, clause, table) {
@@ -3459,9 +3467,10 @@ var ComboPlanner = (function () {
           hasRowCfCond &&
           !/消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|赤字|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ/.test(c) &&
           (_colorHits(c).length > 0 || /太字|太く|色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
-        var hasRowDelCond = /(?:の行|行を|行に|行は|いない行|ない行|データ|明細|レコード|案件|商品)/.test(c) &&
+        var hasRowDelCond = /(?:の行|行を|行に|行は|行だけ|た行|る行|いない行|ない行|データ|明細|レコード|案件|商品)/.test(c) &&
           (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) ||
             _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
+            !!_colContainsOfJs(nfkc(c), table) ||
             /[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|データ|明細|レコード|案件|商品)/.test(c)) &&
           /消|削除/.test(c) &&
           !/重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則/.test(c) &&
@@ -3469,7 +3478,7 @@ var ComboPlanner = (function () {
         var mColDel = /([^\s、。のをにはが]{2,16}?)の?(?:列|カラム)/.exec(c);
         var cNfkcCd = nfkc(c);
         var hasColsDelCue = _COL_DIRECT_DEL_RE_JS.test(cNfkcCd) &&
-          /消|削除|取り除|捨て/.test(cNfkcCd) &&
+          /消(?!費)|削除|取り除|捨て/.test(cNfkcCd) &&
           !_COL_CONTENT_DEL_RE_JS.test(cNfkcCd) &&
           !_COL_PROP_OBJ_RE_JS.test(cNfkcCd) &&
           (_colNames(c, table).length > 0 || _colLetters(c).length > 0 || !!(mColDel && _resolveColRefJs(mColDel[1], table)));
@@ -3483,9 +3492,16 @@ var ComboPlanner = (function () {
           !/消|削除|なく|いらない/.test(c);
         var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄)/.test(c) ||
           _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
+          !!_colContainsOfJs(nfkc(c), table) ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の[^\s、。のをにはが]{1,12}/.test(c)) &&
           /(?:だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ)/.test(c) &&
           !/(?:消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す)/i.test(c);
+        var hasFilterExtractCue = (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄)/.test(c) ||
+          _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
+          !!_colContainsOfJs(nfkc(c), table) ||
+          /[^\s、。]+?(?:が|は)[^\s、。の]+?の(?:行|データ|明細|レコード|案件|商品)/.test(c)) &&
+          /抽出/.test(c) &&
+          !/(?:上位|下位|トップ|ワースト|ベスト|URL|リンク|消|削除)/i.test(c);
         var hasFreezeCue = /固定|フリーズ/.test(c) &&
           !/解除|外|やめ|なく|値|式|数式|絶対参照|固定色|書式|太字|色|背景|罫線|揃え|寄せ/.test(c);
         var hasBlankDelCue = /空行|空いてる行|空いている行|空白行|空白の行|空き行/.test(c) &&
@@ -3542,6 +3558,8 @@ var ComboPlanner = (function () {
           ensureBoost("chart.new");
         } else if (hasFilterWhereCue) {
           ensureBoost("filter.where");
+        } else if (hasFilterExtractCue) {
+          ensureBoost("filter.extract");
         } else if (hasCalcDiffCue) {
           ensureBoost("calc.diff");
         } else if (hasCalcCue) {
@@ -3595,7 +3613,7 @@ var ComboPlanner = (function () {
             boostName = "number.fix";
           } else if (candMap["sheet.diff"] && /シート.*(?:比較|差分|違い)|(?:比較|差分|違い).*シート|2つのシート/.test(c)) {
             boostName = "sheet.diff";
-          } else if (candMap["sheet.list"] && /教え|確認|見せて|あるか|どんなシート|何枚/.test(c) && !/目次|インデックス|作/.test(c)) {
+          } else if (candMap["sheet.list"] && /教え|確認|見せて|あるか|どんなシート|何枚/.test(c) && /シート|タブ|何枚/.test(c) && !/目次|インデックス|作/.test(c)) {
             boostName = "sheet.list";
           } else if (candMap["sheet.toc"] && /目次|インデックスシート|シート一覧/.test(c) && !/教え|確認|見せて|あるか|どんな/.test(c)) {
             boostName = "sheet.toc";
@@ -3852,6 +3870,10 @@ var ComboPlanner = (function () {
     }
     p.ops = dd;
     p.fire = (!fatalErr) && (!p.missing.length) && (p.ops.length > 0);
+    // 守り: 読むだけの問い（変更動詞なし・問いの形）で、シートを触る棚が当たったら撃たない（読む棚だけは撃てる）
+    if (p.fire && _isReadOnlyAskJs(askText) && p.ops.some(function (o) { var sh0 = _byName[o.shelf]; return sh0 && sh0.touch && sh0.touch.length; })) {
+      p.fire = false;
+    }
     var ambChoicesJs = _ambiguousTidyChoicesJs(askText, p.fire ? p.ops : [], kind);
     if (ambChoicesJs) {
       p.fire = false;
