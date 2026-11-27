@@ -23,6 +23,8 @@ import requests
 FP_FILE = Path(__file__).resolve().parent / ".ws_direct_fp.json"   # 後ろで取った指紋（git に入れない）
 _PENDING = {}            # 控えの番号 → 指紋を取っている裏の糸
 _FP_LOCK = threading.Lock()
+# 表の末尾の集計の段（合計・小計・消費税 等）の見出し。workspace_engine.gs の findTable_ と同じ
+_FOOTER_LABEL_RE = re.compile(r"^(合計|総計|小計|税込合計|税抜合計|消費税|外税|内税|税額|値引き?|割引|計|平均|最大値?|最小値?|件数|total|subtotal|tax|sum)", re.I)
 
 SHEETS = "https://sheets.googleapis.com/v4/spreadsheets/"
 TOKEN_LIFE = 45 * 60          # GAS の鍵はおよそ 1 時間。余裕を見て 45 分で取り直す
@@ -1449,16 +1451,21 @@ def _find_table_direct(row_data, merges=None):
     last_data = last + 1
     total_row = None
 
-    if last >= data_start0:
+    # 合計行・末尾集計ブロック：最終行から上に向かって連続する 合計/小計/消費税 等を明細から除外する（workspace_engine.gs findTable_ と同じ型）
+    footer_end = last
+    while footer_end >= data_start0 + 1:
         first_txt = ""
         for fcx in range(fc, lcol + 1):
-            c_obj = _cell_at(last, fcx)
+            c_obj = _cell_at(footer_end, fcx)
             if not _cell_is_blank(c_obj):
                 first_txt = _cell_text(c_obj)
                 break
-        if re.match(r"^(合計|総計|小計|計|total|sum)", first_txt.strip(), re.I):
-            total_row = last + 1
-            last_data = last
+        if not _FOOTER_LABEL_RE.match(first_txt.strip()):
+            break
+        if total_row is None:
+            total_row = footer_end + 1
+        last_data = footer_end
+        footer_end -= 1
 
     columns = []
     for idx, ci in enumerate(range(first_col, last_col + 1)):

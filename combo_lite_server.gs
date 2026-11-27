@@ -100,10 +100,14 @@ function findTable_(sh) {
     if (nonEmpty(vals[r2].slice(fc, lcol + 1)) > 0) last = r2;
   }
   var t = { sheet: sh, headerRow: h + 1, firstCol: fc + 1, lastCol: lcol + 1, firstData: h + 2, lastData: last + 1, totalRow: 0, vals: vals };
-  if (last > h) {
+  // 合計行・末尾集計ブロック：最終行から上に向かって連続する 合計/小計/消費税 等を明細から除外する（workspace_engine.gs findTable_ と同じ型）
+  var footerRe = /^(合計|総計|小計|税込合計|税抜合計|消費税|外税|内税|税額|値引き?|割引|計|平均|最大値?|最小値?|件数|total|subtotal|tax|sum)/i;
+  for (var footerEnd = last; footerEnd >= h + 2; footerEnd--) {
     var first = '';
-    for (var fcx = fc; fcx <= lcol; fcx++) { if (!isBlank_(vals[last][fcx])) { first = String(vals[last][fcx]); break; } }
-    if (/^(合計|総計|小計|計|total|sum)/i.test(first.trim())) { t.totalRow = last + 1; t.lastData = last; }
+    for (var fcx = fc; fcx <= lcol; fcx++) { if (!isBlank_(vals[footerEnd][fcx])) { first = String(vals[footerEnd][fcx]); break; } }
+    if (!footerRe.test(first.trim())) break;
+    if (!t.totalRow) t.totalRow = footerEnd + 1;
+    t.lastData = footerEnd;
   }
   var titleA1 = 'A1';
   for (var tr = 0; tr < h; tr++) {
