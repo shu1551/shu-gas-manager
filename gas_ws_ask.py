@@ -563,10 +563,10 @@ _COL_DIRECT_DEL_RE = re.compile(
 
 # 条件つき書式（行ごと）の対象名詞型（「〈列〉が〈条件〉の〈何か〉を〈書式〉に」、ただし「セル」は列単体のまま維持）
 _ROW_CF_THING_RE = re.compile(
-    r"行全体|の行(?:に|を|全部|だけ|は)?|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃|太字)|いない行|ない行"
-    r"|(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
-    r"|(?:以上|以下|未満|より大き(?:い|く)?|より小さ(?:い|く)?|より前|より後|以前|以降|を超え?|上回[るっ]|下回[るっ]|届か(?:ない)?|届いてい?ない|以外|ではない|でない|じゃない|になって(?:いない|ない|いる|る)|マイナス|負の値)(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
-    r"|(?:書かれ|記載され|入力され|入っ|含まれ|含[むみ]|とある)(?:てい?る|た)?(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
+    r"行全体|の行(?:に|を|全部|だけ|は)?|行に色|行を目立|行に印|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃|太字)|いない行|ない行"
+    r"|(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は|だけ)"
+    r"|(?:以上|以下|未満|より大き(?:い|く)?|より小さ(?:い|く)?|より前|より後|以前|以降|を超え?|上回[るっ]|下回[るっ]|届か(?:ない)?|届いてい?ない|以外|ではない|でない|じゃない|になって(?:いない|ない|いる|る)|マイナス|負の値)(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は|だけ)"
+    r"|(?:書かれ|記載され|入力され|入っ|含まれ|含[むみ]|とある)(?:てい?る|た)?(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は|だけ)"
 )
 def _mask_col_names(text, table):
     """表の列名（「メモ」「コメント」等）を伏せる。除外語の判定が列名に引っかからないように"""
@@ -1242,6 +1242,24 @@ def _resolve_unique_cols(text, table, number_only=False, exclude=()):
         if len(hits) == 1 and hits[0] not in out:
             out.append(hits[0])
     return out
+
+
+def _primary_amount_fallback(text, table, exclude=()):
+    """「売上」「金額」等の語があるが列名が「金額」のみの場合など、代表的な金額・売上数値列を1本補う。"""
+    if not table or not table.get("columns"):
+        return None
+    excl = set(exclude or ())
+    t_n = nfkc(text)
+    if re.search(r"売上|金額|実績|費用|経費|代金|価格", t_n):
+        cands = [
+            c["name"] for c in table.get("columns") or []
+            if c.get("number") and c.get("name") not in excl
+            and re.search(r"金額|売上|実績|費用|経費|代金|小計|合計", str(c.get("name") or ""))
+            and not re.search(r"単価|税込|税抜|税額", str(c.get("name") or ""))
+        ]
+        if len(cands) == 1:
+            return cands[0]
+    return None
 
 
 def _single_numeric_fallback(table, exclude=()):
@@ -2042,7 +2060,17 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     elif raw_v_cf not in (None, ""):
                         escaped_v = str(raw_v_cf).replace('"', '""')
                         expr = f'=ISNUMBER(SEARCH("{escaped_v}",${ref_l}{cf_r1}))'
-            elif not expr and re.search(r"欠席|完了|未完了|終了", text):
+            elif not expr and table and table.get("columns"):
+                m_imp_eq = re.search(r"^(?:.*?\s)?([^\s、。をにのはが]{1,16})の[^\s、。のをにはが]{1,12}(?:だけ|を|に|は)", nfkc(text).strip())
+                if m_imp_eq:
+                    imp_val = m_imp_eq.group(1).strip()
+                    if not _resolve_col_ref(imp_val, table) and not re.search(r"以上|以下|未満|より|超|空欄|空白|マイナス|負", imp_val):
+                        st_cands = [c["col"] for c in table.get("columns") or [] if c.get("col") and not c.get("number") and re.search(r"状態|ステータス|状況|承認|判定|区分|進捗", str(c.get("name") or ""))]
+                        if len(st_cands) == 1:
+                            ref_l = st_cands[0]
+                            escaped_v = imp_val.replace('"', '""')
+                            expr = f'=${ref_l}{cf_r1}="{escaped_v}"'
+            if not expr and re.search(r"欠席|完了|未完了|終了", text):
                 kw_cf = "欠席" if "欠席" in text else ("未完了" if "未完了" in text else ("完了" if "完了" in text else "終了"))
                 expr = f'=COUNTIF(${table["first_col"]}{cf_r1}:${table["last_col"]}{cf_r1},"*{kw_cf}*")>0'
             if expr:
@@ -2066,7 +2094,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             named = True
         if re.search(r"赤字|赤い文字|文字を赤", text) and op.get("bg") == "赤" and not re.search(r"背景|塗", text):
             op["color"] = op.pop("bg")   # 「〜の行を赤字に」は文字の色
-        if not op.get("bg") and not op.get("color") and re.search(r"色[を]?付|色[を]?つ|目立", text):
+        if not op.get("bg") and not op.get("color") and re.search(r"色[を]?付|色[を]?つ|目立|印[を]?付|印[を]?つ|マーク", text):
             op["bg"] = "薄黄"
     if shelf["name"] == "renumber" and "col" not in op and table:
         for col_info in table.get("columns") or []:
@@ -2202,6 +2230,44 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     fz_cols = max(fz_cols, _col_let_to_num(l_fz))
         if fz_cols > 0:
             op["cols"] = fz_cols
+    if shelf["name"] == "calc.tax":
+        t_tax = nfkc(text)
+        m_rt = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*%", t_tax)
+        if m_rt:
+            rt_f = float(m_rt.group(1))
+            op["rate"] = int(rt_f) if rt_f.is_integer() else rt_f
+        if "mode" not in op:
+            if re.search(r"税抜|本体価格|税抜き", t_tax):
+                op["mode"] = "out"
+            elif re.search(r"税額|消費税額|消費税だけ", t_tax):
+                op["mode"] = "tax"
+            else:
+                op["mode"] = "in"
+        if "col" not in op and table and table.get("columns"):
+            amt_cands = [c["name"] for c in table.get("columns") or [] if c.get("number") and re.search(r"金額|売上|価格|代金|小計|単価|費用", str(c.get("name") or ""))]
+            if len(amt_cands) == 1:
+                op["col"] = amt_cands[0]
+                named = True
+            elif len(amt_cands) >= 2:
+                pref_amt = [cn for cn in amt_cands if "金額" in cn or "売上" in cn]
+                op["col"] = pref_amt[0] if pref_amt else amt_cands[-1]
+                named = True
+            else:
+                fb_t = _single_numeric_fallback(table)
+                if fb_t:
+                    op["col"] = fb_t
+                    named = True
+    if shelf["name"] == "format.negred":
+        if "col" not in op and "range" not in op and table and table.get("columns"):
+            u_neg = _resolve_unique_cols(scan, table, number_only=True)
+            if len(u_neg) == 1:
+                op["col"] = u_neg[0]
+                named = True
+            else:
+                fb_neg = _single_numeric_fallback(table)
+                if fb_neg:
+                    op["col"] = fb_neg
+                    named = True
     if shelf["name"] == "calc.diff":
         dc = _calc_diff_cols_of(text, table)
         if dc:
@@ -2249,6 +2315,23 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op["expr"] = _normalize_calc_expr_str(op["expr"], table)
         if "name" not in op and "at" in op:
             op["name"] = op["at"]
+        # 「金額の列を全部計算式にそろえて」のように既存列（数量×単価の隣など）を計算式で上書き統一する依頼
+        if "expr" not in op and table and table.get("columns") and re.search(r"(?:計算式|数式|式)に(?:そろえ|揃え|統一|直|戻)", t_nfkc):
+            target_c = op.get("at") or (names[0] if len(names) == 1 else None)
+            if not target_c:
+                amt_cs = [c["name"] for c in table.get("columns") or [] if c.get("number") and re.search(r"金額|売上|小計|合計", str(c.get("name") or ""))]
+                if len(amt_cs) == 1:
+                    target_c = amt_cs[0]
+            if target_c:
+                res_tc = _resolve_col_ref(target_c, table) or target_c
+                col_nms = [str(c.get("name") or "") for c in table.get("columns") or []]
+                q_col = next((cn for cn in col_nms if re.search(r"数量|個数|件数|人数|時間", cn)), None)
+                p_col = next((cn for cn in col_nms if re.search(r"単価|価格|時給", cn)), None)
+                if q_col and p_col and res_tc not in (q_col, p_col):
+                    op["at"] = res_tc
+                    op["name"] = res_tc
+                    op["expr"] = f"{q_col}*{p_col}"
+                    named = True
         if "name" not in op and op.get("expr"):
             m_after = re.search(r"(?:(?:掛け|かけ|足[しす]|た[しす]|引[いけく]|ひ[いけく]|割[っりる]|わ[っりる]|乗算|加算|減算|除算)(?:て|た|算)?|[×*＊÷/／＋+−\-][^\s、,。をの]{1,20}?で)\s*(.+)$", t_nfkc)
             if m_after:
@@ -2312,7 +2395,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 if resolved_nums:
                     filtered_vals = resolved_nums
                 else:
-                    fb_num = _single_numeric_fallback(table, exclude=group_cols)
+                    fb_num = _single_numeric_fallback(table, exclude=group_cols) or _primary_amount_fallback(text, table, exclude=group_cols)
                     if fb_num:
                         filtered_vals = [fb_num]
             if filtered_vals:
@@ -2365,7 +2448,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         num_cols.extend(grp_sub_cols)
                         used_group_series = True
                 else:
-                    fb_c = _single_numeric_fallback(table, exclude=chart_cols)
+                    fb_c = _single_numeric_fallback(table, exclude=chart_cols) or _primary_amount_fallback(text, table, exclude=chart_cols)
                     if fb_c:
                         num_cols.append(fb_c)
             elif has_num_meta and len(num_cols) == 1 and re.search(r"並べて|並べた|比較|と[^\s、。]{1,12}を", nfkc(text)):
@@ -2754,7 +2837,8 @@ _READ_ONLY_QUERY_RE = re.compile(
     r"ありますか|あるか|いるか|ですか|ますか|でしょうか|どうなって|教えて|知りたい|確認したい|"
     r"構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ|"
     r"(?:重複して|入って|合って|ずれて|漏れて|抜けて)?(?:いないか|いるか|あるか)|"
-    r"(?:見て|確かめて|チェックして|点検して|診断して)(?!.*ボックス)"
+    r"(?:見て|確かめて|チェックして|点検して|診断して)(?!.*ボックス)|"
+    r"洗い出し|洗い出す|ピックアップ|挙げて|リストアップ"
 )
 
 
@@ -2775,9 +2859,17 @@ def _chart_summary_ops(op, clause, table):
     by_col = None
     m_by = re.search(r"([^\s・、をにのはが]{1,16}?)(?:ごと(?:に|の)|別(?:に|で|の))", c_n)
     if m_by:
-        by_col = _resolve_col_ref(m_by.group(1).strip(), table)
+        raw_by = m_by.group(1).strip()
+        by_col = _resolve_col_ref(raw_by, table)
+        if not by_col and len(raw_by) >= 3 and raw_by.endswith("者"):
+            by_col = _resolve_col_ref(raw_by[:-1], table)
     if not by_col:
         return None
+    if by_col and table and table.get("columns"):
+        for c_i in table.get("columns") or []:
+            if c_i.get("col") == by_col and c_i.get("name"):
+                by_col = c_i["name"]
+                break
     # 値列（values）を解決
     func = "count" if re.search(r"件数|人数|回数|の数(?![量値字列])|回答数|カウント", c_n) else ("avg" if "平均" in c_n else None)
     val_cols = []
@@ -2792,7 +2884,7 @@ def _chart_summary_ops(op, clause, table):
                 if uc not in val_cols:
                     val_cols.append(uc)
         if not val_cols:
-            fb = _single_numeric_fallback(table, exclude=(by_col,))
+            fb = _single_numeric_fallback(table, exclude=(by_col,)) or _primary_amount_fallback(clause, table, exclude=(by_col,))
             if fb:
                 val_cols.append(fb)
     if not val_cols:
@@ -2800,7 +2892,7 @@ def _chart_summary_ops(op, clause, table):
     if not func and len(val_cols) >= 2 and not re.search(r"集計|合計|平均", c_n):
         return None
     # 「予算と実績を並べて」等、2項目を並べる文脈で既に表に数値列が2列以上揃っている場合も集計せず直接グラフへ
-    if not func and not re.search(r"集計|合計|平均", c_n) and re.search(r"並べて|並べた|と[^、。]{1,12}を", c_n):
+    if not func and not re.search(r"集計|合計|平均", c_n) and re.search(r"並べて|並べた|([^\s、。をにのがは]{1,12})と([^\s、。をにのがは]{1,12})を", c_n):
         num_cnt = sum(1 for c in (table.get("columns") or []) if c.get("number") and c.get("name") != by_col)
         if num_cnt >= 2:
             return None
@@ -2879,6 +2971,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
     raw_cl = clauses(ask) or [nfkc(ask)]
     cl = []
     for _c in raw_cl:
+        # 「〜が合っているか見て、違っていたら直して」の前半確認節は次の節と1つにまとめる
+        if cl and re.search(r"(?:合って|正しい|問題ない|おかしく|ずれて).*?(?:見て|確かめて|確認して|チェックして)$", cl[-1]) and re.search(r"^(?:違っ|ずれて|おかしかっ|間違っ|合ってい?なかっ)", _c):
+            cl[-1] = cl[-1] + " " + _c
+            continue
         # 1節に「合計と平均（／最大／最小）」の両方を表の下へ足す頼みがあるときは total + stat.row へ展開
         _m_ts = re.search(r"合計(?:行)?と(平均|最大値?|最小値?)(?:の?行)?", _c)
         if _m_ts and re.search(r"一番下|表の下|下に|行を?(?:足|追加|入れ)|足して|追加して|入れて", _c) and not re.search(r"ごと|別に|別シート|小計", _c):
@@ -2968,9 +3064,20 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             has_total_row_cue = bool(
                 (
                     ("合計" in c and re.search(r"一番下|最後の行|末尾の行|表の下|下に|合計行|合計欄", c))
-                    or re.search(r"合計を.{0,12}(?:足|追加|入れ|付け)", c)
+                    or re.search(r"合計を.{0,12}(?:足|追加|入れ|付け|出し直|直)", c)
+                    or re.search(r"合計が.{0,16}(?:直して|出し直)", c)
                 )
                 and not re.search(r"ごと|別に|別シート|小計|平均|最大|最小|ピボット|クロス", c)
+            )
+            has_negred_cue = bool(
+                re.search(r"マイナス|負の(?:値|数)", c)
+                and re.search(r"赤字|赤く|赤色", c)
+                and not re.search(r"の行|行を|行全体", c)
+            )
+            has_calc_tax_cue = bool(
+                re.search(r"消費税|税込|税抜|税額|税率\s*[0-9]+", nfkc(c))
+                and re.search(r"列|欄|足[しす]|追加|作[っる]|計算|出し", nfkc(c))
+                and not re.search(r"消(?!費)|削除|別シート|ごと|別に|グラフ|ソート|並べ", nfkc(c))
             )
             has_stat_row_cue = bool(
                 re.search(r"平均|最大|最小", c)
@@ -2986,7 +3093,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             _m_eq_cf = _COND_EQ_THING_RE.search(_c_nfkc_cf)
             _has_eq_col_cf = bool(_m_eq_cf and (not table or not table.get("columns") or _resolve_col_ref(_m_eq_cf.group(1), table)))
             has_row_cf_cond = bool(
-                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|になっている|になってる|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
+                re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|になっている|になってる|ではない|でない|じゃない|以外|空欄|空白|欠席|完了|未出荷|出荷済|承認待|否認|差戻|キャンセル|未完了|未対応|未処理|保留", c)
                 or _DATE_CMP_CUE_RE.search(_c_nfkc_cf)
                 or _has_eq_col_cf
                 or _two_col_cmp_of(_c_nfkc_cf, table)
@@ -2998,7 +3105,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and has_row_cf_cond
                 and not re.search(r"消|削除|取り除|取っ|取る|除去|トリム|詰め|重複|ダブ|固定色|三角|千円|百万|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
                 and not ("赤字" in c and not re.search(r"の行|行を|行全体", c))
-                and (_color_hits(c) or re.search(r"太字|太く|色[を]?付|色[を]?つ|目立|ハイライト|赤字", c))
+                and (_color_hits(c) or re.search(r"太字|太く|色[を]?付|色[を]?つ|目立|ハイライト|赤字|印[を]?付|印[を]?つ|マーク", c))
             )
             has_row_del_cond = bool(
                 re.search(r"の行|行を|行に|行は|行だけ|た行|る行|いない行|ない行|データ|明細|レコード|案件|商品", c)
@@ -3031,9 +3138,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and not re.search(r"シート|タブ|比較", c)
             )
             has_calc_cue = bool(
-                re.search(
-                    r"(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|/)[^\s、,。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)|[0-9]+(?:\.[0-9]+)?\s*倍|[0-9]+(?:\.[0-9]+)?\s*割(?:増|引)|(?:を|の)\s*半分",
-                    nfkc(c),
+                (
+                    re.search(
+                        r"(?:と|に|×|\*)[^\s、。をにが]{1,16}?(?:を)?(?:掛け|かけ|乗算)|(?:と|に|＋|\+)[^\s、。をにが]{1,16}?(?:を)?(?:足[しす]|た[しす]|加算)|(?:から|−|-)[^\s、。をにが]{1,16}?(?:を)?(?:引[いけく]|ひ[いけく]|差し引|減算)|(?:を|÷|/)[^\s、,。をにが]{1,16}?(?:で)?(?:割[っりる]|わ[っりる]|除算)|[^\s、。0-9:/\-][^\s、。]{0,14}[×*＊÷＋][^\s、。]{1,14}(?:で|を|の)|[0-9]+(?:\.[0-9]+)?\s*倍|[0-9]+(?:\.[0-9]+)?\s*割(?:増|引)|(?:を|の)\s*半分",
+                        nfkc(c),
+                    )
+                    or re.search(r"(?:計算式|数式|式)に(?:そろえ|揃え|統一|直|戻)", nfkc(c))
                 )
                 and not re.search(r"構成比|割合|消費税|累計|順位|平均|合計行|別シート|ごと|別に|小計|前月比|前年比|経過|罫線|空の?(?:列|行)|の間に|の下に|の上に", c)
             )
@@ -3169,6 +3279,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("date.parts")
             elif has_row_cf_cue:
                 _ensure_boost("cf.add")
+            elif has_negred_cue:
+                _ensure_boost("format.negred")
+            elif has_calc_tax_cue:
+                _ensure_boost("calc.tax")
             elif has_chart_cue:
                 _ensure_boost("chart.new")
             elif has_filter_where_cue:
@@ -3337,6 +3451,24 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 p.ops.extend(agg_ops)
                 last_incomplete = None
                 continue
+        # 「キャンセルを除いた売上を顧客ごとに別シートでまとめて」のような除外条件つき summary を filter.extract → summary の2手に展開
+        if top["name"] == "summary" and not missing and table and table.get("columns"):
+            m_ex_sum = re.search(r"([^\s、。をにのがは]{1,16}?)(?:分|行)?を?(?:除い[たて]|除外し[たて]|抜い[たて]|外し[たて])", nfkc(c))
+            if m_ex_sum:
+                ex_val = m_ex_sum.group(1).strip()
+                st_cols = [col_i["name"] for col_i in table.get("columns") or [] if col_i.get("name") and not col_i.get("number") and re.search(r"状態|ステータス|状況|承認|判定|区分", str(col_i["name"]))]
+                if len(st_cols) == 1:
+                    ext_sheet = f"{ex_val}除き"
+                    ext_op = {"shelf": "filter.extract", "col": st_cols[0], "when": "ne", "value": ex_val, "into": ext_sheet}
+                    if op.get("sheet"):
+                        ext_op["sheet"] = op["sheet"]
+                    sum_op2 = dict(op)
+                    sum_op2["sheet"] = ext_sheet
+                    if sum_op2.get("into") in (None, "", "集計") and op.get("by"):
+                        sum_op2["into"] = f"{op['by']}別売上" if "売上" in c else f"集計_{op['by']}別"
+                    p.ops.extend([ext_op, sum_op2])
+                    last_incomplete = None
+                    continue
         p.ops.append(op)
         if top["name"] == "cols.insert" and not missing and op.get("at") and table and table.get("header_row"):
             m_new_col = re.search(r"(?:^|[\s、。])(?:[『「]([^』」\n]{1,20})[』」]|([^\s、。の]{1,20})という)(?:の?列|カラム)", nfkc(c))

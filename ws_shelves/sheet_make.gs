@@ -75,7 +75,13 @@ SHELF['table.new'] = function (ctx, op) {
 SHELF['total'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
   var cols = op.cols ? op.cols.map(function (c) { return colIndexOf_(t, c); }) : [];
-  if (!cols.length) for (var ci = t.firstCol; ci <= t.lastCol; ci++) if (!isNoCol_(t, ci) && isNumberCol_(t, ci)) cols.push(ci);
+  var hNamesT = (typeof headerNames_ === 'function') ? headerNames_(t) : [];
+  var noSumHeadRe = /(?:単価|価格|率|％|%|平均|割合|年齢|日付|年月)/;
+  if (!cols.length) for (var ci = t.firstCol; ci <= t.lastCol; ci++) {
+    if (isNoCol_(t, ci) || !isNumberCol_(t, ci)) continue;
+    if (noSumHeadRe.test(String(hNamesT[ci - t.firstCol] || ''))) continue;   // 足しても意味のない列（単価・率など）は合計しない
+    cols.push(ci);
+  }
   if (!cols.length) throw new ArgError('合計する列が見つかりません。cols で指定してください');
   var tr, existed = !!t.totalRow;
   tr = existed ? t.totalRow : t.lastData + 1;
@@ -97,6 +103,8 @@ SHELF['total'] = function (ctx, op) {
     if (existed && !op.cols && curF && !/^=SUM\(\s*\$?[A-Z]{1,3}\$?\d+:\$?[A-Z]{1,3}\$?\d+\s*\)$/i.test(curF)) {
       return;
     }
+    // すでにある合計行で列の明示指定がないときは、合計の入っていた列だけ直す（空いている欄＝単価・数量などに SUM を足さない）
+    if (existed && !op.cols && !curF && (vr[0][k] === '' || vr[0][k] === null)) return;
     if (fr[0][k] !== f) { fr[0][k] = f; fixed.push(colLetter_(c)); }
     nf[0][k] = STYLE.numFmt; al[0][k] = 'right';
   });

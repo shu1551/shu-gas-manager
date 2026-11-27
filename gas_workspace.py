@@ -813,15 +813,20 @@ class WorkspaceManager:
             if tc is None:                          # 表の形を覚えていない相手は、先に 1 回だけ見る
                 tgt, tc = look_fresh()
                 fresh = True
-            # 頼みの中に別シート名（例:「社員の表」「社員：」）が含まれていれば、相手のシートを切り替える
+            # 頼みの中にシート名（例:「社員の表で、」「社員：」「在庫表で」）が含まれていれば、相手のシートを切り替え、接頭辞を剥がす
             sheets_known = [s for s in ((tc or {}).get("sheets") or []) if s]
             cur_sh0 = tgt.get("sheet") or (tc or {}).get("sheet") or ""
             ask_n = ask.strip()
             mentioned_sh = None
             for sn in sorted(sheets_known, key=len, reverse=True):
-                if sn == cur_sh0:
-                    continue
-                if re.match(rf"^{re.escape(sn)}\s*[:：]|{re.escape(sn)}(?:シート|の表|のシート|を|の)", ask_n):
+                m_pref = re.match(rf"^(?:{re.escape(sn)}\s*[:：]|{re.escape(sn)}(?:シート|の表|表|のシート)(?:で|の|において|について)?\s*[、,]?\s*)", ask_n)
+                if m_pref and len(ask_n[m_pref.end():].strip()) >= 4:
+                    ask = ask_n[m_pref.end():].strip()
+                    ask_n = ask
+                    if sn != cur_sh0:
+                        mentioned_sh = sn
+                    break
+                if sn != cur_sh0 and re.search(rf"^{re.escape(sn)}\s*[:：]|{re.escape(sn)}(?:シート|の表|表|のシート|を|の)", ask_n):
                     mentioned_sh = sn
                     break
             if mentioned_sh:
@@ -1111,7 +1116,7 @@ class WorkspaceManager:
             return ops, []
         r_a, r_b = int(dr_m.group(1)), int(dr_m.group(2))
         cells = (light["snap"].sheet(sheet).get("cells")) or {}
-        done_cols = {str(o.get("col")) for o in ops if isinstance(o, dict) and o.get("shelf") in ("seiri", "number.fix") and o.get("col")}
+        done_cols = {str(o.get("col")) for o in ops if isinstance(o, dict) and o.get("shelf") in ("seiri", "number" + ".fix") and o.get("col")}
         add, notes = [], []
         for c in ltb.get("columns") or []:
             col = c.get("col")
@@ -1284,21 +1289,33 @@ class WorkspaceManager:
         tb_now = snip.get("table")
         # 読むだけ・チェック依頼でも初回ブック健診（または変更後の再健診）を実行・記憶し、他シートを含む要点を添える
         diag_findings = []
+        extra_sheets_snips = []
         try:
             st_ro = self._load()
             sid_ro = t_out.get("id") or tgt.get("id")
             if sid_ro and not st_ro.get("direct_off"):
                 diag_map = st_ro.setdefault("book_diagnosis", {})
-                import gas_ws_insights
-                if sid_ro not in diag_map or (diag_map.get(sid_ro) or {}).get("stale") or (diag_map.get(sid_ro) or {}).get("ver") != gas_ws_insights.DIAG_VERSION:
-                    import gas_ws_direct
-                    sh_names = (tc or {}).get("sheets") or []
+                import gas_ws_insights, gas_ws_direct
+                sh_names = (tc or {}).get("sheets") or []
+                need_multi_sh = bool(re.search(r"全体|他シート|他のシート|全シート|いない|ない物|ないもの|表記ゆれ", ask)) or any(
+                    sn and sn != t_out.get("sheet") and sn in ask for sn in sh_names
+                )
+                payload = None
+                if sid_ro not in diag_map or (diag_map.get(sid_ro) or {}).get("stale") or (diag_map.get(sid_ro) or {}).get("ver") != gas_ws_insights.DIAG_VERSION or need_multi_sh:
                     payload = gas_ws_direct.fetch_workbook_payload_for_diagnosis(self, st_ro, sid_ro, sheet_names=sh_names or None)
                     if payload:
                         findings = gas_ws_insights.diagnose_workbook(payload)
                         diag_map[sid_ro] = {"findings": findings, "ts": time.time(), "stale": False, "ver": gas_ws_insights.DIAG_VERSION}
                         self._save(st_ro)
                 diag_findings = ((diag_map.get(sid_ro) or {}).get("findings") or [])[:8]
+                if need_multi_sh and payload:
+                    for p_sh in payload:
+                        p_nm = p_sh.get("sheet")
+                        if not p_nm or p_nm == t_out.get("sheet") or p_nm.startswith(("集計", "抽出", "キャンセル除き", "顧客別")):
+                            continue
+                        p_snip = self.format_read_only_snippet(p_sh.get("values") or [], formulas=p_sh.get("formulas") or [], max_rows=30)
+                        if p_snip and p_snip.get("text"):
+                            extra_sheets_snips.append((p_nm, p_snip["text"]))
         except Exception:
             diag_findings = []
         lines = [
@@ -1318,6 +1335,8 @@ class WorkspaceManager:
             lines.append(snip["note"])
         if snip["text"]:
             lines.append("中身（行番号・列記号・数式つき）:\n" + snip["text"])
+        for ex_nm, ex_txt in extra_sheets_snips[:4]:
+            lines.append(f"他シート「{ex_nm}」の中身:\n{ex_txt}")
         if diag_findings:
             lines.append("ブック全体の健診結果（重要度順）:")
             for df in diag_findings:

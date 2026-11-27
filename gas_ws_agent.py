@@ -169,24 +169,36 @@ class Agent:
         gates = {"落とし物": 0, "仕上げ検査": 0, "採点": 0}
 
         tt = time.time()
-        material = self.mgr.look(target=target, sheet=sheet, range="A1:Z60")
+        # 1手目は先撃ち（ws_do(ask)）から入る。読むだけ・撃っていませんのときは prefire 内に表の中身と健診が入るため、
+        # 最初の重複 look は省き、先撃ちがシートを書き換えた（控えができた）あとだけ最新のシートを look して材料にする。
+        if sheet and target:
+            st0 = self.mgr._load()
+            t0_cur = st0.get("target") or {}
+            if t0_cur.get("id") == target and t0_cur.get("sheet") != sheet:
+                t0_cur["sheet"] = sheet
+                self.mgr._save(st0)
+        try:
+            prefire = self.mgr.do(ask=request, target=target, ok=approved)
+        except Exception as e:
+            prefire = f"（先撃ちは撃てませんでした: {e}）"
         st = self.mgr._load()
         tgt = st.get("target") or {}
         sheet = sheet or tgt.get("sheet") or ""
         target = tgt.get("id") or target
-        try:
-            prefire = self.mgr.do(ask=request, target=target, sheet=sheet)
-        except Exception as e:
-            prefire = f"（先撃ちは撃てませんでした: {e}）"
         m = re.search(r"控え #(\w+)", prefire)
         if m:
             log["backups"].append(m.group(1))
         for ln in prefire.splitlines():
             if ln.startswith("直した所: "):
                 log["changed"].append(ln[len("直した所: "):])
+        if ("中身（行番号・列記号・数式つき）:" in prefire or "表の中身（行番号・列記号・数式つき）:" in prefire) and not m:
+            material = "（先撃ちの返事に表の中身と健診が含まれています）"
+        else:
+            material = self.mgr.look(target=target, sheet=sheet, range="A1:Z60")
         try:
             import gas_ws_find
-            cards = gas_ws_find.build_ai_shelf_prompt(self.mgr.finder, request, kind="sheet", detail_limit=1600, top_args=25)
+            cards = "" if "次の手: なし＝これで仕上がり" in prefire else gas_ws_find.build_ai_shelf_prompt(
+                self.mgr.finder, request, kind="sheet", detail_limit=1600, top_args=25)
         except Exception:
             cards = ""
         tool_sec += time.time() - tt
@@ -249,7 +261,12 @@ class Agent:
                         gates["仕上げ検査"] += 1
                         prompt = "\n\n".join(last_outs) + "\n\n関所(1) 仕上げ検査: 撃った手の返事に ⚠（検算の食い違い・新しいエラー）が残っています。直すか undo して組み直してから done にしてください。"
                         continue
-                    if self.grade and (self.budget_sec is None or self.budget_sec - (time.time() - t0) > 25) and log["do"] + (1 if log["backups"] else 0) > 0 and gates["採点"] < 1:
+                    # 先撃ち（prefire）1発で「次の手: なし＝これで仕上がり」となり、AIが追加の do を撃たず ⚠ も無いときは
+                    # 道具側の検算をすでに通過しているため、別会話AIによる二重採点（_grade）を省く。
+                    prefire_finished = ("次の手: なし＝これで仕上がり" in prefire and log["do"] == 0 and "⚠" not in prefire)
+                    if (self.grade and not prefire_finished
+                            and (self.budget_sec is None or self.budget_sec - (time.time() - t0) > 25)
+                            and log["do"] + (1 if log["backups"] else 0) > 0 and gates["採点"] < 1):
                         tg = time.time()
                         unmet = self._grade(request, target, sheet, parsed.get("report") or "")
                         ai_sec += time.time() - tg
