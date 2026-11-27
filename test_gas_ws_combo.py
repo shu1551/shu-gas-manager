@@ -3645,3 +3645,124 @@ process.stdout.write(JSON.stringify({ afterSame, afterSwitch }));
     res = _run_node_json(node_code, {"scripts": scripts})
     assert res["afterSame"] == {"ui": "月別", "cur": "月別", "picked": "月別", "lastSrv": "名簿"}
     assert res["afterSwitch"] == {"ui": "売上", "cur": "売上", "picked": "", "lastSrv": "売上"}
+
+
+def test_sidebar_ext_sheet_sync_on_init_refresh_and_run():
+    """拡張から違うシート名が来たら従い、同じ値なら窓の選択を守ること（サーバーopenByIdより拡張優先）。"""
+    files = combo_mod.build_combo_files(combo_lite=True)
+    sidebar_html = next(f["source"] for f in files if f["name"] == "ComboSidebar")
+    scripts = re.findall(r"<script>([\s\S]*?)</script>", sidebar_html)
+    node_code = r"""
+const fs = require('fs');
+const vm = require('vm');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+
+function makeEl(id) {
+  return {
+    id, value: '', checked: false, disabled: false, textContent: '', innerHTML: '',
+    style: {}, dataset: {}, children: [], listeners: {},
+    classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
+    addEventListener(ev, fn){ (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
+    dispatch(ev, payload){ (this.listeners[ev] || []).forEach(fn => fn.call(this, payload || { target: this })); },
+    appendChild(c){
+      this.children.push(c);
+      if (this.tagName === 'SELECT' || this.id === 'sheetSelect' || this.id === 'settingsSheetSelect') {
+        if (c.selected || this.children.length === 1) this.value = c.value;
+      }
+      return c;
+    },
+    querySelectorAll(){ return []; },
+    querySelector(){ return null; },
+    focus(){}
+  };
+}
+const elsMap = {};
+const calls = [];
+let extActiveSheet = '月別';
+const winListeners = {};
+const sandbox = {
+  console, Math, Date, JSON, Object, Array, String, Number, Boolean, RegExp, Error, parseInt, parseFloat, isNaN, isFinite,
+  encodeURIComponent, decodeURIComponent,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  performance: { now: () => 100 },
+  document: {
+    getElementById(id) { if (!elsMap[id]) elsMap[id] = makeEl(id); return elsMap[id]; },
+    createElement(tag) { const el = makeEl(tag); el.tagName = tag.toUpperCase(); return el; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    addEventListener() {}
+  },
+  localStorage: { getItem(){ return null; }, setItem(){} },
+  google: {
+    script: {
+      run: (function mkRunner(okCb, errCb) {
+        return {
+          withSuccessHandler(fn) { return mkRunner(fn, errCb); },
+          withFailureHandler(fn) { return mkRunner(okCb, fn); },
+          comboInit(req) {
+            calls.push({ fn: 'comboInit', req });
+            // openById では常に先頭シート '売上' が返る状況を模擬
+            if (okCb) okCb({ ok: true, target: { id: 'SS_1', kind: 'sheet', name: '売上表', sheet: '売上' }, sheets: ['売上', '名簿', '月別', '集計'], sheet: '売上', table: null });
+          },
+          comboLook(req) {
+            calls.push({ fn: 'comboLook', req });
+            if (okCb) okCb({ ok: true, sheets: ['売上', '名簿', '月別', '集計'], sheet: req.sheet, table: null });
+          },
+          comboRunAsk(req) {
+            calls.push({ fn: 'comboRunAsk', req });
+            if (okCb) okCb({ ok: true, sheets: ['売上', '名簿', '月別', '集計'], sheet: req.sheet, text: 'ok' });
+          },
+          comboQuickList() {},
+          comboGetLearned(req) { if (okCb) okCb({ learned: {} }); },
+          comboGetConfig() {}
+        };
+      })(null, null)
+    }
+  }
+};
+sandbox.window = {
+  location: { search: '' },
+  addEventListener(ev, fn) { (winListeners[ev] = winListeners[ev] || []).push(fn); },
+  removeEventListener(ev, fn) { winListeners[ev] = (winListeners[ev] || []).filter(f => f !== fn); },
+  top: {
+    postMessage(msg) {
+      if (msg && msg.type === 'GAS_COMBO_GET_SEL') {
+        (winListeners.message || []).slice().forEach(fn => fn({ data: { type: 'GAS_COMBO_GET_SEL_DONE', ok: true, range: 'A1', sheet: extActiveSheet } }));
+      }
+    }
+  }
+};
+sandbox.globalThis = sandbox;
+for (const sc of input.scripts) vm.runInNewContext(sc, sandbox);
+
+const dt = sandbox.__comboDirectTest;
+const afterInit = { ui: dt.els.sheetSelect.value, cur: dt.state.curSheet, lastSrv: dt.state.lastServerSheet };
+
+// 人が窓で「集計」を選ぶ
+dt.els.sheetSelect.value = '集計';
+dt.els.sheetSelect.dispatch('change');
+
+// 拡張側は「月別」のまま変わらない状態で撃つ → 窓の選び「集計」を守る
+dt.els.askInput.value = '見出しを太字にして';
+dt.onRunAsk();
+const runKept = calls.filter(c => c.fn === 'comboRunAsk').slice(-1)[0];
+
+// スプレッドシート側で「売上」タブへ切り替わる → 撃つ直前に追従して「売上」に撃つ
+extActiveSheet = '売上';
+dt.els.askInput.value = '1行目を固定して';
+dt.onRunAsk();
+const runSwitched = calls.filter(c => c.fn === 'comboRunAsk').slice(-1)[0];
+
+process.stdout.write(JSON.stringify({
+  afterInit,
+  keptSheet: runKept.req.sheet,
+  switchedSheet: runSwitched.req.sheet,
+  uiEnd: dt.els.sheetSelect.value
+}));
+"""
+    res = _run_node_json(node_code, {"scripts": scripts})
+    assert res["afterInit"] == {"ui": "月別", "cur": "月別", "lastSrv": "月別"}
+    assert res["keptSheet"] == "集計"
+    assert res["switchedSheet"] == "売上"
+    assert res["uiEnd"] == "売上"

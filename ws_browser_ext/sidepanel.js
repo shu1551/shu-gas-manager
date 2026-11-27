@@ -176,13 +176,15 @@ window.addEventListener("message", async (ev) => {
       func: () => {
         const box = document.querySelector("#t-name-box") || document.querySelector("input.waffle-name-box");
         const range = box ? String(box.value || "").trim() : "";
-        const tabEl = document.querySelector(".docs-sheet-active-tab .docs-sheet-tab-name");
+        const tabEl = document.querySelector(".docs-sheet-active-tab .docs-sheet-tab-name")
+          || document.querySelector(".docs-sheet-tab[aria-selected='true'] .docs-sheet-tab-name")
+          || document.querySelector(".docs-sheet-active-tab");
         const sheet = tabEl ? String(tabEl.textContent || "").trim() : "";
         return { range, sheet };
       },
     }).then((r) => {
       const res = (r && r[0] && r[0].result) || {};
-      replySel(!!res.range, res.range || "", res.sheet || "");
+      replySel(!!(res.range || res.sheet), res.range || "", res.sheet || "");
     }).catch(() => replySel(false, "", ""));
     return;
   }

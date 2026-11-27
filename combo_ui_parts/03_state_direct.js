@@ -44,6 +44,7 @@
     curSheet: "",
     _userSelectedSheet: "",
     lastServerSheet: "",
+    hasExtSheet: false,
     table: null,
     selection: "",
     heading: "",
@@ -440,6 +441,30 @@
     return sh;
   }
 
+  function applyExtSheet(extSheet) {
+    var s = String(extSheet || "").trim();
+    if (!s || (state.target && state.target.kind === "doc")) return false;
+    state.hasExtSheet = true;
+    var prev = state.lastServerSheet || "";
+    var uiSel = (els.sheetSelect && typeof els.sheetSelect.value === "string") ? els.sheetSelect.value : "";
+    var picked = state._userSelectedSheet || ((uiSel && uiSel !== state.curSheet) ? uiSel : "");
+    var switched = !!(prev && s !== prev);
+    state.lastServerSheet = s;
+    if (switched) {
+      state._userSelectedSheet = "";
+      state.curSheet = s;
+      syncSheetSelects();
+      updatePreview();
+      return true;
+    }
+    if (!picked) {
+      state.curSheet = s;
+      syncSheetSelects();
+      updatePreview();
+    }
+    return false;
+  }
+
   function updateSelectionLabel() {
     if (!els.chkSync.checked) {
       els.selLabel.textContent = "選択中: OFF（上部「連動」チェックで有効化）";
@@ -538,18 +563,20 @@
     if (prevTargetId && nextTargetId && nextTargetId !== prevTargetId) {
       state._userSelectedSheet = "";
       state.lastServerSheet = "";
+      state.hasExtSheet = false;
     }
     var uiSel = (els.sheetSelect && typeof els.sheetSelect.value === "string") ? els.sheetSelect.value : "";
     var picked = state._userSelectedSheet || ((uiSel && uiSel !== state.curSheet) ? uiSel : "");
     var serverSheet = (typeof res.sheet === "string" && res.sheet) ? res.sheet : ((res.target && typeof res.target === "object" && res.target.sheet) ? res.target.sheet : "");
     var prevServerSheet = state.lastServerSheet || "";
     var isExplicitReq = !!(requestedSheet && serverSheet && requestedSheet === serverSheet);
-    var serverSwitched = !!(!isExplicitReq && prevServerSheet && serverSheet && serverSheet !== prevServerSheet);
+    var trustServerSheet = !state.hasExtSheet;
+    var serverSwitched = !!(trustServerSheet && !isExplicitReq && prevServerSheet && serverSheet && serverSheet !== prevServerSheet);
     if (serverSwitched) {
       state._userSelectedSheet = "";
       picked = "";
     }
-    if (!isExplicitReq && serverSheet) {
+    if (trustServerSheet && !isExplicitReq && serverSheet) {
       state.lastServerSheet = serverSheet;
     }
     if (res.target && typeof res.target === "object") {
@@ -560,7 +587,7 @@
         url: res.target.url || state.target.url || "",
         sheet: res.target.sheet || ""
       };
-      if (res.target.sheet && !picked) state.curSheet = res.target.sheet;
+      if (res.target.sheet && !picked && (trustServerSheet || !state.curSheet)) state.curSheet = res.target.sheet;
     }
     if (Array.isArray(res.sheets)) {
       state.sheets = res.sheets;
@@ -572,7 +599,7 @@
         state._userSelectedSheet = "";
         picked = "";
       }
-      if (typeof res.sheet === "string" && res.sheet) {
+      if (typeof res.sheet === "string" && res.sheet && (trustServerSheet || !state.curSheet)) {
         state.curSheet = res.sheet;
       }
       if (!state.curSheet && state.sheets.length) {

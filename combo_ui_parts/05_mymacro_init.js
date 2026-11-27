@@ -2651,31 +2651,41 @@
       var usp = new URLSearchParams(window.location.search || "");
       initKind = usp.get("kind") || "";
     } catch (_eUsp) {}
-    runServerAction({
-      fnName: "comboInit",
-      payload: {
-        targetId: "",
-        kind: initKind,
-        sheet: "",
-        assumeActive: true,
-        includeQuick: true,
-        wantCodes: true,
-        clientStamp: quickClientStamp()
-      },
-      label: "初期化 / 再読込",
-      statusText: "読込中…",
-      switchToChat: false,
-      silentSuccess: true,
-      onSuccess: function(res) {
-        if (res.postboxDone) handlePostboxDone(res.postboxDone);
-        if (res && res.quick) applyQuickListRes(res.quick);
-        else loadQuickList();
-        loadLearned();
-        if (!res.config) {
-          callGas("comboGetConfig", undefined, function(cfg) { applyConfig(cfg); });
+    var startInit = function(extSheet) {
+      if (extSheet) applyExtSheet(extSheet);
+      runServerAction({
+        fnName: "comboInit",
+        payload: {
+          targetId: "",
+          kind: initKind,
+          sheet: getSelectedSheet() || extSheet || "",
+          assumeActive: true,
+          includeQuick: true,
+          wantCodes: true,
+          clientStamp: quickClientStamp()
+        },
+        label: "初期化 / 再読込",
+        statusText: "読込中…",
+        switchToChat: false,
+        silentSuccess: true,
+        onSuccess: function(res) {
+          if (res.postboxDone) handlePostboxDone(res.postboxDone);
+          if (res && res.quick) applyQuickListRes(res.quick);
+          else loadQuickList();
+          loadLearned();
+          if (!res.config) {
+            callGas("comboGetConfig", undefined, function(cfg) { applyConfig(cfg); });
+          }
         }
-      }
-    });
+      });
+    };
+    if (initKind !== "doc" && typeof requestLiveSelection === "function") {
+      requestLiveSelection(function(live) {
+        startInit(live && live.sheet ? live.sheet : "");
+      });
+    } else {
+      startInit("");
+    }
   } else {
     els.targetNameLabel.textContent = "プレビュー";
     els.infoLabel.textContent = "対象: GAS サイドバー環境で自動接続されます";
@@ -2699,6 +2709,7 @@
       exportMyMacrosData: exportMyMacrosData,
       parseImportMyMacros: parseImportMyMacros,
       applyServerState: applyServerState,
+      applyExtSheet: applyExtSheet,
       onRunAsk: onRunAsk,
       onLook: onLook,
       getSelectedSheet: getSelectedSheet,

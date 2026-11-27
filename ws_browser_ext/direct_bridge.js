@@ -215,10 +215,12 @@
       if (d.type === "GAS_COMBO_GET_SEL") {
         const box = document.querySelector("#t-name-box") || document.querySelector("input.waffle-name-box");
         const range = box ? String(box.value || "").trim() : "";
-        const tabEl = document.querySelector(".docs-sheet-active-tab .docs-sheet-tab-name");
+        const tabEl = document.querySelector(".docs-sheet-active-tab .docs-sheet-tab-name")
+          || document.querySelector(".docs-sheet-tab[aria-selected='true'] .docs-sheet-tab-name")
+          || document.querySelector(".docs-sheet-active-tab");
         const sheet = tabEl ? String(tabEl.textContent || "").trim() : "";
         try {
-          ev.source.postMessage({ type: "GAS_COMBO_GET_SEL_DONE", ok: !!range, range, sheet }, targetOrigin);
+          ev.source.postMessage({ type: "GAS_COMBO_GET_SEL_DONE", ok: !!(range || sheet), range, sheet }, targetOrigin);
         } catch (_e) {}
         return;
       }

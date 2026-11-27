@@ -72,28 +72,38 @@
   }
 
   function onInit(silent) {
-    runServerAction({
-      fnName: "comboInit",
-      payload: {
-        targetId: state.target.id || "",
-        sheet: state.curSheet || "",
-        assumeActive: true,
-        includeQuick: true,
-        forceQuick: !silent,
-        wantCodes: true,
-        clientStamp: quickClientStamp()
-      },
-      label: "初期化 / 再読込",
-      statusText: "読込中…",
-      switchToChat: false,
-      silentSuccess: !!silent,
-      onSuccess: function(res) {
-        if (res.postboxDone) handlePostboxDone(res.postboxDone);
-        if (res && res.quick) applyQuickListRes(res.quick);
-        else loadQuickList();
-        loadLearned();
-      }
-    });
+    var runInit = function(extSheet) {
+      if (extSheet) applyExtSheet(extSheet);
+      runServerAction({
+        fnName: "comboInit",
+        payload: {
+          targetId: state.target.id || "",
+          sheet: getSelectedSheet() || extSheet || "",
+          assumeActive: true,
+          includeQuick: true,
+          forceQuick: !silent,
+          wantCodes: true,
+          clientStamp: quickClientStamp()
+        },
+        label: "初期化 / 再読込",
+        statusText: "読込中…",
+        switchToChat: false,
+        silentSuccess: !!silent,
+        onSuccess: function(res) {
+          if (res.postboxDone) handlePostboxDone(res.postboxDone);
+          if (res && res.quick) applyQuickListRes(res.quick);
+          else loadQuickList();
+          loadLearned();
+        }
+      });
+    };
+    if ((!state.target || state.target.kind !== "doc") && typeof requestLiveSelection === "function") {
+      requestLiveSelection(function(live) {
+        runInit(live && live.sheet ? live.sheet : "");
+      });
+    } else {
+      runInit("");
+    }
   }
 
   function onLook(sheetOverride) {
@@ -131,7 +141,7 @@
     var onMsg = function(ev) {
       var d = ev && ev.data;
       if (!d || d.type !== "GAS_COMBO_GET_SEL_DONE") return;
-      finish(d.ok && d.range ? { range: String(d.range).trim(), sheet: String(d.sheet || "").trim() } : null);
+      finish(d.ok && (d.range || d.sheet) ? { range: String(d.range || "").trim(), sheet: String(d.sheet || "").trim() } : null);
     };
     window.addEventListener("message", onMsg);
     var timer = setTimeout(function() { finish(null); }, 250);
@@ -260,7 +270,8 @@
       appendLog(els.chatLog, "is-err", "⚠ 別の処理を実行中です", "完了までお待ちください。");
       return;
     }
-    pushHistory(txt);
+    var runAskBody = function() {
+      pushHistory(txt);
 
     var activeSheet = syncCurSheetFromUi();
     var liveSelPrompt = !!(els.chkSync.checked && hasSelectionPronoun(txt));
@@ -491,9 +502,25 @@
     }
 
     (!fireOps && aiAuto) ? runAiAskDirectOrGas() : runViaGasAsk();
+    };
+    if ((!state.target || state.target.kind !== "doc") && typeof requestLiveSelection === "function") {
+      requestLiveSelection(function(live) {
+        if (live && live.sheet) applyExtSheet(live.sheet);
+        runAskBody();
+      });
+    } else {
+      runAskBody();
+    }
   }
 
   function onRunOps(ops, customLabel, opts) {
+    if (!(opts && opts._afterLiveSync) && (!state.target || state.target.kind !== "doc") && typeof requestLiveSelection === "function") {
+      requestLiveSelection(function(live) {
+        if (live && live.sheet) applyExtSheet(live.sheet);
+        onRunOps(ops, customLabel, Object.assign({}, opts || {}, { _afterLiveSync: true }));
+      });
+      return;
+    }
     var activeSheet = syncCurSheetFromUi();
     if (Array.isArray(ops) && ops.length === 1 && ops[0] && ops[0].shelf) {
       quickRecordUsage({ src: "shelf", name: ops[0].shelf });
