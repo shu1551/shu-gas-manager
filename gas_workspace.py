@@ -744,6 +744,28 @@ class WorkspaceManager:
             if tc is None:                          # 表の形を覚えていない相手は、先に 1 回だけ見る
                 tgt, tc = look_fresh()
                 fresh = True
+            # 頼みの中に別シート名（例:「社員の表」「社員：」）が含まれていれば、相手のシートを切り替える
+            sheets_known = [s for s in ((tc or {}).get("sheets") or []) if s]
+            cur_sh0 = tgt.get("sheet") or (tc or {}).get("sheet") or ""
+            ask_n = ask.strip()
+            mentioned_sh = None
+            for sn in sorted(sheets_known, key=len, reverse=True):
+                if sn == cur_sh0:
+                    continue
+                if re.match(rf"^{re.escape(sn)}\s*[:：]|{re.escape(sn)}(?:シート|の表|のシート|を|の)", ask_n):
+                    mentioned_sh = sn
+                    break
+            if mentioned_sh:
+                tgt["sheet"] = mentioned_sh
+                s_sw = self._load()
+                if (s_sw.get("target") or {}).get("id") == tgt.get("id"):
+                    s_sw["target"]["sheet"] = mentioned_sh
+                    self._save(s_sw)
+                self._look(target=tgt.get("id") or target, sheet=mentioned_sh)
+                s_sw2 = self._load()
+                tgt = dict(s_sw2.get("target") or tgt)
+                tc = self._cached_table(s_sw2, tgt)
+                fresh = True
         tim.lap("表の形")
         for attempt in range(2):
             table = (tc or {}).get("table")
@@ -902,10 +924,16 @@ class WorkspaceManager:
                                 if f_when not in ("eq", "ne") or f_val is None or not f_op.get("col"):
                                     continue
                                 f_val_s = str(f_val).strip()
-                                f_ci = gas_ws_direct.DirectRunner._col_of(ltb, f_op["col"])
+                                f_ci = None
+                                for c_inf in (ltb.get("columns") or []):
+                                    if str(c_inf.get("name") or "").strip() == str(f_op["col"]).strip() or str(c_inf.get("col") or "").strip().upper() == str(f_op["col"]).strip().upper():
+                                        f_ci = gas_ws_direct.col_num(c_inf["col"])
+                                        break
+                                if not f_ci:
+                                    continue
                                 col_vals = []
                                 for rr in range(r_a, r_b + 1):
-                                    tv = gas_ws_direct.Snapshot.value_text(cells_l.get((rr, f_ci))).strip()
+                                    tv = gas_ws_direct.Snapshot.display_text(cells_l.get((rr, f_ci))).strip()
                                     if tv and tv not in col_vals:
                                         col_vals.append(tv)
                                 if col_vals and f_val_s not in col_vals:
@@ -999,47 +1027,10 @@ class WorkspaceManager:
         ]
         if rest:
             out_lines.append("メモ: " + " ／ ".join(rest[:3]))
-        insights = res.get("insights")
-        diff_cells = list(res.get("diff_cells") or [])
+        self._enrich_do_res(st2, res, p.ops, cur_sh, keeps_shape=keeps_shape)
+        diff_cells = res.get("diff_cells") or []
         verify = res.get("verify") or {"ok": True, "checks": [], "mismatch": []}
-        sh_for_ins = tgt_out.get("sheet") or cur_sh
-        sid_out = tgt_out.get("id")
-        if kind == "sheet" and not res.get("local_only") and not st2.get("direct_off") and sid_out:
-            need_light = (insights is None) or (not keeps_shape and not res.get("direct"))
-            if need_light:
-                try:
-                    import gas_ws_direct, gas_ws_insights
-                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid_out, sh_for_ins, "A1:Z60")
-                    if light:
-                        if insights is None:
-                            insights = gas_ws_insights.analyze_from_snapshot(light["snap"], sh_for_ins, light["table"], ops=p.ops)
-                        v_grid, f_grid, a_map = gas_ws_direct.snapshot_to_grids(light["snap"], sh_for_ins, light["table"])
-                        if not keeps_shape:
-                            b_map = self._load_sheet_vals(st2, sid_out, sh_for_ins)
-                            if b_map and not diff_cells:
-                                diff_cells = gas_ws_insights.diff_cell_values(b_map, a_map)
-                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map)
-                            if not verify.get("checks") and not verify.get("mismatch"):
-                                verify = gas_ws_insights.verify_after_do(light["table"], v_grid, f_grid, ops=p.ops)
-                except Exception:
-                    insights = insights or []
-        # 記憶済みのブック健診から、この手に効く項目（ずれ・欠け）を持ち越して必ず添える
-        diag_all = ((st2.get("book_diagnosis") or {}).get(sid_out) or {}).get("findings") or []
-        sticky_insights = []
-        if diag_all and sid_out:
-            op_cats = {(self.catalog.by_name.get(o.get("shelf")) or {}).get("cat") for o in p.ops if isinstance(o, dict)}
-            want_tags = set()
-            if op_cats & {"集計", "計算"}:
-                want_tags.update({"cross_sheet_mismatch", "key_whitespace_split", "status_in_total", "note_contradiction", "calc_mismatch", "period_structure", "blank_col"})
-            elif "絞る" in op_cats:
-                want_tags.add("sum_subtotal")
-            elif any(isinstance(o, dict) and o.get("shelf") == "dedupe" for o in p.ops):
-                want_tags.add("key_dup_diff")
-            if want_tags:
-                sticky_insights = [
-                    d["text"] for d in diag_all
-                    if d.get("tag") in want_tags and (d.get("sheet") == sh_for_ins or d.get("tag") == "cross_sheet_mismatch")
-                ][:2]
+        merged_ins = res.get("insights") or []
         if diff_cells:
             out_lines.append("変更前→後: " + " ／ ".join(diff_cells))
         if verify.get("mismatch"):
@@ -1048,11 +1039,8 @@ class WorkspaceManager:
             tail.append("検算が合いません。確認するか ws_undo で戻してください")
         elif verify.get("checks"):
             out_lines.append("検算: " + " ／ ".join(verify["checks"]))
-        filtered_ins = self._filter_new_insights(st2, sid_out, sh_for_ins, insights) if insights else []
-        merged_ins = list(dict.fromkeys(sticky_insights + filtered_ins))
         if merged_ins:
             out_lines.append("気づき: " + " ／ ".join(merged_ins[:2]))
-        self._save(st2)
         out_lines.append(" ／ ".join(tail))
         return "\n".join(out_lines)
 
@@ -1170,6 +1158,24 @@ class WorkspaceManager:
             snip["table"] = tb_now
         t_out = snip.get("target") or tgt
         tb_now = snip.get("table")
+        # 読むだけ・チェック依頼でも初回ブック健診を実行・記憶し、他シートを含む要点を添える
+        diag_findings = []
+        try:
+            st_ro = self._load()
+            sid_ro = t_out.get("id") or tgt.get("id")
+            if sid_ro and not st_ro.get("direct_off"):
+                diag_map = st_ro.setdefault("book_diagnosis", {})
+                if sid_ro not in diag_map:
+                    import gas_ws_direct, gas_ws_insights
+                    sh_names = (tc or {}).get("sheets") or []
+                    payload = gas_ws_direct.fetch_workbook_payload_for_diagnosis(self, st_ro, sid_ro, sheet_names=sh_names or None)
+                    if payload:
+                        findings = gas_ws_insights.diagnose_workbook(payload)
+                        diag_map[sid_ro] = {"findings": findings, "ts": time.time()}
+                        self._save(st_ro)
+                diag_findings = ((diag_map.get(sid_ro) or {}).get("findings") or [])[:8]
+        except Exception:
+            diag_findings = []
         lines = [
             f"[読むだけ] {self._title(t_out)}（シートは変更していません）",
             f"質問: {ask}",
@@ -1179,7 +1185,7 @@ class WorkspaceManager:
             hrs = int(tb_now.get("header_rows") or 1)
             hr_label = f"{hr1}-{hr1 + hrs - 1}" if hrs > 1 else f"{hr1}"
             lines.append(
-                f"表: 見出し {hr_label} 行目・{tb_now['first_col']}〜{tb_now['last_col']} 列・明細 {tb_now['data']} 行目"
+                f"表: 見出し {hr1 if hrs == 1 else hr_label} 行目・{tb_now['first_col']}〜{tb_now['last_col']} 列・明細 {tb_now['data']} 行目"
                 + (f"・合計行 {tb_now['total_row']} 行目" if tb_now.get("total_row") else "・合計行なし")
             )
             lines.append("列: " + "、".join(f"{c['col']}={c['name']}{'(数値)' if c['number'] else ''}" for c in tb_now["columns"]))
@@ -1187,19 +1193,81 @@ class WorkspaceManager:
             lines.append(snip["note"])
         if snip["text"]:
             lines.append("中身（行番号・列記号・数式つき）:\n" + snip["text"])
-        lines.append("上の表の中身と根拠セルをもとに、シートを変更せずそのまま答えてください。")
+        if diag_findings:
+            lines.append("ブック全体の健診結果（重要度順）:")
+            for df in diag_findings:
+                lines.append("- " + df["text"])
+        lines.append("上の表の中身と根拠セル・健診結果をもとに、シートを変更せずそのまま答えてください。")
         return "\n".join(lines)
+
+    def _enrich_do_res(self, st2, res, ops, cur_sh, keeps_shape=False):
+        """ws_do(ask/ops) 共通で検算・変更前→後差分・健診のずれ持ち越しを res に付与する。"""
+        if not res.get("ok") or res.get("local_only"):
+            return
+        tgt_out = res.get("target") or res.get("created") or {}
+        sid_out = tgt_out.get("id")
+        sh_for_ins = tgt_out.get("sheet") or cur_sh
+        kind_out = tgt_out.get("kind") or "sheet"
+        if kind_out != "sheet" or not sid_out:
+            return
+        insights = res.get("insights")
+        diff_cells = [] if keeps_shape else list(res.get("diff_cells") or [])
+        verify = res.get("verify") or {"ok": True, "checks": [], "mismatch": []}
+        if not st2.get("direct_off"):
+            need_light = (insights is None) or (not keeps_shape and not res.get("direct"))
+            if need_light:
+                try:
+                    import gas_ws_direct, gas_ws_insights
+                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid_out, sh_for_ins, "A1:Z60")
+                    if light:
+                        if insights is None:
+                            insights = gas_ws_insights.analyze_from_snapshot(light["snap"], sh_for_ins, light["table"], ops=ops)
+                        v_grid, f_grid, a_map = gas_ws_direct.snapshot_to_grids(light["snap"], sh_for_ins, light["table"])
+                        if not keeps_shape:
+                            b_map = self._load_sheet_vals(st2, sid_out, sh_for_ins)
+                            if b_map and not diff_cells:
+                                diff_cells = gas_ws_insights.diff_cell_values(b_map, a_map)
+                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map)
+                            if not verify.get("checks") and not verify.get("mismatch"):
+                                verify = gas_ws_insights.verify_after_do(light["table"], v_grid, f_grid, ops=ops, before_map=b_map, after_map=a_map)
+                except Exception:
+                    insights = insights or []
+        diag_all = ((st2.get("book_diagnosis") or {}).get(sid_out) or {}).get("findings") or []
+        sticky_insights = []
+        if diag_all:
+            op_cats = {(self.catalog.by_name.get(o.get("shelf")) or {}).get("cat") for o in (ops or []) if isinstance(o, dict)}
+            want_tags = set()
+            if op_cats & {"集計", "計算"}:
+                want_tags.update({"cross_sheet_mismatch", "key_whitespace_split", "status_in_total", "note_contradiction", "calc_mismatch", "period_structure", "blank_col"})
+            elif "絞る" in op_cats:
+                want_tags.add("sum_subtotal")
+            elif any(isinstance(o, dict) and o.get("shelf") == "dedupe" for o in (ops or [])):
+                want_tags.add("key_dup_diff")
+            if want_tags:
+                sticky_insights = [
+                    d["text"] for d in diag_all
+                    if d.get("tag") in want_tags and (d.get("sheet") == sh_for_ins or d.get("tag") == "cross_sheet_mismatch")
+                ][:2]
+        filtered_ins = self._filter_new_insights(st2, sid_out, sh_for_ins, insights) if insights else []
+        merged_ins = list(dict.fromkeys(sticky_insights + filtered_ins))
+        res["diff_cells"] = diff_cells
+        res["verify"] = verify
+        res["insights"] = merged_ins[:2]
+        self._save(st2)
 
     def _do(self, ops, target, ok, tim):
         st, res, key = self._do_res(ops, target, ok, tim)
         if res.get("ok") and not res.get("local_only"):
+            parsed_ops = self.parse_ops(ops)
+            keeps_shape = all(self._keeps_shape(o) for o in parsed_ops if isinstance(o, dict))
+            cur_sh = ((res.get("target") or {}).get("sheet")) or ((st.get("target") or {}).get("sheet")) or ""
+            self._enrich_do_res(st, res, parsed_ops, cur_sh, keeps_shape=keeps_shape)
             lu = st.get("last_unfired_ask")
             if isinstance(lu, dict) and lu.get("ask") and (time.time() - float(lu.get("ts") or 0)) <= 300:
                 tid = (res.get("target") or res.get("created") or {}).get("id") or ""
                 if not lu.get("id") or not tid or lu.get("id") == tid:
                     try:
                         import gas_ws_ask
-                        parsed_ops = self.parse_ops(ops)
                         gas_ws_ask.log_ask_ai_solved(lu["ask"], parsed_ops, source="mcp_ai", path=self.ask_misses_path)
                     except Exception:
                         pass

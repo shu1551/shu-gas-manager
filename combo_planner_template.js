@@ -3656,6 +3656,14 @@ var ComboPlanner = (function () {
     }
     if (!valCols.length) return null;
     if (!func && valCols.length >= 2 && !/集計|合計|平均/.test(cN)) return null;
+    if (!func && !/集計|合計|平均/.test(cN) && /並べて|並べた|と[^、。]{1,12}を/.test(cN)) {
+      var numCntJs = 0;
+      for (var nci = 0; nci < table.columns.length; nci++) {
+        var ncObj = table.columns[nci];
+        if (ncObj && ncObj.number && ncObj.name !== byCol) numCntJs++;
+      }
+      if (numCntJs >= 2) return null;
+    }
     var intoName = "集計_" + byCol + "別";
     var sumOp = { shelf: "summary", by: byCol, values: valCols, into: intoName, ok: true };
     if (func) sumOp.func = func;
@@ -3688,9 +3696,9 @@ var ComboPlanner = (function () {
       return arr.map(function (o) { return Object.assign({}, o, { sheet: sh }); });
     };
     return [
-      { label: "見た目だけ整える", desc: "見出し・罫線・桁区切り・列幅だけ（値は触らない）", ops: withSh([{ shelf: "tidy" }]) },
-      { label: "見た目＋データの掃除", desc: "空行削除・前後空白・全角半角の統一＋見た目", ops: withSh([{ shelf: "seiri" }, { shelf: "tidy" }]) },
-      { label: "重複削除＋掃除＋見た目", desc: "重複行の削除も含めて表を丸ごと整える", ops: withSh([{ shelf: "dedupe", ok: true }, { shelf: "seiri" }, { shelf: "tidy" }]) }
+      { label: "値を消さずに整える（おすすめ）", desc: "和暦→西暦・全角半角・単位付き数値化・前後空白・見た目整え（行削除はしない）", ops: withSh([{ shelf: "seiri", numbers: true, dates: true, halfwidth: true, trim: true, tidy: true }]) },
+      { label: "見た目＋空行削除＋掃除", desc: "空行削除・前後空白・全角半角・数値日付の統一＋見た目", ops: withSh([{ shelf: "seiri", blank_rows: true }, { shelf: "tidy" }]) },
+      { label: "重複削除＋掃除＋見た目", desc: "重複行の削除も含めて表を丸ごと整える", ops: withSh([{ shelf: "dedupe", ok: true }, { shelf: "seiri", blank_rows: true }, { shelf: "tidy" }]) }
     ];
   }
 

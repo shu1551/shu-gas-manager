@@ -2735,7 +2735,9 @@ _READ_ONLY_MUTATE_RE = re.compile(
 _READ_ONLY_QUERY_RE = re.compile(
     r"[?？]|どこ|どれ|だれ|誰|どんな|何が|何を|何が入|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|"
     r"ありますか|あるか|いるか|ですか|ますか|でしょうか|どうなって|教えて|知りたい|確認したい|"
-    r"構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ"
+    r"構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ|"
+    r"(?:重複して|入って|合って|ずれて|漏れて|抜けて)?(?:いないか|いるか|あるか)|"
+    r"(?:見て|確かめて|チェックして|点検して|診断して)(?!.*ボックス)"
 )
 
 
@@ -2780,6 +2782,11 @@ def _chart_summary_ops(op, clause, table):
         return None
     if not func and len(val_cols) >= 2 and not re.search(r"集計|合計|平均", c_n):
         return None
+    # 「予算と実績を並べて」等、2項目を並べる文脈で既に表に数値列が2列以上揃っている場合も集計せず直接グラフへ
+    if not func and not re.search(r"集計|合計|平均", c_n) and re.search(r"並べて|並べた|と[^、。]{1,12}を", c_n):
+        num_cnt = sum(1 for c in (table.get("columns") or []) if c.get("number") and c.get("name") != by_col)
+        if num_cnt >= 2:
+            return None
     into_name = f"集計_{by_col}別"
     sum_op = {"shelf": "summary", "by": by_col, "values": val_cols, "into": into_name, "ok": True}
     if func:
@@ -2825,9 +2832,9 @@ def _ambiguous_tidy_choices(ask, ops, kind=""):
         return [dict(o, sheet=sh) for o in op_list]
 
     return [
-        {"label": "見た目だけ整える", "desc": "見出し・罫線・桁区切り・列幅だけ（値は触らない）", "ops": _with_sh([{"shelf": "tidy"}])},
-        {"label": "見た目＋データの掃除", "desc": "空行削除・前後空白・全角半角の統一＋見た目", "ops": _with_sh([{"shelf": "seiri"}, {"shelf": "tidy"}])},
-        {"label": "重複削除＋掃除＋見た目", "desc": "重複行の削除も含めて表を丸ごと整える", "ops": _with_sh([{"shelf": "dedupe", "ok": True}, {"shelf": "seiri"}, {"shelf": "tidy"}])},
+        {"label": "値を消さずに整える（おすすめ）", "desc": "和暦→西暦・全角半角・単位付き数値化・前後空白・見た目整え（行削除はしない）", "ops": _with_sh([{"shelf": "seiri", "numbers": True, "dates": True, "halfwidth": True, "trim": True, "tidy": True}])},
+        {"label": "見た目＋空行削除＋掃除", "desc": "空行削除・前後空白・全角半角・数値日付の統一＋見た目", "ops": _with_sh([{"shelf": "seiri", "blank_rows": True}, {"shelf": "tidy"}])},
+        {"label": "重複削除＋掃除＋見た目", "desc": "重複行の削除も含めて表を丸ごと整える", "ops": _with_sh([{"shelf": "dedupe", "ok": True}, {"shelf": "seiri", "blank_rows": True}, {"shelf": "tidy"}])},
     ]
 
 

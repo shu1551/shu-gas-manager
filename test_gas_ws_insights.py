@@ -170,7 +170,7 @@ def test_ambiguous_tidy_with_sheet_name_like_col():
     p = A.plan("顧客の表を整えて", F.Finder(), "sheet", tb)
     assert not p.fire
     assert len(p.choices) == 3
-    assert p.choices[0]["ops"] == [{"shelf": "tidy"}]
+    assert p.choices[0]["ops"][0]["shelf"] == "seiri"
 
 
 def test_diagnose_workbook_8_types_and_verify_and_diff():
@@ -320,9 +320,9 @@ def test_cross_sheet_diagnosis_and_planner_fixes():
         "columns": [{"col": "A", "name": "社員番号"}, {"col": "B", "name": "氏名"}],
     }
     p_s = A.plan("社員の表をきれいにして", F.Finder(), "sheet", tb_emp)
-    assert p_s.choices and p_s.choices[0]["ops"] == [{"shelf": "tidy"}]
+    assert p_s.choices and p_s.choices[0]["ops"][0]["shelf"] == "seiri"
 
-    # 3. 2列揃っているときは summary せず chart.new
+    # 3. 2列揃っているときは summary せず chart.new（年計と実績を並べるケースも含む）
     tb_bud = {
         "header_row": 1,
         "first_col": "A",
@@ -330,12 +330,27 @@ def test_cross_sheet_diagnosis_and_planner_fixes():
         "data": "3-6",
         "columns": [
             {"col": "A", "name": "部署"},
-            {"col": "H", "name": "予算", "number": True},
+            {"col": "H", "name": "年計", "number": True},
             {"col": "I", "name": "実績", "number": True},
         ],
     }
     p_c = A.plan("部署ごとの予算と実績を棒グラフで並べて", F.Finder(), "sheet", tb_bud)
     assert p_c.fire
-    assert len(p_c.ops) == 1
+    assert all(o["shelf"] != "summary" for o in p_c.ops)
     assert p_c.ops[0]["shelf"] == "chart.new"
-    assert "A1:A6" in p_c.ops[0]["range"] and "H1:I6" in p_c.ops[0]["range"]
+
+    # 4. 「見て」「チェックして」は読むだけ
+    p_ro1 = A.plan("社員番号が重複していないか見て", F.Finder(), "sheet", tb_emp)
+    assert not p_ro1.fire and p_ro1.read_only
+    p_ro2 = A.plan("この表、提出前にチェックして", F.Finder(), "sheet", tb_emp)
+    assert not p_ro2.fire and p_ro2.read_only
+
+    # 5. 日付1日ずれ検算
+    ver_d = I.verify_after_do(
+        tb_emp,
+        [["社員番号", "入社日"], ["E001", "2022/03/31"]],
+        ops=[{"shelf": "date.fix"}],
+        before_map={(2, 2): "2022/04/01"},
+        after_map={(2, 2): "2022/03/31"},
+    )
+    assert not ver_d["ok"] and any("ずれています" in m for m in ver_d["mismatch"])

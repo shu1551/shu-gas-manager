@@ -48,7 +48,20 @@ function setFormulasAllRows_(ctx, sh, startRow, col, formulas) {
       }]);
       return;
     } catch (eApi) {
-      note_(ctx, 'Sheets API での数式書き込みに失敗したため通常方式へ切替: ' + String(eApi && eApi.message || eApi).slice(0, 80));
+      var rgFb = sh.getRange(startRow, col, numRows, numCols);
+      rgFb.setFormulas(formulas);
+      SpreadsheetApp.flush();
+      var wroteF = rgFb.getFormulas();
+      var missingF = 0;
+      for (var ri = 0; ri < numRows; ri++) {
+        for (var ci = 0; ci < numCols; ci++) {
+          if (String(formulas[ri][ci] || '').charAt(0) === '=' && !wroteF[ri][ci]) missingF++;
+        }
+      }
+      if (missingF > 0) {
+        throw new Error('絞り込み中などのため ' + missingF + ' 行に数式を書けませんでした（先に絞り込みを解除してください）');
+      }
+      return;
     }
   }
   sh.getRange(startRow, col, numRows, numCols).setFormulas(formulas);

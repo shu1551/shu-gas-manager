@@ -312,12 +312,13 @@ def analyze_table_insights(
             if m.group(1):
                 half_labels.add(m.group(1))
             month_hits.append(int(m.group(2)))
-    if len(month_hits) >= 2 and len(month_hits) < 12:
-        if half_labels or len(month_hits) <= 6:
-            m_str = "・".join(f"{m}月" for m in month_hits)
+    if len(month_hits) >= 2 and len(set(month_hits)) < 12:
+        uniq_m = sorted(set(month_hits))
+        if half_labels or len(uniq_m) <= 6:
+            m_str = "・".join(f"{m}月" for m in uniq_m)
             add_ins(
                 "type7",
-                f"月別データは {m_str}（計{len(month_hits)}か月分）のみで、他の月が欠けています"
+                f"月別データは {m_str}（計{len(uniq_m)}か月分）のみで、他の月が欠けています"
             )
 
     if not (op_shelves & {"blank.rows.delete", "dedupe", "seiri"}):
@@ -778,11 +779,11 @@ def diagnose_workbook(sheets_payload):
                         if r - 1 < len(vals) and ci - 1 < len(vals[r - 1]) and str(vals[r - 1][ci - 1] or "").strip()
                     }
                     break
-        # 期間抽出（日付列の年月 or 月見出し）
+        # 期間抽出（月見出し、またはマスタ以外の明細シートの日付列の年月）
         m_cols = [int(_MONTH_RE.search(str(c.get("name") or "")).group(2)) for c in cols if _MONTH_RE.search(str(c.get("name") or ""))]
         if m_cols:
             sheet_months_info[sh] = ("header", sorted(set(m_cols)))
-        else:
+        elif not re.search(r"社員|名簿|マスタ|顧客|メンバー", sh):
             d_months = set()
             for c in cols:
                 if _DATE_HEAD_RE.search(str(c.get("name") or "")):
@@ -845,8 +846,8 @@ def diagnose_workbook(sheets_payload):
 # ====================================================================
 # 【2】撃った後の検算（合計・行数・集計表の和）
 # ====================================================================
-def verify_after_do(table, values_grid, formulas_grid=None, ops=None, source_info=None):
-    """ws_do 後に合計行と明細和、集計表と元表の和を Python で検算する。
+def verify_after_do(table, values_grid, formulas_grid=None, ops=None, source_info=None, before_map=None, after_map=None):
+    """ws_do 後に合計行と明細和、集計表と元表の和、日付ずれを Python で検算する。
 
     戻り値: {"ok": bool, "checks": [str, ...], "mismatch": [str, ...]}
     """
@@ -854,6 +855,24 @@ def verify_after_do(table, values_grid, formulas_grid=None, ops=None, source_inf
     mismatch = []
     if not table or not values_grid:
         return {"ok": True, "checks": checks, "mismatch": mismatch}
+
+    # date.fix / seiri 後に既存の日付が 1 日ずれていないか検算
+    op_shelves = {str(o.get("shelf") or "") for o in (ops or []) if isinstance(o, dict)}
+    if before_map and after_map and (op_shelves & {"date.fix", "seiri"}):
+        import datetime as _dt
+        for (r, c), bv in before_map.items():
+            av = after_map.get((r, c), "")
+            mb = re.fullmatch(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", str(bv or "").strip())
+            ma = re.fullmatch(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", str(av or "").strip())
+            if mb and ma:
+                try:
+                    db = _dt.date(int(mb.group(1)), int(mb.group(2)), int(mb.group(3)))
+                    da = _dt.date(int(ma.group(1)), int(ma.group(2)), int(ma.group(3)))
+                    if db != da:
+                        mismatch.append(f"{_col_letter(c)}{r} の日付が {bv} → {av} にずれています")
+                        break
+                except ValueError:
+                    pass
 
     dr = _parse_data_range(table)
     if not dr:

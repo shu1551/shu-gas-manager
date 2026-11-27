@@ -197,6 +197,13 @@ SHELF['summary'] = function (ctx, op) {
   dst.getRange(1, 1, grid.length, grid[0].length).setValues(grid);
   ctx.curSheet = src.getName();
   chg_(ctx, dst, a1_(1, 1, grid.length, grid[0].length), 'シート「' + into + '」へ「' + src.getName() + '」の ' + hdr[0] + ' ごとの集計（元の表を直すと追従）');
+  var sumPreview = [];
+  for (var pi = 1; pi < grid.length && pi <= 4; pi++) {
+    if (grid[pi][0] === '合計') continue;
+    var pv = dst.getRange(pi + 1, 2).getDisplayValue();
+    sumPreview.push(grid[pi][0] + ': ' + pv);
+  }
+  if (sumPreview.length) note_(ctx, '集計結果: ' + sumPreview.join(' ／ ') + (keys.length > 3 ? ' ほか' + (keys.length - 3) + '件' : ''));
   if (hasSpaceTrim) note_(ctx, '「' + byName + '」列の前後の空白を無視してまとめました');
   if (cancelCols.length) note_(ctx, '※「' + cancelCols[0] + '」列にキャンセル等の行を含んでいます');
   note_(ctx, '別の棚からこの表を参照するときは range:"' + into + '"（または "' + into + '!' + a1_(1, 1, grid.length, grid[0].length) + '"）');

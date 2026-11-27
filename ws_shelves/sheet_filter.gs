@@ -97,7 +97,8 @@ function needsPlainTextFmt_(s, isCodeCol) {
 // 列ごとの書式・配置・折り返しを、見出し名・値の型・既存書式から自動判定する
 function tidyColSpec_(headName, vals, existingFmts, isNoCol) {
   var h = String(headName || '').trim();
-  if (isNoCol) return { fmt: null, fmtType: null, align: 'center', wrap: false, kind: null };
+  var isCodeNumHead = /(?:番号|コード|内線|郵便|〒|ID|No\.?|TEL|電話|携帯|FAX|年度)/i.test(h);
+  if (isNoCol || isCodeNumHead) return { fmt: null, fmtType: null, align: 'center', wrap: false, kind: null };
   var nums = vals.filter(function (v) { return typeof v === 'number'; });
   var dates = vals.filter(function (v) { return Object.prototype.toString.call(v) === '[object Date]'; });
   var nonEmptyList = vals.filter(function (v) { return !isBlank_(v); });

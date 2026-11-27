@@ -1920,7 +1920,12 @@ function actUndo_(req) {
     });
   }
   l.items.push(entry); ledgerSave_(l);
-  return { ok: true, undone: it.n, backup: n, what: it.what, notes: undoNotes, target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl() } };
+  var outSheet = '';
+  if (it.kind === 'sheet' && it.sheets && it.sheets.length) {
+    var sOrig = byId_(file, it.sheets[0].id);
+    if (sOrig) outSheet = sOrig.getName();
+  }
+  return { ok: true, undone: it.n, backup: n, what: it.what, notes: undoNotes, target: { id: it.id, name: it.name, kind: it.kind, url: file.getUrl(), sheet: outSheet } };
 }
 
 // ---------------------------------------------------------------- look

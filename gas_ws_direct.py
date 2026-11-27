@@ -208,6 +208,13 @@ class Snapshot:
                 return str(x)
         return ""
 
+    @staticmethod
+    def display_text(cell):
+        """formattedValue があれば表示文字列（日付など）を優先して返す。"""
+        if isinstance(cell, dict) and cell.get("formattedValue") is not None:
+            return str(cell["formattedValue"])
+        return Snapshot.value_text(cell)
+
 
 class DirectRunner:
     def __init__(self, mgr):
@@ -1771,7 +1778,7 @@ def snapshot_cell_map(snap, sheet_name):
         return {}
     out = {}
     for (r, c), cell in (ent.get("cells") or {}).items():
-        txt = Snapshot.value_text(cell)
+        txt = Snapshot.display_text(cell)
         if txt != "":
             out[(r, c)] = txt
     return out
@@ -1815,7 +1822,7 @@ def snapshot_to_grids(snap, sheet_name, tb=None):
                     v_row.append("")
             uv = (cell.get("userEnteredValue") or {}).get("formulaValue") or ""
             f_row.append(str(uv))
-            txt = Snapshot.value_text(cell)
+            txt = Snapshot.display_text(cell)
             if txt != "":
                 cmap[(r, c)] = txt
         v_grid.append(v_row)
