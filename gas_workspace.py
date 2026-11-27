@@ -272,6 +272,8 @@ class WorkspaceManager:
         return st
 
     def _post(self, body, timeout=90):
+        if isinstance(getattr(self, "_look_memo", None), dict):
+            self._look_memo.clear()      # エンジンが書くかもしれないので、覚えた表の読みは捨てる
         tim = self._tim
         if getattr(self, "lane", "") and "lane" not in body:
             body = dict(body, lane=self.lane)       # 並べて回すとき（試験用のエンジンだけが読む）
@@ -652,6 +654,9 @@ class WorkspaceManager:
     def do(self, ops="", target="", ok=False, ask="", sheet=""):
         tim = _Timer()
         self._tim = tim
+        self._after_light = None
+        self._light_seen = None
+        self._look_memo = {}      # この呼び出しの中だけの表の読みの覚え（書いたら捨てる）
         try:
             self._switch_sheet(target, sheet)
             tim.lap("シート")
@@ -848,6 +853,10 @@ class WorkspaceManager:
             ls = ls_info.get("scope") if ls_info.get("id") == tgt.get("id") and (not cur_sh or not ls_info.get("sheet") or ls_info.get("sheet") == cur_sh) else None
             p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=cur_sh, last_scope=ls)
             tim.lap("当て")
+            if not p.fire and kind == "sheet" and not is_new:
+                uni = self._unify_style_ops(st, tgt, cur_sh, ask, table)    # 「内線の書き方をそろえて」＝列の値から多い方の書き方へ
+                if uni:
+                    p.ops, p.fire, p.reasons, p.missing = uni, True, [], []
             if not p.fire and p.missing and not p.reasons and not fresh and kind == "sheet" and not is_new:
                 # 覚えていた形で引数が決まらなかった → 形が変わったのかもしれない。1 回だけ見直して組み直す
                 tgt, tc = look_fresh()
@@ -1409,6 +1418,58 @@ class WorkspaceManager:
         lines.append("上の表の中身と根拠セル・健診結果をもとに、シートを変更せずそのまま答えてください。")
         return "\n".join(lines)
 
+    def _unify_style_ops(self, st, tgt, sheet, ask, table):
+        """「内線の書き方をそろえて」: 列の値を、頭と尻の文字（内線・ext. など）と数字に分け、多い方の書き方に少ない方をそろえる"""
+        import gas_ws_ask
+        m = re.search(r"^(.+?)(?:の列)?の(?:書き方|表記|形|書式)を(?:そろえ|揃え|統一)", gas_ws_ask.nfkc(ask or ""))
+        if not m:
+            return None
+        want = m.group(1).strip()
+        try:
+            import gas_ws_direct
+            light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), sheet, "A1:Z60")
+            tb = (light or {}).get("table") or {}
+            # 覚えている表の形はシートを替えた直後は空なので、今読んだ表から列を引く
+            col = next((c for c in tb.get("columns") or [] if str(c.get("name") or "") == want), None) \
+                or next((c for c in tb.get("columns") or [] if c.get("name") and (str(c["name"]) in want or want in str(c["name"]))), None)
+            if not col:
+                return None
+            dm = re.fullmatch(r"(\d+)-(\d+)", str(tb.get("data") or ""))
+            if not dm:
+                return None
+            ci = gas_ws_direct.col_num(col["col"])
+            cells = light["snap"].sheet(sheet).get("cells") or {}
+            shapes, rows = {}, []
+            for r in range(int(dm.group(1)), int(dm.group(2)) + 1):
+                v = gas_ws_direct.Snapshot.value_text(cells.get((r, ci))).strip()
+                if not v or v.startswith("="):
+                    continue
+                mm = re.fullmatch(r"(\D*?)\s*(\d+)\s*(\D*)", gas_ws_ask.nfkc(v))
+                if not mm:
+                    return None      # 数字の入らない書き方はほかの棚で
+                shape = (mm.group(1), mm.group(3))
+                shapes[shape] = shapes.get(shape, 0) + 1
+                rows.append((r, v, mm.group(2), shape))
+            if len(shapes) < 2:
+                return None
+            best = max(shapes.items(), key=lambda kv: kv[1])
+            if list(shapes.values()).count(best[1]) > 1:
+                return None          # 多い方が決まらない＝人の判断
+            pre, suf = best[0]
+            cells_w = {f"{col['col']}{r}": f"{pre}{d}{suf}" for r, v, d, shape in rows if shape != best[0]}
+            if not cells_w:
+                return None
+            return [{"shelf": "write", "cells": cells_w}]
+        except Exception:
+            return None
+
+    def _reuse_after(self, sid, sheet):
+        """直の道が撃った後に読んだ表（同じ呼び出しの中だけ）を使い回す＝読む回数を減らす（Sheets API の 1 分 60 回の上限）"""
+        la = getattr(self, "_after_light", None)
+        if la and la[0] == sid and la[1] == sheet:
+            return la[2]
+        return None
+
     def _sort_date_notes(self, st2, sid, sheet, ops):
         """並べ替えた列の日付の崩れ（文字の日付・先の日付）を、その手の返事に毎回添える（健診の「一度だけ」とは別）"""
         cols = [o.get("col") for o in (ops or []) if isinstance(o, dict) and o.get("shelf") == "sort" and o.get("col")]
@@ -1417,7 +1478,7 @@ class WorkspaceManager:
         try:
             import gas_ws_direct, gas_ws_ask
             from datetime import date, timedelta
-            light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid, sheet, "A1:Z60")
+            light = self._reuse_after(sid, sheet) or gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid, sheet, "A1:Z60")
             tb = (light or {}).get("table") or {}
             m = re.fullmatch(r"(\d+)-(\d+)", str(tb.get("data") or ""))
             if not m:
@@ -1467,7 +1528,7 @@ class WorkspaceManager:
             if need_light:
                 try:
                     import gas_ws_direct, gas_ws_insights
-                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid_out, sh_for_ins, "A1:Z60")
+                    light = self._reuse_after(sid_out, sh_for_ins) or gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid_out, sh_for_ins, "A1:Z60")
                     if light:
                         if insights is None:
                             insights = gas_ws_insights.analyze_from_snapshot(light["snap"], sh_for_ins, light["table"], ops=ops)
@@ -1638,6 +1699,7 @@ class WorkspaceManager:
             # 値を書く棚（汚れの直し・電話番号・税込み・式の列・合計）は、先撃ちが読んだ今の表から write＋書式に組み替えて直の道に乗せる
             lowered = None
             lf = getattr(self, "_light_full", None)
+            self._light_seen = lf          # 組み替えなくても、撃つ前の読みに使い回す
             self._light_full = None
             if lf and lf[0] == dt.get("id") and lf[1] == dt.get("sheet"):
                 try:

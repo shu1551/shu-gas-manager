@@ -239,12 +239,23 @@ class DirectRunner:
 
     def _call(self, st, method, url, **kw):
         sess = self.mgr.client.session
-        for attempt in range(2):
-            h = {"Authorization": "Bearer " + self._token(st, fresh=attempt > 0)}
+        if method != "GET" and isinstance(getattr(self.mgr, "_look_memo", None), dict):
+            self.mgr._look_memo.clear()      # 書いたら、覚えた表の読みは古い
+        waited, fresh = 0.0, False
+        for attempt in range(8):
+            h = {"Authorization": "Bearer " + self._token(st, fresh=fresh)}
             if "json" in kw:
                 h["Content-Type"] = "application/json"
             r = sess.request(method, url, headers=h, timeout=30, **kw)
-            if r.status_code == 401 and attempt == 0:
+            if r.status_code == 401 and not fresh:
+                fresh = True
+                continue
+            if r.status_code == 429 and waited < 40:
+                # 1 分あたりの読み書きの上限（Sheets API は 1 人 60 回/分）。断られた要求は何も書いていないので、待って撃ち直す
+                import time as _t
+                w = min(2 ** attempt, 10)
+                _t.sleep(w)
+                waited += w
                 continue
             if r.status_code == 403 and "SERVICE_DISABLED" in r.text:
                 st["direct_off"] = "Sheets API が止められている"
@@ -255,13 +266,30 @@ class DirectRunner:
         raise DirectError("鍵が通らない")
 
     def _get(self, st, sid, ranges, extra_fields=""):
-        fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),"
-                  "basicFilter,merges,conditionalFormats,data(startRow,startColumn,rowData(values(userEnteredFormat,"
-                  "effectiveFormat(backgroundColorStyle,backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy,numberFormat),"
-                  "userEnteredValue,note,effectiveValue(errorValue,numberValue,stringValue),formattedValue)),"
-                  "columnMetadata(pixelSize,hiddenByUser),rowMetadata(pixelSize,hiddenByUser)))")
-        params = [("ranges", r) for r in ranges] + [("fields", fields)]
+        params = [("ranges", r) for r in ranges] + [("fields", _FULL_FIELDS)]
         return Snapshot(self._call(st, "GET", SHEETS + sid, params=params))
+
+    def _before(self, st, tgt, sheet, ranges):
+        """撃つ前の読み。同じ呼び出しで先撃ちが今のシートの A1:Z60 を読んでいて、読む範囲がその中に収まれば使い回す"""
+        lf = getattr(self.mgr, "_light_full", None) or getattr(self.mgr, "_light_seen", None)
+        if lf and lf[0] == tgt.get("id") and lf[1] == sheet:
+            ok_all = True
+            for rg in ranges:
+                m = re.fullmatch(r"(?:'((?:[^']|'')*)'|([^!]+))!(.+)", rg)
+                if not m or (m.group(1) or m.group(2)).replace("''", "'") != sheet:
+                    ok_all = False
+                    break
+                try:
+                    r1, c1, r2, c2 = parse_a1(m.group(3))
+                except Exception:
+                    ok_all = False
+                    break
+                if r2 > 60 or c2 > 26:
+                    ok_all = False
+                    break
+            if ok_all:
+                return lf[2]["snap"]
+        return self._get(st, tgt["id"], ranges)
 
     # ------------------------------------------------------------ 場所を決める
     @staticmethod
@@ -1196,7 +1224,7 @@ class DirectRunner:
         tb = tc.get("table")
         try:
             ranges = self._plan(ops, sheet, tb, tc.get("sheets"))
-            before = self._get(st, tgt["id"], ranges)
+            before = self._before(st, tgt, sheet, ranges)
             if tim:
                 tim.lap("直接:読む")
             if tb:      # 覚えている見出しが今の見出しと同じか（違えばエンジンの道でその場の形を見る）
@@ -1274,6 +1302,8 @@ class DirectRunner:
         else:          # 書式などは返事を先に返し、指紋は裏で取る（ws_undo は指紋が取れるのを待ってから比べる）
             fp = "pending"
             self._fp_later(n, st["direct_token"]["token"], tgt["id"], after_ranges, touched)
+        if after is not None and tb:
+            self.mgr._after_light = (tgt["id"], sheet, {"snap": after, "table": tb, "sheet": sheet})
         e0, e1 = self._errors(before, touched), (self._errors(after, touched) if after else {})
         news = [f"{k} {v}" for k, v in e1.items() if k not in e0]
         if news:
@@ -1382,6 +1412,17 @@ class DirectRunner:
 
     # ------------------------------------------------------------ ws_look 直接の道
     def look(self, st, tgt, sheet="", range_str=""):
+        """同じ呼び出しの中で同じ表をもう一度読まない（書き込みがあれば覚えを捨てる＝_call）。Sheets API の 1 分 60 回の上限のため"""
+        memo = getattr(self.mgr, "_look_memo", None)
+        key = (tgt.get("id"), tgt.get("kind"), sheet or "", str(range_str or ""))
+        if isinstance(memo, dict) and key in memo:
+            return memo[key]
+        out = self._look_raw(st, tgt, sheet, range_str)
+        if isinstance(memo, dict) and out is not None:
+            memo[key] = out
+        return out
+
+    def _look_raw(self, st, tgt, sheet="", range_str=""):
         """Sheets API を直接叩いて actLook_ 互換の結果を返す。非対応時は None を返しエンジンへフォールバック。"""
         if tgt.get("kind") != "sheet" or not tgt.get("id") or st.get("direct_off"):
             return None
@@ -2037,11 +2078,7 @@ def fetch_sheet_snapshot_light(mgr, st, sid, sheet_name, range_str="A1:Z60"):
         return None
     try:
         runner = DirectRunner(mgr)
-        fields = (
-            "sheets(properties(sheetId,title),basicFilter,merges,"
-            "data(startRow,startColumn,rowData(values(formattedValue,effectiveValue,userEnteredValue,"
-            "effectiveFormat(numberFormat(type))))))"
-        )
+        fields = _FULL_FIELDS     # 直の道の撃つ前の読みと同じ欄（撃つ前にもう一度読まずに使い回す）
         rng = f"{q(sheet_name)}!{range_str}"
         resp = runner._call(st, "GET", SHEETS + sid, params=[("ranges", rng), ("fields", fields)])
         d_sh = (resp.get("sheets") or [{}])[0]
@@ -2270,6 +2307,12 @@ def lower_pin_problems():
                        f"今は {n} をエンジンの道で撃っています。写しを同じに直してから LOWER_PINS を {now} に")
     return out
 
+
+_FULL_FIELDS = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),"
+                "basicFilter,merges,conditionalFormats,data(startRow,startColumn,rowData(values(userEnteredFormat,"
+                "effectiveFormat(backgroundColorStyle,backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy,numberFormat),"
+                "userEnteredValue,note,effectiveValue(errorValue,numberValue,stringValue,boolValue),formattedValue)),"
+                "columnMetadata(pixelSize,hiddenByUser),rowMetadata(pixelSize,hiddenByUser)))")
 
 _LOW_NUM_FMT = "#,##0"
 _LOW_CODE_HEAD = re.compile(r"(?:郵便|〒|電話|携帯|TEL|FAX|社員番号|社員ID|会員番号|会員ID|顧客番号|顧客ID|管理番号|注文番号|伝票番号|口座番号|商品コード|コード|品番|型番)", re.I)

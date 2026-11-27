@@ -3762,6 +3762,35 @@ var ComboPlanner = (function () {
       for (var i = 0; i < cols.length; i++) { if (/状態|ステータス|状況|区分|承認/.test(cols[i])) { stC = cols[i]; break; } }
       if (stC) return { shelf: "filter.delete", col: stC, equals: m3[1] };
     }
+    var m4 = /^(\d{1,2})月(?:分)?の(?:[^\s、,。]{0,8}?)(?:を|だけ)?(?:全部|すべて)?(?:消して|削除して)/.exec(t);
+    if (m4 && +m4[1] >= 1 && +m4[1] <= 12) {
+      var dC = null;
+      for (var i4 = 0; i4 < cols.length; i4++) { if (/日付|日$|年月日/.test(cols[i4])) { dC = cols[i4]; break; } }
+      if (dC) {
+        var mo4 = +m4[1], last4 = new Date(new Date().getFullYear(), mo4, 0).getDate();
+        return { shelf: "filter.delete", col: dC, when: "between", value: mo4 + "/1.." + mo4 + "/" + last4 };
+      }
+    }
+    var m5 = /^(.+?)(?:の列)?の全角(?:文字)?を(?:直して|半角に(?:して|直して)?|なおして)/.exec(t);
+    if (m5) {
+      var c5 = m5[1].trim();
+      if (cols.indexOf(c5) < 0) {
+        var hit5 = null;
+        for (var i5 = 0; i5 < cols.length; i5++) { if (cols[i5] && (c5.indexOf(cols[i5]) >= 0 || cols[i5].indexOf(c5) >= 0)) { hit5 = cols[i5]; break; } }
+        c5 = hit5;
+      }
+      if (c5) return { shelf: "seiri", col: c5, halfwidth: true, trim: false, numbers: false, dates: false, tidy: false };
+    }
+    if (/消化率|達成率|執行率/.test(t) && /列|足して|追加|作って|出して/.test(t)) {
+      var act6 = null, bud6 = null, tot6 = null;
+      cols.forEach(function (c) {
+        if (!act6 && /実績/.test(c)) act6 = c;
+        if (!bud6 && /予算/.test(c)) bud6 = c;
+        if (!tot6 && /年計|合計|計$/.test(c)) tot6 = c;
+      });
+      bud6 = bud6 || tot6;
+      if (act6 && bud6 && act6 !== bud6) return { shelf: "calc.col", name: /(消化率|達成率|執行率)/.exec(t)[1], expr: act6 + "/" + bud6 };
+    }
     var ys = [], re = /(\d{4})年度?/g, mm;
     while ((mm = re.exec(t)) !== null) ys.push(mm[1]);
     var uniq = ys.filter(function (v, i2) { return ys.indexOf(v) === i2; });

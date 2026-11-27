@@ -401,7 +401,7 @@ SHELF['date.fix'] = function (ctx, op) {
   };
   var mk = function (y, m, d) { var dt = new Date(y, m - 1, d); return (dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d) ? dt : null; };
   var eraBase = { '令和': 2018, 'R': 2018, '平成': 1988, 'H': 1988, '昭和': 1925, 'S': 1925, '大正': 1911, 'T': 1911, '明治': 1867, 'M': 1867 };
-  var fixed = [], fmtOnly = 0;
+  var fixed = [], fixedRc = [], fmtOnly = 0;
   for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
     var v = vals[r][c];
     if (forms[r][c]) continue;
@@ -426,10 +426,12 @@ SHELF['date.fix'] = function (ctx, op) {
     vals[r][c] = (typeof formatDateCell_ === 'function') ? formatDateCell_(dt) : (dt.getFullYear() + '/' + ('0' + (dt.getMonth() + 1)).slice(-2) + '/' + ('0' + dt.getDate()).slice(-2));
     if (op.format || !fmts[r][c] || fmts[r][c] === '@' || fmts[r][c] === 'General') fmts[r][c] = targetFmt;
     fixed.push(a1_(startR + r, startC + c));
+    fixedRc.push([r, c]);
   }
   if (!fixed.length && !fmtOnly) { note_(ctx, '変換対象の日付は見つかりませんでした（' + rg.getA1Notation() + '）'); return; }
   rg.setNumberFormats(fmts);
-  if (fixed.length) rg.setValues(vals);
+  // 直したセルだけ書く（もとから本物の日付のセルを setValues で書き戻すと、スクリプトとシートの時間帯の差で 1 日ずれる）
+  fixedRc.forEach(function (rc) { sh.getRange(startR + rc[0], startC + rc[1]).setValue(vals[rc[0]][rc[1]]); });
   chg_(ctx, sh, fixed.length ? (fixed.slice(0, 5).join('・') + (fixed.length > 5 ? ' ほか ' + (fixed.length - 5) + ' 件' : '')) : rg.getA1Notation(),
     '日付を変換・統一（変換 ' + fixed.length + ' 件' + (fmtOnly ? '・書式統一 ' + fmtOnly + ' 件' : '') + '）');
 };

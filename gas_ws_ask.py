@@ -2977,6 +2977,29 @@ def _early_calc_col(t, table):
         st_c = next((c for c in cols if re.search(r"状態|ステータス|状況|区分|承認", c)), None)
         if st_c:
             return {"shelf": "filter.delete", "col": st_c, "equals": m3.group(1)}
+    # ④「10月の申請を消して」＝日付の列でその月（1 日〜末日）を条件に消す。消す手なので撃つ前の確かめは道具がする
+    m4 = re.search(r"^(\d{1,2})月(?:分)?の(?:[^\s、,。]{0,8}?)(?:を|だけ)?(?:全部|すべて)?(?:消して|削除して)", t)
+    if m4 and 1 <= int(m4.group(1)) <= 12:
+        d_c = next((c for c in cols if re.search(r"日付|日$|年月日", c)), None)
+        if d_c:
+            import calendar
+            mo = int(m4.group(1))
+            last = calendar.monthrange(datetime.now().year, mo)[1]
+            return {"shelf": "filter.delete", "col": d_c, "when": "between", "value": f"{mo}/1..{mo}/{last}"}
+    # ⑤「メールアドレスの全角を直して」＝その列だけ全角を半角に
+    m5 = re.search(r"^(.+?)(?:の列)?の全角(?:文字)?を(?:直して|半角に(?:して|直して)?|なおして)", t)
+    if m5:
+        c5 = m5.group(1).strip()
+        c5 = c5 if c5 in cols else next((c for c in cols if c and (c in c5 or c5 in c)), None)
+        if c5:
+            return {"shelf": "seiri", "col": c5, "halfwidth": True, "trim": False, "numbers": False, "dates": False, "tidy": False}
+    # ⑥「予算の消化率の列を足して」＝実績÷予算（予算の列が無ければ年計・合計）
+    if re.search(r"消化率|達成率|執行率", t) and re.search(r"列|足して|追加|作って|出して", t):
+        act = next((c for c in cols if re.search(r"実績", c)), None)
+        bud = next((c for c in cols if re.search(r"予算", c)), None) or next((c for c in cols if re.search(r"年計|合計|計$", c)), None)
+        if act and bud and act != bud:
+            nm = (re.search(r"(消化率|達成率|執行率)", t).group(1))
+            return {"shelf": "calc.col", "name": nm, "expr": f"{act}/{bud}"}
     # ②「2026年度と2025年度の上期を比べた伸び率の列」＝2 段見出しの年度×四半期から、上期（Q1+Q2）・下期（Q3+Q4）の伸び率
     ys = re.findall(r"(\d{4})年度?", t)
     half = re.search(r"上期|下期|上半期|下半期", t)
