@@ -1367,6 +1367,251 @@ var ComboPlanner = (function () {
   }
 
   // ------------------------------------------------------------------ 1節 → 1 op
+  function _auditBuiltOpJs(shObj, opObj, txt, scanTxt, tbl, cHits, missArr) {
+    var shN = shObj.name;
+    var scanN = nfkc(scanTxt);
+    var addMiss = function (msg) {
+      if (missArr.indexOf(msg) < 0) missArr.push(msg);
+    };
+    var hasSizeCue = /(?<!より)(?:大きく|小さく)|文字サイズ|フォントサイズ|(?<![0-9])サイズを(?:変え|上げ|下げ|大きく|小さく|拡大|縮小)|拡大して|縮小して/.test(scanN);
+    var isDimSize = /(?:幅|高さ|列幅|行高|行|列)を(?:大きく|小さく)/.test(scanN);
+    if (hasSizeCue && (!isDimSize || /文字|フォント/.test(scanN))) {
+      if (!(shN === "width" && !/文字|フォント/.test(scanN)) && (opObj.size === undefined || opObj.size === null) && (opObj.size_delta === undefined || opObj.size_delta === null)) {
+        addMiss("サイズ（具体的な数値 pt）");
+      }
+    }
+    if (_ADD_SHELVES_JS[shN] && /外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア/.test(scanN)) {
+      addMiss("逆の操作（外す・消す・解除）の語が含まれています");
+    }
+    if (shN !== "api" && /下線|アンダーライン|取り消し線|打ち消し線|取消線|縦書き|斜め文字|文字を回転|テキストを回転/.test(scanN)) {
+      addMiss("未対応の書式指示（下線・取り消し線・回転等）");
+    }
+    if (shN === "format") {
+      var mEqF = _COND_EQ_THING_RE_JS.exec(scanN);
+      var hasEqColF = !!(mEqF && (!tbl || !Array.isArray(tbl.columns) || !tbl.columns.length || _resolveColRefJs(mEqF[1], tbl)));
+      var hasRowCond = /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(scanN) ||
+        hasEqColF ||
+        /(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない|になっている|になってる).{0,8}(?:の行|行を|行に|行全体|のセル|セルを|(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}(?:を|に|は))/.test(scanN) ||
+        (_DATE_CMP_CUE_RE_JS.test(scanN) && /(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN));
+      if (hasRowCond) addMiss("条件付き書式（cf.add）の条件");
+      if (/固定|フリーズ/.test(scanN)) addMiss("固定（freeze）の指定");
+      if (/並べ替|ソート/.test(scanN)) addMiss("並べ替え（sort）の指定");
+      if (/フィルタ|絞り込/.test(scanN)) addMiss("絞り込み（filter）の指定");
+      if (scanN.indexOf("太字") >= 0 && !_hasOwn(opObj, "bold")) addMiss("太字（bold）");
+      if (/斜体|イタリック/.test(scanN) && !_hasOwn(opObj, "italic")) addMiss("斜体（italic）");
+      if (/中央揃え|中央寄せ|中央に|真ん中に|右揃え|右寄せ|左揃え|左寄せ/.test(scanN) && !_hasOwn(opObj, "align")) addMiss("配置（align）");
+      if (scanN.indexOf("折り返") >= 0 && !_hasOwn(opObj, "wrap")) addMiss("折り返し（wrap）");
+      if (/罫線|外枠/.test(scanN) && !_hasOwn(opObj, "borders")) addMiss("罫線（borders）");
+      if (/結合|マージ/.test(scanN) && !_hasOwn(opObj, "merge")) addMiss("結合（merge）");
+      if (/二重線|点線|破線/.test(scanN)) addMiss("罫線の種類（formatは実線のみ）");
+      if (/(?:パーセント|%\s*表示|桁区切|カンマ区切|通貨形式|円マーク|年月日の?形|年月日形式|yyyy|hh:mm|曜日)/i.test(scanN) && !_hasOwn(opObj, "number_format")) {
+        addMiss("表示形式（number_format）");
+      }
+      if (cHits.length && !opObj.bg && !opObj.color) addMiss("色（color/bg）");
+    }
+    if (shN === "cf.add" && !opObj.bg && !opObj.color && (opObj.bold === undefined || opObj.bold === null)) {
+      addMiss("書式（bg・color・bold）");
+    }
+    if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
+      if ((/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) || _DATE_CMP_CUE_RE_JS.test(scanN)) && !opObj.when) {
+        addMiss("条件（when）");
+      }
+      if (!opObj.when && _isEmptyVal(opObj.equals) && _isEmptyVal(opObj.value)) {
+        addMiss("絞り込み条件（equals/when）");
+      }
+      if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "ne" || opObj.when === "between") && _isEmptyVal(opObj.value)) {
+        addMiss("value");
+      }
+    }
+    if (_FORMULA_COL_SHELVES_JS[shN] && opObj.at) {
+      var dstCol = opObj.at;
+      var dstL = _letterOf(tbl, dstCol) || dstCol;
+      var srcRefs = {};
+      if (shN === "calc.col" && opObj.expr) {
+        srcRefs = _exprReferencedColsJs(opObj.expr, tbl);
+      } else {
+        var sKeys = ["col", "col_a", "col_b", "start_col", "end_col"];
+        for (var ski = 0; ski < sKeys.length; ski++) {
+          var sv = opObj[sKeys[ski]];
+          if (sv) {
+            srcRefs[sv] = true;
+            var sl0 = _letterOf(tbl, sv);
+            if (sl0) srcRefs[sl0] = true;
+          }
+        }
+        if (Array.isArray(opObj.cols)) {
+          for (var sci0 = 0; sci0 < opObj.cols.length; sci0++) {
+            var scv = opObj.cols[sci0];
+            srcRefs[scv] = true;
+            var sl1 = _letterOf(tbl, scv);
+            if (sl1) srcRefs[sl1] = true;
+          }
+        }
+      }
+      if (srcRefs[dstCol] || srcRefs[dstL]) {
+        addMiss("入れ先の列「" + dstCol + "」が式の入力列と同じため上書き不可");
+      }
+    }
+    // 6. 最終防波堤: 組んだ op の列引数・式に表に無い列名が残っていれば撃たない
+    if (tbl && Array.isArray(tbl.columns) && tbl.columns.length) {
+      var validNames = {}, validLetters = {};
+      for (var vi0 = 0; vi0 < tbl.columns.length; vi0++) {
+        var vnm = String((tbl.columns[vi0] && tbl.columns[vi0].name) || "").trim();
+        var vcl = String((tbl.columns[vi0] && tbl.columns[vi0].col) || "").trim();
+        if (vnm) validNames[vnm] = true;
+        if (vcl) validLetters[vcl] = true;
+      }
+      var isValidColVal = function (v, allowAnyLetter) {
+        var sv = nfkc(String(v === null || v === undefined ? "" : v)).trim();
+        if (!sv) return false;
+        if (validNames[sv] || validLetters[sv]) return true;
+        if (allowAnyLetter && /^[A-Z]{1,3}$/.test(sv)) return true;
+        return false;
+      };
+      var shArgs = shObj.args || [];
+      for (var ai3 = 0; ai3 < shArgs.length; ai3++) {
+        var ak = shArgs[ai3].name, at = shArgs[ai3].type;
+        if (!_hasOwn(opObj, ak) || _SKIP_COL_VALIDATE_JS[shN + ":" + ak]) continue;
+        var allowLet = (ak === "at" || ak === "from" || ak === "to");
+        if (at === "列") {
+          if (!isValidColVal(opObj[ak], allowLet)) addMiss("表に無い列名（" + opObj[ak] + "）");
+        } else if (at === "列[]") {
+          var arrV = Array.isArray(opObj[ak]) ? opObj[ak] : [opObj[ak]];
+          for (var avi = 0; avi < arrV.length; avi++) {
+            if (!isValidColVal(arrV[avi], allowLet)) addMiss("表に無い列名（" + arrV[avi] + "）");
+          }
+        }
+      }
+      if (shN === "sort" && Array.isArray(opObj.cols)) {
+        for (var si3 = 0; si3 < opObj.cols.length; si3++) {
+          var sSpec = String(opObj.cols[si3]);
+          var sBody = sSpec.charAt(0) === "-" ? sSpec.slice(1) : sSpec;
+          if (!isValidColVal(sBody, false)) addMiss("表に無い列名（" + sBody + "）");
+        }
+      }
+      if (shN === "calc.col" && opObj.expr) {
+        var eToks = nfkc(String(opObj.expr)).split(/[*/+\-()]/);
+        for (var eti = 0; eti < eToks.length; eti++) {
+          var stE = eToks[eti].trim();
+          if (!stE || /^-?[0-9]+(?:\.[0-9]+)?$/.test(stE)) continue;
+          if (!isValidColVal(stE, false)) addMiss("式に表に無い列名（" + stE + "）");
+        }
+      }
+    }
+    // 7. % 列の 1 超え比較防止 ＋ 過半数・全行削除防止
+    if (_CMP_VALUE_SHELVES_JS[shN]) {
+      var cmpCol = opObj.col;
+      var cmpNumStr = null;
+      if (shN === "cf.add" && opObj.when === "formula" && typeof opObj.value === "string") {
+        var mFm = /\$([A-Z]{1,3})[0-9]+\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)/.exec(opObj.value);
+        if (mFm) {
+          var fmColL = mFm[1];
+          cmpNumStr = mFm[2];
+          var fmCols = (tbl && tbl.columns) || [];
+          for (var fmi = 0; fmi < fmCols.length; fmi++) {
+            if (fmCols[fmi] && fmCols[fmi].col === fmColL && fmCols[fmi].name) { cmpCol = fmCols[fmi].name; break; }
+          }
+        }
+      } else if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "eq" || opObj.when === "ne") && !_isEmptyVal(opObj.value)) {
+        cmpNumStr = String(opObj.value).replace(/,/g, "").trim();
+      }
+      if (!cmpCol && shN === "cf.add" && typeof opObj.range === "string" && tbl && tbl.columns) {
+        var mRgC = /^([A-Z]{1,3})[0-9]+:\1[0-9]+$/.exec(opObj.range);
+        if (mRgC) {
+          for (var rgi = 0; rgi < tbl.columns.length; rgi++) {
+            if (tbl.columns[rgi] && tbl.columns[rgi].col === mRgC[1] && tbl.columns[rgi].name) { cmpCol = tbl.columns[rgi].name; break; }
+          }
+        }
+      }
+      if (cmpCol && _PCT_COL_RE_JS.test(String(cmpCol)) && cmpNumStr !== null && cmpNumStr !== "" && !isNaN(Number(cmpNumStr))) {
+        if (Math.abs(Number(cmpNumStr)) > 1.0) {
+          addMiss("%列「" + cmpCol + "」を1を超える値（" + cmpNumStr + "）で比較しているため確認が必要");
+        }
+      }
+      if (shN === "filter.delete" && tbl && Array.isArray(tbl.rows) && tbl.rows.length && opObj.col) {
+        var delCols = tbl.columns || [];
+        var delIdx = -1;
+        for (var dci0 = 0; dci0 < delCols.length; dci0++) {
+          if (delCols[dci0] && (delCols[dci0].name === opObj.col || delCols[dci0].col === opObj.col)) { delIdx = dci0; break; }
+        }
+        if (delIdx >= 0) {
+          var totalR = tbl.rows.length, hitsR = 0;
+          var tgtV = opObj.value !== undefined ? opObj.value : opObj.equals;
+          for (var dri = 0; dri < totalR; dri++) {
+            var rowD = tbl.rows[dri];
+            if (Array.isArray(rowD) && delIdx < rowD.length && _matchRowCondJs(rowD[delIdx], opObj.when || "eq", tgtV)) hitsR++;
+          }
+          if (hitsR > 0 && (hitsR === totalR || hitsR * 2 > totalR)) {
+            addMiss("条件に合う行が過半数（" + hitsR + "/" + totalR + "行）のため確認が必要");
+          }
+        }
+      }
+    }
+    // 8. 守りの逆（頼みに無い手を勝手に足さない）＋ find の疑問文誤爆防止
+    var tFullN = nfkc(txt);
+    if (shN === "find") {
+      var hasQWord = /どんな|何が|何を|何の|何か|なにが|なにを|何が入|何があ|どれ|誰|だれ|いくつ|何件|何人|何行|何列|何個|いくら/.test(tFullN);
+      var hasPoliteQ = /ですか|でしょうか|ますか/.test(tFullN) && !/(?:もらえ|くれ|いただけ|でき|られ)ますか/.test(tFullN);
+      var findTxtN = nfkc(String(opObj.text || ""));
+      if (hasQWord || hasPoliteQ || /どんな|何|なに|どれ|どこ|誰|だれ|いくつ/.test(findTxtN)) {
+        addMiss("疑問の文のため find で検索しません");
+      }
+    }
+    if (shN === "seiri") {
+      if (opObj.renumber && !_OPT_COL_CUES_JS.renumber.test(tFullN)) {
+        addMiss("頼みに無い操作（renumber）が混入しています");
+      }
+      if (opObj.blank_rows === true && !/空行|空白行|空白の行|空いてる行|空いている行|空き行/.test(tFullN)) {
+        addMiss("頼みに無い操作（blank_rows）が混入しています");
+      }
+      if (opObj.dedupe === true && !/重複|ダブ|同じ行/.test(tFullN)) {
+        addMiss("頼みに無い操作（dedupe）が混入しています");
+      }
+    }
+    if (shN === "table.new") {
+      if (opObj.number && !_OPT_COL_CUES_JS.number.test(tFullN)) {
+        addMiss("頼みに無い操作（number）が混入しています");
+      }
+      if (opObj.total && !_OPT_COL_CUES_JS.total.test(tFullN)) {
+        addMiss("頼みに無い操作（total）が混入しています");
+      }
+    }
+    if (shN === "sort") {
+      if ((opObj.filter === true || opObj.where) && !/フィルタ|フィルター|絞り|だけ|のみ/.test(tFullN)) {
+        addMiss("頼みに無い操作（filter/where）が混入しています");
+      }
+    }
+    if (opObj.all_sheets === true && !/全シート|すべてのシート|全てのシート|ブック全体/.test(tFullN)) {
+      addMiss("頼みに無い操作（all_sheets）が混入しています");
+    }
+    if (shN === "format") {
+      if (opObj.bold === true && !/太字|太く|ボールド/i.test(tFullN)) {
+        addMiss("頼みに無い操作（bold）が混入しています");
+      }
+      if (opObj.italic === true && !/斜体|イタリック/i.test(tFullN)) {
+        addMiss("頼みに無い操作（italic）が混入しています");
+      }
+      if (opObj.merge === true && !/結合|マージ/i.test(tFullN)) {
+        addMiss("頼みに無い操作（merge）が混入しています");
+      }
+      if (_hasOwn(opObj, "borders") && opObj.borders !== null && opObj.borders !== false && opObj.borders !== "none" && opObj.borders !== "なし" && !/罫線|枠線|外枠|格子/.test(tFullN)) {
+        addMiss("頼みに無い操作（borders）が混入しています");
+      }
+    }
+    if (shN === "cols.delete") {
+      if (_COL_CONTENT_DEL_RE_JS.test(scanN) || _COL_PROP_OBJ_RE_JS.test(scanN)) {
+        addMiss("列そのものではなく列の中身の語が含まれているため列削除しません");
+      } else if (/(?:列|カラム)/.test(scanN) && !_COL_DIRECT_DEL_RE_JS.test(scanN)) {
+        addMiss("列そのものが削除対象ではないため列削除しません");
+      }
+    }
+    if (shN === "rows.delete") {
+      if (/(?:行目|行)の(?!削除|消去|除去)[^\s、。のをにはが]{1,12}を|中身|値だけ|値を|空白|スペース|改行|色|背景|書式|罫線|メモ|コメント|リンク/.test(scanN)) {
+        addMiss("行そのものではなく中身の語が含まれているため行削除しません");
+      }
+    }
+  }
+
   function buildOp(shelf, text, table, sheets, curSheet) {
     _ensureInit();
     if (typeof shelf === "string") {
@@ -1880,251 +2125,6 @@ var ComboPlanner = (function () {
         }
       }
       opObj.equals = eqS;
-    }
-
-    function _auditBuiltOpJs(shObj, opObj, txt, scanTxt, tbl, cHits, missArr) {
-      var shN = shObj.name;
-      var scanN = nfkc(scanTxt);
-      var addMiss = function (msg) {
-        if (missArr.indexOf(msg) < 0) missArr.push(msg);
-      };
-      var hasSizeCue = /(?<!より)(?:大きく|小さく)|文字サイズ|フォントサイズ|(?<![0-9])サイズを(?:変え|上げ|下げ|大きく|小さく|拡大|縮小)|拡大して|縮小して/.test(scanN);
-      var isDimSize = /(?:幅|高さ|列幅|行高|行|列)を(?:大きく|小さく)/.test(scanN);
-      if (hasSizeCue && (!isDimSize || /文字|フォント/.test(scanN))) {
-        if (!(shN === "width" && !/文字|フォント/.test(scanN)) && (opObj.size === undefined || opObj.size === null) && (opObj.size_delta === undefined || opObj.size_delta === null)) {
-          addMiss("サイズ（具体的な数値 pt）");
-        }
-      }
-      if (_ADD_SHELVES_JS[shN] && /外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア/.test(scanN)) {
-        addMiss("逆の操作（外す・消す・解除）の語が含まれています");
-      }
-      if (/下線|アンダーライン|取り消し線|打ち消し線|取消線|縦書き|斜め文字|文字を回転|テキストを回転/.test(scanN)) {
-        addMiss("未対応の書式指示（下線・取り消し線・回転等）");
-      }
-      if (shN === "format") {
-        var mEqF = _COND_EQ_THING_RE_JS.exec(scanN);
-        var hasEqColF = !!(mEqF && (!tbl || !Array.isArray(tbl.columns) || !tbl.columns.length || _resolveColRefJs(mEqF[1], tbl)));
-        var hasRowCond = /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(scanN) ||
-          hasEqColF ||
-          /(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない|になっている|になってる).{0,8}(?:の行|行を|行に|行全体|のセル|セルを|(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}(?:を|に|は))/.test(scanN) ||
-          (_DATE_CMP_CUE_RE_JS.test(scanN) && /(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN));
-        if (hasRowCond) addMiss("条件付き書式（cf.add）の条件");
-        if (/固定|フリーズ/.test(scanN)) addMiss("固定（freeze）の指定");
-        if (/並べ替|ソート/.test(scanN)) addMiss("並べ替え（sort）の指定");
-        if (/フィルタ|絞り込/.test(scanN)) addMiss("絞り込み（filter）の指定");
-        if (scanN.indexOf("太字") >= 0 && !_hasOwn(opObj, "bold")) addMiss("太字（bold）");
-        if (/斜体|イタリック/.test(scanN) && !_hasOwn(opObj, "italic")) addMiss("斜体（italic）");
-        if (/中央揃え|中央寄せ|中央に|真ん中に|右揃え|右寄せ|左揃え|左寄せ/.test(scanN) && !_hasOwn(opObj, "align")) addMiss("配置（align）");
-        if (scanN.indexOf("折り返") >= 0 && !_hasOwn(opObj, "wrap")) addMiss("折り返し（wrap）");
-        if (/罫線|外枠/.test(scanN) && !_hasOwn(opObj, "borders")) addMiss("罫線（borders）");
-        if (/結合|マージ/.test(scanN) && !_hasOwn(opObj, "merge")) addMiss("結合（merge）");
-        if (/二重線|点線|破線/.test(scanN)) addMiss("罫線の種類（formatは実線のみ）");
-        if (/(?:パーセント|%\s*表示|桁区切|カンマ区切|通貨形式|円マーク|年月日の?形|年月日形式|yyyy|hh:mm|曜日)/i.test(scanN) && !_hasOwn(opObj, "number_format")) {
-          addMiss("表示形式（number_format）");
-        }
-        if (cHits.length && !opObj.bg && !opObj.color) addMiss("色（color/bg）");
-      }
-      if (shN === "cf.add" && !opObj.bg && !opObj.color && (opObj.bold === undefined || opObj.bold === null)) {
-        addMiss("書式（bg・color・bold）");
-      }
-      if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
-        if ((/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) || _DATE_CMP_CUE_RE_JS.test(scanN)) && !opObj.when) {
-          addMiss("条件（when）");
-        }
-        if (!opObj.when && _isEmptyVal(opObj.equals) && _isEmptyVal(opObj.value)) {
-          addMiss("絞り込み条件（equals/when）");
-        }
-        if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "ne" || opObj.when === "between") && _isEmptyVal(opObj.value)) {
-          addMiss("value");
-        }
-      }
-      if (_FORMULA_COL_SHELVES_JS[shN] && opObj.at) {
-        var dstCol = opObj.at;
-        var dstL = _letterOf(tbl, dstCol) || dstCol;
-        var srcRefs = {};
-        if (shN === "calc.col" && opObj.expr) {
-          srcRefs = _exprReferencedColsJs(opObj.expr, tbl);
-        } else {
-          var sKeys = ["col", "col_a", "col_b", "start_col", "end_col"];
-          for (var ski = 0; ski < sKeys.length; ski++) {
-            var sv = opObj[sKeys[ski]];
-            if (sv) {
-              srcRefs[sv] = true;
-              var sl0 = _letterOf(tbl, sv);
-              if (sl0) srcRefs[sl0] = true;
-            }
-          }
-          if (Array.isArray(opObj.cols)) {
-            for (var sci0 = 0; sci0 < opObj.cols.length; sci0++) {
-              var scv = opObj.cols[sci0];
-              srcRefs[scv] = true;
-              var sl1 = _letterOf(tbl, scv);
-              if (sl1) srcRefs[sl1] = true;
-            }
-          }
-        }
-        if (srcRefs[dstCol] || srcRefs[dstL]) {
-          addMiss("入れ先の列「" + dstCol + "」が式の入力列と同じため上書き不可");
-        }
-      }
-      // 6. 最終防波堤: 組んだ op の列引数・式に表に無い列名が残っていれば撃たない
-      if (tbl && Array.isArray(tbl.columns) && tbl.columns.length) {
-        var validNames = {}, validLetters = {};
-        for (var vi0 = 0; vi0 < tbl.columns.length; vi0++) {
-          var vnm = String((tbl.columns[vi0] && tbl.columns[vi0].name) || "").trim();
-          var vcl = String((tbl.columns[vi0] && tbl.columns[vi0].col) || "").trim();
-          if (vnm) validNames[vnm] = true;
-          if (vcl) validLetters[vcl] = true;
-        }
-        var isValidColVal = function (v, allowAnyLetter) {
-          var sv = nfkc(String(v === null || v === undefined ? "" : v)).trim();
-          if (!sv) return false;
-          if (validNames[sv] || validLetters[sv]) return true;
-          if (allowAnyLetter && /^[A-Z]{1,3}$/.test(sv)) return true;
-          return false;
-        };
-        var shArgs = shObj.args || [];
-        for (var ai3 = 0; ai3 < shArgs.length; ai3++) {
-          var ak = shArgs[ai3].name, at = shArgs[ai3].type;
-          if (!_hasOwn(opObj, ak) || _SKIP_COL_VALIDATE_JS[shN + ":" + ak]) continue;
-          var allowLet = (ak === "at" || ak === "from" || ak === "to");
-          if (at === "列") {
-            if (!isValidColVal(opObj[ak], allowLet)) addMiss("表に無い列名（" + opObj[ak] + "）");
-          } else if (at === "列[]") {
-            var arrV = Array.isArray(opObj[ak]) ? opObj[ak] : [opObj[ak]];
-            for (var avi = 0; avi < arrV.length; avi++) {
-              if (!isValidColVal(arrV[avi], allowLet)) addMiss("表に無い列名（" + arrV[avi] + "）");
-            }
-          }
-        }
-        if (shN === "sort" && Array.isArray(opObj.cols)) {
-          for (var si3 = 0; si3 < opObj.cols.length; si3++) {
-            var sSpec = String(opObj.cols[si3]);
-            var sBody = sSpec.charAt(0) === "-" ? sSpec.slice(1) : sSpec;
-            if (!isValidColVal(sBody, false)) addMiss("表に無い列名（" + sBody + "）");
-          }
-        }
-        if (shN === "calc.col" && opObj.expr) {
-          var eToks = nfkc(String(opObj.expr)).split(/[*/+\-()]/);
-          for (var eti = 0; eti < eToks.length; eti++) {
-            var stE = eToks[eti].trim();
-            if (!stE || /^-?[0-9]+(?:\.[0-9]+)?$/.test(stE)) continue;
-            if (!isValidColVal(stE, false)) addMiss("式に表に無い列名（" + stE + "）");
-          }
-        }
-      }
-      // 7. % 列の 1 超え比較防止 ＋ 過半数・全行削除防止
-      if (_CMP_VALUE_SHELVES_JS[shN]) {
-        var cmpCol = opObj.col;
-        var cmpNumStr = null;
-        if (shN === "cf.add" && opObj.when === "formula" && typeof opObj.value === "string") {
-          var mFm = /\$([A-Z]{1,3})[0-9]+\s*(?:>=|<=|<>|>|<|=)\s*(-?[0-9]+(?:\.[0-9]+)?)/.exec(opObj.value);
-          if (mFm) {
-            var fmColL = mFm[1];
-            cmpNumStr = mFm[2];
-            var fmCols = (tbl && tbl.columns) || [];
-            for (var fmi = 0; fmi < fmCols.length; fmi++) {
-              if (fmCols[fmi] && fmCols[fmi].col === fmColL && fmCols[fmi].name) { cmpCol = fmCols[fmi].name; break; }
-            }
-          }
-        } else if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "eq" || opObj.when === "ne") && !_isEmptyVal(opObj.value)) {
-          cmpNumStr = String(opObj.value).replace(/,/g, "").trim();
-        }
-        if (!cmpCol && shN === "cf.add" && typeof opObj.range === "string" && tbl && tbl.columns) {
-          var mRgC = /^([A-Z]{1,3})[0-9]+:\1[0-9]+$/.exec(opObj.range);
-          if (mRgC) {
-            for (var rgi = 0; rgi < tbl.columns.length; rgi++) {
-              if (tbl.columns[rgi] && tbl.columns[rgi].col === mRgC[1] && tbl.columns[rgi].name) { cmpCol = tbl.columns[rgi].name; break; }
-            }
-          }
-        }
-        if (cmpCol && _PCT_COL_RE_JS.test(String(cmpCol)) && cmpNumStr !== null && cmpNumStr !== "" && !isNaN(Number(cmpNumStr))) {
-          if (Math.abs(Number(cmpNumStr)) > 1.0) {
-            addMiss("%列「" + cmpCol + "」を1を超える値（" + cmpNumStr + "）で比較しているため確認が必要");
-          }
-        }
-        if (shN === "filter.delete" && tbl && Array.isArray(tbl.rows) && tbl.rows.length && opObj.col) {
-          var delCols = tbl.columns || [];
-          var delIdx = -1;
-          for (var dci0 = 0; dci0 < delCols.length; dci0++) {
-            if (delCols[dci0] && (delCols[dci0].name === opObj.col || delCols[dci0].col === opObj.col)) { delIdx = dci0; break; }
-          }
-          if (delIdx >= 0) {
-            var totalR = tbl.rows.length, hitsR = 0;
-            var tgtV = opObj.value !== undefined ? opObj.value : opObj.equals;
-            for (var dri = 0; dri < totalR; dri++) {
-              var rowD = tbl.rows[dri];
-              if (Array.isArray(rowD) && delIdx < rowD.length && _matchRowCondJs(rowD[delIdx], opObj.when || "eq", tgtV)) hitsR++;
-            }
-            if (hitsR > 0 && (hitsR === totalR || hitsR * 2 > totalR)) {
-              addMiss("条件に合う行が過半数（" + hitsR + "/" + totalR + "行）のため確認が必要");
-            }
-          }
-        }
-      }
-      // 8. 守りの逆（頼みに無い手を勝手に足さない）＋ find の疑問文誤爆防止
-      var tFullN = nfkc(txt);
-      if (shN === "find") {
-        var hasQWord = /どんな|何が|何を|何の|何か|なにが|なにを|何が入|何があ|どれ|誰|だれ|いくつ|何件|何人|何行|何列|何個|いくら/.test(tFullN);
-        var hasPoliteQ = /ですか|でしょうか|ますか/.test(tFullN) && !/(?:もらえ|くれ|いただけ|でき|られ)ますか/.test(tFullN);
-        var findTxtN = nfkc(String(opObj.text || ""));
-        if (hasQWord || hasPoliteQ || /どんな|何|なに|どれ|どこ|誰|だれ|いくつ/.test(findTxtN)) {
-          addMiss("疑問の文のため find で検索しません");
-        }
-      }
-      if (shN === "seiri") {
-        if (opObj.renumber && !_OPT_COL_CUES_JS.renumber.test(tFullN)) {
-          addMiss("頼みに無い操作（renumber）が混入しています");
-        }
-        if (opObj.blank_rows === true && !/空行|空白行|空白の行|空いてる行|空いている行|空き行/.test(tFullN)) {
-          addMiss("頼みに無い操作（blank_rows）が混入しています");
-        }
-        if (opObj.dedupe === true && !/重複|ダブ|同じ行/.test(tFullN)) {
-          addMiss("頼みに無い操作（dedupe）が混入しています");
-        }
-      }
-      if (shN === "table.new") {
-        if (opObj.number && !_OPT_COL_CUES_JS.number.test(tFullN)) {
-          addMiss("頼みに無い操作（number）が混入しています");
-        }
-        if (opObj.total && !_OPT_COL_CUES_JS.total.test(tFullN)) {
-          addMiss("頼みに無い操作（total）が混入しています");
-        }
-      }
-      if (shN === "sort") {
-        if ((opObj.filter === true || opObj.where) && !/フィルタ|フィルター|絞り|だけ|のみ/.test(tFullN)) {
-          addMiss("頼みに無い操作（filter/where）が混入しています");
-        }
-      }
-      if (opObj.all_sheets === true && !/全シート|すべてのシート|全てのシート|ブック全体/.test(tFullN)) {
-        addMiss("頼みに無い操作（all_sheets）が混入しています");
-      }
-      if (shN === "format") {
-        if (opObj.bold === true && !/太字|太く|ボールド/i.test(tFullN)) {
-          addMiss("頼みに無い操作（bold）が混入しています");
-        }
-        if (opObj.italic === true && !/斜体|イタリック/i.test(tFullN)) {
-          addMiss("頼みに無い操作（italic）が混入しています");
-        }
-        if (opObj.merge === true && !/結合|マージ/i.test(tFullN)) {
-          addMiss("頼みに無い操作（merge）が混入しています");
-        }
-        if (_hasOwn(opObj, "borders") && opObj.borders !== null && opObj.borders !== false && opObj.borders !== "none" && opObj.borders !== "なし" && !/罫線|枠線|外枠|格子/.test(tFullN)) {
-          addMiss("頼みに無い操作（borders）が混入しています");
-        }
-      }
-      if (shN === "cols.delete") {
-        if (_COL_CONTENT_DEL_RE_JS.test(scanN) || _COL_PROP_OBJ_RE_JS.test(scanN)) {
-          addMiss("列そのものではなく列の中身の語が含まれているため列削除しません");
-        } else if (/(?:列|カラム)/.test(scanN) && !_COL_DIRECT_DEL_RE_JS.test(scanN)) {
-          addMiss("列そのものが削除対象ではないため列削除しません");
-        }
-      }
-      if (shN === "rows.delete") {
-        if (/(?:行目|行)の(?!削除|消去|除去)[^\s、。のをにはが]{1,12}を|中身|値だけ|値を|空白|スペース|改行|色|背景|書式|罫線|メモ|コメント|リンク/.test(scanN)) {
-          addMiss("行そのものではなく中身の語が含まれているため行削除しません");
-        }
-      }
     }
 
     if (_CMP_VALUE_SHELVES_JS[shelf.name] && op.when !== "formula") {
@@ -3840,6 +3840,111 @@ var ComboPlanner = (function () {
     };
   }
 
+  var _AI_DESTRUCTIVE_SHELVES_JS = {
+    "rows.delete": 1, "cols.delete": 1, "filter.delete": 1,
+    "clear.values": 1, "clear.all": 1, "sheet.delete": 1
+  };
+  var _AI_DELETE_CUE_RE_JS = /消|削除|取り除|捨て|クリア|空に|抜[いきく]|削[っりる]|除去|除外|詰め|無く|なく[しす]|減ら|落と/;
+
+  function auditAiOps(ops, askText, table) {
+    _ensureInit();
+    var issues = [];
+    if (!Array.isArray(ops) || !ops.length) {
+      return { ok: false, ops: [], issues: ["ops が空または配列ではありません"] };
+    }
+    var askS = String(askText || "").trim();
+    var askN = nfkc(askS);
+    if (askS && _isReadOnlyAskJs(askS)) {
+      return { ok: false, ops: [], issues: ["読むだけの質問のためシートを変更する ops は実行しません"] };
+    }
+    var sanitized = [];
+    for (var i = 0; i < ops.length; i++) {
+      var raw = ops[i];
+      if (!raw || typeof raw !== "object" || typeof raw.shelf !== "string" || !raw.shelf.trim()) {
+        issues.push((i + 1) + " 番目の ops に 'shelf'（棚の名前）がありません");
+        continue;
+      }
+      var op = {};
+      var ks = Object.keys(raw);
+      for (var ki = 0; ki < ks.length; ki++) {
+        if (ks[ki] !== "ok") op[ks[ki]] = raw[ks[ki]];
+      }
+      var shName = op.shelf.trim();
+      op.shelf = shName;
+      var shObj = _byName[shName];
+      if (!shObj) {
+        issues.push("棚「" + shName + "」はありません（" + (i + 1) + " 番目）");
+        continue;
+      }
+      var reqArgs = shObj.args || [];
+      for (var ri = 0; ri < reqArgs.length; ri++) {
+        var ra = reqArgs[ri];
+        if (ra.req && (!_hasOwn(op, ra.name) || _isEmptyVal(op[ra.name]))) {
+          issues.push("棚「" + shName + "」に必須引数「" + ra.name + "」がありません");
+        }
+      }
+      if (Array.isArray(shObj.any) && shObj.any.length) {
+        var anyHit = false;
+        for (var ai0 = 0; ai0 < shObj.any.length; ai0++) {
+          var ak0 = shObj.any[ai0];
+          if (_hasOwn(op, ak0) && !_isEmptyVal(op[ak0])) { anyHit = true; break; }
+        }
+        if (!anyHit) {
+          issues.push("棚「" + shName + "」に " + shObj.any.join("・") + " のどれかが要ります");
+        }
+      }
+      if (askS && _AI_DESTRUCTIVE_SHELVES_JS[shName] && !_AI_DELETE_CUE_RE_JS.test(askN)) {
+        issues.push("頼みに削除・消去の指示が無いため「" + shName + "」は実行しません");
+        continue;
+      }
+      sanitized.push(op);
+    }
+    if (issues.length || !sanitized.length || !askS) {
+      return { ok: !issues.length && sanitized.length > 0, ops: sanitized, issues: issues };
+    }
+    var scan = askS.replace(QUOTE_RE_G, " ").replace(PAREN_RE_G, " ");
+    var colorHits = _colorHits(scan);
+    scan = scan.replace(_HEX_COLOR_RE_G, " ");
+
+    var allShelves = {};
+    for (var si = 0; si < sanitized.length; si++) allShelves[sanitized[si].shelf] = 1;
+    var multi = sanitized.length > 1;
+    var hasAny = function (fn) {
+      for (var xi = 0; xi < sanitized.length; xi++) if (fn(sanitized[xi])) return true;
+      return false;
+    };
+    var sharedOk = {
+      "サイズ（具体的な数値 pt）": hasAny(function (o) { return (o.size !== undefined && o.size !== null) || (o.size_delta !== undefined && o.size_delta !== null); }),
+      "太字（bold）": hasAny(function (o) { return _hasOwn(o, "bold"); }),
+      "斜体（italic）": hasAny(function (o) { return _hasOwn(o, "italic"); }),
+      "配置（align）": hasAny(function (o) { return _hasOwn(o, "align"); }),
+      "折り返し（wrap）": hasAny(function (o) { return _hasOwn(o, "wrap"); }),
+      "罫線（borders）": hasAny(function (o) { return _hasOwn(o, "borders"); }),
+      "結合（merge）": hasAny(function (o) { return _hasOwn(o, "merge"); }),
+      "表示形式（number_format）": hasAny(function (o) { return _hasOwn(o, "number_format") || o.shelf === "format.negred" || o.shelf === "date.fix"; }),
+      "色（color/bg）": hasAny(function (o) { return !!(o.bg || o.color || o.shelf === "cf.add" || o.shelf === "banding.add" || o.shelf === "sheet.color"); }),
+      "条件付き書式（cf.add）の条件": !!allShelves["cf.add"],
+      "固定（freeze）の指定": !!allShelves["freeze"],
+      "並べ替え（sort）の指定": !!allShelves["sort"],
+      "絞り込み（filter）の指定": !!(allShelves["filter.on"] || allShelves["filter.where"] || allShelves["filter.delete"] || allShelves["filter.extract"] || allShelves["filter.off"]),
+      "逆の操作（外す・消す・解除）の語が含まれています": !!(allShelves["banding.remove"] || allShelves["cf.clear"] || allShelves["validation.clear"] || allShelves["filter.off"] || allShelves["unfreeze"] || allShelves["protect.remove"] || allShelves["group.remove"] || allShelves["chart.delete"] || allShelves["bg.clear"] || allShelves["clear.format"] || allShelves["clear.values"] || allShelves["clear.all"])
+    };
+    for (var oi = 0; oi < sanitized.length; oi++) {
+      var opCur = sanitized[oi];
+      var shCur = _byName[opCur.shelf];
+      if (!shCur) continue;
+      var opMiss = [];
+      _auditBuiltOpJs(shCur, opCur, askS, scan, table, colorHits, opMiss);
+      for (var mi = 0; mi < opMiss.length; mi++) {
+        var mTxt = opMiss[mi];
+        if (multi && sharedOk[mTxt]) continue;
+        var tag = multi ? (opCur.shelf + ": " + mTxt) : mTxt;
+        if (issues.indexOf(tag) < 0) issues.push(tag);
+      }
+    }
+    return { ok: !issues.length, ops: sanitized, issues: issues };
+  }
+
   return {
     init: init,
     nfkc: nfkc,
@@ -3851,6 +3956,7 @@ var ComboPlanner = (function () {
     _expandSelectionPronouns: _expandSelectionPronouns,
     expandSelectionPronouns: _expandSelectionPronouns,
     buildOp: buildOp,
+    auditAiOps: auditAiOps,
     _applyScopeFallback: _applyScopeFallback,
     applyScopeFallback: _applyScopeFallback,
     plan: plan,

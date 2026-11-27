@@ -398,7 +398,22 @@
             return;
           }
           if (d.ok && d.action === "ops" && Array.isArray(d.ops) && d.ops.length) {
-            onRunOps(d.ops, txt, { switchToChat: true });
+            var safeOps = d.ops.map(function(o) {
+              if (!o || typeof o !== "object") return o;
+              var cp = Object.assign({}, o);
+              delete cp.ok;
+              return cp;
+            });
+            if (Planner && typeof Planner.auditAiOps === "function") {
+              var uiAud = Planner.auditAiOps(safeOps, txt, state.table);
+              if (!uiAud.ok) {
+                switchTab("chat");
+                appendLog(els.chatLog, "is-err", "⚠ AI の手順を守りで止めました: " + txt, uiAud.issues.join(" ／ "));
+                return;
+              }
+              safeOps = uiAud.ops;
+            }
+            onRunOps(safeOps, txt, { switchToChat: true, fromAi: true, aiAsk: txt, aiNote: d.note || "" });
             return;
           }
           if (d.ok && d.action === "reply") {
@@ -486,7 +501,11 @@
         switchToChat: switchChat
       });
     };
-    if (!els.chkBackup.checked && tryDirectSheetsApi(ops, label, false, runViaGas, { switchToChat: switchChat })) {
+    var forceEngineForAiGuard = !!(opts && opts.fromAi && Array.isArray(ops) && ops.some(function(o) {
+      var sn = o && o.shelf;
+      return sn === "cols.insert" || sn === "rows.insert" || sn === "clear.values" || sn === "write";
+    }));
+    if (!forceEngineForAiGuard && !els.chkBackup.checked && tryDirectSheetsApi(ops, label, false, runViaGas, { switchToChat: switchChat })) {
       return;
     }
     runViaGas();

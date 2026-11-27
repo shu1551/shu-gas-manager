@@ -279,6 +279,32 @@ function comboResolveLatestApiModel_(provider, aliasOrModel, apiKey) {
   return gFallback;
 }
 
+function comboSanitizeAndAuditAiOps_(ops, askText, table) {
+  if (!Array.isArray(ops) || !ops.length) {
+    return { ok: false, ops: [], issues: ['ops が空または配列ではありません'] };
+  }
+  // 守り: AI が勝手に ok:true を付けても必ず剥ぎ取る（guardDelete_ / guardOverwrite_ を緩めない）
+  var cleaned = ops.map(function (o) {
+    if (!o || typeof o !== 'object') return o;
+    var cp = {};
+    Object.keys(o).forEach(function (k) { if (k !== 'ok') cp[k] = o[k]; });
+    return cp;
+  });
+  if (typeof ComboPlanner !== 'undefined' && typeof ComboPlanner.auditAiOps === 'function') {
+    return ComboPlanner.auditAiOps(cleaned, askText || '', table || null);
+  }
+  var issues = [];
+  for (var i = 0; i < cleaned.length; i++) {
+    var op = cleaned[i];
+    if (!op || typeof op !== 'object' || !op.shelf) {
+      issues.push((i + 1) + ' 番目の ops に shelf がありません');
+    } else if (typeof CATALOG !== 'undefined' && CATALOG && !CATALOG[op.shelf]) {
+      issues.push('棚「' + op.shelf + '」はありません');
+    }
+  }
+  return { ok: !issues.length, ops: cleaned, issues: issues };
+}
+
 function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets, optOpts) {
   var apiKey = comboResolveApiKey_(cfg);
   if (!apiKey) throw new Error('APIキーが設定されていません');
@@ -717,8 +743,32 @@ function comboRunAsk(req) {
         };
       }
       if (aiRes && Array.isArray(aiRes.ops) && aiRes.ops.length) {
+        var aud1 = comboSanitizeAndAuditAiOps_(aiRes.ops, askText, table);
+        if (!aud1.ok) {
+          var retryAsk = askText + '\n（前の答えの ops は守りの監査で止まりました: ' + aud1.issues.join(' ／ ') + '。表にある列名と頼みに合う棚・引数だけで直し、安全にできない・曖昧なら reply で聞き返してください）';
+          aiRes = comboCallAiApi_(cfg, retryAsk, ss, curSheet, selection, table, sheets, {
+            readOnly: isReadOnlyAsk,
+            snippet: tblSnippet,
+            plan: planHintObj
+          });
+          if (aiRes && aiRes.action === 'reply') {
+            return {
+              ok: true,
+              source: 'ai_reply',
+              readOnly: false,
+              text: '[AI返答]\n' + String(aiRes.message || ''),
+              gasMs: Date.now() - t0
+            };
+          }
+          aud1 = comboSanitizeAndAuditAiOps_(aiRes && aiRes.ops, askText, table);
+          if (!aud1.ok) {
+            var audMsg = 'AI の手順が守りの監査で止まりました: ' + aud1.issues.join(' ／ ');
+            return { ok: false, error: audMsg, text: audMsg, gasMs: Date.now() - t0 };
+          }
+        }
+        var safeOps = aud1.ops;
         var execRes = comboRunOps({
-          ops: aiRes.ops,
+          ops: safeOps,
           ok: !!req.ok,
           backup: !!req.backup,
           fastUndo: req.fastUndo,
@@ -733,6 +783,8 @@ function comboRunAsk(req) {
         });
         var noteHead = '[AI解釈]' + (aiRes.note ? ' ' + aiRes.note : '');
         execRes.source = 'ai_api';
+        execRes.aiOps = safeOps;
+        execRes.aiNote = aiRes.note || '';
         execRes.text = noteHead + '\n' + execRes.text;
         execRes.gasMs = Date.now() - t0;
         return execRes;
@@ -1158,8 +1210,22 @@ function comboPostboxDeliver(resPayload) {
 
   var isReadOnlyDeliver = !!((orig && (orig.kind === 'read' || orig.readOnly)) || resPayload.readOnly);
   if (!isReadOnlyDeliver && action === 'ops' && Array.isArray(resPayload.ops) && resPayload.ops.length) {
+    var audPb = comboSanitizeAndAuditAiOps_(resPayload.ops, orig ? orig.ask : '', orig ? orig.table : null);
+    if (!audPb.ok) {
+      var audPbMsg = '[AI監査停止(郵便受け)] ' + audPb.issues.join(' ／ ');
+      comboPushPostboxDone_({
+        reqId: reqId,
+        ssId: orig ? orig.ssId : '',
+        ask: orig ? orig.ask : '',
+        ok: false,
+        error: audPbMsg,
+        text: audPbMsg,
+        gasMs: Date.now() - t0
+      });
+      return { ok: false, delivered: true, reqId: reqId, error: audPbMsg, text: audPbMsg, gasMs: Date.now() - t0 };
+    }
     var execRes = comboRunOps({
-      ops: resPayload.ops,
+      ops: audPb.ops,
       ok: orig ? !!orig.ok : !!resPayload.ok,
       backup: orig ? !!orig.backup : !!resPayload.backup,
       sheet: orig ? orig.sheet : (resPayload.sheet || ''),

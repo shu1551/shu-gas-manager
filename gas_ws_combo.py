@@ -1786,10 +1786,13 @@ class ComboPostboxWatcher:
                     "message": msg,
                 }
             action = parsed.get("action") or ("ops" if parsed.get("ops") else "reply")
+            raw_ops = parsed.get("ops") or []
+            # 守り: AI が勝手に ok:true を付けても必ず剥ぎ取る（承認スキップ防止）
+            clean_ops = [{k: v for k, v in o.items() if k != "ok"} if isinstance(o, dict) else o for o in raw_ops] if isinstance(raw_ops, list) else []
             return {
                 "reqId": req_id,
                 "action": action,
-                "ops": parsed.get("ops") or [],
+                "ops": clean_ops,
                 "note": parsed.get("note") or "",
                 "message": parsed.get("message") or "",
             }
@@ -1826,25 +1829,38 @@ class ComboPostboxWatcher:
                     }
         return {"ok": True, "code": clean, "name": fns[0], "names": fns}
 
-    def _validate_ops_local(self, ops):
-        """直結ルート用: ops の棚名・必須引数・型をローカルのカタログで検査する。"""
+    def _validate_ops_local(self, ops, ask=None, table=None):
+        """直結・郵便受け共通: AI が返した ops をカタログ検査＋棚と同じ守り(_audit_built_op)に通す。"""
         if not isinstance(ops, list) or not ops:
-            return {"ok": False, "error": "ops が空または配列ではありません"}
+            return {"ok": False, "ops": [], "error": "ops が空または配列ではありません"}
         finder = self._get_finder()
         cat = finder.cat
-        for i, op in enumerate(ops, 1):
-            if not isinstance(op, dict) or not isinstance(op.get("shelf"), str) or not op.get("shelf").strip():
-                return {"ok": False, "error": f"{i} 番目の ops に 'shelf'（棚の名前）がありません"}
+        sanitized = []
+        for i, raw_op in enumerate(ops, 1):
+            if not isinstance(raw_op, dict) or not isinstance(raw_op.get("shelf"), str) or not raw_op.get("shelf").strip():
+                return {"ok": False, "ops": [], "error": f"{i} 番目の ops に 'shelf'（棚の名前）がありません"}
+            op = {k: v for k, v in raw_op.items() if k != "ok"}
             name = op["shelf"]
             if not cat.spec(name):
                 near = finder.near(name)
-                return {"ok": False, "error": f"棚「{name}」はありません（{i} 番目）。" + ("\n" + near if near else "")}
+                return {"ok": False, "ops": [], "error": f"棚「{name}」はありません（{i} 番目）。" + ("\n" + near if near else "")}
             msg = cat.check_op(i, op) or (gas_ws_catalog.EXTRA_CHECKS[name](op) if name in gas_ws_catalog.EXTRA_CHECKS else None)
             if msg:
                 s = cat.by_name[name]
                 card = "\n".join(finder.card(s))
-                return {"ok": False, "error": f"{msg}\nその棚の札:\n{card}\n   引数: {s['args_raw']}"}
-        return {"ok": True}
+                return {"ok": False, "ops": [], "error": f"{msg}\nその棚の札:\n{card}\n   引数: {s['args_raw']}"}
+            sanitized.append(op)
+        if ask:
+            import gas_ws_ask
+            aud = gas_ws_ask.audit_ai_ops(sanitized, ask, finder, table=table)
+            if not aud.get("ok"):
+                return {
+                    "ok": False,
+                    "ops": [],
+                    "error": "守りの監査で止まりました: " + " ／ ".join(aud.get("issues") or ["不明な不備"]),
+                }
+            sanitized = aud.get("ops") or sanitized
+        return {"ok": True, "ops": sanitized}
 
     @staticmethod
     def _extract_recorded_macros_from_files(files):
@@ -2018,22 +2034,26 @@ class ComboPostboxWatcher:
         with self._ai_lock:
             payload = self.resolve_item(item)
         if item.get("kind") != "mymacro" and payload.get("action") == "ops":
-            val_ops = self._validate_ops_local(payload.get("ops"))
-            if not val_ops.get("ok"):
-                _emit({"type": "status", "message": "検証エラーを検出・AI に修正依頼中…"})
+            val_ops = self._validate_ops_local(payload.get("ops"), ask=item.get("ask"), table=item.get("table"))
+            if val_ops.get("ok"):
+                payload["ops"] = val_ops.get("ops") or payload.get("ops")
+            else:
+                _emit({"type": "status", "message": "検証・監査エラーを検出・AI に修正依頼中…"})
                 retry_item = dict(
                     item,
                     ask=str(item.get("ask") or "")
-                    + "\n（前の答えの ops は失敗しました: "
+                    + "\n（前の答えの ops は守りの検査で止まりました: "
                     + str(val_ops.get("error") or "")
-                    + "。正しい棚名・引数名に直して答え直してください）",
+                    + "。表にある列名と頼みに合う棚・引数だけで直し、安全にできない・曖昧なら reply で聞き返してください）",
                 )
                 with self._ai_lock:
                     payload = self.resolve_item(retry_item)
                 if payload.get("action") == "ops":
-                    val_ops2 = self._validate_ops_local(payload.get("ops"))
-                    if not val_ops2.get("ok"):
-                        payload = {"action": "error", "error": val_ops2.get("error") or "ops の検証に失敗しました"}
+                    val_ops2 = self._validate_ops_local(payload.get("ops"), ask=item.get("ask"), table=item.get("table"))
+                    if val_ops2.get("ok"):
+                        payload["ops"] = val_ops2.get("ops") or payload.get("ops")
+                    else:
+                        payload = {"action": "error", "error": val_ops2.get("error") or "ops の検証・監査に失敗しました"}
         if item.get("kind") == "mymacro" and payload.get("action") == "mymacro":
             mode = item.get("mode") or "add"
             existing_names = item.get("existingNames") or []
@@ -2102,6 +2122,26 @@ class ComboPostboxWatcher:
             t_ai = time.perf_counter()
             with self._ai_lock:
                 payload = self.resolve_item(item)
+            if item.get("kind") != "mymacro" and payload.get("action") == "ops":
+                val_pb = self._validate_ops_local(payload.get("ops"), ask=item.get("ask"), table=item.get("table"))
+                if val_pb.get("ok"):
+                    payload["ops"] = val_pb.get("ops") or payload.get("ops")
+                else:
+                    retry_pb = dict(
+                        item,
+                        ask=str(item.get("ask") or "")
+                        + "\n（前の答えの ops は守りの検査で止まりました: "
+                        + str(val_pb.get("error") or "")
+                        + "。表にある列名と頼みに合う棚・引数だけで直し、安全にできない・曖昧なら reply で聞き返してください）",
+                    )
+                    with self._ai_lock:
+                        payload = self.resolve_item(retry_pb)
+                    if payload.get("action") == "ops":
+                        val_pb2 = self._validate_ops_local(payload.get("ops"), ask=item.get("ask"), table=item.get("table"))
+                        if val_pb2.get("ok"):
+                            payload["ops"] = val_pb2.get("ops") or payload.get("ops")
+                        else:
+                            payload = {"reqId": item.get("reqId"), "action": "error", "error": val_pb2.get("error") or "ops の検証・監査に失敗しました"}
             ai_ms = int((time.perf_counter() - t_ai) * 1000)
             t_deliv = time.perf_counter()
             deliv_resp = self.client.run_function(

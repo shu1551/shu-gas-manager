@@ -1062,8 +1062,8 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
     if sh_name in _ADD_SHELVES and re.search(r"外し|外す|解除|やめ|なくし|無くし|消して|消す|削除|クリア", scan_n):
         _add_miss("逆の操作（外す・消す・解除）の語が含まれています")
 
-    # 2. 未対応の書式装飾語が残っている
-    if re.search(r"下線|アンダーライン|取り消し線|打ち消し線|取消線|縦書き|斜め文字|文字を回転|テキストを回転", scan_n):
+    # 2. 未対応の書式装飾語が残っている（api 棚で直接 Sheets API を組む場合を除く）
+    if sh_name != "api" and re.search(r"下線|アンダーライン|取り消し線|打ち消し線|取消線|縦書き|斜め文字|文字を回転|テキストを回転", scan_n):
         _add_miss("未対応の書式指示（下線・取り消し線・回転等）")
 
     # 3. format 棚での取りこぼし・誤爆防止
@@ -1264,6 +1264,90 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
     if sh_name == "rows.delete":
         if re.search(r"(?:行目|行)の(?!削除|消去|除去)[^\s、。のをにはが]{1,12}を|中身|値だけ|値を|空白|スペース|改行|色|背景|書式|罫線|メモ|コメント|リンク", scan_n):
             _add_miss("行そのものではなく中身の語が含まれているため行削除しません")
+
+
+_AI_DESTRUCTIVE_SHELVES = frozenset({"rows.delete", "cols.delete", "filter.delete", "clear.values", "clear.all", "sheet.delete"})
+_AI_DELETE_CUE_RE = re.compile(r"消|削除|取り除|捨て|クリア|空に|抜[いきく]|削[っりる]|除去|除外|詰め|無く|なく[しす]|減ら|落と")
+
+
+def audit_ai_ops(ops, ask, finder, table=None):
+    """AI が返した ops を棚と同じ守り（ok 剥ぎ取り・カタログ検査・_audit_built_op）に通す。
+    戻り値: {"ok": bool, "ops": sanitized_ops, "issues": list[str]}
+    """
+    issues = []
+    if not isinstance(ops, list) or not ops:
+        return {"ok": False, "ops": [], "issues": ["ops が空または配列ではありません"]}
+    cat = finder.cat if finder is not None else None
+    ask_s = str(ask or "").strip()
+    ask_n = nfkc(ask_s)
+    if ask_s and _is_read_only_ask(ask_s):
+        return {"ok": False, "ops": [], "issues": ["読むだけの質問のためシートを変更する ops は実行しません"]}
+
+    sanitized = []
+    for idx, raw_op in enumerate(ops, 1):
+        if not isinstance(raw_op, dict) or not isinstance(raw_op.get("shelf"), str) or not raw_op.get("shelf").strip():
+            issues.append(f"{idx} 番目の ops に 'shelf'（棚の名前）がありません")
+            continue
+        # 守り: AI が勝手に ok=True を付けて承認（guardDelete_ / guardOverwrite_）を素通りするのを防ぐ
+        op = {k: v for k, v in raw_op.items() if k != "ok"}
+        sh_name = op["shelf"].strip()
+        op["shelf"] = sh_name
+        if cat is not None:
+            if not cat.spec(sh_name):
+                near = finder.near(sh_name)
+                issues.append(f"棚「{sh_name}」はありません（{idx} 番目）" + (f"（{near}）" if near else ""))
+                continue
+            msg = cat.check_op(idx, op) or (gas_ws_catalog.EXTRA_CHECKS[sh_name](op) if sh_name in gas_ws_catalog.EXTRA_CHECKS else None)
+            if msg:
+                issues.append(msg)
+                continue
+        if ask_s and sh_name in _AI_DESTRUCTIVE_SHELVES and not _AI_DELETE_CUE_RE.search(ask_n):
+            issues.append(f"頼みに削除・消去の指示が無いため「{sh_name}」は実行しません")
+            continue
+        sanitized.append(op)
+
+    if issues or not sanitized or not ask_s or cat is None:
+        return {"ok": not issues and bool(sanitized), "ops": sanitized, "issues": issues}
+
+    scan = QUOTE_RE.sub(" ", ask_s)
+    scan = re.sub(r"[（(][^）)]*[）)]", " ", scan)
+    color_hits = _color_hits(scan)
+    scan = _HEX_COLOR_RE.sub(" ", scan)
+
+    all_shelves = {o["shelf"] for o in sanitized}
+    multi = len(sanitized) > 1
+    # 複数 op のときに別 op が分担して満たし得る使い残し項目
+    shared_ok = {
+        "サイズ（具体的な数値 pt）": any(o.get("size") is not None or o.get("size_delta") is not None for o in sanitized),
+        "太字（bold）": any("bold" in o for o in sanitized),
+        "斜体（italic）": any("italic" in o for o in sanitized),
+        "配置（align）": any("align" in o for o in sanitized),
+        "折り返し（wrap）": any("wrap" in o for o in sanitized),
+        "罫線（borders）": any("borders" in o for o in sanitized),
+        "結合（merge）": any("merge" in o for o in sanitized),
+        "表示形式（number_format）": any("number_format" in o or o["shelf"] in ("format.negred", "date.fix") for o in sanitized),
+        "色（color/bg）": any(o.get("bg") or o.get("color") or o["shelf"] in ("cf.add", "banding.add", "sheet.color") for o in sanitized),
+        "条件付き書式（cf.add）の条件": "cf.add" in all_shelves,
+        "固定（freeze）の指定": "freeze" in all_shelves,
+        "並べ替え（sort）の指定": "sort" in all_shelves,
+        "絞り込み（filter）の指定": bool(all_shelves & {"filter.on", "filter.where", "filter.delete", "filter.extract", "filter.off"}),
+        "逆の操作（外す・消す・解除）の語が含まれています": bool(all_shelves & {"banding.remove", "cf.clear", "validation.clear", "filter.off", "unfreeze", "protect.remove", "group.remove", "chart.delete", "bg.clear", "clear.format", "clear.values", "clear.all"}),
+    }
+
+    for idx, op in enumerate(sanitized, 1):
+        shelf = cat.by_name.get(op["shelf"])
+        if not shelf:
+            continue
+        op_miss = []
+        _audit_built_op(shelf, op, ask_s, scan, table, color_hits, op_miss)
+        for m in op_miss:
+            if multi and shared_ok.get(m):
+                continue
+            tag = f"{op['shelf']}: {m}" if multi else m
+            if tag not in issues:
+                issues.append(tag)
+
+    return {"ok": not issues, "ops": sanitized, "issues": issues}
 
 
 # ------------------------------------------------------------------ 1 節 → 1 op
