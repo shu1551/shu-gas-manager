@@ -171,3 +171,63 @@ def test_ambiguous_tidy_with_sheet_name_like_col():
     assert not p.fire
     assert len(p.choices) == 3
     assert p.choices[0]["ops"] == [{"shelf": "tidy"}]
+
+
+def test_diagnose_workbook_8_types_and_verify_and_diff():
+    payload = [
+        {
+            "sheet": "受注",
+            "table": {
+                "header_row": 1,
+                "first_col": "A",
+                "last_col": "E",
+                "data": "2-4",
+                "total_row": 5,
+                "columns": [
+                    {"col": "A", "name": "顧客名", "number": False},
+                    {"col": "B", "name": "数量", "number": True},
+                    {"col": "C", "name": "単価", "number": True},
+                    {"col": "D", "name": "金額", "number": True},
+                    {"col": "E", "name": "備考", "number": False},
+                ],
+            },
+            "values": [
+                ["顧客名", "数量", "単価", "金額", "備考"],
+                ["青葉物産 ", 2, 1000, 2000, "10%引き"],
+                ["北斗工業", 3, 2000, 5000, ""],
+                ["北斗工業", 1, 1000, 1000, "キャンセル"],
+                ["合計", 6, "", 8000, ""],
+            ],
+            "formulas": [
+                [""] * 5,
+                [""] * 5,
+                [""] * 5,
+                [""] * 5,
+                ["", "=SUM(B2:B4)", "", "=SUM(D2:D4)", ""],
+            ],
+            "side": [],
+        },
+        {
+            "sheet": "集計",
+            "table": None,
+            "values": [["#REF!"]],
+            "formulas": [["=存在しないシート!A1"]],
+            "side": [],
+        },
+    ]
+    findings = I.diagnose_workbook(payload)
+    tags = {f["tag"] for f in findings}
+    assert "cross_sheet_ref" in tags
+    assert "calc_mismatch" in tags
+    assert "note_contradiction" in tags
+    assert "status_in_total" in tags
+    assert "key_whitespace_split" in tags
+
+    # 検算
+    ver = I.verify_after_do(payload[0]["table"], payload[0]["values"], payload[0]["formulas"])
+    assert ver["ok"] is True
+    assert any("D5 = 8,000" in c for c in ver["checks"])
+
+    # 差分
+    diffs = I.diff_cell_values({(3, 4): "5,000"}, {(3, 4): "6,000"})
+    assert diffs == ["D3: 5,000 → 6,000"]

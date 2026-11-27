@@ -222,11 +222,25 @@ def analyze_table_insights(
                         ("×", lambda a, b: a * b),
                         ("+", lambda a, b: a + b),
                     ):
-                        if all(abs(col_nums[tc_key][r] - fn(col_nums[k1][r], col_nums[k2][r])) < 1e-4 for r in valid_rows):
+                        match_rows = [r for r in valid_rows if abs(col_nums[tc_key][r] - fn(col_nums[k1][r], col_nums[k2][r])) < 1e-4]
+                        mismatch_rows = [r for r in valid_rows if abs(col_nums[tc_key][r] - fn(col_nums[k1][r], col_nums[k2][r])) >= 1e-4]
+                        if len(match_rows) == len(valid_rows):
                             add_ins(
                                 "type1",
                                 f"「{target_c['name']}」列（{tc_key}{first_data}:{tc_key}{last_data}）は"
                                 f"「{c1['name']} {op_sym} {c2['name']}」で計算できますが、数式ではなく値で入っています"
+                            )
+                            found_calc = True
+                            break
+                        if len(match_rows) >= 2 and len(match_rows) / len(valid_rows) >= 0.65 and mismatch_rows:
+                            mr = mismatch_rows[0]
+                            exp_v = fn(col_nums[k1][mr], col_nums[k2][mr])
+                            exp_s = f"{int(exp_v):,}" if abs(exp_v - round(exp_v)) < 1e-6 else f"{exp_v:,.2f}"
+                            act_s = get_val(mr, target_c["ci"])
+                            extra_m = f"（ほか {len(mismatch_rows) - 1} 件）" if len(mismatch_rows) > 1 else ""
+                            add_ins(
+                                "type1",
+                                f"{tc_key}{mr}（{target_c['name']}={act_s}）が「{c1['name']} {op_sym} {c2['name']}」（{exp_s}）と食い違っています{extra_m}（数式ではなく値で入力）"
                             )
                             found_calc = True
                             break
@@ -492,3 +506,284 @@ def analyze_from_snapshot(snap, sheet_name, tb, ops=None, max_items=3):
     if ent.get("basicFilter"):
         side.append("フィルタ")
     return analyze_table_insights(tb, v_grid, f_grid, side=side, ops=ops, max_items=max_items)
+
+
+# ====================================================================
+# 【1】ブック全体健診（全シート総当たり・8つの型）
+# ====================================================================
+_ERR_TOKENS = ("#REF!", "#NAME?", "#VALUE!", "#N/A", "#DIV/0!", "#NUM!", "#ERROR!")
+_CROSS_REF_RE = re.compile(r"(?:'([^']+)'|([A-Za-z0-9_\u3040-\u30ff\u4e00-\u9faf]+))![$]?[A-Z]{1,3}[$]?\d+")
+_KEY_HEAD_RE = re.compile(r"(?:コード|ID|番号|No|顧客|部門|部署|担当|商品|店舗|地域)", re.I)
+_UNIQUE_KEY_HEAD_RE = re.compile(r"(?:コード|ID|社員番号|会員番号|顧客番号|管理番号|注文番号|メール|mail)", re.I)
+_PCT_OFF_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]\s*(?:引|びき|オフ|OFF)", re.I)
+
+
+def _nfkc_trim(s: str) -> str:
+    import unicodedata
+    return unicodedata.normalize("NFKC", str(s or "")).strip()
+
+
+def _fmt_num(v: float) -> str:
+    if abs(v - round(v)) < 1e-6:
+        return f"{int(round(v)):,}"
+    return f"{v:,.2f}"
+
+
+def diagnose_workbook(sheets_payload):
+    """ブック全体の全シートデータから8つの型で確かな健診項目を重要度順に返す。
+
+    戻り値: [{"sheet": str, "tag": str, "priority": int, "text": str}, ...]
+    """
+    if not sheets_payload:
+        return []
+    sheet_names = {str(s.get("sheet") or "") for s in sheets_payload}
+    findings = []
+
+    def add_f(sheet, tag, priority, text):
+        findings.append({"sheet": sheet, "tag": tag, "priority": priority, "text": text})
+
+    for sp in sheets_payload:
+        sh = str(sp.get("sheet") or "")
+        tb = sp.get("table")
+        vals = sp.get("values") or []
+        forms = sp.get("formulas") or []
+        side = sp.get("side") or []
+
+        # --- 型8: シートをまたぐ参照と、壊れた参照・セルエラー ---
+        cross_refs = set()
+        broken_refs = []
+        cell_errs = []
+        for r_idx, row in enumerate(vals, 1):
+            f_row = forms[r_idx - 1] if r_idx - 1 < len(forms) else []
+            for c_idx, v in enumerate(row, 1):
+                sv = str(v or "")
+                sf = str(f_row[c_idx - 1] if c_idx - 1 < len(f_row) else "")
+                a1 = f"{_col_letter(c_idx)}{r_idx}"
+                if any(et in sv for et in _ERR_TOKENS):
+                    cell_errs.append(f"{sh}!{a1}({sv})")
+                if sf.startswith("="):
+                    for m in _CROSS_REF_RE.finditer(sf):
+                        ref_sh = m.group(1) or m.group(2)
+                        if ref_sh and ref_sh != sh:
+                            cross_refs.add(ref_sh)
+                            if ref_sh not in sheet_names:
+                                broken_refs.append(f"{sh}!{a1}→存在しないシート「{ref_sh}」")
+        if cell_errs:
+            add_f(sh, "cross_sheet_ref", 1, f"[{sh}] 数式エラーがあります: {'・'.join(cell_errs[:3])}")
+        if broken_refs:
+            add_f(sh, "cross_sheet_ref", 1, f"[{sh}] シート参照が壊れています: {broken_refs[0]}")
+        elif cross_refs:
+            add_f(sh, "cross_sheet_ref", 4, f"[{sh}] 他シート（{'・'.join(sorted(cross_refs)[:3])}）への参照があります（元シート削除・改名時は注意）")
+
+        if not tb or not vals:
+            continue
+        dr = _parse_data_range(tb)
+        if not dr:
+            continue
+        first_data, last_data = dr
+        if last_data < first_data:
+            continue
+
+        cols = tb.get("columns") or []
+        col_infos = []
+        for c in cols:
+            ci = _col_num(c.get("col"))
+            if ci > 0:
+                col_infos.append({
+                    "ci": ci,
+                    "col": str(c.get("col")),
+                    "name": str(c.get("name") or c.get("col")),
+                    "number": bool(c.get("number")),
+                })
+        if not col_infos:
+            continue
+
+        def gval(r1, c1):
+            if 1 <= r1 <= len(vals) and 1 <= c1 <= len(vals[r1 - 1]):
+                return vals[r1 - 1][c1 - 1]
+            return ""
+
+        def gform(r1, c1):
+            if 1 <= r1 <= len(forms) and 1 <= c1 <= len(forms[r1 - 1]):
+                return str(forms[r1 - 1][c1 - 1] or "")
+            return ""
+
+        # --- 型1〜4, 6, 7 の既存分析（最大10件で全取得） ---
+        base_ins = analyze_table_insights(tb, vals, forms, side=side, ops=None, max_items=10)
+        for txt in base_ins:
+            pri = 2
+            tag = "general"
+            if "食い違っています" in txt:
+                pri, tag = 1, "calc_mismatch"
+            elif "数式ではなく値" in txt:
+                pri, tag = 2, "calc_value"
+            elif "キャンセル" in txt or "値引き前の金額" in txt or "食い違いがあります" in txt:
+                pri, tag = 1, "note_contradiction"
+            elif "SUBTOTAL" in txt:
+                pri, tag = 2, "sum_subtotal"
+            elif "前後の空白" in txt or "全角数字" in txt:
+                pri, tag = 2, "key_whitespace_split"
+            elif "メールアドレス" in txt or "番号" in txt or "日付表記" in txt:
+                pri, tag = 3, "format_broken"
+            elif "欠けています" in txt or "空行" in txt or "重複行" in txt:
+                pri, tag = 3, "period_structure"
+            # 値引き率（例: 10%引き）があれば試算額を追記
+            if "値引き前の金額のまま" in txt:
+                m_pct = _PCT_OFF_RE.search(txt)
+                if m_pct:
+                    pct = float(m_pct.group(1))
+                    m_amt = re.search(r"=([0-9,]+(?:\.\d+)?)", txt)
+                    if m_amt:
+                        raw_a = float(m_amt.group(1).replace(",", ""))
+                        disc_a = raw_a * (1.0 - pct / 100.0)
+                        txt += f"（{m_pct.group(1)}%引き適用時は {_fmt_num(disc_a)}）"
+            add_f(sh, tag, pri, f"[{sh}] {txt}")
+
+        # --- 型2補足: 状態列の行が合計に入っている場合の除外時金額 ---
+        total_row = tb.get("total_row")
+        amt_cols = [c for c in col_infos if c["number"] and _AMT_HEAD_RE.search(c["name"])]
+        note_cols = [c for c in col_infos if _NOTE_HEAD_RE.search(c["name"])]
+        if total_row and amt_cols and note_cols:
+            ac = amt_cols[0]
+            tot_v = _to_float(gval(int(total_row), ac["ci"]))
+            if tot_v is not None:
+                cancel_sum = 0.0
+                cancel_rows = []
+                for nc in note_cols:
+                    for r in range(first_data, last_data + 1):
+                        nt = str(gval(r, nc["ci"]) or "").strip()
+                        if _ZERO_NOTE_RE.search(nt) or "保留" in nt:
+                            av = _to_float(gval(r, ac["ci"]))
+                            if av is not None and av > 0:
+                                cancel_sum += av
+                                cancel_rows.append(r)
+                if cancel_rows and cancel_sum > 0:
+                    add_f(
+                        sh,
+                        "status_in_total",
+                        1,
+                        f"[{sh}] {ac['col']}{total_row}（{ac['name']}合計 {_fmt_num(tot_v)}）にキャンセル等の行（{','.join(str(x) for x in cancel_rows)}行目: 計{_fmt_num(cancel_sum)}）が含まれています（除外時 {_fmt_num(tot_v - cancel_sum)}）",
+                    )
+
+        # --- 型4補足: 集計キーになりそうな列の表記ゆれ・割れ ---
+        for c in col_infos:
+            if c["number"] or not _KEY_HEAD_RE.search(c["name"]):
+                continue
+            raw_set = set()
+            norm_map = {}
+            for r in range(first_data, last_data + 1):
+                sv = str(gval(r, c["ci"]) or "")
+                if not sv.strip():
+                    continue
+                raw_set.add(sv)
+                nk = _nfkc_trim(sv)
+                norm_map.setdefault(nk, set()).add(sv)
+            if len(raw_set) > len(norm_map):
+                ex = next((vs for vs in norm_map.values() if len(vs) > 1), set())
+                ex_s = " / ".join(f"「{x}」" for x in sorted(ex)[:2])
+                add_f(sh, "key_whitespace_split", 2, f"[{sh}] 「{c['name']}」列（{c['col']}列）に表記ゆれ・空白違いがあり、集計時に別グループに割れます（{ex_s}）")
+
+        # --- 型5: ユニークキー重複で他列が違う行 ---
+        for c in col_infos:
+            if not _UNIQUE_KEY_HEAD_RE.search(c["name"]):
+                continue
+            seen_u = {}
+            for r in range(first_data, last_data + 1):
+                kv = _nfkc_trim(str(gval(r, c["ci"]) or ""))
+                if not kv:
+                    continue
+                others = tuple(_nfkc_trim(str(gval(r, oc["ci"]) or "")) for oc in col_infos if oc["ci"] != c["ci"])
+                if kv in seen_u:
+                    fr, f_others = seen_u[kv]
+                    if others != f_others:
+                        add_f(sh, "key_dup_diff", 2, f"[{sh}] {c['col']}{fr} と {c['col']}{r} で「{c['name']}」（{kv}）が重複していますが、他の列の値が異なります（削除時は確認が必要）")
+                        break
+                else:
+                    seen_u[kv] = (r, others)
+
+        # --- 型7補足: 2段見出し ---
+        if int(tb.get("header_rows") or 1) > 1:
+            hr = int(tb.get("header_row") or 1)
+            add_f(sh, "period_structure", 4, f"[{sh}] 2段見出し（{hr}-{hr + int(tb['header_rows']) - 1}行目）の表です")
+
+    findings.sort(key=lambda x: x["priority"])
+    return findings
+
+
+# ====================================================================
+# 【2】撃った後の検算（合計・行数・集計表の和）
+# ====================================================================
+def verify_after_do(table, values_grid, formulas_grid=None, ops=None, source_info=None):
+    """ws_do 後に合計行と明細和、集計表と元表の和を Python で検算する。
+
+    戻り値: {"ok": bool, "checks": [str, ...], "mismatch": [str, ...]}
+    """
+    checks = []
+    mismatch = []
+    if not table or not values_grid:
+        return {"ok": True, "checks": checks, "mismatch": mismatch}
+
+    dr = _parse_data_range(table)
+    if not dr:
+        return {"ok": True, "checks": checks, "mismatch": mismatch}
+    first_data, last_data = dr
+    cols = table.get("columns") or []
+    total_row = table.get("total_row")
+
+    def gval(r1, c1):
+        if 1 <= r1 <= len(values_grid) and 1 <= c1 <= len(values_grid[r1 - 1]):
+            return values_grid[r1 - 1][c1 - 1]
+        return ""
+
+    def gform(r1, c1):
+        if formulas_grid and 1 <= r1 <= len(formulas_grid) and 1 <= c1 <= len(formulas_grid[r1 - 1]):
+            return str(formulas_grid[r1 - 1][c1 - 1] or "")
+        return ""
+
+    if total_row and last_data >= first_data:
+        for c in cols:
+            if not c.get("number"):
+                continue
+            ci = _col_num(c.get("col"))
+            tot_v = _to_float(gval(int(total_row), ci))
+            tot_f = gform(int(total_row), ci)
+            if tot_v is None or not tot_f.upper().startswith("=SUM("):
+                continue
+            # 明細和を Python で計算
+            row_sum = 0.0
+            has_any = False
+            for r in range(first_data, last_data + 1):
+                rv = _to_float(gval(r, ci))
+                if rv is not None:
+                    row_sum += rv
+                    has_any = True
+            if has_any:
+                col_l = c.get("col")
+                if abs(tot_v - row_sum) < 1e-4:
+                    checks.append(f"{col_l}{total_row} = {_fmt_num(tot_v)}（明細 {col_l}{first_data}:{col_l}{last_data} の和と一致）")
+                else:
+                    mismatch.append(
+                        f"{col_l}{total_row}（表示 {_fmt_num(tot_v)}）と明細 {col_l}{first_data}:{col_l}{last_data} の和（{_fmt_num(row_sum)}）が一致しません"
+                    )
+
+    return {"ok": not mismatch, "checks": checks[:3], "mismatch": mismatch[:3]}
+
+
+# ====================================================================
+# 【3】変わったセルの前→後差分
+# ====================================================================
+def diff_cell_values(before_map, after_map, max_items=4):
+    """{(r, c): val} 同士を比較し、変化したセルを 'F8: 100,000 → 120,000' 形式で返す。"""
+    if not before_map or not after_map:
+        return []
+    diffs = []
+    all_keys = sorted(set(before_map.keys()) | set(after_map.keys()))
+    for r, c in all_keys:
+        b = str(before_map.get((r, c), "") or "")
+        a = str(after_map.get((r, c), "") or "")
+        if b != a:
+            diffs.append(f"{_col_letter(c)}{r}: {b or '(空)'} → {a or '(空)'}")
+    if len(diffs) > max_items:
+        rest = len(diffs) - max_items
+        return diffs[:max_items] + [f"ほか {rest} セル変更"]
+    return diffs

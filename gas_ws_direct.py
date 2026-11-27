@@ -1093,14 +1093,33 @@ class DirectRunner:
         if already:
             notes.append(f"すでに書式が当たっている範囲はスキップしました: {'・'.join(already)}")
         insights = []
+        diff_cells = []
+        verify = {"ok": True, "checks": [], "mismatch": []}
         if tb and not any(o.get("shelf") in ("sheet.rename", "sheet.delete") for o in ops):
             try:
                 import gas_ws_insights
                 snap_ins = after or before
                 insights = gas_ws_insights.analyze_from_snapshot(snap_ins, out_t["sheet"], tb, ops=ops)
+                if after:
+                    b_map = snapshot_cell_map(before, sheet)
+                    a_map = snapshot_cell_map(after, out_t["sheet"])
+                    diff_cells = gas_ws_insights.diff_cell_values(b_map, a_map)
+                    v_grid, f_grid, _ = snapshot_to_grids(after, out_t["sheet"], tb)
+                    verify = gas_ws_insights.verify_after_do(tb, v_grid, f_grid, ops=ops)
             except Exception:
                 insights = []
-        return {"ok": True, "target": out_t, "changed": changed, "notes": notes, "remaining": [], "backup": f"D{n}", "direct": True, "insights": insights}
+        return {
+            "ok": True,
+            "target": out_t,
+            "changed": changed,
+            "notes": notes,
+            "remaining": [],
+            "backup": f"D{n}",
+            "direct": True,
+            "insights": insights,
+            "diff_cells": diff_cells,
+            "verify": verify,
+        }
 
     # ------------------------------------------------------------ 裏の指紋
     def _fp_later(self, n, token, sid, ranges, touched):
@@ -1740,3 +1759,98 @@ def fetch_sheet_snapshot_light(mgr, st, sid, sheet_name, range_str="A1:Z60"):
         return {"snap": snap, "table": tb, "sheet": sheet_name}
     except Exception:
         return None
+
+
+def snapshot_cell_map(snap, sheet_name):
+    """Snapshot の指定シートから {(r, c): formatted_text} 辞書を取り出す。"""
+    if not snap or not sheet_name:
+        return {}
+    try:
+        ent = snap.sheet(sheet_name)
+    except Exception:
+        return {}
+    out = {}
+    for (r, c), cell in (ent.get("cells") or {}).items():
+        txt = Snapshot.value_text(cell)
+        if txt != "":
+            out[(r, c)] = txt
+    return out
+
+
+def snapshot_to_grids(snap, sheet_name, tb=None):
+    """Snapshot の指定シートから (values_grid, formulas_grid, cell_map) を生成する。"""
+    if not snap or not sheet_name:
+        return [], [], {}
+    try:
+        ent = snap.sheet(sheet_name)
+    except Exception:
+        return [], [], {}
+    cells = ent.get("cells") or {}
+    if not cells:
+        return [], [], {}
+    max_r = max((r for r, _ in cells.keys()), default=0)
+    max_c = max((c for _, c in cells.keys()), default=0)
+    if tb and tb.get("total_row"):
+        max_r = max(max_r, int(tb["total_row"]))
+    v_grid, f_grid, cmap = [], [], {}
+    for r in range(1, max_r + 1):
+        v_row, f_row = [], []
+        for c in range(1, max_c + 1):
+            cell = cells.get((r, c)) or {}
+            ev = cell.get("effectiveValue") or {}
+            if "numberValue" in ev and not (
+                (((cell.get("effectiveFormat") or {}).get("numberFormat") or {}).get("type") or "").upper()
+                in ("DATE", "DATE_TIME", "TIME")
+            ):
+                v_row.append(ev["numberValue"])
+            else:
+                fv = cell.get("formattedValue")
+                if fv is not None:
+                    v_row.append(str(fv))
+                elif "stringValue" in ev:
+                    v_row.append(str(ev["stringValue"]))
+                elif "numberValue" in ev:
+                    v_row.append(ev["numberValue"])
+                else:
+                    v_row.append("")
+            uv = (cell.get("userEnteredValue") or {}).get("formulaValue") or ""
+            f_row.append(str(uv))
+            txt = Snapshot.value_text(cell)
+            if txt != "":
+                cmap[(r, c)] = txt
+        v_grid.append(v_row)
+        f_grid.append(f_row)
+    return v_grid, f_grid, cmap
+
+
+def fetch_workbook_payload_for_diagnosis(mgr, st, sid, sheet_names=None, range_str="A1:Z60"):
+    """全シートの表・値・数式を 1 リクエストで軽量取得し、ブック健診用のペイロードを返す。"""
+    if not sid or st.get("direct_off"):
+        return []
+    try:
+        runner = DirectRunner(mgr)
+        fields = (
+            "sheets(properties(sheetId,title),basicFilter,merges,"
+            "data(startRow,startColumn,rowData(values(formattedValue,effectiveValue,userEnteredValue,"
+            "effectiveFormat(numberFormat(type))))))"
+        )
+        params = [("fields", fields)]
+        if sheet_names:
+            for nm in sheet_names[:15]:
+                params.append(("ranges", f"{q(nm)}!{range_str}"))
+        else:
+            params.append(("includeGridData", "true"))
+        resp = runner._call(st, "GET", SHEETS + sid, params=params)
+        snap = Snapshot(resp)
+        out = []
+        for d_sh in resp.get("sheets") or []:
+            nm = (d_sh.get("properties") or {}).get("title") or ""
+            grid_data = (d_sh.get("data") or [{}])[0]
+            row_data = grid_data.get("rowData") or []
+            tb = _find_table_direct(row_data, merges=d_sh.get("merges") or [])
+            v_grid, f_grid, _ = snapshot_to_grids(snap, nm, tb)
+            side = ["フィルタ"] if d_sh.get("basicFilter") else []
+            out.append({"sheet": nm, "table": tb, "values": v_grid, "formulas": f_grid, "side": side})
+        return out
+    except Exception:
+        return []

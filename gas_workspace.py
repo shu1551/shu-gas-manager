@@ -638,6 +638,33 @@ class WorkspaceManager:
 
     # ------------------------------------------------------------ ws_do(ask=…)：当てて・組んで・撃つを 1 回で
     @staticmethod
+    def _save_sheet_vals(st, sid, sheet, cell_map):
+        if not sid or not sheet or not isinstance(cell_map, dict):
+            return
+        m = st.setdefault("last_sheet_values", {})
+        key = f"{sid}:{sheet}"
+        # 上限200セルまで軽量に保存
+        ser = {f"{r},{c}": str(v) for (r, c), v in list(cell_map.items())[:200]}
+        m[key] = ser
+        if len(m) > 8:
+            for old_k in list(m.keys())[:-8]:
+                m.pop(old_k, None)
+
+    @staticmethod
+    def _load_sheet_vals(st, sid, sheet):
+        if not sid or not sheet:
+            return {}
+        raw = (st.get("last_sheet_values") or {}).get(f"{sid}:{sheet}") or {}
+        out = {}
+        for k, v in raw.items():
+            try:
+                r_s, c_s = k.split(",", 1)
+                out[(int(r_s), int(c_s))] = v
+            except Exception:
+                pass
+        return out
+
+    @staticmethod
     def _filter_new_insights(st, tgt_id, sheet_name, insights):
         """同じシートで一度伝えた気づき文言を繰り返さないよう絞り込む。"""
         if not insights or not tgt_id:
@@ -897,21 +924,61 @@ class WorkspaceManager:
         if rest:
             out_lines.append("メモ: " + " ／ ".join(rest[:3]))
         insights = res.get("insights")
-        if insights is None and kind == "sheet" and not res.get("local_only") and not st2.get("direct_off") and tgt_out.get("id"):
-            try:
-                import gas_ws_direct, gas_ws_insights
-                sh_for_ins = tgt_out.get("sheet") or cur_sh
-                light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, tgt_out.get("id"), sh_for_ins, "A1:Z60")
-                if light:
-                    insights = gas_ws_insights.analyze_from_snapshot(light["snap"], sh_for_ins, light["table"], ops=p.ops)
-            except Exception:
-                insights = []
+        diff_cells = list(res.get("diff_cells") or [])
+        verify = res.get("verify") or {"ok": True, "checks": [], "mismatch": []}
+        sh_for_ins = tgt_out.get("sheet") or cur_sh
+        sid_out = tgt_out.get("id")
+        if kind == "sheet" and not res.get("local_only") and not st2.get("direct_off") and sid_out:
+            need_light = (insights is None) or (not keeps_shape and not res.get("direct"))
+            if need_light:
+                try:
+                    import gas_ws_direct, gas_ws_insights
+                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, sid_out, sh_for_ins, "A1:Z60")
+                    if light:
+                        if insights is None:
+                            insights = gas_ws_insights.analyze_from_snapshot(light["snap"], sh_for_ins, light["table"], ops=p.ops)
+                        v_grid, f_grid, a_map = gas_ws_direct.snapshot_to_grids(light["snap"], sh_for_ins, light["table"])
+                        if not keeps_shape:
+                            b_map = self._load_sheet_vals(st2, sid_out, sh_for_ins)
+                            if b_map and not diff_cells:
+                                diff_cells = gas_ws_insights.diff_cell_values(b_map, a_map)
+                            self._save_sheet_vals(st2, sid_out, sh_for_ins, a_map)
+                            if not verify.get("checks") and not verify.get("mismatch"):
+                                verify = gas_ws_insights.verify_after_do(light["table"], v_grid, f_grid, ops=p.ops)
+                except Exception:
+                    insights = insights or []
+        # 記憶済みのブック健診から、この手に効く項目だけ最大2件補う
+        diag_all = ((st2.get("book_diagnosis") or {}).get(sid_out) or {}).get("findings") or []
+        if diag_all and sid_out:
+            op_shs = {str(o.get("shelf") or "") for o in p.ops if isinstance(o, dict)}
+            want_tags = set()
+            if op_shs & {"summary", "top.n", "chart.new", "pivot.new"}:
+                want_tags.update({"key_whitespace_split", "status_in_total", "note_contradiction"})
+            elif op_shs & {"calc.col", "total"}:
+                want_tags.update({"note_contradiction", "calc_mismatch"})
+            elif op_shs & {"dedupe"}:
+                want_tags.add("key_dup_diff")
+            elif op_shs & {"filter", "filter.where", "sort"}:
+                want_tags.add("sum_subtotal")
+            if want_tags:
+                extra_diag = [
+                    d["text"] for d in diag_all
+                    if d.get("tag") in want_tags and d.get("sheet") == sh_for_ins
+                ]
+                insights = list(insights or []) + extra_diag
+        if diff_cells:
+            out_lines.append("変更前→後: " + " ／ ".join(diff_cells))
+        if verify.get("mismatch"):
+            out_lines.append("⚠ 検算不一致: " + " ／ ".join(verify["mismatch"]))
+            tail = [t for t in tail if t != "このまま使う人に報告して終える"]
+            tail.append("検算が合いません。確認するか ws_undo で戻してください")
+        elif verify.get("checks"):
+            out_lines.append("検算: " + " ／ ".join(verify["checks"]))
         if insights:
-            sh_for_seen = tgt_out.get("sheet") or cur_sh
-            insights = self._filter_new_insights(st2, tgt_out.get("id"), sh_for_seen, insights)
+            insights = self._filter_new_insights(st2, sid_out, sh_for_ins, insights)
             if insights:
-                self._save(st2)
-                out_lines.append("気づき: " + " ／ ".join(insights[:3]))
+                out_lines.append("気づき: " + " ／ ".join(insights[:2]))
+        self._save(st2)
         out_lines.append(" ／ ".join(tail))
         return "\n".join(out_lines)
 
@@ -1259,8 +1326,15 @@ class WorkspaceManager:
                 rest.append("残り: " + " ／ ".join(res["remaining"][:3]))
             if rest:
                 lines.append("　".join(rest))
+            if res.get("diff_cells"):
+                lines.append("変更前→後: " + " ／ ".join(res["diff_cells"]))
+            ver = res.get("verify") or {}
+            if ver.get("mismatch"):
+                lines.append("⚠ 検算不一致: " + " ／ ".join(ver["mismatch"]))
+            elif ver.get("checks"):
+                lines.append("検算: " + " ／ ".join(ver["checks"]))
             if res.get("insights"):
-                lines.append("気づき: " + " ／ ".join(res["insights"][:3]))
+                lines.append("気づき: " + " ／ ".join(res["insights"][:2]))
             tail = []
             if tgt.get("url"):
                 tail.append(tgt["url"])
@@ -1374,10 +1448,40 @@ class WorkspaceManager:
             st["target_set_at"] = time.time()
         if t.get("kind") == "sheet":
             self._remember_table(st, st["target"], res.get("table"), res.get("sheets"))
+            sid_lk = t.get("id")
+            sh_lk = t.get("sheet")
+            # 現在のシートのセル値を記憶（次の ws_do での変更前→後比較用）
+            if res.get("values") and sid_lk and sh_lk:
+                cmap = {}
+                for r_i, row in enumerate(res["values"], 1):
+                    for c_i, val in enumerate(row, 1):
+                        if str(val or "") != "":
+                            cmap[(r_i, c_i)] = str(val)
+                self._save_sheet_vals(st, sid_lk, sh_lk, cmap)
             try:
                 import gas_ws_insights
-                ins = gas_ws_insights.analyze_from_look_res(res)
-                ins = self._filter_new_insights(st, t.get("id"), t.get("sheet"), ins)
+                ins = []
+                # 初回ブック健診（全シート総当たり・1回だけ実行して記憶）
+                diag_map = st.setdefault("book_diagnosis", {})
+                if sid_lk and sid_lk not in diag_map and not st.get("direct_off"):
+                    import gas_ws_direct
+                    t0 = time.perf_counter()
+                    sh_names = [s.get("name") for s in (res.get("sheets") or []) if s.get("name")]
+                    payload = gas_ws_direct.fetch_workbook_payload_for_diagnosis(self, st, sid_lk, sheet_names=sh_names)
+                    if payload:
+                        findings = gas_ws_insights.diagnose_workbook(payload)
+                        diag_map[sid_lk] = {
+                            "findings": findings,
+                            "ts": time.time(),
+                            "elapsed": round(time.perf_counter() - t0, 2),
+                        }
+                        if len(diag_map) > 5:
+                            for old_sid in list(diag_map.keys())[:-5]:
+                                diag_map.pop(old_sid, None)
+                        ins.extend(f["text"] for f in findings[:6])
+                if not ins:
+                    ins = gas_ws_insights.analyze_from_look_res(res)
+                ins = self._filter_new_insights(st, sid_lk, sh_lk, ins)
                 if ins:
                     res["insights"] = ins
             except Exception:
@@ -1420,7 +1524,7 @@ class WorkspaceManager:
                     lines.append("\t".join(cells))
             if res.get("insights"):
                 lines.append("気づき:")
-                for ins in res["insights"][:3]:
+                for ins in res["insights"][:6]:
                     lines.append("- " + ins)
         else:
             lines.append(f"段落数 {res.get('paragraphs')}・見出し: " + (" / ".join(f"{h['no']}:{'#' * h['level']}{h['text']}" for h in res.get("headings", [])) or "なし"))
