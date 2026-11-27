@@ -166,3 +166,10 @@ R	備考に「VIP」が入っている担当者と部門を一覧で教えて
 1	部門の列に「営業」「開発」のプルダウンを設定して	[{"shelf":"validation.list","range":"B4:B9","items":["営業","開発"]}]
 1	備考の列を削除して	[{"shelf":"cols.delete","cols":["備考"]}]
 1	メモという列を右端に追加して	[{"shelf":"cols.insert","at":"J"},{"shelf":"write","cells":{"J3":"メモ"}}]
+# 第13ラウンド: date.parts・calc.if・任意単位/列名単位の数値比べ・1列の経過年数date.age・降順sort
+1	部門ごとに単価の高い順に並べて	[{"shelf":"sort","cols":["部門","-単価"]}]
+1	日付から年の列を足して	[{"shelf":"date.parts","col":"日付","part":"year"}]
+1	数量が10以上なら大口、そうでなければ通常と入る列を足して	[{"shelf":"calc.if","col":"数量","when":"ge","value":"10","then_val":"大口","else_val":"通常"}]
+1	数量が50個以上の行を黄色にして	[{"shelf":"cf.add","when":"formula","value":"=$E4>=50","bg":"黄"}]
+1	売上金額が10万キロ以上の行を薄い赤にして	[{"shelf":"cf.add","when":"formula","value":"=$G4>=100000","bg":"薄赤"}]
+1	日付から経過年数の列を足して	[{"shelf":"date.age","col":"日付","name":"経過年数"}]

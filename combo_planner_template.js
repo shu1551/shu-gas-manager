@@ -978,7 +978,7 @@ var ComboPlanner = (function () {
 
     var w = opObj.when;
     if (w !== "gt" && w !== "ge" && w !== "lt" && w !== "le" && w !== "eq" && w !== "ne") return;
-    var mNum = /(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)/.exec(tN);
+    var mNum = /(-?[0-9][0-9,\.]*%?[万億]?)(?:(?!(?:以上|以下|未満|より|超|上回|下回|届|以外|では|でな|じゃな|にな|の行|のセ|なら|判定))[^\s、。0-9]{0,6})?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)/.exec(tN);
     var raw = opObj.value;
     if (w === "gt" || w === "ge" || w === "lt" || w === "le") {
       delete opObj.equals;
@@ -2888,6 +2888,20 @@ var ComboPlanner = (function () {
       }
     }
 
+    if (shelf.name === "date.parts" && !_hasOwn(op, "part")) {
+      var tDp = nfkc(text);
+      if (tDp.indexOf("四半期") >= 0) op.part = "quarter";
+      else if (/(?:から日の?(?:列|欄)|日の?列)/.test(tDp)) op.part = "day";
+    }
+    if (shelf.name === "calc.if") {
+      var vkList = ["then_val", "else_val"];
+      for (var vki = 0; vki < vkList.length; vki++) {
+        var vk = vkList[vki];
+        if (typeof op[vk] === "string") {
+          op[vk] = op[vk].replace(/(?:と入る|と表示(?:する|させる)?|にする|を入れる|の?列|の?欄).*$/, "").trim();
+        }
+      }
+    }
     if (shelf.name === "date.age" && !_hasOwn(op, "name")) {
       var mAge = /(勤続年数|勤続月数|在籍年数|経過年数|経過月数|経過日数|築年数|年齢)/.exec(text);
       if (mAge && mAge[1] !== "年齢") {
@@ -3744,6 +3758,12 @@ var ComboPlanner = (function () {
           ensureBoost("filter.delete");
         } else if (hasColsDelCue) {
           ensureBoost("cols.delete");
+        } else if ((/(?:なら|であれば).*(?:そうでなければ|そうでなく|それ以外|さもなくば|そうでない場合|でなければ).*(?:列|欄)/.test(c) || /IF文|条件分岐|判定列/i.test(c)) && _byName["calc.if"]) {
+          ensureBoost("calc.if");
+        } else if (/経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数/.test(c) && !hasRowCfCue && !hasRowDelCond && !hasFilterWhereCue && _colNamesJs(c, table).length <= 1 && _byName["date.age"]) {
+          ensureBoost("date.age");
+        } else if (/(?:^|[\s、。]|から)(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)/.test(c) && !/経過|年齢|勤続|在籍|築年数|年数|月数|日数|年度別/.test(c) && _byName["date.parts"]) {
+          ensureBoost("date.parts");
         } else if (hasRowCfCue) {
           ensureBoost("cf.add");
         } else if (hasChartCue) {

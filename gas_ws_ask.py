@@ -871,7 +871,7 @@ def _resolve_cmp_value(op, text):
     if w not in ("gt", "ge", "lt", "le", "eq", "ne"):
         return
     m_num = re.search(
-        r"(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)",
+        r"(-?[0-9][0-9,\.]*%?[万億]?)(?:(?!(?:以上|以下|未満|より|超|上回|下回|届|以外|では|でな|じゃな|にな|の行|のセ|なら|判定))[^\s、。0-9]{0,6})?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)",
         t_n,
     )
     raw = op.get("value")
@@ -2247,6 +2247,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                             op["range"] = ",".join(f"{x}{ch_r1}:{x}{ch_r2}" for x in ordered_ls)
                     if used_group_series and len(label_cols) == 1 and len(num_cols) >= 2 and re.search(r"推移|月別|折れ線|ごと|別", text):
                         op["transpose"] = True
+    if shelf["name"] == "date.parts" and "part" not in op:
+        t_dp = nfkc(text)
+        if "四半期" in t_dp:
+            op["part"] = "quarter"
+        elif re.search(r"から日の?(?:列|欄)|日の?列", t_dp):
+            op["part"] = "day"
+    if shelf["name"] == "calc.if":
+        for vk in ("then_val", "else_val"):
+            if isinstance(op.get(vk), str):
+                op[vk] = re.sub(r"(?:と入る|と表示(?:する|させる)?|にする|を入れる|の?列|の?欄).*$", "", op[vk]).strip()
     if shelf["name"] == "date.age" and "name" not in op:
         m_age = re.search(r"(勤続年数|勤続月数|在籍年数|経過年数|経過月数|経過日数|築年数|年齢)", text)
         if m_age and m_age.group(1) != "年齢":
@@ -2940,6 +2950,19 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("filter.delete")
             elif has_cols_del_cue:
                 _ensure_boost("cols.delete")
+            elif (
+                re.search(r"(?:なら|であれば).*(?:そうでなければ|そうでなく|それ以外|さもなくば|そうでない場合|でなければ).*(?:列|欄)", c)
+                or re.search(r"IF文|条件分岐|判定列", c, re.IGNORECASE)
+            ) and "calc.if" in finder.cat.by_name:
+                _ensure_boost("calc.if")
+            elif re.search(r"経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数", c) and not has_row_cf_cue and not has_row_del_cond and not has_filter_where_cue and len(_col_names(c, table)) <= 1 and "date.age" in finder.cat.by_name:
+                _ensure_boost("date.age")
+            elif (
+                re.search(r"(?:^|[\s、。]|から)(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)", c)
+                and not re.search(r"経過|年齢|勤続|在籍|築年数|年数|月数|日数|年度別", c)
+                and "date.parts" in finder.cat.by_name
+            ):
+                _ensure_boost("date.parts")
             elif has_row_cf_cue:
                 _ensure_boost("cf.add")
             elif has_chart_cue:
