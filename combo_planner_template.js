@@ -2811,6 +2811,33 @@ var ComboPlanner = (function () {
     return [sumOp, chOp];
   }
 
+  var _AMBIG_TIDY_CUE_RE_JS = /見やすく|きれいに|綺麗に|整えて|整え|体裁|見栄え/;
+  var _SPECIFIC_TIDY_RE_JS = /見た目だけ|書式だけ|デザインだけ|中身は|値は|掃除なし|罫線|列幅|幅を|色|背景|太字|斜体|フォント|空行|空白|スペース|全角|半角|重複|ダブ|和暦|日付|電話|ハイフン|固定|フィルタ|並べ|ソート|グラフ|集計|合計|平均|削除|消して/;
+
+  function _ambiguousTidyChoicesJs(askText, ops, kind) {
+    if (kind === "doc") return null;
+    var t = nfkc(askText || "").trim();
+    if (!t || VAGUE_RE.test(t) || _allExplicitRanges(t).length) return null;
+    if (!_AMBIG_TIDY_CUE_RE_JS.test(t) || _SPECIFIC_TIDY_RE_JS.test(t)) return null;
+    var isBareTidy = (
+      ops.length === 1 && ops[0] &&
+      (ops[0].shelf === "tidy" || ops[0].shelf === "seiri") &&
+      !ops[0].range && !ops[0].blank_rows && !ops[0].dedupe && !ops[0].halfwidth &&
+      !ops[0].trim && !ops[0].numbers && !ops[0].dates && !ops[0].renumber
+    );
+    if (!isBareTidy && ops.length) return null;
+    var sh = (ops.length === 1 && ops[0] && ops[0].sheet) ? ops[0].sheet : null;
+    var withSh = function (arr) {
+      if (!sh) return arr;
+      return arr.map(function (o) { return Object.assign({}, o, { sheet: sh }); });
+    };
+    return [
+      { label: "見た目だけ整える", desc: "見出し・罫線・桁区切り・列幅だけ（値は触らない）", ops: withSh([{ shelf: "tidy" }]) },
+      { label: "見た目＋データの掃除", desc: "空行削除・前後空白・全角半角の統一＋見た目", ops: withSh([{ shelf: "seiri" }, { shelf: "tidy" }]) },
+      { label: "重複削除＋掃除＋見た目", desc: "重複行の削除も含めて表を丸ごと整える", ops: withSh([{ shelf: "dedupe", ok: true }, { shelf: "seiri" }, { shelf: "tidy" }]) }
+    ];
+  }
+
   function _isReadOnlyAskJs(askText) {
     var t = nfkc(askText || "").trim();
     if (!t) return false;
@@ -2821,6 +2848,9 @@ var ComboPlanner = (function () {
   function _buildPreviewText(res) {
     if (res.fire) {
       return "棚ヒット: " + formatOpsShort(res.ops);
+    }
+    if (res.choices && res.choices.length) {
+      return "選択待ち: どこまで整えるか候補から選びます（" + res.choices.length + "件）";
     }
     if (res.readOnly) {
       return "読むだけ: シートの中身を読んで答えます（変更なし）";
@@ -2841,6 +2871,7 @@ var ComboPlanner = (function () {
       ops: [],
       fire: false,
       readOnly: false,
+      choices: [],
       reasons: [],
       missing: [],
       cards: [],
@@ -3331,7 +3362,16 @@ var ComboPlanner = (function () {
     }
     p.ops = dd;
     p.fire = (!fatalErr) && (!p.missing.length) && (p.ops.length > 0);
-    if (!p.fire && _isReadOnlyAskJs(askText)) {
+    var ambChoicesJs = _ambiguousTidyChoicesJs(askText, p.fire ? p.ops : [], kind);
+    if (ambChoicesJs) {
+      p.fire = false;
+      p.choices = ambChoicesJs;
+      p.ops = [];
+      p.reasons = ["どこまで整えるか選んでください"];
+      p.missing = [];
+      p.cards = [];
+      p.suggest = null;
+    } else if (!p.fire && _isReadOnlyAskJs(askText)) {
       p.readOnly = true;
       p.ops = [];
       p.reasons = [];

@@ -319,6 +319,34 @@
     }, function() {});
   }
 
+  function offerChoices(txt, choices) {
+    var descLines = [];
+    for (var i = 0; i < choices.length; i++) {
+      descLines.push((i + 1) + ". " + choices[i].label + " — " + (choices[i].desc || formatOpsShort(choices[i].ops)));
+    }
+    var entry = appendLog(els.chatLog, "is-info", "どこまで整えますか？: " + txt, descLines.join("\n"));
+    var bar = document.createElement("div");
+    bar.style.display = "flex";
+    bar.style.flexWrap = "wrap";
+    bar.style.gap = "6px";
+    bar.style.marginTop = "6px";
+    for (var j = 0; j < choices.length; j++) {
+      (function(ch, idx) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn";
+        b.textContent = (idx + 1) + ". " + ch.label;
+        b.onclick = function() {
+          bar.remove();
+          onRunOps(ch.ops, txt + "（" + ch.label + "）");
+        };
+        bar.appendChild(b);
+      })(choices[j], j);
+    }
+    entry.appendChild(bar);
+    switchTab("chat");
+  }
+
   function offerSuggest(txt, ops, onNo) {
     var entry = appendLog(els.chatLog, "is-info", "棚に当たりませんでした: " + txt,
       "近い候補: " + formatOpsShort(ops) + "\nこれを撃ちますか？（［はい］で撃って、この言い方を覚えます）");

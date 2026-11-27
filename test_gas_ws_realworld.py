@@ -61,6 +61,9 @@ def test_ask_realworld_tsv(lineno, mode, ask, exp):
     if mode == "R":
         assert not p.fire and p.read_only is True and not p.ops, f"L{lineno} [{ask}] fire={p.fire} read_only={p.read_only} ops={p.ops}"
         return
+    if mode == "C":
+        assert not p.fire and len(p.choices) >= 2 and not p.ops, f"L{lineno} [{ask}] fire={p.fire} choices={p.choices} ops={p.ops}"
+        return
     want_fire = mode == "1"
     assert p.fire is want_fire, f"L{lineno} [{ask}] fire={p.fire} want={want_fire} read_only={p.read_only} reasons={p.reasons} missing={p.missing} ops={p.ops}"
     if want_fire and exp:

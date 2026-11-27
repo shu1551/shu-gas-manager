@@ -83,14 +83,15 @@ class Plan:
         self.ops = []          # 組んだ ops（fire=False でも組めた所まで）
         self.fire = False
         self.read_only = False # シートを変えない「読むだけ」の問いと判定されたか
+        self.choices = []      # 曖昧な頼みに対する選択肢 [{label, desc, ops}, ...]
         self.reasons = []      # 撃たない理由（人と AI に見せる）
         self.missing = []      # 決まらなかった引数（"棚: 引数(型)"）
         self.cards = []        # 候補の棚の dict（撃たないときに札を見せる）
         self.guide = []
 
     def to_dict(self):
-        return {"ops": self.ops, "fire": self.fire, "read_only": self.read_only, "reasons": self.reasons,
-                "missing": self.missing, "cards": [s["name"] for s in self.cards], "guide": self.guide}
+        return {"ops": self.ops, "fire": self.fire, "read_only": self.read_only, "choices": self.choices,
+                "reasons": self.reasons, "missing": self.missing, "cards": [s["name"] for s in self.cards], "guide": self.guide}
 
 
 def nfkc(s):
@@ -1854,6 +1855,43 @@ def _chart_summary_ops(op, clause, table):
     return [sum_op, ch_op]
 
 
+_AMBIG_TIDY_CUE_RE = re.compile(r"見やすく|きれいに|綺麗に|整えて|整え|体裁|見栄え")
+_SPECIFIC_TIDY_RE = re.compile(
+    r"見た目だけ|書式だけ|デザインだけ|中身は|値は|掃除なし|罫線|列幅|幅を|色|背景|太字|斜体|フォント|"
+    r"空行|空白|スペース|全角|半角|重複|ダブ|和暦|日付|電話|ハイフン|固定|フィルタ|並べ|ソート|グラフ|集計|合計|平均|削除|消して"
+)
+
+
+def _ambiguous_tidy_choices(ask, ops, kind=""):
+    """「見やすく整えて」のような曖昧な整え依頼なら 3 択候補を返す。具体的指示や VAGUE 語があれば None。"""
+    if kind == "doc":
+        return None
+    t = nfkc(ask or "").strip()
+    if not t or VAGUE.search(t) or _all_explicit_ranges(t):
+        return None
+    if not _AMBIG_TIDY_CUE_RE.search(t) or _SPECIFIC_TIDY_RE.search(t):
+        return None
+    is_bare_tidy = (
+        len(ops) == 1
+        and ops[0].get("shelf") in ("tidy", "seiri")
+        and not any(k in ops[0] for k in ("range", "blank_rows", "dedupe", "halfwidth", "trim", "numbers", "dates", "renumber"))
+    )
+    if not is_bare_tidy and ops:
+        return None
+    sh = ops[0].get("sheet") if (len(ops) == 1 and ops[0].get("sheet")) else None
+
+    def _with_sh(op_list):
+        if not sh:
+            return op_list
+        return [dict(o, sheet=sh) for o in op_list]
+
+    return [
+        {"label": "見た目だけ整える", "desc": "見出し・罫線・桁区切り・列幅だけ（値は触らない）", "ops": _with_sh([{"shelf": "tidy"}])},
+        {"label": "見た目＋データの掃除", "desc": "空行削除・前後空白・全角半角の統一＋見た目", "ops": _with_sh([{"shelf": "seiri"}, {"shelf": "tidy"}])},
+        {"label": "重複削除＋掃除＋見た目", "desc": "重複行の削除も含めて表を丸ごと整える", "ops": _with_sh([{"shelf": "dedupe", "ok": True}, {"shelf": "seiri"}, {"shelf": "tidy"}])},
+    ]
+
+
 def _is_read_only_ask(ask):
     """棚が撃てなかった依頼のうち、変更動詞が無く問いの形になっている「読むだけ」かを判定する。"""
     t = nfkc(ask or "").strip()
@@ -2250,7 +2288,15 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         dd.append(o)
     p.ops = dd
     p.fire = (not fatal_err) and (not p.missing) and bool(p.ops)
-    if not p.fire and _is_read_only_ask(ask):
+    amb_choices = _ambiguous_tidy_choices(ask, p.ops if p.fire else [], kind=kind)
+    if amb_choices:
+        p.fire = False
+        p.choices = amb_choices
+        p.ops = []
+        p.reasons = ["どこまで整えるか選んでください"]
+        p.missing = []
+        p.cards = []
+    elif not p.fire and _is_read_only_ask(ask):
         p.read_only = True
         p.ops = []
         p.reasons = []
@@ -2260,6 +2306,13 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
 
 
 def render_unfired(p, finder):
+    if getattr(p, "choices", None):
+        lines = ["どこまで行うか選んでください（まだシートは変更していません）:"]
+        for i, ch in enumerate(p.choices, 1):
+            ops_s = json.dumps(ch["ops"], ensure_ascii=False, separators=(",", ":"))
+            lines.append(f"{i}. {ch['label']} — {ch['desc']}  ops={ops_s}")
+        lines.append("使う人に番号を選んでもらい、選ばれた ops を ws_do(ops=…) で撃つ。")
+        return "\n".join(lines)
     lines = ["撃っていません: " + ("／".join(p.reasons) or "引数が決まりません")]
     if len(p.missing) == 1 and p.ops:
         miss_name = p.missing[0].split(": ", 1)[-1] if ": " in p.missing[0] else p.missing[0]

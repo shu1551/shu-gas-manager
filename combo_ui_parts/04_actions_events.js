@@ -265,11 +265,17 @@
     var liveSelPrompt = !!(els.chkSync.checked && hasSelectionPronoun(txt));
     var planRes = updatePreview();
     var fireOps = (!liveSelPrompt && planRes && planRes.fire && Array.isArray(planRes.ops) && planRes.ops.length) ? planRes.ops : null;
-    var isReadOnly = !!(planRes && planRes.readOnly && !fireOps);
+    var planChoices = (!fireOps && !liveSelPrompt && planRes && Array.isArray(planRes.choices) && planRes.choices.length) ? planRes.choices : null;
+    var isReadOnly = !!(planRes && planRes.readOnly && !fireOps && !planChoices);
     var aiAuto = !!els.chkAiAuto.checked;
 
     els.askInput.value = "";
     updatePreview();
+
+    if (planChoices) {
+      offerChoices(txt, planChoices);
+      return;
+    }
 
     // 読むだけの質問: aiAuto=false なら中身を AI へ送らず要約のみ。aiAuto=true なら中身を添えて AI へ渡し ops は必ず捨てる
     if (isReadOnly) {

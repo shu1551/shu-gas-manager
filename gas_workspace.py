@@ -721,6 +721,8 @@ class WorkspaceManager:
             if not p.fire:
                 if p.read_only:
                     return self._answer_read_only(ask, target, tgt, kind, tc, tim)
+                if getattr(p, "choices", None):
+                    return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
                 gas_ws_ask.log_ask_miss(ask, p, source="mcp", path=self.ask_misses_path)
                 return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。

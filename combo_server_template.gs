@@ -1947,6 +1947,20 @@ function comboRunAsk(req) {
       return hitRes;
     }
 
+    if (plan && Array.isArray(plan.choices) && plan.choices.length) {
+      var chLines = ['どこまで整えますか？（まだシートは変更していません）'];
+      plan.choices.forEach(function (ch, idx) {
+        chLines.push((idx + 1) + '. ' + ch.label + ' — ' + (ch.desc || comboFormatOpsShort_(ch.ops)));
+      });
+      return {
+        ok: true,
+        source: 'choices',
+        choices: plan.choices,
+        text: chLines.join('\n'),
+        gasMs: Date.now() - t0
+      };
+    }
+
     isReadOnlyAsk = !!(plan && plan.readOnly);
 
     // 読むだけの質問はマイマクロ照合を行わない。aiAuto=false なら表の中身は AI へ送らず要約のみ返す
