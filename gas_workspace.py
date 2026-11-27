@@ -719,6 +719,8 @@ class WorkspaceManager:
                 p = gas_ws_ask.plan(ask, self.finder, kind, table, (tc or {}).get("sheets"), cur_sheet=cur_sh, last_scope=ls)
                 tim.lap("当て")
             if not p.fire:
+                if p.read_only:
+                    return self._answer_read_only(ask, target, tgt, kind, tc, tim)
                 gas_ws_ask.log_ask_miss(ask, p, source="mcp", path=self.ask_misses_path)
                 return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
@@ -773,6 +775,105 @@ class WorkspaceManager:
         if not s or op.get("shelf") == "api":
             return False
         return not ({"値", "シート構成"} & set(s.get("touch") or []))
+
+    @staticmethod
+    def format_read_only_snippet(values, formulas=None, total_rows=None, start_row=1, start_col=1, max_rows=100, head_rows=80, tail_rows=20, max_cols=26):
+        """読むだけモード用: 表の中身を行番号・列記号・数式つきテキストへ整形（上限 100 行×26 列・超過時は先頭80＋末尾20抜粋）。"""
+        import gas_ws_direct
+        rows = values or []
+        fms = formulas or []
+        n_rows = len(rows)
+        actual_total = max(n_rows, int(total_rows or 0))
+        truncated = actual_total > max_rows
+        if n_rows > max_rows:
+            picked_idx = list(range(head_rows)) + [-1] + list(range(n_rows - tail_rows, n_rows))
+        else:
+            picked_idx = list(range(n_rows))
+        lines = []
+        for idx in picked_idx:
+            if idx < 0:
+                lines.append(f"...（中略: 全 {actual_total} 行のうち先頭 {head_rows} 行＋末尾 {tail_rows} 行を抜粋）...")
+                continue
+            r_no = start_row + idx
+            row = rows[idx] or []
+            fm_row = fms[idx] if idx < len(fms) and isinstance(fms[idx], list) else []
+            parts = []
+            for j in range(min(len(row), max_cols)):
+                v = row[j]
+                f = fm_row[j] if j < len(fm_row) else ""
+                vs = "" if v is None else str(v)
+                fs = "" if f is None else str(f)
+                if vs == "" and fs == "":
+                    continue
+                col_l = gas_ws_direct.col_letter(start_col + j)
+                parts.append(f"{col_l}={vs}{' {' + fs + '}' if fs else ''}")
+            lines.append(f"R{r_no}: " + (" | ".join(parts) if parts else "(空行)"))
+        note = f"※全 {actual_total} 行のうち抜粋（先頭{head_rows}行＋末尾{tail_rows}行）で読みました" if truncated else ""
+        return {"text": "\n".join(lines), "truncated": truncated, "total_rows": actual_total, "note": note}
+
+    def _answer_read_only(self, ask, target, tgt, kind, tc, tim):
+        """シートを変えない「読むだけ」の問いに対し、棚を撃たず表の中身（上限100行×26列）を1往復で返す。"""
+        if kind != "sheet" or not tgt.get("id"):
+            look_txt = self._look(target=target)
+            return "[読むだけ] シート・文書は変更していません。以下の内容から質問に答えてください。\n" + look_txt
+        import gas_ws_direct
+        st = self._load()
+        cur = st.get("target") or {}
+        body_target = {k: v for k, v in tgt.items() if k in ("id", "kind")}
+        want_sheet = tgt.get("sheet") or (tc or {}).get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else "")
+        tb = (tc or {}).get("table")
+        r_end, c_end = 100, 26
+        if tb and not tb.get("none"):
+            try:
+                c_end = min(26, max(1, gas_ws_direct.col_num(tb.get("last_col") or "Z")))
+            except Exception:
+                c_end = 26
+            data_last = 0
+            m_d = re.fullmatch(r"([0-9]+)-([0-9]+)", str(tb.get("data") or ""))
+            if m_d:
+                data_last = int(m_d.group(2))
+            r_end = max(int(tb.get("total_row") or 0), data_last, int(tb.get("header_row") or 1))
+        fetch_rows = min(max(r_end, 1), 2000)
+        rng_str = f"A1:{gas_ws_direct.col_letter(c_end)}{fetch_rows}"
+        res = None
+        if not st.get("direct_off"):
+            res = gas_ws_direct.DirectRunner(self).look(st, body_target, sheet=want_sheet, range_str=rng_str)
+        if res is None:
+            res = self._post({"action": "look", "target": body_target, "sheet": want_sheet, "range": rng_str})
+        if not res or not res.get("ok"):
+            raise WorkspaceError((res or {}).get("error") or "シートの中身を読めませんでした")
+        tim.lap("読むだけ")
+        t_out = res.get("target") or tgt
+        sh_rows = 0
+        for s_info in res.get("sheets") or []:
+            if s_info.get("name") == t_out.get("sheet"):
+                sh_rows = int(s_info.get("rows") or 0)
+                break
+        tb_now = res.get("table")
+        snip = self.format_read_only_snippet(
+            res.get("values") or [],
+            formulas=res.get("formulas") or [],
+            total_rows=max(sh_rows, len(res.get("values") or [])),
+        )
+        lines = [
+            f"[読むだけ] {self._title(t_out)}（シートは変更していません）",
+            f"質問: {ask}",
+        ]
+        if tb_now:
+            hr1 = tb_now["header_row"]
+            hrs = int(tb_now.get("header_rows") or 1)
+            hr_label = f"{hr1}-{hr1 + hrs - 1}" if hrs > 1 else f"{hr1}"
+            lines.append(
+                f"表: 見出し {hr_label} 行目・{tb_now['first_col']}〜{tb_now['last_col']} 列・明細 {tb_now['data']} 行目"
+                + (f"・合計行 {tb_now['total_row']} 行目" if tb_now.get("total_row") else "・合計行なし")
+            )
+            lines.append("列: " + "、".join(f"{c['col']}={c['name']}{'(数値)' if c['number'] else ''}" for c in tb_now["columns"]))
+        if snip["note"]:
+            lines.append(snip["note"])
+        if snip["text"]:
+            lines.append("中身（行番号・列記号・数式つき）:\n" + snip["text"])
+        lines.append("上の表の中身と根拠セルをもとに、シートを変更せずそのまま答えてください。")
+        return "\n".join(lines)
 
     def _do(self, ops, target, ok, tim):
         st, res, key = self._do_res(ops, target, ok, tim)

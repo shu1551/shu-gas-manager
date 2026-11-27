@@ -1736,6 +1736,9 @@ var ComboPlanner = (function () {
         }
         if (cHits.length && !opObj.bg && !opObj.color) addMiss("色（color/bg）");
       }
+      if (shN === "cf.add" && !opObj.bg && !opObj.color && (opObj.bold === undefined || opObj.bold === null)) {
+        addMiss("書式（bg・color・bold）");
+      }
       if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
         if (/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) && !opObj.when) {
           addMiss("条件（when）");
@@ -2735,9 +2738,22 @@ var ComboPlanner = (function () {
     return false;
   }
 
+  var _READ_ONLY_MUTATE_RE_JS = /並べて|並べ替|ソート|絞り込|フィルタ|抽出|消して|消す|削除|取り除|捨て|外して|外す|解除|塗|色[をに]?付|色[をに]?つ|色[をに]?変|色にして|太字|斜体|罫線|固定|フリーズ|非表示|隠して|再表示|追加|足して|作って|作成|入れて|入力|書[きくい]|書き換|置換|直して|そろえて|揃えて|整えて|変換|グラフ|ピボット|集計表|別シート|コピー|複製|移動|変更|保護|結合|幅を|高さを|広げて|狭めて|大きくして|小さくして|プルダウン|リストを作|ハイライト|目立たせ|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$/;
+  var _READ_ONLY_QUERY_RE_JS = /[?？]|どこ|どれ|だれ|誰|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|ありますか|あるか|いるか|ですか|でしょうか|どうなって|教えて|知りたい|確認したい|構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ/;
+
+  function _isReadOnlyAskJs(askText) {
+    var t = nfkc(askText || "").trim();
+    if (!t) return false;
+    if (_READ_ONLY_MUTATE_RE_JS.test(t)) return false;
+    return _READ_ONLY_QUERY_RE_JS.test(t);
+  }
+
   function _buildPreviewText(res) {
     if (res.fire) {
       return "棚ヒット: " + formatOpsShort(res.ops);
+    }
+    if (res.readOnly) {
+      return "読むだけ: シートの中身を読んで答えます（変更なし）";
     }
     var reason = res.reasons.length
       ? res.reasons.join("／")
@@ -2754,6 +2770,7 @@ var ComboPlanner = (function () {
     var p = {
       ops: [],
       fire: false,
+      readOnly: false,
       reasons: [],
       missing: [],
       cards: [],
@@ -3236,7 +3253,14 @@ var ComboPlanner = (function () {
     }
     p.ops = dd;
     p.fire = (!fatalErr) && (!p.missing.length) && (p.ops.length > 0);
-    if (!p.fire && !hasGuideBlock && !vagueM) {
+    if (!p.fire && _isReadOnlyAskJs(askText)) {
+      p.readOnly = true;
+      p.ops = [];
+      p.reasons = [];
+      p.missing = [];
+      p.cards = [];
+      p.suggest = null;
+    } else if (!p.fire && !hasGuideBlock && !vagueM) {
       p.suggest = _suggestOps(askText, kind, table, sheets, curSheet, p.cards);
     }
     p.previewText = _buildPreviewText(p);

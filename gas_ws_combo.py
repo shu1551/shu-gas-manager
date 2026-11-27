@@ -1585,6 +1585,7 @@ class ComboPostboxWatcher:
         selection = item.get("selection") or ""
         table = item.get("table")
         sheets = item.get("sheets") or []
+        is_read_only = (item.get("kind") == "read") or bool(item.get("readOnly"))
 
         lines = ["【現在の対象状態】", f"ブック: {ss_name} / シート: {sheet}"]
         if sheets:
@@ -1592,8 +1593,11 @@ class ComboPostboxWatcher:
         if selection:
             lines.append(f"選択中のセル範囲: {selection}（「ここ」「選択範囲」等の対象）")
         if table:
+            hr1 = table.get("header_row")
+            hrs = int(table.get("header_rows") or 1)
+            hr_s = f"{hr1}-{hr1 + hrs - 1}" if (hr1 and hrs > 1) else f"{hr1}"
             lines.append(
-                f"表: 見出し {table.get('header_row')}行目・{table.get('first_col')}〜{table.get('last_col')}列"
+                f"表: 見出し {hr_s}行目・{table.get('first_col')}〜{table.get('last_col')}列"
                 f"・明細 {table.get('data')}行目"
                 + (f"・合計行 {table['total_row']}行目" if table.get("total_row") else "")
             )
@@ -1602,6 +1606,19 @@ class ComboPostboxWatcher:
                 for c in (table.get("columns") or [])
             )
             lines.append("列: " + cols)
+
+        if is_read_only:
+            snip_txt = str(item.get("tableSnippet") or "").strip()
+            if item.get("truncated") and item.get("totalRows"):
+                lines.append(f"※全 {item['totalRows']} 行のうち抜粋（先頭80行＋末尾20行）です。")
+            if snip_txt:
+                lines.append("\n【表の中身（行番号・列記号・値・数式）】\n" + snip_txt)
+            lines.append(
+                f"\n【ユーザーの質問（読むだけ・シート変更禁止）】\n{ask}\n\n"
+                "シートは変更せず、上の表の中身から根拠のセル番地・数値を添えて簡潔に答えてください。"
+                '必ず {"action":"reply","message":"..."} の JSON 1個だけを返してください（ops は返さないこと）。'
+            )
+            return "\n".join(lines)
 
         finder = self._get_finder()
         priority = (
@@ -1708,8 +1725,25 @@ class ComboPostboxWatcher:
                 return dict(meta, action="error", error=str(e))
 
         prompt = self._build_prompt(item)
+        is_read_only = (item.get("kind") == "read") or bool(item.get("readOnly"))
         try:
             parsed = self._ask_via_claude(prompt, model=req_model or "sonnet")
+            if is_read_only:
+                # 守り: 読むだけの道で AI が ops を返してもコード側で必ず捨てて撃たない
+                msg = str(parsed.get("message") or parsed.get("note") or "").strip()
+                if not msg:
+                    msg = "読むだけの質問のためシートは変更しませんでした。"
+                if item.get("truncated") and item.get("totalRows"):
+                    trunc_note = f"※全 {item['totalRows']} 行のうち抜粋（先頭80行＋末尾20行）で読みました"
+                    if "抜粋" not in msg:
+                        msg = msg + "\n" + trunc_note
+                return {
+                    "reqId": req_id,
+                    "action": "reply",
+                    "ops": [],
+                    "note": "",
+                    "message": msg,
+                }
             action = parsed.get("action") or ("ops" if parsed.get("ops") else "reply")
             return {
                 "reqId": req_id,

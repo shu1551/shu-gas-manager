@@ -48,17 +48,21 @@ def _load_cases():
         if not ln or ln.startswith("#"):
             continue
         parts = raw.split("\t")
-        want_fire = parts[0].strip() == "1"
+        mode = parts[0].strip()
         ask = parts[1].strip()
         exp = parts[2].strip() if len(parts) >= 3 else ""
-        cases.append((lineno, want_fire, ask, exp))
+        cases.append((lineno, mode, ask, exp))
     return cases
 
 
-@pytest.mark.parametrize("lineno, want_fire, ask, exp", _load_cases())
-def test_ask_realworld_tsv(lineno, want_fire, ask, exp):
+@pytest.mark.parametrize("lineno, mode, ask, exp", _load_cases())
+def test_ask_realworld_tsv(lineno, mode, ask, exp):
     p = A.plan(ask, FINDER, "sheet", REALWORLD_TABLE, ["シート1"], "シート1")
-    assert p.fire is want_fire, f"L{lineno} [{ask}] fire={p.fire} want={want_fire} reasons={p.reasons} missing={p.missing} ops={p.ops}"
+    if mode == "R":
+        assert not p.fire and p.read_only is True and not p.ops, f"L{lineno} [{ask}] fire={p.fire} read_only={p.read_only} ops={p.ops}"
+        return
+    want_fire = mode == "1"
+    assert p.fire is want_fire, f"L{lineno} [{ask}] fire={p.fire} want={want_fire} read_only={p.read_only} reasons={p.reasons} missing={p.missing} ops={p.ops}"
     if want_fire and exp:
         expected_ops = json.loads(exp)
         assert len(p.ops) == len(expected_ops), f"L{lineno} [{ask}] ops={p.ops}"

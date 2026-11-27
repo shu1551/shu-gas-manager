@@ -82,14 +82,15 @@ class Plan:
     def __init__(self):
         self.ops = []          # 組んだ ops（fire=False でも組めた所まで）
         self.fire = False
+        self.read_only = False # シートを変えない「読むだけ」の問いと判定されたか
         self.reasons = []      # 撃たない理由（人と AI に見せる）
         self.missing = []      # 決まらなかった引数（"棚: 引数(型)"）
         self.cards = []        # 候補の棚の dict（撃たないときに札を見せる）
         self.guide = []
 
     def to_dict(self):
-        return {"ops": self.ops, "fire": self.fire, "reasons": self.reasons, "missing": self.missing,
-                "cards": [s["name"] for s in self.cards], "guide": self.guide}
+        return {"ops": self.ops, "fire": self.fire, "read_only": self.read_only, "reasons": self.reasons,
+                "missing": self.missing, "cards": [s["name"] for s in self.cards], "guide": self.guide}
 
 
 def nfkc(s):
@@ -903,6 +904,10 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
             _add_miss("表示形式（number_format）")
         if color_hits and not op.get("bg") and not op.get("color"):
             _add_miss("色（color/bg）")
+
+    # 3b. cf.add は書式（bg・color・bold）が 1 つも無いまま撃たない（質問文への誤爆防止）
+    if sh_name == "cf.add" and not op.get("bg") and not op.get("color") and op.get("bold") is None:
+        _add_miss("書式（bg・color・bold）")
 
     # 4. フィルタ系で条件語が落ちている／条件自体が空
     if sh_name in ("filter.where", "filter.delete", "filter.extract"):
@@ -1786,6 +1791,31 @@ def _apply_scope_fallback(op, missing, source_scope, shelf=None, clause=""):
     return missing, False
 
 
+_READ_ONLY_MUTATE_RE = re.compile(
+    r"並べて|並べ替|ソート|絞り込|フィルタ|抽出|消して|消す|削除|取り除|捨て|外して|外す|解除|塗|"
+    r"色[をに]?付|色[をに]?つ|色[をに]?変|色にして|太字|斜体|罫線|固定|フリーズ|非表示|隠して|再表示|"
+    r"追加|足して|作って|作成|入れて|入力|書[きくい]|書き換|置換|直して|そろえて|揃えて|整えて|変換|"
+    r"グラフ|ピボット|集計表|別シート|コピー|複製|移動|変更|保護|結合|幅を|高さを|広げて|狭めて|"
+    r"大きくして|小さくして|プルダウン|リストを作|ハイライト|目立たせ|"
+    r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$"
+)
+_READ_ONLY_QUERY_RE = re.compile(
+    r"[?？]|どこ|どれ|だれ|誰|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|"
+    r"ありますか|あるか|いるか|ですか|でしょうか|どうなって|教えて|知りたい|確認したい|"
+    r"構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ"
+)
+
+
+def _is_read_only_ask(ask):
+    """棚が撃てなかった依頼のうち、変更動詞が無く問いの形になっている「読むだけ」かを判定する。"""
+    t = nfkc(ask or "").strip()
+    if not t:
+        return False
+    if _READ_ONLY_MUTATE_RE.search(t):
+        return False
+    return bool(_READ_ONLY_QUERY_RE.search(t))
+
+
 # ------------------------------------------------------------------ 頼み → ops
 def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope=None):
     cur_sheet = cur_sheet or (sheets[0] if sheets else "")
@@ -2166,6 +2196,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
         dd.append(o)
     p.ops = dd
     p.fire = (not fatal_err) and (not p.missing) and bool(p.ops)
+    if not p.fire and _is_read_only_ask(ask):
+        p.read_only = True
+        p.ops = []
+        p.reasons = []
+        p.missing = []
+        p.cards = []
     return p
 
 

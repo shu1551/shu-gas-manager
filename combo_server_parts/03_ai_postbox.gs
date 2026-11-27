@@ -70,21 +70,94 @@ function comboBuildCompactShelfSummary_(ask, fullLimit) {
   return lines.join('\n');
 }
 
-function comboBuildAiPrompts_(ask, ssName, sheetName, selection, table, sheets) {
-  var sys = [
-    'あなたは Google スプレッドシートを操作するアシスタントです。',
-    '必ず有効な JSON オブジェクト 1 個だけを返してください（説明文や ``` などの装飾は一切付けない）。',
-    '・操作を実行するとき: {"action":"ops","ops":[{"shelf":"棚名","引数":値}],"note":"短い日本語要約"}',
-    '・返事や確認だけを返すとき: {"action":"reply","message":"日本語の返事"}',
-    'ルール: 棚名・引数名は利用可能な棚一覧に載っている正確な名前と型を使うこと。'
-  ].join('\n');
+function comboReadTableSnippet_(ss, curSheet, table) {
+  var sh = sheetOf_(ss, curSheet, '');
+  var lr = Math.max(0, sh.getLastRow());
+  var lc = Math.max(0, sh.getLastColumn());
+  if (!lr || !lc) {
+    return { text: '(シートは空です)', truncated: false, totalRows: 0, note: '' };
+  }
+  var maxRows = 100, headRows = 80, tailRows = 20, maxCols = 26;
+  var useCols = Math.min(lc, maxCols);
+  var truncated = lr > maxRows;
+  var fmtRow = function (rNo, dispRow, fmRow) {
+    var parts = [];
+    for (var j = 0; j < useCols; j++) {
+      var vs = dispRow && dispRow[j] !== undefined && dispRow[j] !== null ? String(dispRow[j]) : '';
+      var fs = fmRow && fmRow[j] ? String(fmRow[j]) : '';
+      if (!vs && !fs) continue;
+      parts.push(colLetter_(j + 1) + '=' + vs + (fs ? ' {' + fs + '}' : ''));
+    }
+    return 'R' + rNo + ': ' + (parts.length ? parts.join(' | ') : '(空行)');
+  };
+  var lines = [];
+  if (!truncated) {
+    var rgAll = sh.getRange(1, 1, lr, useCols);
+    var dvAll = rgAll.getDisplayValues();
+    var fmAll = rgAll.getFormulas();
+    for (var i = 0; i < lr; i++) lines.push(fmtRow(i + 1, dvAll[i], fmAll[i]));
+  } else {
+    var rgH = sh.getRange(1, 1, headRows, useCols);
+    var dvH = rgH.getDisplayValues(), fmH = rgH.getFormulas();
+    for (var hi = 0; hi < headRows; hi++) lines.push(fmtRow(hi + 1, dvH[hi], fmH[hi]));
+    lines.push('...（中略: 全 ' + lr + ' 行のうち先頭 ' + headRows + ' 行＋末尾 ' + tailRows + ' 行を抜粋）...');
+    var tailStart = lr - tailRows + 1;
+    var rgT = sh.getRange(tailStart, 1, tailRows, useCols);
+    var dvT = rgT.getDisplayValues(), fmT = rgT.getFormulas();
+    for (var ti = 0; ti < tailRows; ti++) lines.push(fmtRow(tailStart + ti, dvT[ti], fmT[ti]));
+  }
+  var note = truncated ? ('※全 ' + lr + ' 行のうち抜粋（先頭' + headRows + '行＋末尾' + tailRows + '行）で読みました') : '';
+  return { text: lines.join('\n'), truncated: truncated, totalRows: lr, note: note };
+}
+
+function comboReadSnippet(req) {
+  var t0 = Date.now();
+  req = req || {};
+  try {
+    var ss = comboOpenSs_(req);
+    var selInfo = comboGetSelectionInfo_(ss, req);
+    var sn = comboReadTableSnippet_(ss, selInfo.sheet, req.table);
+    return Object.assign({ ok: true, sheet: selInfo.sheet, gasMs: Date.now() - t0 }, sn);
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err), gasMs: Date.now() - t0 };
+  }
+}
+
+function comboBuildAiPrompts_(ask, ssName, sheetName, selection, table, sheets, optOpts) {
+  var isReadOnly = !!(optOpts && optOpts.readOnly);
+  var sys = isReadOnly
+    ? [
+        'あなたは Google スプレッドシートの内容を読んで質問に答えるアシスタントです。',
+        '必ず有効な JSON オブジェクト 1 個だけを返してください（説明文や ``` などの装飾は一切付けない）。',
+        '形式: {"action":"reply","message":"日本語の返事（根拠セル番地・数値を添えて簡潔に）"}',
+        '重要: シートは一切変更しないでください（ops は絶対に返さないこと）。'
+      ].join('\n')
+    : [
+        'あなたは Google スプレッドシートを操作するアシスタントです。',
+        '必ず有効な JSON オブジェクト 1 個だけを返してください（説明文や ``` などの装飾は一切付けない）。',
+        '・操作を実行するとき: {"action":"ops","ops":[{"shelf":"棚名","引数":値}],"note":"短い日本語要約"}',
+        '・返事や確認だけを返すとき: {"action":"reply","message":"日本語の返事"}',
+        'ルール: 棚名・引数名は利用可能な棚一覧に載っている正確な名前と型を使うこと。'
+      ].join('\n');
 
   var lines = ['【現在の対象状態】', 'ブック: ' + ssName + ' / シート: ' + sheetName];
   if (sheets && sheets.length) lines.push('全シート: ' + sheets.join('、'));
   if (selection) lines.push('選択中のセル範囲: ' + selection + '（「ここ」「選択範囲」等の対象）');
   if (table) {
-    lines.push('表: 見出し ' + table.header_row + '行目・' + table.first_col + '〜' + table.last_col + '列・明細 ' + table.data + '行目' + (table.total_row ? '・合計行 ' + table.total_row : ''));
+    var hr1 = table.header_row;
+    var hrs = parseInt(table.header_rows || 1, 10);
+    var hrLabel = hrs > 1 ? (hr1 + '-' + (hr1 + hrs - 1)) : String(hr1);
+    lines.push('表: 見出し ' + hrLabel + '行目・' + table.first_col + '〜' + table.last_col + '列・明細 ' + table.data + '行目' + (table.total_row ? '・合計行 ' + table.total_row : ''));
     lines.push('列: ' + (table.columns || []).map(function (c) { return c.col + '=' + c.name + (c.number ? '(数値)' : ''); }).join('、'));
+  }
+
+  if (isReadOnly) {
+    var sn = (optOpts && optOpts.snippet) || {};
+    if (sn.note) lines.push(sn.note);
+    if (sn.text) lines.push('\n【表の中身（行番号・列記号・値・数式）】\n' + sn.text);
+    lines.push('\n【ユーザーの質問（読むだけ・シート変更禁止）】\n' + ask);
+    lines.push('\n必ず {"action":"reply","message":"..."} の JSON 1個だけを返してください。');
+    return { system: sys, user: lines.join('\n') };
   }
 
   lines.push('\n【関連する棚候補と全棚カタログ】');
@@ -184,10 +257,11 @@ function comboResolveLatestApiModel_(provider, aliasOrModel, apiKey) {
   return gFallback;
 }
 
-function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets) {
+function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets, optOpts) {
   var apiKey = comboResolveApiKey_(cfg);
   if (!apiKey) throw new Error('APIキーが設定されていません');
-  var prompts = comboBuildAiPrompts_(ask, ss.getName(), curSheet, selection, table, sheets);
+  var isReadOnly = !!(optOpts && optOpts.readOnly);
+  var prompts = comboBuildAiPrompts_(ask, ss.getName(), curSheet, selection, table, sheets, optOpts);
   var rawText = '';
 
   if (cfg.aiMode === 'api_gemini') {
@@ -239,6 +313,18 @@ function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets) {
   }
 
   var parsed = JSON.parse(comboStripJsonFence_(rawText));
+  if (isReadOnly) {
+    // 守り: 読むだけの道で AI が ops を返してもコード側で必ず捨てて撃たない
+    var roMsg = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+      ? String(parsed.message || parsed.note || '').trim()
+      : '';
+    if (!roMsg) roMsg = '読むだけの質問のためシートは変更しませんでした。';
+    var snRo = optOpts && optOpts.snippet;
+    if (snRo && snRo.truncated && snRo.note && roMsg.indexOf('抜粋') < 0) {
+      roMsg += '\n' + snRo.note;
+    }
+    return { action: 'reply', message: roMsg };
+  }
   if (Array.isArray(parsed)) return { action: 'ops', ops: parsed, note: '' };
   if (parsed && parsed.shelf && !parsed.ops) return { action: 'ops', ops: [parsed], note: '' };
   return parsed;
@@ -464,6 +550,7 @@ function comboRunAsk(req) {
     cached = comboCacheGet_(ssId, curSheet);
   }
 
+  var isReadOnlyAsk = false;
   if (typeof ComboPlanner !== 'undefined' && typeof ComboPlanner.plan === 'function') {
     if (typeof ComboPlanner.setLearned === 'function') ComboPlanner.setLearned(comboGetLearned().learned);
     var plan = ComboPlanner.plan(askText, 'sheet', table, sheets, curSheet, scope);
@@ -491,46 +578,64 @@ function comboRunAsk(req) {
       return hitRes;
     }
 
-    // 既製棚に一発ヒットしなかった場合、マイマクロの // 棚: 言い方 と関数名を照合する
-    if (typeof quickMyFind_ === 'function' && typeof quickMyListCached_ === 'function' && typeof comboQuickRun === 'function') {
-      try {
-        var allPropsMy = null;
-        try { allPropsMy = PropertiesService.getUserProperties().getProperties() || {}; } catch (ePM) {}
-        var metaMy = quickMyFind_(true, allPropsMy);
-        if (metaMy && metaMy.id) {
-          var myList = quickMyListCached_(metaMy.id, metaMy.stamp || undefined);
-          var myHit = comboMatchMyMacro_(askText, myList);
-          if (myHit) {
-            var myRes = comboQuickRun({
-              name: myHit.name,
-              myId: metaMy.id,
-              myStamp: metaMy.stamp || '',
-              targetId: ssId,
-              sheet: curSheet,
-              selection: selection,
-              backup: !!req.backup
-            });
-            if (myRes) {
-              myRes.source = 'mymacro';
-              myRes.matchedMacro = myHit.name;
-              if (myRes.ok) myRes.text = '[マイマクロ] ' + myHit.name + '\n' + (myRes.text || '');
-              myRes.gasMs = Date.now() - t0;
-              return myRes;
+    isReadOnlyAsk = !!(plan && plan.readOnly);
+
+    // 読むだけの質問はマイマクロ照合を行わない。aiAuto=false なら表の中身は AI へ送らず要約のみ返す
+    if (isReadOnlyAsk) {
+      if (!req.aiAuto) {
+        var roSummary = table
+          ? ('シート「' + curSheet + '」: 見出し ' + table.header_row + (table.header_rows > 1 ? '-' + (table.header_row + table.header_rows - 1) : '') + '行目・明細 ' + table.data + '行目\n列: ' + (table.columns || []).map(function (c) { return c.col + '=' + c.name; }).join('、'))
+          : ('シート「' + curSheet + '」');
+        return {
+          ok: true,
+          source: 'read_only_summary',
+          readOnly: true,
+          text: '[読むだけ] シートは変更していません。\n' + roSummary + '\n（※「AI自動」をONにするとシートの中身を読んで質問に答えます）',
+          gasMs: Date.now() - t0
+        };
+      }
+    } else {
+      // 既製棚に一発ヒットしなかった場合、マイマクロの // 棚: 言い方 と関数名を照合する
+      if (typeof quickMyFind_ === 'function' && typeof quickMyListCached_ === 'function' && typeof comboQuickRun === 'function') {
+        try {
+          var allPropsMy = null;
+          try { allPropsMy = PropertiesService.getUserProperties().getProperties() || {}; } catch (ePM) {}
+          var metaMy = quickMyFind_(true, allPropsMy);
+          if (metaMy && metaMy.id) {
+            var myList = quickMyListCached_(metaMy.id, metaMy.stamp || undefined);
+            var myHit = comboMatchMyMacro_(askText, myList);
+            if (myHit) {
+              var myRes = comboQuickRun({
+                name: myHit.name,
+                myId: metaMy.id,
+                myStamp: metaMy.stamp || '',
+                targetId: ssId,
+                sheet: curSheet,
+                selection: selection,
+                backup: !!req.backup
+              });
+              if (myRes) {
+                myRes.source = 'mymacro';
+                myRes.matchedMacro = myHit.name;
+                if (myRes.ok) myRes.text = '[マイマクロ] ' + myHit.name + '\n' + (myRes.text || '');
+                myRes.gasMs = Date.now() - t0;
+                return myRes;
+              }
             }
           }
-        }
-      } catch (eMyMatch) {}
-    }
+        } catch (eMyMatch) {}
+      }
 
-    // 棚にもマイマクロにも一発ヒットしなかった場合
-    if (!req.aiAuto) {
-      return {
-        ok: false,
-        unfired: true,
-        plan: plan,
-        text: comboRenderUnfired_(plan),
-        gasMs: Date.now() - t0
-      };
+      // 棚にもマイマクロにも一発ヒットしなかった場合
+      if (!req.aiAuto) {
+        return {
+          ok: false,
+          unfired: true,
+          plan: plan,
+          text: comboRenderUnfired_(plan),
+          gasMs: Date.now() - t0
+        };
+      }
     }
   } else if (!req.aiAuto) {
     return {
@@ -545,15 +650,22 @@ function comboRunAsk(req) {
   if (req.forceAiMode === 'api_gemini' || req.forceAiMode === 'api_claude') {
     cfg = Object.assign({}, cfg, { aiMode: req.forceAiMode });
   }
+  var roSnippet = isReadOnlyAsk ? comboReadTableSnippet_(ss, curSheet, table) : null;
   var hasApiKey = (cfg.aiMode === 'api_gemini' || cfg.aiMode === 'api_claude') && !!comboResolveApiKey_(cfg);
   if (hasApiKey) {
     try {
-      var aiRes = comboCallAiApi_(cfg, askText, ss, curSheet, selection, table, sheets);
-      if (aiRes && aiRes.action === 'reply') {
+      var aiRes = comboCallAiApi_(cfg, askText, ss, curSheet, selection, table, sheets, isReadOnlyAsk ? { readOnly: true, snippet: roSnippet } : null);
+      if (isReadOnlyAsk || (aiRes && aiRes.action === 'reply')) {
+        // 守り: 読むだけモードでは ops が混入していても絶対に実行せず reply のみ返す
+        var repMsg = (aiRes && aiRes.message) ? String(aiRes.message) : '読むだけの質問のためシートは変更しませんでした。';
+        if (roSnippet && roSnippet.truncated && roSnippet.note && repMsg.indexOf('抜粋') < 0) {
+          repMsg += '\n' + roSnippet.note;
+        }
         return {
           ok: true,
           source: 'ai_reply',
-          text: '[AI返答]\n' + (aiRes.message || '(返答なし)'),
+          readOnly: isReadOnlyAsk,
+          text: (isReadOnlyAsk ? '[読むだけ]\n' : '[AI返答]\n') + repMsg,
           gasMs: Date.now() - t0
         };
       }
@@ -594,6 +706,8 @@ function comboRunAsk(req) {
     return { ok: false, error: COMBO_PB_NOT_LISTENING_MSG, text: COMBO_PB_NOT_LISTENING_MSG, gasMs: Date.now() - t0 };
   }
   var reqId = comboPostboxEnqueue_({
+    kind: isReadOnlyAsk ? 'read' : 'ops',
+    readOnly: isReadOnlyAsk,
     ssId: ss.getId(),
     ssName: ss.getName(),
     sheet: curSheet,
@@ -603,7 +717,10 @@ function comboRunAsk(req) {
     backup: !!req.backup,
     aiModel: cfg.aiModel || 'sonnet',
     table: table,
-    sheets: sheets
+    sheets: sheets,
+    tableSnippet: roSnippet ? roSnippet.text : '',
+    truncated: roSnippet ? !!roSnippet.truncated : false,
+    totalRows: roSnippet ? (roSnippet.totalRows || 0) : 0
   });
   return {
     ok: true,
@@ -988,7 +1105,8 @@ function comboPostboxDeliver(resPayload) {
     };
   }
 
-  if (action === 'ops' && Array.isArray(resPayload.ops) && resPayload.ops.length) {
+  var isReadOnlyDeliver = !!((orig && (orig.kind === 'read' || orig.readOnly)) || resPayload.readOnly);
+  if (!isReadOnlyDeliver && action === 'ops' && Array.isArray(resPayload.ops) && resPayload.ops.length) {
     var execRes = comboRunOps({
       ops: resPayload.ops,
       ok: orig ? !!orig.ok : !!resPayload.ok,

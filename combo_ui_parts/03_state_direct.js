@@ -1888,6 +1888,95 @@
     };
   }
 
+  function fetchDirectTableSnippet(sheetName, table, done) {
+    var colLetterLocal = function(n) {
+      var s = "";
+      while (n > 0) {
+        var m = (n - 1) % 26;
+        s = String.fromCharCode(65 + m) + s;
+        n = Math.floor((n - 1) / 26);
+      }
+      return s;
+    };
+    var fallbackGas = function() {
+      callGas("comboReadSnippet", {
+        targetId: (state.target && state.target.id) || "",
+        sheet: sheetName || state.curSheet || "",
+        table: table || state.table || null
+      }, function(res) {
+        if (res && res.ok) done(res);
+        else done({ text: "", truncated: false, totalRows: 0, note: "" });
+      }, function() {
+        done({ text: "", truncated: false, totalRows: 0, note: "" });
+      });
+    };
+    if (typeof fetch !== "function" || !state.oauthToken || !state.target || !state.target.id) {
+      fallbackGas();
+      return;
+    }
+    var sh = sheetName || state.curSheet || (state.target && state.target.sheet) || "";
+    var shPrefix = sh ? ("'" + sh.replace(/'/g, "''") + "'!") : "";
+    var maxRows = 100, headRows = 80, tailRows = 20, maxCols = 26;
+    var rangeStr = shPrefix + "A1:Z2000";
+    var url = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(state.target.id)
+      + "?ranges=" + encodeURIComponent(rangeStr)
+      + "&fields=" + encodeURIComponent("sheets(properties(gridProperties(rowCount)),data(rowData(values(formattedValue,userEnteredValue(formulaValue)))))");
+    fetch(url, {
+      method: "GET",
+      headers: { "Authorization": "Bearer " + state.oauthToken }
+    }).then(function(res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function(json) {
+      var shObj = (json && json.sheets && json.sheets[0]) || {};
+      var rd = (((shObj.data || [])[0] || {}).rowData) || [];
+      var lastR = 0;
+      for (var i = rd.length - 1; i >= 0; i--) {
+        var vs = (rd[i] && rd[i].values) || [];
+        var hasAny = false;
+        for (var j = 0; j < vs.length; j++) {
+          if (vs[j] && ((vs[j].formattedValue !== undefined && vs[j].formattedValue !== "") || (vs[j].userEnteredValue && vs[j].userEnteredValue.formulaValue))) {
+            hasAny = true;
+            break;
+          }
+        }
+        if (hasAny) { lastR = i + 1; break; }
+      }
+      if (!lastR) {
+        done({ text: "(シートは空です)", truncated: false, totalRows: 0, note: "" });
+        return;
+      }
+      var gridRows = ((shObj.properties && shObj.properties.gridProperties && shObj.properties.gridProperties.rowCount) || lastR);
+      var totalRows = (lastR >= 2000 && gridRows > 2000) ? gridRows : lastR;
+      var truncated = totalRows > maxRows;
+      var fmtRow = function(idx) {
+        var vs = (rd[idx] && rd[idx].values) || [];
+        var parts = [];
+        var limC = Math.min(vs.length, maxCols);
+        for (var c = 0; c < limC; c++) {
+          var cell = vs[c] || {};
+          var fv = cell.formattedValue !== undefined && cell.formattedValue !== null ? String(cell.formattedValue) : "";
+          var fm = (cell.userEnteredValue && cell.userEnteredValue.formulaValue) ? String(cell.userEnteredValue.formulaValue) : "";
+          if (!fv && !fm) continue;
+          parts.push(colLetterLocal(c + 1) + "=" + fv + (fm ? " {" + fm + "}" : ""));
+        }
+        return "R" + (idx + 1) + ": " + (parts.length ? parts.join(" | ") : "(空行)");
+      };
+      var lines = [];
+      if (!truncated) {
+        for (var r = 0; r < lastR; r++) lines.push(fmtRow(r));
+      } else {
+        for (var rh = 0; rh < Math.min(headRows, lastR); rh++) lines.push(fmtRow(rh));
+        lines.push("...（中略: 全 " + totalRows + " 行のうち先頭 " + headRows + " 行＋末尾 " + tailRows + " 行を抜粋）...");
+        for (var rt = Math.max(headRows, lastR - tailRows); rt < lastR; rt++) lines.push(fmtRow(rt));
+      }
+      var note = truncated ? ("※全 " + totalRows + " 行のうち抜粋（先頭" + headRows + "行＋末尾" + tailRows + "行）で読みました") : "";
+      done({ text: lines.join("\n"), truncated: truncated, totalRows: totalRows, note: note });
+    }).catch(function() {
+      fallbackGas();
+    });
+  }
+
   function tryDirectSheetsApi(ops, label, isFromAsk, fallbackFn, extraOpts) {
     if (typeof fetch !== "function") return false;
     var sheetName = state.curSheet || (state.target && state.target.sheet) || "";

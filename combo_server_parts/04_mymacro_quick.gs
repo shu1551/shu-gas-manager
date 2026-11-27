@@ -1654,6 +1654,7 @@ if (typeof EXTRA_ACTIONS !== 'undefined') {
   EXTRA_ACTIONS.combo_ping = comboPing;
   EXTRA_ACTIONS.combo_init = comboInit;
   EXTRA_ACTIONS.combo_look = comboLook;
+  EXTRA_ACTIONS.combo_read_snippet = comboReadSnippet;
   EXTRA_ACTIONS.combo_find = comboFind;
   EXTRA_ACTIONS.combo_ask = comboRunAsk;
   EXTRA_ACTIONS.combo_ops = comboRunOps;

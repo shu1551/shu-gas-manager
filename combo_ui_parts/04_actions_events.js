@@ -265,13 +265,26 @@
     var liveSelPrompt = !!(els.chkSync.checked && hasSelectionPronoun(txt));
     var planRes = updatePreview();
     var fireOps = (!liveSelPrompt && planRes && planRes.fire && Array.isArray(planRes.ops) && planRes.ops.length) ? planRes.ops : null;
+    var isReadOnly = !!(planRes && planRes.readOnly && !fireOps);
     var aiAuto = !!els.chkAiAuto.checked;
 
     els.askInput.value = "";
     updatePreview();
 
+    // 読むだけの質問: aiAuto=false なら中身を AI へ送らず要約のみ。aiAuto=true なら中身を添えて AI へ渡し ops は必ず捨てる
+    if (isReadOnly) {
+      if (!aiAuto) {
+        switchTab("chat");
+        var tbSum = state.table
+          ? ("シート「" + (state.curSheet || "") + "」: 見出し " + state.table.header_row + (state.table.header_rows > 1 ? "-" + (state.table.header_row + state.table.header_rows - 1) : "") + "行目・明細 " + state.table.data + "行目\n列: " + (state.table.columns || []).map(function(c) { return c.col + "=" + c.name; }).join("、"))
+          : ("シート「" + (state.curSheet || "") + "」");
+        appendLog(els.chatLog, "is-info", "📖 " + txt + "（読むだけ）", "シートは変更していません。\n" + tbSum + "\n（※「AI自動」をONにするとシートの中身を読んで質問に答えます）");
+        return;
+      }
+    }
+
     // 近い候補があれば、AI自動でも先に［はい］を出す（郵便受けの受け手がいなくても止まらない。［いいえ］なら AI へ回す）
-    var suggestOps = (!fireOps && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) ? planRes.suggest : null;
+    var suggestOps = (!fireOps && !isReadOnly && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) ? planRes.suggest : null;
 
     var statusText = (!fireOps && aiAuto) ? "AI解釈・実行中…" : "実行中…";
     var payload = {
@@ -327,45 +340,73 @@
         runViaGasAsk();
         return;
       }
-      setBusy(true, "✨ ローカル AI に直接確認中…");
-      requestDirectAi({
-        kind: "ops",
-        stream: true,
-        ask: txt,
-        ssId: state.target.id || "",
-        ssName: state.target.name || "",
-        sheet: state.curSheet || "",
-        selection: els.chkSync.checked ? (state.selection || "") : "",
-        table: state.table,
-        sheets: state.sheets || [],
-        aiModel: getCurrentAiModel()
-      }, function(r) {
-        setBusy(false);
-        if (r && r.inExtension && !r.reachable) {
+      var sendDirectPayload = function(sn) {
+        setBusy(true, isReadOnly ? "📖 シートを読んで確認中…" : "✨ ローカル AI に直接確認中…");
+        var aiReq = {
+          kind: isReadOnly ? "read" : "ops",
+          readOnly: isReadOnly,
+          stream: true,
+          ask: txt,
+          ssId: state.target.id || "",
+          ssName: state.target.name || "",
+          sheet: state.curSheet || "",
+          selection: els.chkSync.checked ? (state.selection || "") : "",
+          table: state.table,
+          sheets: state.sheets || [],
+          aiModel: getCurrentAiModel()
+        };
+        if (isReadOnly && sn) {
+          aiReq.tableSnippet = sn.text || "";
+          aiReq.truncated = !!sn.truncated;
+          aiReq.totalRows = sn.totalRows || 0;
+        }
+        requestDirectAi(aiReq, function(r) {
+          setBusy(false);
+          if (r && r.inExtension && !r.reachable) {
+            switchTab("chat");
+            appendApiRetryLog("⚠ ローカル直結に接続できません: " + txt, "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください");
+            return;
+          }
+          if (!r || !r.reachable) {
+            runViaGasAsk();
+            return;
+          }
+          var d = r.data || {};
+          // 守り: 読むだけモードでは AI が ops を返してもコード側で必ず捨てて実行しない
+          if (isReadOnly) {
+            switchTab("chat");
+            var roMsg = String(d.message || d.text || d.note || "").trim() || "読むだけの質問のためシートは変更しませんでした。";
+            if (sn && sn.truncated && sn.note && roMsg.indexOf("抜粋") < 0) {
+              roMsg += "\n" + sn.note;
+            }
+            var roHead = "📖 " + txt + (typeof d.aiMs === "number" ? ("（読むだけ " + (d.aiMs / 1000).toFixed(1) + "秒）") : "（読むだけ）");
+            appendLog(els.chatLog, "is-info", roHead, roMsg);
+            return;
+          }
+          if (d.ok && d.action === "ops" && Array.isArray(d.ops) && d.ops.length) {
+            onRunOps(d.ops, txt, { switchToChat: true });
+            return;
+          }
+          if (d.ok && d.action === "reply") {
+            switchTab("chat");
+            var head = "💬 " + txt + (typeof d.aiMs === "number" ? ("（直結 " + (d.aiMs / 1000).toFixed(1) + "秒）") : "");
+            appendLog(els.chatLog, "is-info", head, String(d.message || d.text || ""));
+            return;
+          }
           switchTab("chat");
-          appendApiRetryLog("⚠ ローカル直結に接続できません: " + txt, "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください");
-          return;
-        }
-        if (!r || !r.reachable) {
-          runViaGasAsk();
-          return;
-        }
-        var d = r.data || {};
-        if (d.ok && d.action === "ops" && Array.isArray(d.ops) && d.ops.length) {
-          onRunOps(d.ops, txt, { switchToChat: true });
-          return;
-        }
-        if (d.ok && d.action === "reply") {
-          switchTab("chat");
-          var head = "💬 " + txt + (typeof d.aiMs === "number" ? ("（直結 " + (d.aiMs / 1000).toFixed(1) + "秒）") : "");
-          appendLog(els.chatLog, "is-info", head, String(d.message || d.text || ""));
-          return;
-        }
-        switchTab("chat");
-        appendApiRetryLog("⚠ AI エラー: " + txt, String(d.error || r.error || "AI 処理に失敗しました"));
-      }, function(ev) {
-        if (ev && ev.message) setBusy(true, "✨ " + String(ev.message));
-      });
+          appendApiRetryLog("⚠ AI エラー: " + txt, String(d.error || r.error || "AI 処理に失敗しました"));
+        }, function(ev) {
+          if (ev && ev.message) setBusy(true, "✨ " + String(ev.message));
+        });
+      };
+      if (isReadOnly) {
+        setBusy(true, "📖 表の中身を取得中…");
+        fetchDirectTableSnippet(state.curSheet || "", state.table, function(sn) {
+          sendDirectPayload(sn);
+        });
+        return;
+      }
+      sendDirectPayload(null);
     };
     if (suggestOps) {
       offerSuggest(txt, suggestOps, aiAuto ? runAiAskDirectOrGas : null);
