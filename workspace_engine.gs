@@ -1605,7 +1605,9 @@ var ERR_SCAN_ONLY = /^(cols\.(insert|move|delete)|rows(\.(insert|delete|move))?$
 function errScanNeeded_(ops) {
   return ops.some(function (o) {
     var nm = String(o.shelf || '');
-    if (!ERR_SCAN_ONLY.test(nm) && !o.at) return false;
+    // at 付きでも、同じ名前の列への上書き（calc.col の at=name＝「金額の列を式にそろえて」）は列を差し込まない
+    var overwrite = o.at && o.name && String(o.at).trim() === String(o.name).trim();
+    if (!ERR_SCAN_ONLY.test(nm) && (!o.at || overwrite)) return false;
     if (ERR_SCAN_SKIP.test(nm)) return false;
     if (typeof CATALOG !== 'undefined' && CATALOG && CATALOG[nm]) {
       var touch = CATALOG[nm].touch || [];
