@@ -248,7 +248,9 @@ class DirectRunner:
 
     def _get(self, st, sid, ranges, extra_fields=""):
         fields = ("sheets(properties(sheetId,title,index,hidden,tabColorStyle,gridProperties(frozenRowCount,frozenColumnCount,hideGridlines)),"
-                  "basicFilter,merges,conditionalFormats,data(startRow,startColumn,rowData(values(userEnteredFormat,userEnteredValue,note,effectiveValue(errorValue))),"
+                  "basicFilter,merges,conditionalFormats,data(startRow,startColumn,rowData(values(userEnteredFormat,"
+                  "effectiveFormat(backgroundColorStyle,backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy,numberFormat),"
+                  "userEnteredValue,note,effectiveValue(errorValue,numberValue,stringValue),formattedValue)),"
                   "columnMetadata(pixelSize,hiddenByUser),rowMetadata(pixelSize,hiddenByUser)))")
         params = [("ranges", r) for r in ranges] + [("fields", fields)]
         return Snapshot(self._call(st, "GET", SHEETS + sid, params=params))
@@ -468,8 +470,87 @@ class DirectRunner:
             ranges.add(f"{q(sheet)}!{tb['first_col']}{tb['header_row']}:{tb['last_col']}{tb['header_row']}")
         return sorted(ranges)
 
+    @staticmethod
+    def _rgb_eq(c1, c2, tol=0.03):
+        if not isinstance(c1, dict) or not isinstance(c2, dict):
+            return False
+        for k in ("red", "green", "blue"):
+            if abs(float(c1.get(k, 0.0) or 0.0) - float(c2.get(k, 0.0) or 0.0)) > tol:
+                return False
+        return True
+
+    @classmethod
+    def _format_already_applied(cls, ent, r1, c1, r2, c2, op, title_band):
+        """対象範囲の全セルに op で指定された書式がすでに当たっているか判定する。"""
+        if op.get("borders") is not None or op.get("merge") is not None or op.get("size_delta") is not None:
+            return False
+        checked = False
+        cells = ent.get("cells") or {}
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                cell = cells.get((r, c)) or {}
+                ef = cell.get("effectiveFormat") or {}
+                uf = cell.get("userEnteredFormat") or {}
+                if not ef and not uf:
+                    return False
+                if op.get("bg") is not None:
+                    checked = True
+                    want = rgb(op["bg"])
+                    cur_bg = ((ef.get("backgroundColorStyle") or {}).get("rgbColor")) or ef.get("backgroundColor")
+                    if want is None:
+                        if uf.get("backgroundColorStyle") or uf.get("backgroundColor"):
+                            return False
+                    elif not cls._rgb_eq(want, cur_bg):
+                        return False
+                if op.get("bold") is not None:
+                    checked = True
+                    if bool(op["bold"]) != bool((ef.get("textFormat") or {}).get("bold", False)):
+                        return False
+                if op.get("italic") is not None:
+                    checked = True
+                    if bool(op["italic"]) != bool((ef.get("textFormat") or {}).get("italic", False)):
+                        return False
+                if op.get("color") is not None:
+                    checked = True
+                    want_c = rgb(op["color"])
+                    cur_c = ((ef.get("textFormat") or {}).get("foregroundColorStyle") or {}).get("rgbColor") or (ef.get("textFormat") or {}).get("foregroundColor")
+                    if want_c is not None and not cls._rgb_eq(want_c, cur_c):
+                        return False
+                if op.get("size") is not None:
+                    checked = True
+                    if int(op["size"]) != int((ef.get("textFormat") or {}).get("fontSize") or 10):
+                        return False
+                if op.get("font") is not None:
+                    checked = True
+                    if str(op["font"]).lower() != str((ef.get("textFormat") or {}).get("fontFamily") or "").lower():
+                        return False
+                if op.get("number_format") is not None:
+                    checked = True
+                    if str(op["number_format"]) != str((ef.get("numberFormat") or {}).get("pattern") or ""):
+                        return False
+                if op.get("align") is not None:
+                    checked = True
+                    al = str(op["align"]).upper()
+                    if title_band and al in ("CENTER", "MIDDLE", "RIGHT"):
+                        al = "LEFT"
+                    want_al = "CENTER" if al == "MIDDLE" else al
+                    if want_al != str(ef.get("horizontalAlignment") or "").upper():
+                        return False
+                if op.get("valign") is not None:
+                    checked = True
+                    va = str(op["valign"]).upper()
+                    want_va = "MIDDLE" if va == "CENTER" else va
+                    if want_va != str(ef.get("verticalAlignment") or "").upper():
+                        return False
+                if op.get("wrap") is not None:
+                    checked = True
+                    want_w = "WRAP" if op["wrap"] else "OVERFLOW_CELL"
+                    if want_w != str(ef.get("wrapStrategy") or "").upper():
+                        return False
+        return checked
+
     def _build(self, ops, sheet, tb, snap):
-        req, undo, changed, touched = [], [], [], []
+        req, undo, changed, touched, already = [], [], [], [], []
 
         def area(shname, r1, c1, r2, c2):
             touched.append((shname, r1, c1, r2, c2))
@@ -485,6 +566,9 @@ class DirectRunner:
                     (r1, c1, r2, c2), title_band = self._title_place(ent, tb, op)
                 else:
                     (r1, c1, r2, c2), title_band = pl, False
+                if s == "format" and self._format_already_applied(ent, r1, c1, r2, c2, op, title_band):
+                    already.append(f"{shn}!{a1(r1, c1, r2, c2)}")
+                    continue
                 g = grid(sid, r1, c1, r2, c2)
                 cf, tf, fields, did = {}, {}, [], []
                 if s == "bg.clear" or (op.get("bg") is not None and rgb(op["bg"]) is None):
@@ -874,6 +958,7 @@ class DirectRunner:
                     undo.append({"addConditionalFormatRule": {"rule": rule, "index": idx_cf}})
                 area(shn, 0, 0, 0, 0)
                 changed.append(f"{shn}!{op.get('range') or 'シート全体'} 条件付き書式を解除（{len(targets_cf)} 件）")
+        self._last_already = already
         return req, undo, changed, touched
 
     # ------------------------------------------------------------ 指紋（撃った後の姿。戻す前に人の手直しを見つける）
@@ -934,8 +1019,22 @@ class DirectRunner:
                 if now != [str(c.get("name")) for c in tb.get("columns") or []]:
                     return None
             req, undo, changed, touched = self._build(ops, sheet, tb, before)
+            already = getattr(self, "_last_already", []) or []
             vals = [r["_values"] for r in req if "_values" in r]
             req = [r for r in req if "_values" not in r]
+            if not req and not vals and already:
+                out_t = {k: tgt[k] for k in ("id", "name", "kind", "url") if tgt.get(k)}
+                out_t["sheet"] = sheet
+                return {
+                    "ok": True,
+                    "target": out_t,
+                    "changed": [],
+                    "notes": [f"すでにその書式が当たっています（変更なし）: {'・'.join(already)}"],
+                    "remaining": [],
+                    "backup": 0,
+                    "direct": True,
+                    "already": True,
+                }
             if req:
                 self._call(st, "POST", SHEETS + tgt["id"] + ":batchUpdate", json={"requests": req})
             for v in vals:
@@ -990,7 +1089,18 @@ class DirectRunner:
             st.pop("table_cache", None)      # 値やシート名が変わったので、次の頼みで表の形を見直す
         out_t = {k: tgt[k] for k in ("id", "name", "kind", "url") if tgt.get(k)}
         out_t["sheet"] = next((o.get("to") for o in ops if o.get("shelf") == "sheet.rename" and (o.get("name") or sheet) == sheet), None) or sheet
-        return {"ok": True, "target": out_t, "changed": changed, "notes": notes, "remaining": [], "backup": f"D{n}", "direct": True}
+        already = getattr(self, "_last_already", []) or []
+        if already:
+            notes.append(f"すでに書式が当たっている範囲はスキップしました: {'・'.join(already)}")
+        insights = []
+        if tb and not any(o.get("shelf") in ("sheet.rename", "sheet.delete") for o in ops):
+            try:
+                import gas_ws_insights
+                snap_ins = after or before
+                insights = gas_ws_insights.analyze_from_snapshot(snap_ins, out_t["sheet"], tb, ops=ops)
+            except Exception:
+                insights = []
+        return {"ok": True, "target": out_t, "changed": changed, "notes": notes, "remaining": [], "backup": f"D{n}", "direct": True, "insights": insights}
 
     # ------------------------------------------------------------ 裏の指紋
     def _fp_later(self, n, token, sid, ranges, touched):
@@ -1605,3 +1715,28 @@ def _extract_range_direct(row_data, rr1, cc1, rr2, cc2):
         out_vals.append(v_row)
         out_forms.append(f_row)
     return out_vals, out_forms
+
+
+def fetch_sheet_snapshot_light(mgr, st, sid, sheet_name, range_str="A1:Z60"):
+    """気づき分析・確認用に 1 シートの値・数式・表構造を軽量（1 リクエスト）で取得する。"""
+    if not sid or not sheet_name or st.get("direct_off"):
+        return None
+    try:
+        runner = DirectRunner(mgr)
+        fields = (
+            "sheets(properties(sheetId,title),basicFilter,merges,"
+            "data(startRow,startColumn,rowData(values(formattedValue,effectiveValue,userEnteredValue,"
+            "effectiveFormat(numberFormat(type))))))"
+        )
+        rng = f"{q(sheet_name)}!{range_str}"
+        resp = runner._call(st, "GET", SHEETS + sid, params=[("ranges", rng), ("fields", fields)])
+        d_sh = (resp.get("sheets") or [{}])[0]
+        grid_data = (d_sh.get("data") or [{}])[0]
+        row_data = grid_data.get("rowData") or []
+        tb = _find_table_direct(row_data, merges=d_sh.get("merges") or [])
+        if not tb:
+            return None
+        snap = Snapshot(resp)
+        return {"snap": snap, "table": tb, "sheet": sheet_name}
+    except Exception:
+        return None

@@ -36,6 +36,32 @@ SHELF['format'] = function (ctx, op) {
   var did = [];
   var set = function (key, fn) { if (op[key] !== undefined) { fn(op[key]); did.push(key); } };
   if (titleBand && (op.align === 'center' || op.align === 'right')) op = Object.assign({}, op, { align: 'left' });
+  // すでに同じ書式が対象範囲全体に当たっていれば掛け直さずに返す
+  var alreadyFmt = (op.borders === undefined && op.merge === undefined && op.size_delta === undefined);
+  if (alreadyFmt) {
+    var hasAnyFmtProp = false;
+    var normHex = function (h) { return String(h || '').trim().toLowerCase(); };
+    var allEq = function (grid, want) {
+      for (var ri = 0; ri < grid.length; ri++) for (var ci2 = 0; ci2 < grid[ri].length; ci2++) {
+        if (grid[ri][ci2] !== want) return false;
+      }
+      return true;
+    };
+    if (op.bold !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getFontWeights(), op.bold ? 'bold' : 'normal')) alreadyFmt = false; }
+    if (alreadyFmt && op.italic !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getFontStyles(), op.italic ? 'italic' : 'normal')) alreadyFmt = false; }
+    if (alreadyFmt && op.color !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getFontColors().map(function (r) { return r.map(normHex); }), normHex(rgb_(op.color)))) alreadyFmt = false; }
+    if (alreadyFmt && op.bg !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getBackgrounds().map(function (r) { return r.map(normHex); }), normHex(rgb_(op.bg)))) alreadyFmt = false; }
+    if (alreadyFmt && op.align !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getHorizontalAlignments(), String(op.align).toLowerCase())) alreadyFmt = false; }
+    if (alreadyFmt && op.number_format !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getNumberFormats(), String(op.number_format))) alreadyFmt = false; }
+    if (alreadyFmt && op.size !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getFontSizes(), Number(op.size))) alreadyFmt = false; }
+    if (alreadyFmt && op.font !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getFontFamilies(), String(op.font))) alreadyFmt = false; }
+    if (alreadyFmt && op.valign !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getVerticalAlignments(), String(op.valign).toLowerCase())) alreadyFmt = false; }
+    if (alreadyFmt && op.wrap !== undefined) { hasAnyFmtProp = true; if (!allEq(rg.getWraps(), !!op.wrap)) alreadyFmt = false; }
+    if (alreadyFmt && hasAnyFmtProp) {
+      note_(ctx, rg.getA1Notation() + ' はすでにその書式が当たっています（変更なし）');
+      return;
+    }
+  }
   set('bold', function (v) { rg.setFontWeight(v ? 'bold' : 'normal'); });
   set('italic', function (v) { rg.setFontStyle(v ? 'italic' : 'normal'); });
   set('color', function (v) { rg.setFontColor(rgb_(v)); });

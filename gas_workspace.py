@@ -749,6 +749,46 @@ class WorkspaceManager:
                         sn_lines.append("※消す・上書きの棚には ok=True を勝手に付けず、ユーザー確認を取ってください。")
                         unfired_txt += "\n" + "\n".join(sn_lines)
                 return unfired_txt
+            # 消す・値を変える棚で、人の判断が要る空白（姓と名の間などセル内の空白）がある場合の確かめ
+            if (
+                not ok
+                and kind == "sheet"
+                and not is_new
+                and any(isinstance(o, dict) and o.get("shelf") == "seiri" and o.get("trim") is not False and not o.get("trim_inner") for o in p.ops)
+                and re.search(r"空白|スペース", ask)
+                and not re.search(r"前後|先頭|末尾|両端|トリム", ask)
+            ):
+                try:
+                    import gas_ws_direct
+                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), cur_sh, "A1:Z40")
+                    if light and light.get("table"):
+                        ltb = light["table"]
+                        dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
+                        if dr_m:
+                            r_a, r_b = int(dr_m.group(1)), int(dr_m.group(2))
+                            ent_l = light["snap"].sheet(cur_sh)
+                            inner_hits = []
+                            for rr in range(r_a, r_b + 1):
+                                for col_i in (ltb.get("columns") or []):
+                                    c_num = gas_ws_direct.col_num(col_i["col"])
+                                    txt = gas_ws_direct.Snapshot.value_text((ent_l.get("cells") or {}).get((rr, c_num)))
+                                    if txt and not re.search(r"\d{4}[/-]\d{1,2}[/-]\d{1,2}\s+\d{1,2}:\d{2}", txt):
+                                        trimmed = txt.strip(" \t　")
+                                        if re.search(r"[ \t　]", trimmed):
+                                            inner_hits.append(f"{col_i['col']}{rr}「{trimmed}」")
+                                            break
+                                if inner_hits:
+                                    break
+                            if inner_hits:
+                                return (
+                                    f"{self._title(tgt)}\n"
+                                    f"確認: セル内の空白（例: {inner_hits[0]} の途中の空白）も消しますか？それとも前後の空白だけ消しますか？\n"
+                                    "何も変えていません。\n"
+                                    '1. 前後の空白だけ消す → ws_do(ops=\'[{"shelf":"seiri","trim":true}]\', ok=True)\n'
+                                    '2. 中の空白もすべて消す → ws_do(ops=\'[{"shelf":"seiri","trim_inner":true}]\', ok=True)'
+                                )
+                except Exception:
+                    pass
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
             # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
             keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
@@ -794,6 +834,18 @@ class WorkspaceManager:
         ]
         if rest:
             out_lines.append("メモ: " + " ／ ".join(rest[:3]))
+        insights = res.get("insights")
+        if insights is None and kind == "sheet" and not res.get("local_only") and not st2.get("direct_off") and tgt_out.get("id"):
+            try:
+                import gas_ws_direct, gas_ws_insights
+                sh_for_ins = tgt_out.get("sheet") or cur_sh
+                light = gas_ws_direct.fetch_sheet_snapshot_light(self, st2, tgt_out.get("id"), sh_for_ins, "A1:Z60")
+                if light:
+                    insights = gas_ws_insights.analyze_from_snapshot(light["snap"], sh_for_ins, light["table"], ops=p.ops)
+            except Exception:
+                insights = []
+        if insights:
+            out_lines.append("気づき: " + " ／ ".join(insights[:3]))
         out_lines.append(" ／ ".join(tail))
         return "\n".join(out_lines)
 
@@ -1141,6 +1193,8 @@ class WorkspaceManager:
                 rest.append("残り: " + " ／ ".join(res["remaining"][:3]))
             if rest:
                 lines.append("　".join(rest))
+            if res.get("insights"):
+                lines.append("気づき: " + " ／ ".join(res["insights"][:3]))
             tail = []
             if tgt.get("url"):
                 tail.append(tgt["url"])
@@ -1154,7 +1208,7 @@ class WorkspaceManager:
                 tail.append("同じ番号の呼び直し：撃ち直さず前の結果を返しました")
             if tail:
                 lines.append(" ／ ".join(tail))
-            return "\n".join(lines[:5])
+            return "\n".join(lines[:8])
         err = res.get("error") or "不明なエラー"
         if res.get("blocked"):
             lines.append("止めました: " + err)
@@ -1254,6 +1308,13 @@ class WorkspaceManager:
             st["target_set_at"] = time.time()
         if t.get("kind") == "sheet":
             self._remember_table(st, st["target"], res.get("table"), res.get("sheets"))
+            try:
+                import gas_ws_insights
+                ins = gas_ws_insights.analyze_from_look_res(res)
+                if ins:
+                    res["insights"] = ins
+            except Exception:
+                pass
         self._save(st)
         out = self.format_look(res)
         if t.get("kind") == "sheet" and self.browser_active_path.exists():
@@ -1290,6 +1351,10 @@ class WorkspaceManager:
                         f = fm[i][j] if i < len(fm) and j < len(fm[i]) else ""
                         cells.append(f"{v}{'  {' + f + '}' if f else ''}")
                     lines.append("\t".join(cells))
+            if res.get("insights"):
+                lines.append("気づき:")
+                for ins in res["insights"][:3]:
+                    lines.append("- " + ins)
         else:
             lines.append(f"段落数 {res.get('paragraphs')}・見出し: " + (" / ".join(f"{h['no']}:{'#' * h['level']}{h['text']}" for h in res.get("headings", [])) or "なし"))
             lines.extend(res.get("outline", []))

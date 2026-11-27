@@ -32,6 +32,8 @@ import functools
 GAS_MANAGER_INSTRUCTIONS = (
     "【最優先原則】スプレッドシート・文書の操作は必ず 2号機（ws_do / ws_look / ws_find / ws_undo・全177棚）を優先し、使い捨ての GAS コードや独自スクリプトを自作しないこと。"
     "初手は ws_do(ask='頼みの文そのまま') で先撃ちし、当たらなければ返ってきた札で ws_do(ops=...)、棚に無い設定のみ shelf='api' を使う。"
+    "ws_look や ws_do の返事に「気づき:」があるときは、使う人への返事の最後にその内容を 1〜2 行そのまま伝えること。"
+    "シートを読んで質問に答えるときは、根拠となるセル番地（必要なら割合や内訳も）を添えて答えること。"
     "GASコンボのマイマクロは shelf([{shelf:'...'}, ...]) で既存棚を束ねる「まとめ棚」として作成でき、gas('combo quick <id> list|run <名前>') で MCP からも一覧・実行できる。"
     "棚の健全性検査は gas('ws-check')、外れ・API逃げ集計は gas('ws-misses') を使う。\n"
     "GASコードを直す1手目は gas_shelf(project=プロジェクト名, query=頼み文そのまま) のみ"
@@ -94,7 +96,7 @@ def reload_tools() -> str:
     if "gas_local_extras" in sys.modules:
         import gas_local_extras
         importlib.reload(gas_local_extras)
-    for _mod_name in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_ws_direct", "gas_ws_browser", "gas_workspace", "gas_ws_combo"):
+    for _mod_name in ("gas_ws_catalog", "gas_ws_find", "gas_ws_ask", "gas_ws_api", "gas_ws_insights", "gas_ws_direct", "gas_ws_browser", "gas_workspace", "gas_ws_combo"):
         if _mod_name in sys.modules:
             importlib.reload(sys.modules[_mod_name])
 

@@ -358,7 +358,7 @@ function deleteRowRuns_(sh, rowNums) {
 // 分類: 整える
 // 語: データを整理|空白を除|前後の空白|空白を消|スペースを消|スペースを取り除|前後のスペース|全角を半角|全角の数字|数字を半角|数字を数値に|空行を詰|重複を消|きれいに整|汚れを直|余分な空白|全角数字|空白行|空行を全部|空白や全角|整理して|きれいにして|きれいに整えて
 // 違い: 前後の空白・全角半角・数字文字の掃除と見た目整え（tidy）をまとめて行う。見た目だけと限らない「表をきれいに整えて」はこれ。col を指定するとその列だけ掃除する（他列・表全体の書式は変えない）。blank_rows/dedupe を付けない限り行削除はしないので ok 不要で即撃てる。見た目だけなら tidy
-// 引数: col=列, trim=真偽, halfwidth=真偽, numbers=真偽, dates=真偽, blank_rows=真偽, dedupe=真偽, renumber=列, tidy=真偽
+// 引数: col=列, trim=真偽, trim_inner=真偽, halfwidth=真偽, numbers=真偽, dates=真偽, blank_rows=真偽, dedupe=真偽, renumber=列, tidy=真偽
 // 頼み: blank_rows=true<空行|空いている行 ; dedupe=true<重複 ; halfwidth=true<全角 ; trim=true<前後の空白|余分な空白|余分なスペース|前後のスペース|空白を消|空白を除|空白を取|スペースを消|スペースを取り除|スペースを取
 // 例: 「全角の数字を半角に直して」 → {"shelf":"seiri"}
 // 例: 「空行を詰めて重複行も消して」 → {"shelf":"seiri","blank_rows":true,"dedupe":true}
@@ -405,7 +405,8 @@ SHELF['seiri'] = function (ctx, op) {
       var isDataR = r >= dataRowOff;
       var nv = v;
       if (doHalf) { var h = nv.replace(/[！-～]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); }).replace(/　/g, ' '); if (h !== nv) { nv = h; nHalf++; } }
-      if (doTrim) { var tr = nv.replace(/^[\s　]+|[\s　]+$/g, ''); if (tr !== nv) { nv = tr; nTrim++; } }
+      if (op.trim_inner) { var ti = nv.replace(/[\s　]+/g, ''); if (ti !== nv) { nv = ti; nTrim++; } }
+      else if (doTrim) { var tr = nv.replace(/^[\s　]+|[\s　]+$/g, ''); if (tr !== nv) { nv = tr; nTrim++; } }
       var isCodeLike = keepTextCol[c] || /^[+-]?0\d/.test(nv);
       if (doNum && isDataR && !isCodeLike && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(nv)) { nv = Number(nv.replace(/,/g, '')); nNum++; }
       else if (doDate && isDataR && !isCodeLike && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
