@@ -1598,7 +1598,17 @@ class WorkspaceManager:
             self._light_full = None
             if lf and lf[0] == dt.get("id") and lf[1] == dt.get("sheet"):
                 try:
-                    lowered = gas_ws_direct.lower_ops(remote_ops, lf[2], dt["sheet"], (self._cached_table(st, dt) or {}).get("sheets"))
+                    _lcache = {}
+
+                    def _light_of(nm, _id=dt.get("id")):
+                        if nm not in _lcache:
+                            try:
+                                _lcache[nm] = gas_ws_direct.fetch_sheet_snapshot_light(self, st, _id, nm, "A1:Z60")
+                            except Exception:
+                                _lcache[nm] = None
+                        return _lcache[nm]
+                    lowered = gas_ws_direct.lower_ops(remote_ops, lf[2], dt["sheet"], (self._cached_table(st, dt) or {}).get("sheets"),
+                                                      light_of=_light_of, ok=bool(ok))
                 except Exception:
                     lowered = None
             dres = gas_ws_direct.DirectRunner(self).try_do(st, dt, lowered[0] if lowered else remote_ops, tim)

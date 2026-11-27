@@ -2234,7 +2234,84 @@ def _low_phone(raw):
     return f"{d[:3]}-{d[3:6]}-{d[6:]}"
 
 
-def lower_ops(ops, light, sheet, sheet_names=None):
+def _low_serial_date(n):
+    from datetime import date, timedelta
+    try:
+        return date(1899, 12, 30) + timedelta(days=int(float(n)))
+    except Exception:
+        return None
+
+
+def _low_cmp_date(val, is_date_num, fy):
+    """セルの値・比べる値を日付に（エンジンの parseCmpDate_）。日付でなければ None"""
+    from datetime import date
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return _low_serial_date(val) if is_date_num else None
+    if not isinstance(val, str) or not val.strip():
+        return None
+    import gas_ws_ask
+    d = gas_ws_ask._parse_cmp_date_str(val)
+    if not d:
+        return None
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", d)
+    if m:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.fullmatch(r"(\d{2})/(\d{2})", d)
+    try:
+        return date(int(fy), int(m.group(1)), int(m.group(2))) if m else None
+    except ValueError:
+        return None
+
+
+def _low_match(cv, is_date_num, when, target, fy):
+    """エンジンの matchRowCond_ と同じ"""
+    w = str(when or "").lower()
+    if w == "not_blank":
+        w = "notblank"
+    blank = cv in (None, "")
+    if w == "blank":
+        return blank
+    if w == "notblank":
+        return not blank
+    ts = "" if target is None else str(target)
+    cs = "" if blank else (str(int(cv)) if isinstance(cv, float) and cv.is_integer() else str(cv))
+    if w == "contains":
+        return ts in cs
+    if w == "between":
+        if ".." not in ts or blank:
+            return False
+        a0, b0 = ts.split("..", 1)
+        d1, d2 = _low_cmp_date(a0, False, fy), _low_cmp_date(b0, False, fy)
+        if not d1 or not d2:
+            return False
+        lo, hi = min(d1, d2), max(d1, d2)
+        c = _low_cmp_date(cv, is_date_num, fy)
+        return bool(c and lo <= c <= hi)
+    tn = ts.replace(",", "").strip()
+    is_tn = bool(re.fullmatch(r"-?\d+(?:\.\d+)?", tn))
+    td = _low_cmp_date(ts, False, fy) if not is_tn else None
+    if td:
+        if blank:
+            return False
+        c = _low_cmp_date(cv, is_date_num, fy)
+        if not c:
+            return w == "ne"
+        return {"gt": c > td, "ge": c >= td, "lt": c < td, "le": c <= td, "ne": c != td}.get(w, c == td)
+    if w == "ne":
+        if re.fullmatch(r"-?[\d,]+(\.\d+)?", ts.strip()) and isinstance(cv, (int, float)) and not isinstance(cv, bool):
+            return cv != float(ts.replace(",", ""))
+        return cs != ts
+    if w in ("gt", "ge", "lt", "le"):
+        try:
+            c = float(cv) if isinstance(cv, (int, float)) and not isinstance(cv, bool) else float(str(cv).replace(",", ""))
+            t = float(ts.replace(",", ""))
+        except (TypeError, ValueError):
+            return False
+        return {"gt": c > t, "ge": c >= t, "lt": c < t, "le": c <= t}[w]
+    return None      # eq などのほかの型はこの写しでは決めない（呼んだ側がエンジンの道へ）
+
+
+def lower_ops(ops, light, sheet, sheet_names=None, light_of=None, ok=False):
     """ops を直の道で撃てる形に組み替える。戻り値 (新しい ops, 直した所の文[]) か None（組み替えない）"""
     if not light or not light.get("table") or not ops:
         return None
@@ -2255,6 +2332,7 @@ def lower_ops(ops, light, sheet, sheet_names=None):
     news, new_writes, notes = [], [], []          # 新しいシート（抽出・集計）とグラフ
     names_now = list(sheet_names or [])
     mem = {}                                       # 作ったシートの中身（続く手の元になる）
+    conv = []                                      # 日付の比べを式に組み替えた印（書く物が無くても直の道へ）
 
     def cell(r, c):
         return cells.get((r, c)) or {}
@@ -2284,22 +2362,59 @@ def lower_ops(ops, light, sheet, sheet_names=None):
             raise Skip("同じセルを 2 回書く")
         writes[k] = v
 
-    def ev(r, c):
-        """今の値（この呼び出しで直した値を先に）"""
+    def ev(r, c, depth=0):
+        """今の値（この呼び出しで直した値・式を先に）。式は、直した値で計算し直せる形（同じ行の四則）だけ自分で計算する"""
         k = f"{col_letter(c)}{r}"
-        if k in writes and not (isinstance(writes[k], str) and writes[k].startswith("=")):
+        f = writes[k] if k in writes and isinstance(writes[k], str) and writes[k].startswith("=") else None
+        if k in writes and f is None:
             return writes[k]
-        e = cell(r, c).get("effectiveValue") or {}
-        for kk in ("stringValue", "numberValue", "boolValue"):
-            if kk in e:
-                return e[kk]
-        return None
+        if f is None:
+            f = formula(r, c) or None
+            if f and writes and depth == 0 or (f and depth > 0):
+                pass
+            elif not f:
+                e = cell(r, c).get("effectiveValue") or {}
+                for kk in ("stringValue", "numberValue", "boolValue"):
+                    if kk in e:
+                        return e[kk]
+                return None
+            else:
+                e = cell(r, c).get("effectiveValue") or {}
+                if "errorValue" in e:
+                    return cell(r, c).get("formattedValue")
+                for kk in ("stringValue", "numberValue", "boolValue"):
+                    if kk in e:
+                        return e[kk]
+                return None
+        # 式を計算し直す（=E10*F10 のような同じシートの四則だけ。ほかの式で直した値に関わる物はエンジンの道へ）
+        body = f[1:]
+        if not re.fullmatch(r"[A-Z]{1,3}\d+(?:\s*[-+*/]\s*(?:[A-Z]{1,3}\d+|\d+(?:\.\d+)?))*", body.strip()) or depth > 3:
+            if not writes:
+                e = cell(r, c).get("effectiveValue") or {}
+                for kk in ("stringValue", "numberValue", "boolValue"):
+                    if kk in e:
+                        return e[kk]
+                return cell(r, c).get("formattedValue")
+            raise Skip("直した値に関わる式を計算し直せない")
+        def ref(m):
+            rr, cc = int(m.group(2)), col_num(m.group(1))
+            v = ev(rr, cc, depth + 1)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise Skip("数でない値の計算")
+            return repr(float(v))
+        expr = re.sub(r"([A-Z]{1,3})(\d+)", ref, body)
+        try:
+            val = eval(expr, {"__builtins__": {}}, {})
+        except ZeroDivisionError:
+            return "#DIV/0!"
+        return int(val) if float(val).is_integer() else val
 
     def src_table(name):
         """元の表: 今のシートか、この呼び出しで作ったシート"""
         if name in (None, "", sheet):
             return {"name": sheet, "hr": hr, "ra": r_a, "rb": r_b, "fc": first_c, "lc": last_c,
                     "names": {c: h for h, c in name2c.items()}, "get": ev,
+                    "isdate": lambda r, c: (((cell(r, c).get("effectiveFormat") or {}).get("numberFormat")) or {}).get("type") in ("DATE", "DATE_TIME"),
                     "fmt": lambda c: (((cell(r_a, c).get("userEnteredFormat") or {}).get("numberFormat")) or {})}
         if name in mem:
             return mem[name]
@@ -2344,39 +2459,74 @@ def lower_ops(ops, light, sheet, sheet_names=None):
 
     next_col = last_c + 1
     for op in ops:
-        if not isinstance(op, dict) or (op.get("sheet") and op.get("sheet") != sheet):
+        if not isinstance(op, dict) or (op.get("sheet") and op.get("sheet") != sheet and op.get("sheet") not in mem):
             return None
         s = op.get("shelf")
         if s in LOWER_PINS and not lower_pin_ok(s):
             return None      # エンジンの棚が書き換わった＝この写しは古い。エンジンの道で撃つ（ws-check が知らせる）
         try:
             if s == "filter.extract":
-                if not lower_pin_ok(s) or not op.get("col") or str(op.get("when") or "eq").lower() not in ("eq", "ne"):
+                if not lower_pin_ok(s) or not op.get("col"):
                     return None
                 tgt_v = op["value"] if op.get("value") is not None else op.get("equals")
-                if tgt_v is None or re.search(r"\d+\s*[/年月\-]", str(tgt_v)):
+                if tgt_v is None and str(op.get("when") or "").lower() not in ("blank", "notblank", "not_blank"):
                     return None
                 into = str(op.get("into") or "抽出").strip()
-                if not sheet_names or into in names_now:
-                    return None      # 既にあるシートへの抽出（中身を消して書く）はエンジンの道で
+                if not sheet_names:
+                    return None
                 T = src_table(op.get("sheet"))
                 ci = next((c for c, h in T["names"].items() if h == str(op["col"]).strip()), None) or col_of(op["col"])
                 if not ci:
                     return None
-                want_eq = str(op.get("when") or "eq").lower() == "eq"
+                when = str(op.get("when") or "eq").lower()
+                isd = T.get("isdate") or (lambda r, c: False)
+                fy = next((_low_serial_date(T["get"](r, ci)).year for r in range(T["ra"], T["rb"] + 1)
+                           if isd(r, ci) and isinstance(T["get"](r, ci), (int, float))), None)
+                if fy is None:
+                    fy = next((_low_cmp_date(T["get"](r, ci), False, 2000).year for r in range(T["ra"], T["rb"] + 1)
+                               if isinstance(T["get"](r, ci), str) and re.match(r"^\s*\d{4}", T["get"](r, ci)) and _low_cmp_date(T["get"](r, ci), False, 2000)), None)
+                if fy is None:
+                    from datetime import date as _d
+                    fy = _d.today().year
                 hdr = [T["names"].get(c, "") for c in range(T["fc"], T["lc"] + 1)]
                 rows = []
                 for r in range(T["ra"], T["rb"] + 1):
                     v = T["get"](r, ci)
-                    hit = (str(v).strip() if v is not None else "") == str(tgt_v).strip()
-                    if hit == want_eq:
+                    if when == "eq" and not _low_cmp_date(str(tgt_v), False, fy):
+                        cs = "" if v in (None, "") else (str(int(v)) if isinstance(v, float) and v.is_integer() else str(v))
+                        hit = cs == str(tgt_v)
+                    else:
+                        hit = _low_match(v, isd(r, ci), when, tgt_v, fy)
+                        if hit is None:
+                            return None
+                    if hit:
                         rows.append([T["get"](r, c) for c in range(T["fc"], T["lc"] + 1)])
                 if not rows:
                     return None
-                sid_n = uniq_id()
                 ncol = len(hdr)
-                news.append({"shelf": "sheet.new", "name": into, "sheet_id": sid_n, "index": len(names_now)})
-                names_now.append(into)
+                if into in names_now:
+                    # 既にあるシート: 値だけ消して書く（書式は残す＝エンジンの clearContents と同じ）。戻しは書く前の値
+                    if not light_of:
+                        return None
+                    L2 = light_of(into)
+                    if not L2:
+                        return None
+                    ent2 = L2["snap"].sheet(into)
+                    sid_n = ent2["props"]["sheetId"]
+                    used = [k for k, c0 in (ent2.get("cells") or {}).items() if (c0.get("userEnteredValue") or {})]
+                    mr = max([k[0] for k in used] + [len(rows) + 1])
+                    mc = max([k[1] for k in used] + [ncol])
+                    if mr >= 60 or mc >= 26:
+                        return None      # 読んだ範囲（A1:Z60）を越えるシートはエンジンの道で
+                    old_rows = [{"values": [{"userEnteredValue": ((ent2["cells"].get((r, c)) or {}).get("userEnteredValue"))} if ((ent2["cells"].get((r, c)) or {}).get("userEnteredValue")) else {}
+                                            for c in range(1, mc + 1)]} for r in range(1, mr + 1)]
+                    news.append({"shelf": "_raw", "requests": [{"updateCells": {"range": grid(sid_n, 1, 1, mr, mc), "fields": "userEnteredValue"}}],
+                                 "undo": [{"updateCells": {"start": {"sheetId": sid_n, "rowIndex": 0, "columnIndex": 0}, "rows": old_rows, "fields": "userEnteredValue"}}],
+                                 "touch": [(into, 1, 1, mr, mc)]})
+                else:
+                    sid_n = uniq_id()
+                    news.append({"shelf": "sheet.new", "name": into, "sheet_id": sid_n, "index": len(names_now)})
+                    names_now.append(into)
                 reqs = [{"repeatCell": {"range": grid(sid_n, 1, 1, 1, ncol), "cell": {"userEnteredFormat": {"backgroundColor": rgb("#1F4E79"), "textFormat": {"bold": True, "foregroundColor": rgb("#FFFFFF")}}},
                                         "fields": "userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor))"}}]
                 for j, c in enumerate(range(T["fc"], T["lc"] + 1), start=1):   # 日付などの数の形を元の列から
@@ -2420,8 +2570,9 @@ def lower_ops(ops, light, sheet, sheet_names=None):
                         into, k2 = base, 2
                         while into in names_now:
                             into, k2 = f"{base}_{k2}", k2 + 1
-                if into in names_now:
-                    return None      # 作り直し（中身が変わる）はエンジンの道で
+                exist = into in names_now
+                if exist and not ok:
+                    return None      # 作り直しは消す手＝確かめが要る（エンジンの道が聞き返す）
                 keys, trim_hit = [], False
                 for r in range(T["ra"], T["rb"] + 1):
                     k = T["get"](r, by)
@@ -2432,21 +2583,72 @@ def lower_ops(ops, light, sheet, sheet_names=None):
                         trim_hit = True
                     if ks.strip() not in keys:
                         keys.append(ks.strip())
-                nk = {}
-                for k in keys:     # 書き方の違いで割れる物は、マスタを探してまとめるエンジンの道で
-                    n0 = re.sub(r"[\s()（）［］\[\]・,，.、。]", "", re.sub(r"株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)|㈱|㈲", "", unicodedata.normalize("NFKC", k))).lower()
-                    if n0 in nk:
+                def normk(v):
+                    return re.sub(r"[\s()（）［］\[\]・,，.、。]", "", re.sub(r"株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)|㈱|㈲", "", unicodedata.normalize("NFKC", str(v)))).lower()
+                groups, order = {}, []
+                for k in keys:
+                    n0 = normk(k)
+                    if n0 not in groups:
+                        groups[n0] = []
+                        order.append(n0)
+                    groups[n0].append(k)
+                merged = []
+                if any(len(v) > 1 for v in groups.values()):
+                    # 書き方の違いで割れる物は 1 行に。名前はマスタ（同じ見出しの列を持ち、値が重ならないほかのシート）の書き方（エンジンの summary と同じ）
+                    master = {}
+                    for nm in names_now:
+                        if nm in (T["name"], into, "_GASクイックの控え") or nm in mem or not light_of:
+                            continue
+                        L3 = light_of(nm)
+                        if not L3 or not L3.get("table"):
+                            continue
+                        t3 = L3["table"]
+                        c3 = next((col_num(c["col"]) for c in t3.get("columns") or [] if str(c.get("name") or "").strip() == by_name), None)
+                        if not c3:
+                            continue
+                        m3 = re.fullmatch(r"(\d+)-(\d+)", str(t3.get("data") or ""))
+                        if not m3:
+                            continue
+                        cand, dup = {}, False
+                        for r in range(int(m3.group(1)), int(m3.group(2)) + 1):
+                            v3 = Snapshot.value_text(L3["snap"].sheet(nm)["cells"].get((r, c3))).strip()
+                            if not v3:
+                                continue
+                            if normk(v3) in cand:
+                                dup = True
+                                break
+                            cand[normk(v3)] = v3
+                        if dup:
+                            continue
+                        master = cand
+                        break
+                    if not light_of:
                         return None
-                    nk[n0] = k
+                    names_k = []
+                    for n0 in order:
+                        vs = groups[n0]
+                        nm0 = master.get(n0) or vs[0]
+                        if len(vs) > 1:
+                            merged.append("・".join(f"「{v}」" for v in vs if v != nm0) + f"を「{nm0}」")
+                        names_k.append(nm0)
+                else:
+                    names_k = list(keys)
+                variants = [groups[n0] for n0 in order]
+                keys = names_k
                 sq = "'" + T["name"].replace("'", "''") + "'"
                 rng = lambda c: f"{sq}!${col_letter(c)}${T['ra']}:${col_letter(c)}${T['rb']}"
                 hdr_row = [by_name] + [T["names"].get(c, "") + ("(件数)" if func == "count" else "") for c in vals_c]
                 grid_rows, preview = [hdr_row], []
+                qv = lambda v: '"' + str(v).replace('"', '""') + '"'
                 for i, k in enumerate(keys):
                     rr = i + 2
                     row = [k]
+                    vs = variants[i]
                     for c in vals_c:
-                        if trim_hit:
+                        if len(vs) > 1:
+                            hit = "(" + "+".join(f"(TRIM({rng(by)})={qv(v)})" for v in vs) + ")"
+                            row.append(f"=SUMPRODUCT({hit}*1)" if func == "count" else f"=SUMPRODUCT({hit}*({rng(c)}))")
+                        elif trim_hit:
                             row.append(f"=SUMPRODUCT((TRIM({rng(by)})=$A{rr})*1)" if func == "count" else f"=SUMPRODUCT((TRIM({rng(by)})=$A{rr})*({rng(c)}))")
                         else:
                             row.append(f"=COUNTIFS({rng(by)},$A{rr})" if func == "count" else f"=SUMIFS({rng(c)},{rng(by)},$A{rr})")
@@ -2454,17 +2656,40 @@ def lower_ops(ops, light, sheet, sheet_names=None):
                     if i < 4:
                         tot_v = 0
                         for r in range(T["ra"], T["rb"] + 1):
-                            if str(T["get"](r, by) or "").strip() == k:
+                            if str(T["get"](r, by) or "").strip() in variants[i]:
                                 v = T["get"](r, vals_c[0])
                                 tot_v += 1 if func == "count" else (v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0)
                         preview.append(f"{k}: {int(tot_v) if float(tot_v).is_integer() else tot_v}")
                 tot_row = ["合計"] + [f"=SUM({col_letter(j + 2)}2:{col_letter(j + 2)}{len(keys) + 1})" for j in range(len(vals_c))]
                 grid_rows.append(tot_row)
-                sid_n = uniq_id()
                 ncol = len(hdr_row)
                 nrow = len(grid_rows)
-                news.append({"shelf": "sheet.new", "name": into, "sheet_id": sid_n, "index": len(names_now)})
-                names_now.append(into)
+                if exist:
+                    # 作り直し（ok あり）: 値と書式を消して書き直す。戻しは書く前の値と書式
+                    L2 = light_of(into) if light_of else None
+                    if not L2:
+                        return None
+                    ent2 = L2["snap"].sheet(into)
+                    sid_n = ent2["props"]["sheetId"]
+                    used = list((ent2.get("cells") or {}).keys())
+                    mr, mc = max([k[0] for k in used] + [nrow]), max([k[1] for k in used] + [ncol])
+                    if mr >= 60 or mc >= 26:
+                        return None
+                    cur_g = [[Snapshot.value_text(ent2["cells"].get((r, c))) for c in range(1, ncol + 1)] for r in range(1, nrow + 1)]
+                    new_g = [[(str(int(v)) if isinstance(v, float) and v.is_integer() else str(v)) for v in row] for row in grid_rows]
+                    if cur_g == new_g and not any((ent2["cells"].get((r, c)) or {}).get("userEnteredValue") for r in range(nrow + 1, mr + 1) for c in range(1, mc + 1)):
+                        notes.append(f"集計シート「{into}」は最新です（変更なし）")
+                        continue
+                    old_rows = [{"values": [{k2: v2 for k2, v2 in (("userEnteredValue", (ent2["cells"].get((r, c)) or {}).get("userEnteredValue")),
+                                                                    ("userEnteredFormat", clean_format((ent2["cells"].get((r, c)) or {}).get("userEnteredFormat")))) if v2}
+                                            for c in range(1, mc + 1)]} for r in range(1, mr + 1)]
+                    news.append({"shelf": "_raw", "requests": [{"updateCells": {"range": grid(sid_n, 1, 1, mr, mc), "fields": "userEnteredValue,userEnteredFormat"}}],
+                                 "undo": [{"updateCells": {"start": {"sheetId": sid_n, "rowIndex": 0, "columnIndex": 0}, "rows": old_rows, "fields": "userEnteredValue,userEnteredFormat"}}],
+                                 "touch": [(into, 1, 1, mr, mc)]})
+                else:
+                    sid_n = uniq_id()
+                    news.append({"shelf": "sheet.new", "name": into, "sheet_id": sid_n, "index": len(names_now)})
+                    names_now.append(into)
                 txt = [[str(x) for x in grid_rows[0]]] + [[k] + ["0" * 7] * len(vals_c) for k in keys] + [["合計"] + ["0" * 9] * len(vals_c)]
                 news.append({"shelf": "_raw", "requests": tidy_reqs(sid_n, nrow, ncol, True, list(range(2, ncol + 1)), txt),
                              "said": f"{into}!A1:{col_letter(ncol)}{nrow} シート「{into}」へ「{T['name']}」の {by_name} ごとの集計（元の表を直すと追従）"})
@@ -2477,6 +2702,8 @@ def lower_ops(ops, light, sheet, sheet_names=None):
                     if re.search(r"状態|ステータス|状況|備考|メモ", h) and any(re.search(r"キャンセル|取消|無効", str(T["get"](r, c) or "")) for r in range(T["ra"], T["rb"] + 1)):
                         notes.append(f"※「{h}」列にキャンセル等の行を含んでいます")
                         break
+                if merged:
+                    notes.append("書き方の違いをまとめて数えました: " + "、".join(merged[:3]) + "（元の表は直していません。そろえるなら match.master）")
                 notes.append(f'別の棚からこの表を参照するときは range:"{into}"（または "{into}!A1:{col_letter(ncol)}{nrow}"）')
                 mem[into] = {"name": into, "hr": 1, "ra": 2, "rb": len(keys) + 1, "fc": 1, "lc": ncol, "names": {j: h for j, h in enumerate(hdr_row, start=1)},
                              "get": (lambda g: (lambda r, c: g[r - 1][c - 1] if r - 1 < len(g) and c - 1 < len(g[r - 1]) else None))(grid_rows),
@@ -2521,6 +2748,32 @@ def lower_ops(ops, light, sheet, sheet_names=None):
                 said.append(f"{sheet}!{tb['first_col']}{r_a}:{tb['last_col']}{r_b} {op.get('col') or op.get('cols')} で{'降順' if op.get('desc') else '昇順'}に並べ替え")
                 continue
             if s == "cf.add":
+                w0 = str(op.get("when") or "").lower()
+                v0 = "" if op.get("value") is None else str(op["value"])
+                is_n = bool(re.fullmatch(r"-?\d+(?:\.\d+)?", v0.replace(",", "").strip()))
+                if w0 == "between" or (not is_n and w0 in ("gt", "ge", "lt", "le", "eq", "ne") and _low_cmp_date(v0.split("..")[0], False, 2000)):
+                    # 日付の比べ: エンジンと同じ式（=AND(ISNUMBER(先頭),先頭 比べ DATE(年,月,日))）。年の無い日付は範囲の先頭の列の年
+                    r1, c1, r2, c2 = parse_a1(op["range"])
+                    fy = next((_low_serial_date(ev(r, c1)).year for r in range(r1, r2 + 1)
+                               if isinstance(ev(r, c1), (int, float)) and (((cell(r, c1).get("effectiveFormat") or {}).get("numberFormat")) or {}).get("type") in ("DATE", "DATE_TIME")), None)
+                    if fy is None:
+                        from datetime import date as _d
+                        fy = _d.today().year
+                    a1c = f"{col_letter(c1)}{r1}"
+                    de = lambda d: f"DATE({d.year},{d.month},{d.day})"
+                    if w0 == "between":
+                        if ".." not in v0:
+                            return None
+                        d1, d2 = _low_cmp_date(v0.split("..")[0], False, fy), _low_cmp_date(v0.split("..")[1], False, fy)
+                        if not d1 or not d2:
+                            return None
+                        lo, hi = min(d1, d2), max(d1, d2)
+                        fml = f"=AND(ISNUMBER({a1c}),{a1c}>={de(lo)},{a1c}<={de(hi)})"
+                    else:
+                        d1 = _low_cmp_date(v0, False, fy)
+                        fml = f"=AND(ISNUMBER({a1c}),{a1c}{ {'gt': '>', 'ge': '>=', 'lt': '<', 'le': '<=', 'eq': '=', 'ne': '<>'}[w0] }{de(d1)})"
+                    op = dict(op, when="formula", value=fml)
+                    conv.append(1)
                 fmts.append(dict(op))
                 said.append(f"{sheet}!{op.get('range')} 条件付き書式を付与（when: {op.get('when')}）")
             elif s == "seiri":
@@ -2685,7 +2938,7 @@ def lower_ops(ops, light, sheet, sheet_names=None):
                 return None
         except Skip:
             return None
-    if not writes and not news:
+    if not writes and not news and not conv:
         return None
     if mem and any(o.get("shelf") == "sort" for o in ops):
         return None
