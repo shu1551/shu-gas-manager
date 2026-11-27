@@ -517,10 +517,95 @@ _ROW_CF_THING_RE = re.compile(
     r"行全体|の行(?:に|を|全部|だけ|は)?|行に色|行を目立|行を(?:赤|黄|青|緑|黒|白|薄|濃|橙|灰|紫|水色|紺|茶|桃|太字)|いない行|ない行"
     r"|(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
     r"|(?:以上|以下|未満|より大き(?:い|く)?|より小さ(?:い|く)?|より前|より後|以前|以降|を超え?|上回[るっ]|下回[るっ]|届か(?:ない)?|届いてい?ない|以外|ではない|でない|じゃない|になって(?:いない|ない|いる|る)|マイナス|負の値)(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
+    r"|(?:書かれ|記載され|入力され|入っ|含まれ|含[むみ]|とある)(?:てい?る|た)?(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線|空白|スペース|表記|表示|形式)[^\s、。のをにはが]{1,12}(?:を|に|は)"
 )
 _COND_EQ_THING_RE = re.compile(
     r"([^\s、。をにで]{1,16}?)(?:列)?(?:が|は)[『「]?([^』」\s、。の]+?)[』」]?(?:になって(?:いる|る)|の)(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}"
 )
+_TWO_COL_CMP_RE = re.compile(
+    r"([^\s、。をにで]{1,16}?)(?:列)?(?:が|は)"
+    r"([^\s、。をに]{1,16}?)(?:列)?"
+    r"(?:を(下回[るっ]|上回[るっ]|超え?る?|超え)|に(届か(?:ない)?|届いてい?ない)|"
+    r"(下回[るっ]|上回[るっ]|超え?る?|超え|届か(?:ない)?|届いてい?ない|"
+    r"より大き(?:い|く)?|より小さ(?:い|く)?|以上|以下|未満|"
+    r"と等しい|と同じ|と一致|と違う|と異なる|以外|ではない|でない|じゃない))"
+)
+_COL_CONTAINS_RE = re.compile(
+    r"([^\s、。をがはで]{1,16}?)(?:列)?(?:に|が|は)[『「]?([^』」\s、。をにがは]{1,20}?)[』」]?"
+    r"(?:(?:と|が)(?:書かれ|記載|入力され|入っ|含まれ)|を含[むみ]|とある)"
+)
+_CALC_DIFF_RE = re.compile(
+    r"([^\s、。をにとがは]{1,16}?)(?:列)?と([^\s、。をにとがは]{1,16}?)(?:列)?の(?:差額?|差分|差と伸び率|伸び率|増減率)"
+)
+
+
+def _two_col_cmp_of(text, table):
+    """「〈列A〉が〈列B〉を下回る/上回る/以上…」の 2 列比較を _resolve_col_ref で解決し (col_a, op_sym, col_b) を返す。"""
+    if not table or not table.get("columns"):
+        return None
+    t_n = nfkc(text)
+    for m in _TWO_COL_CMP_RE.finditer(t_n):
+        r1, r2 = m.group(1).strip(), m.group(2).strip()
+        c1 = _resolve_col_ref(r1, table) or (("の" in r1) and _resolve_col_ref(r1.rsplit("の", 1)[-1], table))
+        c2 = _resolve_col_ref(r2, table)
+        if not c1 or not c2 or c1 == c2:
+            continue
+        kw = m.group(3) or m.group(4) or m.group(5) or ""
+        if re.search(r"下回|未満|より小さ|届か|届いて", kw):
+            sym = "<"
+        elif re.search(r"上回|超|より大き", kw):
+            sym = ">"
+        elif "以上" in kw:
+            sym = ">="
+        elif "以下" in kw:
+            sym = "<="
+        elif re.search(r"等しい|同じ|一致", kw):
+            sym = "="
+        else:
+            sym = "<>"
+        return (c1, sym, c2)
+    return None
+
+
+def _col_contains_of(text, table):
+    """「〈列〉に〈語〉と書かれている/入っている/を含む…」を _resolve_col_ref で解決し (col, word) を返す。"""
+    t_n = nfkc(text)
+    has_cols = bool(table and table.get("columns"))
+    for m in _COL_CONTAINS_RE.finditer(t_n):
+        r1, word = m.group(1).strip(), m.group(2).strip()
+        if not word:
+            continue
+        if has_cols:
+            c1 = _resolve_col_ref(r1, table) or (("の" in r1) and _resolve_col_ref(r1.rsplit("の", 1)[-1], table))
+            if not c1:
+                continue
+            return (c1, word)
+        return (r1, word)
+    return None
+
+
+def _calc_diff_cols_of(text, table):
+    """「〈列A〉と〈列B〉の差額/差/差分/伸び率/増減率」を _resolve_col_ref で解決し (col_a, col_b) を返す。"""
+    t_n = nfkc(text)
+    has_cols = bool(table and table.get("columns"))
+    for m in _CALC_DIFF_RE.finditer(t_n):
+        r1, r2 = m.group(1).strip(), m.group(2).strip()
+        if has_cols:
+            c1 = _resolve_col_ref(r1, table) or (("の" in r1) and _resolve_col_ref(r1.rsplit("の", 1)[-1], table))
+            c2 = _resolve_col_ref(r2, table)
+            if not c1 or not c2 or c1 == c2:
+                continue
+            return (c1, c2)
+        if r1 and r2 and r1 != r2:
+            return (r1, r2)
+    return None
+
+
+def _col_let_to_num(s):
+    n = 0
+    for ch in s:
+        n = n * 26 + (ord(ch) - 64)
+    return n
 
 
 def _cond_col_of(text, table):
@@ -1073,6 +1158,8 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
         has_row_cond = bool(
             re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", scan_n)
             or _has_eq_col_f
+            or _two_col_cmp_of(scan_n, table)
+            or _col_contains_of(scan_n, table)
             or re.search(r"(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない|になっている|になってる).{0,8}(?:の行|行を|行に|行全体|のセル|セルを|(?:の)?(?!セル|列|値|背景|文字|色|書式|フォント|サイズ|幅|高さ|罫線|枠線)[^\s、。のをにはが]{1,12}(?:を|に|は))", scan_n)
             or (_DATE_CMP_CUE_RE.search(scan_n) and re.search(r"の行|行を|行に|行全体|のセル|セルを", scan_n))
         )
@@ -1103,9 +1190,12 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
         if color_hits and not op.get("bg") and not op.get("color"):
             _add_miss("色（color/bg）")
 
-    # 3b. cf.add は書式（bg・color・bold）が 1 つも無いまま撃たない（質問文への誤爆防止）
-    if sh_name == "cf.add" and not op.get("bg") and not op.get("color") and op.get("bold") is None:
-        _add_miss("書式（bg・color・bold）")
+    # 3b. cf.add は書式（bg・color・bold）と必要な比較値（value）が欠けたまま撃たない
+    if sh_name == "cf.add":
+        if not op.get("bg") and not op.get("color") and op.get("bold") is None:
+            _add_miss("書式（bg・color・bold）")
+        if op.get("when") in ("gt", "ge", "lt", "le", "eq", "ne", "between", "contains", "formula") and op.get("value") in (None, ""):
+            _add_miss("value")
 
     # 4. フィルタ系で条件語が落ちている／条件自体が空
     if sh_name in ("filter.where", "filter.delete", "filter.extract"):
@@ -1604,10 +1694,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
     if shelf["name"] in _CMP_VALUE_SHELVES and op.get("when") != "formula":
         _resolve_cmp_value(op, text)
     if shelf["name"] == "cf.add" and op.get("when") != "formula" and table and table.get("first_col") and table.get("last_col"):
+        sp_cf = _data_span(table)
+        cf_r1 = sp_cf[0] if sp_cf else ((table.get("header_row") or 1) + 1)
+        cf_r2 = sp_cf[1] if sp_cf else cf_r1
+        two_col_cf = _two_col_cmp_of(text, table)
+        col_cont_cf = _col_contains_of(text, table)
         if not re.search(r"のセル|セルを|セルに", text) and _ROW_CF_THING_RE.search(nfkc(text)):
-            sp_cf = _data_span(table)
-            cf_r1 = sp_cf[0] if sp_cf else ((table.get("header_row") or 1) + 1)
-            cf_r2 = sp_cf[1] if sp_cf else cf_r1
             cond_col_cf = _cond_col_of(scan, table)
             ref_l = (_letter_of(table, cond_col_cf) if cond_col_cf else None) or (_letter_of(table, names[0]) if names else None) or (letters[0] if letters else "")
             if not ref_l:
@@ -1618,7 +1710,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             raw_v_cf = op.get("value")
             norm_v_cf = _normalize_filter_number(raw_v_cf) if raw_v_cf not in (None, "") else None
             num_val = norm_v_cf if norm_v_cf is not None else (str(raw_v_cf).replace(",", "") if raw_v_cf is not None else "")
-            if ref_l:
+            if two_col_cf:
+                la_cf, lb_cf = _letter_of(table, two_col_cf[0]), _letter_of(table, two_col_cf[2])
+                if la_cf and lb_cf:
+                    expr = f"=${la_cf}{cf_r1}{two_col_cf[1]}${lb_cf}{cf_r1}"
+            if not expr and col_cont_cf:
+                cl_cc = _letter_of(table, col_cont_cf[0])
+                if cl_cc:
+                    escaped_cc = col_cont_cf[1].replace('"', '""')
+                    expr = f'=ISNUMBER(SEARCH("{escaped_cc}",${cl_cc}{cf_r1}))'
+            if not expr and ref_l:
                 w = op.get("when")
                 d_cf_atom = _date_cmp_to_formula_atom(raw_v_cf, table) if (raw_v_cf not in (None, "") and norm_v_cf is None) else None
                 if w == "between" and isinstance(raw_v_cf, str) and ".." in raw_v_cf:
@@ -1671,7 +1772,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     elif raw_v_cf not in (None, ""):
                         escaped_v = str(raw_v_cf).replace('"', '""')
                         expr = f'=ISNUMBER(SEARCH("{escaped_v}",${ref_l}{cf_r1}))'
-            elif re.search(r"欠席|完了|未完了|終了", text):
+            elif not expr and re.search(r"欠席|完了|未完了|終了", text):
                 kw_cf = "欠席" if "欠席" in text else ("未完了" if "未完了" in text else ("完了" if "完了" in text else "終了"))
                 expr = f'=COUNTIF(${table["first_col"]}{cf_r1}:${table["last_col"]}{cf_r1},"*{kw_cf}*")>0'
             if expr:
@@ -1679,6 +1780,20 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 op["when"] = "formula"
                 op["value"] = expr
                 named = True
+        elif two_col_cf:
+            la_cf, lb_cf = _letter_of(table, two_col_cf[0]), _letter_of(table, two_col_cf[2])
+            if la_cf and lb_cf:
+                op["range"] = f"{la_cf}{cf_r1}:{la_cf}{cf_r2}"
+                op["when"] = "formula"
+                op["value"] = f"=${la_cf}{cf_r1}{two_col_cf[1]}${lb_cf}{cf_r1}"
+                named = True
+        elif col_cont_cf and op.get("when") in (None, "contains") and op.get("value") in (None, ""):
+            cl_cc = _letter_of(table, col_cont_cf[0])
+            if cl_cc:
+                op["range"] = f"{cl_cc}{cf_r1}:{cl_cc}{cf_r2}"
+            op["when"] = "contains"
+            op["value"] = col_cont_cf[1]
+            named = True
         if not op.get("bg") and not op.get("color") and re.search(r"色[を]?付|色[を]?つ|目立", text):
             op["bg"] = "薄黄"
     if shelf["name"] == "renumber" and "col" not in op and table:
@@ -1767,8 +1882,46 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             if num_cols:
                 op["col"] = num_cols[0]
                 named = True
-    if shelf["name"] == "freeze" and "rows" not in op and table and table.get("header_row") and re.search(r"見出し|ヘッダ", text):
-        op["rows"] = int(table["header_row"]) + max(1, int(table.get("header_rows") or 1)) - 1
+    if shelf["name"] == "freeze":
+        if "rows" not in op and table and table.get("header_row") and re.search(r"見出し|ヘッダ", text):
+            op["rows"] = int(table["header_row"]) + max(1, int(table.get("header_rows") or 1)) - 1
+        t_fz = nfkc(text)
+        fz_cols = 0
+        max_tbl_cols = max(
+            (_col_let_to_num(str(c.get("col") or "")) for c in (table or {}).get("columns") or [] if re.fullmatch(r"[A-Z]{1,3}", str(c.get("col") or ""))),
+            default=26,
+        )
+        for m_fc in re.finditer(r"(?<![A-Za-z0-9])([A-Z]{1,2}(?:\s*列?\s*(?:[・、,〜~～\-]|と|から)\s*[A-Z]{1,2})*)\s*列", t_fz):
+            for tok in re.findall(r"[A-Z]{1,2}", m_fc.group(1)):
+                if len(tok) == 1:
+                    fz_cols = max(fz_cols, _col_let_to_num(tok))
+                else:
+                    res_fc = _resolve_col_ref(tok, table)
+                    if res_fc:
+                        res_l = _letter_of(table, res_fc)
+                        if res_l:
+                            fz_cols = max(fz_cols, _col_let_to_num(res_l))
+                    else:
+                        n_fc = _col_let_to_num(tok)
+                        if n_fc <= max_tbl_cols:
+                            fz_cols = max(fz_cols, n_fc)
+        for m_fn in re.finditer(r"(?:左(?:から)?|先頭(?:から)?|最初(?:の)?)\s*([0-9]+)\s*列|([0-9]+)\s*列(?:目?(?:まで)?(?:固定|フリーズ|動かない)|を固定)", t_fz):
+            nv_f = int(m_fn.group(1) or m_fn.group(2))
+            if nv_f > 0:
+                fz_cols = max(fz_cols, nv_f)
+        if fz_cols > 0:
+            op["cols"] = fz_cols
+    if shelf["name"] == "calc.diff":
+        dc = _calc_diff_cols_of(text, table)
+        if dc:
+            op["col_a"], op["col_b"] = dc[0], dc[1]
+            named = True
+        else:
+            for dk in ("col_a", "col_b"):
+                if isinstance(op.get(dk), str):
+                    res_d = _resolve_col_ref(op[dk], table)
+                    if res_d:
+                        op[dk] = res_d
     if shelf["name"] == "calc.col":
         t_nfkc = nfkc(text)
         tbl_cols_sorted = sorted(
@@ -2423,6 +2576,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|になっている|になってる|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
                 or _DATE_CMP_CUE_RE.search(_c_nfkc_cf)
                 or _has_eq_col_cf
+                or _two_col_cmp_of(_c_nfkc_cf, table)
+                or _col_contains_of(_c_nfkc_cf, table)
                 or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
             )
             has_row_cf_cue = bool(
@@ -2455,6 +2610,10 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 re.search(r"(?:別(?:に|で|の)|ごと(?:に|の))", c)
                 and re.search(r"集計|合計|平均|件数", c)
                 and not re.search(r"ピボット|クロス|縦と横|小計|グラフ|並|ソート|抽出", c)
+            )
+            has_calc_diff_cue = bool(
+                _calc_diff_cols_of(nfkc(c), table)
+                and not re.search(r"シート|タブ|比較", c)
             )
             has_calc_cue = bool(
                 re.search(
@@ -2559,6 +2718,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 _ensure_boost("chart.new")
             elif has_filter_where_cue:
                 _ensure_boost("filter.where")
+            elif has_calc_diff_cue:
+                _ensure_boost("calc.diff")
             elif has_calc_cue:
                 _ensure_boost("calc.col")
             elif has_summary_cue:

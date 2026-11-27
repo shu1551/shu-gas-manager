@@ -351,8 +351,14 @@ def load(shelf_dir=None):
 
 # ------------------------------------------------------------------ Catalog.gs
 def build_catalog_gs(cat):
-    """エンジンの共通部が見る CATALOG。棚ごとに kind・触る物・控えるシート・危ない"""
-    obj = {s["name"]: {"kind": s["kind"], "touch": s["touch"], "backup": s["backup"], "danger": s["danger"]} for s in cat.shelves}
+    """エンジンの共通部が見る CATALOG。棚ごとに kind・触る物・控えるシート・危ない（＋into の既定シート名）"""
+    obj = {}
+    for s in cat.shelves:
+        item = {"kind": s["kind"], "touch": s["touch"], "backup": s["backup"], "danger": s["danger"]}
+        into_def = next((a["default"] for a in s["args"] if a["name"] == "into" and a.get("default")), None)
+        if into_def:
+            item["intoDefault"] = into_def
+        obj[s["name"]] = item
     body = ",\n".join("  " + json.dumps(k, ensure_ascii=False) + ": " + json.dumps(v, ensure_ascii=False) for k, v in obj.items())
     return "// Catalog.gs - 道具（gas_ws_catalog.py）が棚の札から作る。手で直さない\nvar CATALOG = {\n" + body + "\n};\n"
 

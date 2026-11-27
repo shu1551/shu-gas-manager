@@ -1823,7 +1823,7 @@ function touchedSheets_(ctx, ops) {
     bk.forEach(function (b) {
       if (b === '今') add(op.sheet || def);
       else if (b === '名前') add(op.name);
-      else if (b === '先') add(op.into);
+      else if (b === '先') add(op.into || (c && c.intoDefault));
       else if (b === '全部') ss.getSheets().forEach(function (s) { add(s.getName()); });
     });
   });
