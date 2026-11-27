@@ -1153,6 +1153,24 @@ class WorkspaceManager:
                             "halfwidth": False, "dates": False, "tidy": False})
                 # ok は付けない（1 本でも ok があると、頼みの消す手まで確かめなしで撃たれる＝_do_res の決まり）
                 notes += [x for x in (num_hit, trim_hit) if x]
+        # 合計行の SUM が明細の一部しか足していない（G16 が =SUM(G4:G14) で 15 行目が漏れている）なら、どの頼みでも明細全体に直す
+        tot_r = int(ltb.get("total_row") or 0)
+        if tot_r and not any(isinstance(o, dict) and o.get("shelf") == "total" for o in ops):
+            tfix = {}
+            for c in ltb.get("columns") or []:
+                col = c.get("col")
+                if not col:
+                    continue
+                fv = str((((cells.get((tot_r, gas_ws_direct.col_num(col))) or {}).get("userEnteredValue")) or {}).get("formulaValue") or "")
+                mm = re.fullmatch(r"=SUM\(\s*([A-Z]{1,3})(\d+):([A-Z]{1,3})(\d+)\s*\)", fv.strip(), re.I)
+                if not mm or mm.group(1).upper() != col or mm.group(3).upper() != col:
+                    continue
+                a0, b0 = int(mm.group(2)), int(mm.group(4))
+                if a0 == r_a and b0 < r_b:
+                    tfix[f"{col}{tot_r}"] = f"=SUM({col}{r_a}:{col}{r_b})"
+                    notes.append(f"{col}{tot_r}「{fv}」（{b0 + 1}〜{r_b} 行目が漏れている）→ =SUM({col}{r_a}:{col}{r_b})")
+            if tfix:
+                add.append({"shelf": "write", "cells": tfix})
         # 合計を直す頼みでは、式の列に値が直に書かれた行（=E{r}*F{r} の列の G9 に 1200 等）も式に戻す。
         # 直書きが残ると合計が合わないまま「直した」になる。同じ形の式が明細の 6 割以上にある列だけを見る
         if any(isinstance(o, dict) and o.get("shelf") == "total" for o in ops):
@@ -1580,12 +1598,13 @@ class WorkspaceManager:
             self._light_full = None
             if lf and lf[0] == dt.get("id") and lf[1] == dt.get("sheet"):
                 try:
-                    lowered = gas_ws_direct.lower_ops(remote_ops, lf[2], dt["sheet"])
+                    lowered = gas_ws_direct.lower_ops(remote_ops, lf[2], dt["sheet"], (self._cached_table(st, dt) or {}).get("sheets"))
                 except Exception:
                     lowered = None
             dres = gas_ws_direct.DirectRunner(self).try_do(st, dt, lowered[0] if lowered else remote_ops, tim)
             if dres is not None and lowered and lowered[1]:
                 dres["changed"] = lowered[1]
+                dres["notes"] = list(dres.get("notes") or []) + list(getattr(gas_ws_direct.lower_ops, "last_notes", []) or [])
             if dres is not None:
                 for o in reversed(remote_ops):
                     sc = next(({k: o[k]} for k in ("header", "title", "col", "range") if o.get(k) not in (None, "", [])), None)

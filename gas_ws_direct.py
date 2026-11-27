@@ -13,6 +13,7 @@ gas_ws_direct.py - ws_do の直接の道（エンジンの往復を省いて She
 import hashlib
 import json
 import re
+import unicodedata
 import threading
 import time
 from datetime import datetime
@@ -33,7 +34,7 @@ DIRECT_SHELVES = {"format", "format.negred", "font.unify", "bg.clear", "freeze",
                   "clear.values", "clear.format", "sort", "rows.insert", "cols.insert", "cf.clear",
                   "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "sheet.gridlines",
                   "filter.on", "filter.off", "rows.hide", "rows.show", "cols.hide", "cols.show",
-                  "note.set", "note.clear", "fmt.copy", "cf.add"}
+                  "note.set", "note.clear", "fmt.copy", "cf.add", "sheet.new", "_raw"}
 _SHARED_DEFS_FILE = Path(__file__).resolve().parent / "ws_shared_defs.json"
 
 
@@ -326,6 +327,8 @@ class DirectRunner:
         """読む範囲を決める。返すのは (読む範囲のリスト, 組み立ての関数)。組み立ては読みの後に呼ぶ"""
         ranges = set()
         for op in ops:
+            if op.get("_new") or op["shelf"] in ("sheet.new", "_raw"):
+                continue      # これから作るシートへの手（読む物が無い）
             sh = op.get("sheet") or sheet
             ranges.add(f"{q(sh)}!A1")
             s = op["shelf"]
@@ -576,6 +579,24 @@ class DirectRunner:
         for op in ops:
             s = op["shelf"]
             shn = op.get("sheet") or sheet
+            if s == "sheet.new":
+                req.append({"addSheet": {"properties": {"sheetId": op["sheet_id"], "title": op["name"], "index": op["index"]}}})
+                undo.append({"deleteSheet": {"sheetId": op["sheet_id"]}})     # 戻しは最後にシートごと消す
+                continue
+            if s == "_raw":
+                req.extend(op["requests"])
+                undo[0:0] = list(op.get("undo") or [])
+                for t_ in op.get("touch") or []:
+                    area(*t_)
+                if op.get("said"):
+                    changed.append(op["said"])
+                continue
+            if s == "write" and op.get("_new"):
+                for k in op["cells"]:
+                    r1, c1, _, _ = parse_a1(k)
+                    area(shn, r1, c1, r1, c1)
+                req.append({"_values": {shn: op["cells"]}})
+                continue
             ent = snap.sheet(shn)
             sid = ent["props"]["sheetId"]
             if s in ("format", "bg.clear"):
@@ -1083,8 +1104,9 @@ class DirectRunner:
             return None
         if any(o.get("shelf") == "write" for o in ops) and len(ops) > 1:
             # 値を書く棚を組み替えた手（write 1 本＋書式・書式の写し）だけは一緒に撃つ（書式が先・値が後）
-            if not (sum(1 for o in ops if o.get("shelf") == "write") == 1
-                    and all(o.get("shelf") in ("write", "format", "fmt.copy", "cf.add") for o in ops)):
+            if not all(o.get("shelf") in ("write", "format", "fmt.copy", "cf.add", "sort", "sheet.new", "_raw") for o in ops):
+                return None
+            if sum(1 for o in ops if o.get("shelf") == "write" and not o.get("_new")) > 1:
                 return None
         if any(o.get("shelf") == "fmt.copy" for o in ops) and not any(o.get("shelf") == "write" for o in ops):
             return None
@@ -1120,12 +1142,17 @@ class DirectRunner:
                     "direct": True,
                     "already": True,
                 }
+            # 撃つ順: 書式など → 値 → 並べ替え（汚れを直した値で並べる）
+            post = [r for r in req if "sortRange" in r] if vals else []
+            req = [r for r in req if not (vals and "sortRange" in r)]
             if req:
                 self._call(st, "POST", SHEETS + tgt["id"] + ":batchUpdate", json={"requests": req})
             for v in vals:
                 for shn, cells in v.items():
                     data = [{"range": f"{q(shn)}!{k}", "values": [[x]]} for k, x in cells.items()]
                     self._call(st, "POST", SHEETS + tgt["id"] + "/values:batchUpdate", json={"valueInputOption": "USER_ENTERED", "data": data})
+            if post:
+                self._call(st, "POST", SHEETS + tgt["id"] + ":batchUpdate", json={"requests": post})
             if tim:
                 tim.lap("直接:撃つ")
         except (Skip, DirectError) as e:
@@ -2136,7 +2163,8 @@ def trace(mgr, st, sid, sheet, cell, depth=3, max_nodes=40):
 # その棚は組み替えず（直の道に乗せず）エンジンの道で撃つ＝2 か所の食い違いで結果が変わることはない。
 # ws-check がずれを知らせる。ここの写しを同じに直したら、gas('ws-check') が出す新しい指紋に書き換える
 LOWER_PINS = {"seiri": "ae95f8b5af9a", "phone.fix": "3c0eeebff844", "calc.tax": "47d88fc63fa5",
-              "calc.col": "2a5fb1eec63c", "total": "8f6db18212fd", "cf.add": "18a2eabb5f69"}
+              "calc.col": "2a5fb1eec63c", "total": "8f6db18212fd", "cf.add": "18a2eabb5f69",
+              "filter.extract": "1ffd5f88061c", "summary": "422d47d5ed6a", "chart.new": "b2a2fd2707d1"}
 
 
 def _shelf_pin(name):
@@ -2206,7 +2234,7 @@ def _low_phone(raw):
     return f"{d[:3]}-{d[3:6]}-{d[6:]}"
 
 
-def lower_ops(ops, light, sheet):
+def lower_ops(ops, light, sheet, sheet_names=None):
     """ops を直の道で撃てる形に組み替える。戻り値 (新しい ops, 直した所の文[]) か None（組み替えない）"""
     if not light or not light.get("table") or not ops:
         return None
@@ -2223,7 +2251,10 @@ def lower_ops(ops, light, sheet):
     cols = tb.get("columns") or []
     name2c = {str(c.get("name") or "").strip(): col_num(c["col"]) for c in cols if c.get("col")}
     first_c, last_c = col_num(tb["first_col"]), col_num(tb["last_col"])
-    writes, fmts, copies, said = {}, [], [], []
+    writes, fmts, copies, said, sorts = {}, [], [], [], []
+    news, new_writes, notes = [], [], []          # 新しいシート（抽出・集計）とグラフ
+    names_now = list(sheet_names or [])
+    mem = {}                                       # 作ったシートの中身（続く手の元になる）
 
     def cell(r, c):
         return cells.get((r, c)) or {}
@@ -2253,6 +2284,64 @@ def lower_ops(ops, light, sheet):
             raise Skip("同じセルを 2 回書く")
         writes[k] = v
 
+    def ev(r, c):
+        """今の値（この呼び出しで直した値を先に）"""
+        k = f"{col_letter(c)}{r}"
+        if k in writes and not (isinstance(writes[k], str) and writes[k].startswith("=")):
+            return writes[k]
+        e = cell(r, c).get("effectiveValue") or {}
+        for kk in ("stringValue", "numberValue", "boolValue"):
+            if kk in e:
+                return e[kk]
+        return None
+
+    def src_table(name):
+        """元の表: 今のシートか、この呼び出しで作ったシート"""
+        if name in (None, "", sheet):
+            return {"name": sheet, "hr": hr, "ra": r_a, "rb": r_b, "fc": first_c, "lc": last_c,
+                    "names": {c: h for h, c in name2c.items()}, "get": ev,
+                    "fmt": lambda c: (((cell(r_a, c).get("userEnteredFormat") or {}).get("numberFormat")) or {})}
+        if name in mem:
+            return mem[name]
+        raise Skip("ほかのシートの表")
+
+    def uniq_id():
+        import random
+        return random.randint(10 ** 8, 2 ** 31 - 1)
+
+    def tidy_reqs(sid, nrow, ncol, total, num_cols, rows_text):
+        bd = {"style": "SOLID", "color": rgb("#9E9E9E")}
+        last = nrow
+        out = [
+            {"updateBorders": {"range": grid(sid, 1, 1, last, ncol), "top": bd, "bottom": bd, "left": bd, "right": bd, "innerHorizontal": bd, "innerVertical": bd}},
+            {"repeatCell": {"range": grid(sid, 1, 1, last, ncol), "cell": {"userEnteredFormat": {"verticalAlignment": "MIDDLE"}}, "fields": "userEnteredFormat.verticalAlignment"}},
+            {"repeatCell": {"range": grid(sid, 1, 1, 1, ncol), "cell": {"userEnteredFormat": {"backgroundColor": rgb("#1F4E79"), "textFormat": {"bold": True, "foregroundColor": rgb("#FFFFFF")},
+                                                                                     "horizontalAlignment": "CENTER", "wrapStrategy": "WRAP"}},
+                            "fields": "userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor),horizontalAlignment,wrapStrategy)"}},
+        ]
+        for c in num_cols:
+            out.append({"repeatCell": {"range": grid(sid, 2, c, last, c), "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}, "horizontalAlignment": "RIGHT"}},
+                                       "fields": "userEnteredFormat(numberFormat,horizontalAlignment)"}})
+        if total:
+            out.append({"repeatCell": {"range": grid(sid, last, 1, last, ncol), "cell": {"userEnteredFormat": {"backgroundColor": rgb("#F2F2F2"), "textFormat": {"bold": True}}},
+                                       "fields": "userEnteredFormat(backgroundColor,textFormat(bold))"}})
+            out.append({"updateBorders": {"range": grid(sid, last, 1, last, ncol), "top": {"style": "DOUBLE", "color": rgb("#595959")}}})
+        dims = [(0, 1, 28)] + ([(1, last - 1 if total else last, 24)] if last > 1 else []) + ([(last - 1, last, 26)] if total else [])
+        for a0, b0, px in dims:
+            if b0 > a0:
+                out.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "ROWS", "startIndex": a0, "endIndex": b0}, "properties": {"pixelSize": px}, "fields": "pixelSize"}})
+        for c in range(1, ncol + 1):
+            mx = max((sum(2 if ord(ch) > 255 else 1 for ch in str(row[c - 1])) for row in rows_text if c - 1 < len(row)), default=0)
+            out.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": c - 1, "endIndex": c},
+                                                      "properties": {"pixelSize": max(50, min(360, mx * 7 + 18))}, "fields": "pixelSize"}})
+        out.append({"updateSheetProperties": {"properties": {"sheetId": sid, "gridProperties": {"frozenRowCount": 1}}, "fields": "gridProperties.frozenRowCount"}})
+        return out
+
+    def numtxt(v):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return f"{int(v):,}" if float(v).is_integer() else f"{v:,.2f}"
+        return str(v if v is not None else "")
+
     next_col = last_c + 1
     for op in ops:
         if not isinstance(op, dict) or (op.get("sheet") and op.get("sheet") != sheet):
@@ -2261,6 +2350,176 @@ def lower_ops(ops, light, sheet):
         if s in LOWER_PINS and not lower_pin_ok(s):
             return None      # エンジンの棚が書き換わった＝この写しは古い。エンジンの道で撃つ（ws-check が知らせる）
         try:
+            if s == "filter.extract":
+                if not lower_pin_ok(s) or not op.get("col") or str(op.get("when") or "eq").lower() not in ("eq", "ne"):
+                    return None
+                tgt_v = op["value"] if op.get("value") is not None else op.get("equals")
+                if tgt_v is None or re.search(r"\d+\s*[/年月\-]", str(tgt_v)):
+                    return None
+                into = str(op.get("into") or "抽出").strip()
+                if not sheet_names or into in names_now:
+                    return None      # 既にあるシートへの抽出（中身を消して書く）はエンジンの道で
+                T = src_table(op.get("sheet"))
+                ci = next((c for c, h in T["names"].items() if h == str(op["col"]).strip()), None) or col_of(op["col"])
+                if not ci:
+                    return None
+                want_eq = str(op.get("when") or "eq").lower() == "eq"
+                hdr = [T["names"].get(c, "") for c in range(T["fc"], T["lc"] + 1)]
+                rows = []
+                for r in range(T["ra"], T["rb"] + 1):
+                    v = T["get"](r, ci)
+                    hit = (str(v).strip() if v is not None else "") == str(tgt_v).strip()
+                    if hit == want_eq:
+                        rows.append([T["get"](r, c) for c in range(T["fc"], T["lc"] + 1)])
+                if not rows:
+                    return None
+                sid_n = uniq_id()
+                ncol = len(hdr)
+                news.append({"shelf": "sheet.new", "name": into, "sheet_id": sid_n, "index": len(names_now)})
+                names_now.append(into)
+                reqs = [{"repeatCell": {"range": grid(sid_n, 1, 1, 1, ncol), "cell": {"userEnteredFormat": {"backgroundColor": rgb("#1F4E79"), "textFormat": {"bold": True, "foregroundColor": rgb("#FFFFFF")}}},
+                                        "fields": "userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor))"}}]
+                for j, c in enumerate(range(T["fc"], T["lc"] + 1), start=1):   # 日付などの数の形を元の列から
+                    nf = T["fmt"](c)
+                    if nf.get("pattern"):
+                        reqs.append({"repeatCell": {"range": grid(sid_n, 2, j, len(rows) + 1, j), "cell": {"userEnteredFormat": {"numberFormat": nf}}, "fields": "userEnteredFormat.numberFormat"}})
+                news.append({"shelf": "_raw", "requests": reqs, "said": f"{into}!A1:{col_letter(ncol)}{len(rows) + 1} {len(rows)} 行を抽出"})
+                cells_n = {}
+                for j, h in enumerate(hdr, start=1):
+                    cells_n[f"{col_letter(j)}1"] = h
+                for i, row in enumerate(rows, start=2):
+                    for j, v in enumerate(row, start=1):
+                        if v not in (None, ""):
+                            cells_n[f"{col_letter(j)}{i}"] = v
+                new_writes.append({"shelf": "write", "sheet": into, "cells": cells_n, "_new": True})
+                mrows = {(i, j): v for i, row in enumerate(rows, start=2) for j, v in enumerate(row, start=1)}
+                mem[into] = {"name": into, "hr": 1, "ra": 2, "rb": len(rows) + 1, "fc": 1, "lc": ncol,
+                             "names": {j: h for j, h in enumerate(hdr, start=1)}, "get": (lambda mr: (lambda r, c: mr.get((r, c))))(mrows),
+                             "fmt": (lambda T0, fc0: (lambda c: T0["fmt"](c + fc0 - 1)))(T, T["fc"])}
+                continue
+            if s == "summary":
+                if not lower_pin_ok(s) or not op.get("by") or not op.get("values"):
+                    return None
+                func = str(op.get("func") or "sum").lower()
+                if func not in ("sum", "count"):
+                    return None
+                T = src_table(op.get("sheet"))
+                nm2 = {h: c for c, h in T["names"].items()}
+                by = nm2.get(str(op["by"]).strip()) or col_of(op["by"])
+                vals_c = [nm2.get(str(v).strip()) or col_of(v) for v in (op["values"] if isinstance(op["values"], list) else [op["values"]])]
+                if not by or not all(vals_c):
+                    return None
+                by_name = T["names"].get(by, str(op["by"]))
+                into = op.get("into")
+                if not sheet_names:
+                    return None
+                if not into:
+                    into = "集計"
+                    if into in names_now:
+                        base = f"集計_{by_name}別"
+                        into, k2 = base, 2
+                        while into in names_now:
+                            into, k2 = f"{base}_{k2}", k2 + 1
+                if into in names_now:
+                    return None      # 作り直し（中身が変わる）はエンジンの道で
+                keys, trim_hit = [], False
+                for r in range(T["ra"], T["rb"] + 1):
+                    k = T["get"](r, by)
+                    if k in (None, ""):
+                        continue
+                    ks = str(k)
+                    if ks != ks.strip():
+                        trim_hit = True
+                    if ks.strip() not in keys:
+                        keys.append(ks.strip())
+                nk = {}
+                for k in keys:     # 書き方の違いで割れる物は、マスタを探してまとめるエンジンの道で
+                    n0 = re.sub(r"[\s()（）［］\[\]・,，.、。]", "", re.sub(r"株式会社|有限会社|合同会社|\(株\)|\(有\)|\(同\)|㈱|㈲", "", unicodedata.normalize("NFKC", k))).lower()
+                    if n0 in nk:
+                        return None
+                    nk[n0] = k
+                sq = "'" + T["name"].replace("'", "''") + "'"
+                rng = lambda c: f"{sq}!${col_letter(c)}${T['ra']}:${col_letter(c)}${T['rb']}"
+                hdr_row = [by_name] + [T["names"].get(c, "") + ("(件数)" if func == "count" else "") for c in vals_c]
+                grid_rows, preview = [hdr_row], []
+                for i, k in enumerate(keys):
+                    rr = i + 2
+                    row = [k]
+                    for c in vals_c:
+                        if trim_hit:
+                            row.append(f"=SUMPRODUCT((TRIM({rng(by)})=$A{rr})*1)" if func == "count" else f"=SUMPRODUCT((TRIM({rng(by)})=$A{rr})*({rng(c)}))")
+                        else:
+                            row.append(f"=COUNTIFS({rng(by)},$A{rr})" if func == "count" else f"=SUMIFS({rng(c)},{rng(by)},$A{rr})")
+                    grid_rows.append(row)
+                    if i < 4:
+                        tot_v = 0
+                        for r in range(T["ra"], T["rb"] + 1):
+                            if str(T["get"](r, by) or "").strip() == k:
+                                v = T["get"](r, vals_c[0])
+                                tot_v += 1 if func == "count" else (v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0)
+                        preview.append(f"{k}: {int(tot_v) if float(tot_v).is_integer() else tot_v}")
+                tot_row = ["合計"] + [f"=SUM({col_letter(j + 2)}2:{col_letter(j + 2)}{len(keys) + 1})" for j in range(len(vals_c))]
+                grid_rows.append(tot_row)
+                sid_n = uniq_id()
+                ncol = len(hdr_row)
+                nrow = len(grid_rows)
+                news.append({"shelf": "sheet.new", "name": into, "sheet_id": sid_n, "index": len(names_now)})
+                names_now.append(into)
+                txt = [[str(x) for x in grid_rows[0]]] + [[k] + ["0" * 7] * len(vals_c) for k in keys] + [["合計"] + ["0" * 9] * len(vals_c)]
+                news.append({"shelf": "_raw", "requests": tidy_reqs(sid_n, nrow, ncol, True, list(range(2, ncol + 1)), txt),
+                             "said": f"{into}!A1:{col_letter(ncol)}{nrow} シート「{into}」へ「{T['name']}」の {by_name} ごとの集計（元の表を直すと追従）"})
+                new_writes.append({"shelf": "write", "sheet": into, "_new": True,
+                                   "cells": {f"{col_letter(j)}{i}": v for i, row in enumerate(grid_rows, start=1) for j, v in enumerate(row, start=1)}})
+                notes.append("集計結果: " + " ／ ".join(preview[:4]) + (f" ほか{len(keys) - 3}件" if len(keys) > 3 else ""))
+                if trim_hit:
+                    notes.append(f"「{by_name}」列の前後の空白を無視してまとめました")
+                for c, h in T["names"].items():
+                    if re.search(r"状態|ステータス|状況|備考|メモ", h) and any(re.search(r"キャンセル|取消|無効", str(T["get"](r, c) or "")) for r in range(T["ra"], T["rb"] + 1)):
+                        notes.append(f"※「{h}」列にキャンセル等の行を含んでいます")
+                        break
+                notes.append(f'別の棚からこの表を参照するときは range:"{into}"（または "{into}!A1:{col_letter(ncol)}{nrow}"）')
+                mem[into] = {"name": into, "hr": 1, "ra": 2, "rb": len(keys) + 1, "fc": 1, "lc": ncol, "names": {j: h for j, h in enumerate(hdr_row, start=1)},
+                             "get": (lambda g: (lambda r, c: g[r - 1][c - 1] if r - 1 < len(g) and c - 1 < len(g[r - 1]) else None))(grid_rows),
+                             "fmt": lambda c: {}, "sid": sid_n}
+                continue
+            if s == "chart.new":
+                if not lower_pin_ok(s) or op.get("edit") or op.get("target") or op.get("at") or op.get("transpose"):
+                    return None
+                typ = str(op.get("type") or "column").lower()
+                if typ not in ("column", "bar", "line", "pie", "area"):
+                    return None
+                host = op.get("sheet") or sheet
+                if host != sheet:
+                    return None
+                rname = str(op.get("range") or "")
+                if rname not in mem:
+                    return None      # 作ったシートの表をグラフにする形だけ（ほかはエンジンの道）
+                M = mem[rname]
+                g_sid = M.get("sid")
+                if not g_sid:
+                    return None
+                r1, r2, c1, c2 = M["hr"], M["rb"], M["fc"], M["lc"]
+                src = lambda c: {"sourceRange": {"sources": [grid(g_sid, r1, c, r2, c)]}}
+                cid = uniq_id()
+                right = max([last_c] + [c for (_r, c) in cells.keys()]) if cells else last_c
+                anchor = {"anchorCell": {"sheetId": light["snap"].sheet(sheet)["props"]["sheetId"], "rowIndex": hr - 1, "columnIndex": right + 1}, "offsetXPixels": 0, "offsetYPixels": 0}
+                if typ == "pie":
+                    spec = {"pieChart": {"legendPosition": "RIGHT_LEGEND", "domain": src(c1), "series": src(c1 + 1)}}
+                else:
+                    spec = {"basicChart": {"chartType": typ.upper(), "legendPosition": "RIGHT_LEGEND", "headerCount": 1,
+                                           "domains": [{"domain": src(c1)}], "series": [{"series": src(c), "targetAxis": "LEFT_AXIS"} for c in range(c1 + 1, c2 + 1)]}}
+                if op.get("title"):
+                    spec["title"] = op["title"]
+                news.append({"shelf": "_raw", "requests": [{"addChart": {"chart": {"chartId": cid, "spec": spec, "position": {"overlayPosition": anchor}}}}],
+                             "undo": [{"deleteEmbeddedObject": {"objectId": cid}}], "touch": [(sheet, 0, 0, 0, 0)],
+                             "said": f"{sheet}!{rname}!A{r1}:{col_letter(c2)}{r2} グラフを作成（{typ}{'・' + op['title'] if op.get('title') else ''}）"})
+                continue
+            if s == "sort":
+                if op.get("where") or op.get("filter"):
+                    return None
+                sorts.append(dict(op))
+                said.append(f"{sheet}!{tb['first_col']}{r_a}:{tb['last_col']}{r_b} {op.get('col') or op.get('cols')} で{'降順' if op.get('desc') else '昇順'}に並べ替え")
+                continue
             if s == "cf.add":
                 fmts.append(dict(op))
                 said.append(f"{sheet}!{op.get('range')} 条件付き書式を付与（when: {op.get('when')}）")
@@ -2426,6 +2685,10 @@ def lower_ops(ops, light, sheet):
                 return None
         except Skip:
             return None
-    if not writes:
+    if not writes and not news:
         return None
-    return copies + fmts + [{"shelf": "write", "cells": writes}], said
+    if mem and any(o.get("shelf") == "sort" for o in ops):
+        return None
+    out_ops = news + copies + fmts + ([{"shelf": "write", "cells": writes}] if writes else []) + new_writes + sorts
+    lower_ops.last_notes = notes
+    return out_ops, said + [o["said"] for o in news if o.get("said")]
