@@ -3364,3 +3364,80 @@ def test_push_combo_dev_checks_table_asks_and_aborts_on_js_exception(tmp_path, m
     assert "__broken_undef_var__" in msg
     assert "あいうえお存在しない頼み" in msg
     assert fc.called == []
+
+
+def test_chart_new_places_chart_two_cols_right_of_sheet_and_at_header_row():
+    """chart.new は元範囲から年計等を外しても、シート最右列（結合・式含む）の2つ右・見出し行に置くこと。"""
+    files = combo_mod.build_combo_files(combo_lite=True)
+    engine_src = next(f["source"] for f in files if f["name"] == "Engine")
+    node_code = r"""
+const vm = require('vm'), fs = require('fs');
+const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+// A3:J8 の 2 段見出し表（3〜4行目見出し、J列が年計で J3:J4 結合）
+const grid = [
+  ['月別売上', '', '', '', '', '', '', '', '', ''],
+  ['', '', '', '', '', '', '', '', '', ''],
+  ['部門', '上期', '', '', '', '下期', '', '', '', '年計'],
+  ['', '4月', '5月', '6月', '7月', '10月', '11月', '12月', '1月', ''],
+  ['営業1', 100, 110, 120, 130, 140, 150, 160, 170, 1080],
+  ['営業2', 200, 210, 220, 230, 240, 250, 260, 270, 1880],
+  ['営業3', 300, 310, 320, 330, 340, 350, 360, 370, 2680],
+  ['合計', 600, 630, 660, 690, 720, 750, 780, 810, 5640]
+];
+const mkRg = (r, c, nr, nc) => ({
+  getRow: () => r,
+  getColumn: () => c,
+  getLastRow: () => r + nr - 1,
+  getLastColumn: () => c + nc - 1,
+  getValues: () => grid,
+  getMergedRanges: () => [
+    mkRg(3, 1, 2, 1), // A3:A4
+    mkRg(3, 2, 1, 4), // B3:E3
+    mkRg(3, 6, 1, 4), // F3:I3
+    mkRg(3, 10, 2, 1) // J3:J4
+  ],
+  getA1Notation: () => 'A4:I7',
+  getSheet: () => sh
+});
+const placed = [];
+const sh = {
+  getName: () => '月別',
+  getSheetId: () => 1,
+  getLastRow: () => 8,
+  getLastColumn: () => 10,
+  getCharts: () => [],
+  getDataRange: () => mkRg(1, 1, 8, 10),
+  getRange: (r, c, nr, nc) => {
+    if (typeof r === 'string') {
+      // 'A4:I7'
+      return mkRg(4, 1, 4, 9);
+    }
+    return mkRg(r, c, nr || 1, nc || 1);
+  },
+  newChart: () => {
+    const pos = [];
+    const b = {
+      setChartType: () => b,
+      addRange: () => b,
+      setTransposeRowsAndColumns: () => b,
+      setOption: () => b,
+      setPosition: (r, c, ox, oy) => { pos.push([r, c, ox, oy]); return b; },
+      build: () => ({ pos })
+    };
+    return b;
+  },
+  insertChart: (ch) => { placed.push(ch.pos); }
+};
+const ctx = vm.createContext({
+  Charts: { ChartType: { COLUMN: 'COLUMN', BAR: 'BAR', LINE: 'LINE', PIE: 'PIE', AREA: 'AREA', SCATTER: 'SCATTER' } },
+  SpreadsheetApp: {},
+  JSON, Math, Array, Object, String, Number, Boolean, RegExp, Date
+});
+ctx.globalThis = ctx;
+vm.runInContext(payload.engine, ctx);
+const opCtx = { ss: { getSheetByName: () => sh, getSheets: () => [sh] }, curSheet: '月別', changed: [] };
+ctx.SHELF['chart.new'](opCtx, { shelf: 'chart.new', type: 'line', range: 'A4:I7', transpose: true });
+process.stdout.write(JSON.stringify(placed));
+"""
+    res = _run_node_json(node_code, {"engine": engine_src})
+    assert res == [[[3, 12, 0, 0]]]  # L3 = row 3, col 12 (J=10 の 2 つ右)

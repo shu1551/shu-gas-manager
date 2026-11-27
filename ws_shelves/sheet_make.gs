@@ -301,10 +301,15 @@ SHELF['chart.new'] = function (ctx, op) {
     b.setPosition(atRg.getRow(), atRg.getColumn(), 0, 0);
   } else {
     var sameSheet = ranges.every(function (rg) { return !rg.getSheet || rg.getSheet().getName() === sh.getName(); });
-    var atRow = sameSheet ? full.getRow() : 1;
-    var atCol = sameSheet
-      ? Math.max.apply(null, ranges.map(function (rg) { return rg.getLastColumn(); })) + 2
-      : Math.max(1, sh.getLastColumn()) + 2;
+    var tblPos = findTable_(sh);
+    var atRow = tblPos ? tblPos.headerRow : (sameSheet ? full.getRow() : 1);
+    var rightCol = Math.max(1, sh.getLastColumn ? sh.getLastColumn() : 1);
+    if (tblPos && tblPos.lastCol > rightCol) rightCol = tblPos.lastCol;
+    if (sameSheet) {
+      var maxRgCol = Math.max.apply(null, ranges.map(function (rg) { return rg.getLastColumn(); }));
+      if (maxRgCol > rightCol) rightCol = maxRgCol;
+    }
+    var atCol = rightCol + 2;
     b.setPosition(atRow, atCol, 0, 0);
   }
   sh.insertChart(b.build());
