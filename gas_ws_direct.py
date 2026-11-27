@@ -34,7 +34,7 @@ DIRECT_SHELVES = {"format", "format.negred", "font.unify", "bg.clear", "freeze",
                   "clear.values", "clear.format", "sort", "rows.insert", "cols.insert", "cf.clear",
                   "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "sheet.gridlines",
                   "filter.on", "filter.off", "rows.hide", "rows.show", "cols.hide", "cols.show",
-                  "note.set", "note.clear", "fmt.copy", "cf.add", "sheet.new", "_raw"}
+                  "note.set", "note.clear", "fmt.copy", "cf.add", "sheet.new", "_raw", "filter.where"}
 _SHARED_DEFS_FILE = Path(__file__).resolve().parent / "ws_shared_defs.json"
 
 
@@ -477,6 +477,16 @@ class DirectRunner:
                 else:
                     for n in sheets_known or []:
                         ranges.add(f"{q(n)}!A1")
+            elif s == "filter.where":
+                if not tb or not op.get("col"):
+                    raise Skip("表と列が要る")
+                f_r, l_r = self._table_rows(tb)
+                if l_r - f_r + 1 > 500:
+                    raise Skip("行数が多いためエンジンの道へ")
+                ci_w = self._col_of(tb, op["col"])
+                if not ci_w:
+                    raise Skip("列が分からない")
+                ranges.add(f"{q(sh)}!{col_letter(ci_w)}{f_r}:{col_letter(ci_w)}{l_r}")
             elif s == "filter.on":
                 if op.get("range"):
                     ranges.add(f"{q(sh)}!{op['range']}")
@@ -841,6 +851,75 @@ class DirectRunner:
                     area(nm, 0, 0, 0, 0)
                 if s == "sheet.show" and not names:
                     raise Skip("隠したシートが無い")
+            elif s == "filter.where":
+                if not lower_pin_ok("sort"):
+                    raise Skip("エンジンの sort（絞り込みの本体）が書き換わった")
+                if int(tb.get("header_rows") or 1) > 1:
+                    raise Skip("2 段見出しはエンジンの道で")
+                f_r, l_r = self._table_rows(tb)
+                c_first, c_last = col_num(tb["first_col"]), col_num(tb["last_col"])
+                ci_w = self._col_of(tb, op["col"])
+                wh = str(op.get("when") or "").lower()
+                wv = op.get("value") if op.get("value") is not None else op.get("equals")
+                wvs = "" if wv is None else str(wv)
+                wvn = wvs.replace(",", "").strip()
+                try:
+                    is_n = wvn != "" and float(wvn) == float(wvn)
+                except ValueError:
+                    is_n = False
+                fy = None
+                for r in range(f_r, l_r + 1):
+                    c0 = ent["cells"].get((r, ci_w)) or {}
+                    e0 = c0.get("effectiveValue") or {}
+                    if "numberValue" in e0 and (((c0.get("effectiveFormat") or {}).get("numberFormat")) or {}).get("type") in ("DATE", "DATE_TIME"):
+                        fy = _low_serial_date(e0["numberValue"]).year
+                        break
+                    if "stringValue" in e0 and re.match(r"^\s*\d{4}", e0["stringValue"]):
+                        d0 = _low_cmp_date(e0["stringValue"], False, 2000)
+                        if d0:
+                            fy = d0.year
+                            break
+                if fy is None:
+                    from datetime import date as _d
+                    fy = _d.today().year
+                ref = f"{col_letter(ci_w)}{f_r}"
+                de = lambda d: f"DATE({d.year},{d.month},{d.day})"
+                d_rng = None
+                if wh == "between" and ".." in wvs:
+                    d1, d2 = _low_cmp_date(wvs.split("..")[0], False, fy), _low_cmp_date(wvs.split("..")[1], False, fy)
+                    d_rng = (min(d1, d2), max(d1, d2)) if d1 and d2 else None
+                d_one = _low_cmp_date(wvs, False, fy) if (not is_n and (wh in ("gt", "ge", "lt", "le", "eq", "ne") or (wh == "" and op.get("equals") is not None))) else None
+                cf_ = lambda t, v=None: {"type": t, **({"values": [{"userEnteredValue": v}]} if v is not None else {})}
+                if wh == "blank":
+                    cond = cf_("BLANK")
+                elif wh in ("notblank", "not_blank"):
+                    cond = cf_("NOT_BLANK")
+                elif wh == "contains":
+                    cond = cf_("TEXT_CONTAINS", wvs)
+                elif wh == "between" and d_rng:
+                    cond = cf_("CUSTOM_FORMULA", f"=AND(ISNUMBER({ref}),{ref}>={de(d_rng[0])},{ref}<={de(d_rng[1])})")
+                elif d_one:
+                    opm = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "=", "ne": "<>"}.get(wh or "eq", "=")
+                    cond = cf_("CUSTOM_FORMULA", f"=AND(ISNUMBER({ref}),{ref}{opm}{de(d_one)})")
+                elif wh == "ne":
+                    if wvs == "":
+                        cond = cf_("NOT_BLANK")
+                    elif is_n:
+                        cond = cf_("NUMBER_NOT_EQ", wvn)
+                    else:
+                        cond = cf_("CUSTOM_FORMULA", f'={ref}<>"' + wvs.replace('"', '""') + '"')
+                elif wh in ("gt", "ge", "lt", "le"):
+                    cond = cf_({"gt": "NUMBER_GREATER", "ge": "NUMBER_GREATER_THAN_EQ", "lt": "NUMBER_LESS", "le": "NUMBER_LESS_THAN_EQ"}[wh], wvn)
+                elif wh == "eq" or op.get("equals") is not None:
+                    cond = cf_("NUMBER_EQ", wvn) if is_n else cf_("TEXT_EQ", wvs)
+                else:
+                    cond = cf_("NOT_BLANK")
+                prev = ent.get("filter")
+                g_f = grid(sid, int(tb["header_row"]), c_first, l_r, c_last)
+                req.append({"setBasicFilter": {"filter": {"range": g_f, "filterSpecs": [{"columnIndex": ci_w - 1, "filterCriteria": {"condition": cond}}]}}})
+                undo.insert(0, {"setBasicFilter": {"filter": prev}} if prev else {"clearBasicFilter": {"sheetId": sid}})
+                area(shn, 0, 0, 0, 0)
+                changed.append(f"{shn}!{a1(int(tb['header_row']), c_first, l_r, c_last)} フィルタを設定")
             elif s in ("filter.on", "filter.off"):
                 prev = ent.get("filter")
                 if s == "filter.off" and not prev:
@@ -1104,7 +1183,7 @@ class DirectRunner:
             return None
         if any(o.get("shelf") == "write" for o in ops) and len(ops) > 1:
             # 値を書く棚を組み替えた手（write 1 本＋書式・書式の写し）だけは一緒に撃つ（書式が先・値が後）
-            if not all(o.get("shelf") in ("write", "format", "fmt.copy", "cf.add", "sort", "sheet.new", "_raw") for o in ops):
+            if not all(o.get("shelf") in ("write", "format", "fmt.copy", "cf.add", "sort", "sheet.new", "_raw", "filter.where") for o in ops):
                 return None
             if sum(1 for o in ops if o.get("shelf") == "write" and not o.get("_new")) > 1:
                 return None
@@ -1143,8 +1222,8 @@ class DirectRunner:
                     "already": True,
                 }
             # 撃つ順: 書式など → 値 → 並べ替え（汚れを直した値で並べる）
-            post = [r for r in req if "sortRange" in r] if vals else []
-            req = [r for r in req if not (vals and "sortRange" in r)]
+            post = [r for r in req if "sortRange" in r or ("setBasicFilter" in r and r["setBasicFilter"]["filter"].get("filterSpecs"))] if vals else []
+            req = [r for r in req if not (vals and r in post)]
             if req:
                 self._call(st, "POST", SHEETS + tgt["id"] + ":batchUpdate", json={"requests": req})
             for v in vals:
@@ -2164,7 +2243,7 @@ def trace(mgr, st, sid, sheet, cell, depth=3, max_nodes=40):
 # ws-check がずれを知らせる。ここの写しを同じに直したら、gas('ws-check') が出す新しい指紋に書き換える
 LOWER_PINS = {"seiri": "ae95f8b5af9a", "phone.fix": "3c0eeebff844", "calc.tax": "47d88fc63fa5",
               "calc.col": "2a5fb1eec63c", "total": "8f6db18212fd", "cf.add": "18a2eabb5f69",
-              "filter.extract": "1ffd5f88061c", "summary": "422d47d5ed6a", "chart.new": "b2a2fd2707d1"}
+              "sort": "741d5c81681c", "filter.extract": "1ffd5f88061c", "summary": "422d47d5ed6a", "chart.new": "b2a2fd2707d1"}
 
 
 def _shelf_pin(name):
@@ -2740,6 +2819,10 @@ def lower_ops(ops, light, sheet, sheet_names=None, light_of=None, ok=False):
                 news.append({"shelf": "_raw", "requests": [{"addChart": {"chart": {"chartId": cid, "spec": spec, "position": {"overlayPosition": anchor}}}}],
                              "undo": [{"deleteEmbeddedObject": {"objectId": cid}}], "touch": [(sheet, 0, 0, 0, 0)],
                              "said": f"{sheet}!{rname}!A{r1}:{col_letter(c2)}{r2} グラフを作成（{typ}{'・' + op['title'] if op.get('title') else ''}）"})
+                continue
+            if s == "filter.where":
+                sorts.append(dict(op))
+                said.append(f"{sheet}!{tb['first_col']}{hr}:{tb['last_col']}{r_b} フィルタを設定")
                 continue
             if s == "sort":
                 if op.get("where") or op.get("filter"):
