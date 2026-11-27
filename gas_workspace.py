@@ -724,7 +724,23 @@ class WorkspaceManager:
                 if getattr(p, "choices", None):
                     return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
                 gas_ws_ask.log_ask_miss(ask, p, source="mcp", path=self.ask_misses_path)
-                return self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
+                unfired_txt = self._title(tgt) + "\n" + gas_ws_ask.render_unfired(p, self.finder)
+                # 止まった頼みを呼び出し元 AI へ切れ目なく渡す: 表の中身（最大100行×26列・値と式）を添える
+                if (
+                    kind == "sheet"
+                    and tgt.get("id")
+                    and not is_new
+                    and not any("人にしか分かりません" in r for r in (p.reasons or []))
+                ):
+                    sn_info = self._fetch_sheet_snippet(tgt, tc, tim)
+                    if sn_info and sn_info.get("text"):
+                        sn_lines = []
+                        if sn_info.get("note"):
+                            sn_lines.append(sn_info["note"])
+                        sn_lines.append("表の中身（行番号・列記号・数式つき）:\n" + sn_info["text"])
+                        sn_lines.append("※消す・上書きの棚には ok=True を勝手に付けず、ユーザー確認を取ってください。")
+                        unfired_txt += "\n" + "\n".join(sn_lines)
+                return unfired_txt
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
             # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
             keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
@@ -813,50 +829,78 @@ class WorkspaceManager:
         note = f"※全 {actual_total} 行のうち抜粋（先頭{head_rows}行＋末尾{tail_rows}行）で読みました" if truncated else ""
         return {"text": "\n".join(lines), "truncated": truncated, "total_rows": actual_total, "note": note}
 
+    def _fetch_sheet_snippet(self, tgt, tc, tim):
+        """表の中身（最大100行×26列・値と式・超えたら先頭80＋末尾20抜粋）を1往復で取得する。失敗時は None。"""
+        if not tgt or not tgt.get("id"):
+            return None
+        try:
+            import gas_ws_direct
+            st = self._load()
+            cur = st.get("target") or {}
+            body_target = {k: v for k, v in tgt.items() if k in ("id", "kind")}
+            want_sheet = tgt.get("sheet") or (tc or {}).get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else "")
+            tb = (tc or {}).get("table")
+            r_end, c_end = 100, 26
+            if tb and not tb.get("none"):
+                try:
+                    c_end = min(26, max(1, gas_ws_direct.col_num(tb.get("last_col") or "Z")))
+                except Exception:
+                    c_end = 26
+                data_last = 0
+                m_d = re.fullmatch(r"([0-9]+)-([0-9]+)", str(tb.get("data") or ""))
+                if m_d:
+                    data_last = int(m_d.group(2))
+                r_end = max(int(tb.get("total_row") or 0), data_last, int(tb.get("header_row") or 1))
+            fetch_rows = min(max(r_end, 1), 2000)
+            rng_str = f"A1:{gas_ws_direct.col_letter(c_end)}{fetch_rows}"
+            res = None
+            if not st.get("direct_off") and (st.get("direct_token") or {}).get("token"):
+                res = gas_ws_direct.DirectRunner(self).look(st, body_target, sheet=want_sheet, range_str=rng_str)
+            if res is None and st.get("engine_url"):
+                res = self._post({"action": "look", "target": body_target, "sheet": want_sheet, "range": rng_str})
+            if not res or not res.get("ok"):
+                return None
+            tim.lap("表の中身")
+            t_out = res.get("target") or tgt
+            sh_rows = 0
+            for s_info in res.get("sheets") or []:
+                if s_info.get("name") == t_out.get("sheet"):
+                    sh_rows = int(s_info.get("rows") or 0)
+                    break
+            snip = self.format_read_only_snippet(
+                res.get("values") or [],
+                formulas=res.get("formulas") or [],
+                total_rows=max(sh_rows, len(res.get("values") or [])),
+            )
+            snip["target"] = t_out
+            snip["table"] = res.get("table")
+            return snip
+        except Exception:
+            return None
+
     def _answer_read_only(self, ask, target, tgt, kind, tc, tim):
         """シートを変えない「読むだけ」の問いに対し、棚を撃たず表の中身（上限100行×26列）を1往復で返す。"""
         if kind != "sheet" or not tgt.get("id"):
             look_txt = self._look(target=target)
             return "[読むだけ] シート・文書は変更していません。以下の内容から質問に答えてください。\n" + look_txt
-        import gas_ws_direct
-        st = self._load()
-        cur = st.get("target") or {}
-        body_target = {k: v for k, v in tgt.items() if k in ("id", "kind")}
-        want_sheet = tgt.get("sheet") or (tc or {}).get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else "")
-        tb = (tc or {}).get("table")
-        r_end, c_end = 100, 26
-        if tb and not tb.get("none"):
-            try:
-                c_end = min(26, max(1, gas_ws_direct.col_num(tb.get("last_col") or "Z")))
-            except Exception:
-                c_end = 26
-            data_last = 0
-            m_d = re.fullmatch(r"([0-9]+)-([0-9]+)", str(tb.get("data") or ""))
-            if m_d:
-                data_last = int(m_d.group(2))
-            r_end = max(int(tb.get("total_row") or 0), data_last, int(tb.get("header_row") or 1))
-        fetch_rows = min(max(r_end, 1), 2000)
-        rng_str = f"A1:{gas_ws_direct.col_letter(c_end)}{fetch_rows}"
-        res = None
-        if not st.get("direct_off"):
-            res = gas_ws_direct.DirectRunner(self).look(st, body_target, sheet=want_sheet, range_str=rng_str)
-        if res is None:
-            res = self._post({"action": "look", "target": body_target, "sheet": want_sheet, "range": rng_str})
-        if not res or not res.get("ok"):
-            raise WorkspaceError((res or {}).get("error") or "シートの中身を読めませんでした")
-        tim.lap("読むだけ")
-        t_out = res.get("target") or tgt
-        sh_rows = 0
-        for s_info in res.get("sheets") or []:
-            if s_info.get("name") == t_out.get("sheet"):
-                sh_rows = int(s_info.get("rows") or 0)
-                break
-        tb_now = res.get("table")
-        snip = self.format_read_only_snippet(
-            res.get("values") or [],
-            formulas=res.get("formulas") or [],
-            total_rows=max(sh_rows, len(res.get("values") or [])),
-        )
+        snip = self._fetch_sheet_snippet(tgt, tc, tim)
+        if not snip:
+            # 直接トークンもエンジンURLも無い場合は従来の _post でエラーを出す
+            import gas_ws_direct
+            st = self._load()
+            cur = st.get("target") or {}
+            body_target = {k: v for k, v in tgt.items() if k in ("id", "kind")}
+            want_sheet = tgt.get("sheet") or (tc or {}).get("sheet") or (cur.get("sheet") if cur.get("id") == tgt.get("id") else "")
+            res = self._post({"action": "look", "target": body_target, "sheet": want_sheet, "range": "A1:Z100"})
+            if not res or not res.get("ok"):
+                raise WorkspaceError((res or {}).get("error") or "シートの中身を読めませんでした")
+            t_out = res.get("target") or tgt
+            tb_now = res.get("table")
+            snip = self.format_read_only_snippet(res.get("values") or [], formulas=res.get("formulas") or [])
+            snip["target"] = t_out
+            snip["table"] = tb_now
+        t_out = snip.get("target") or tgt
+        tb_now = snip.get("table")
         lines = [
             f"[読むだけ] {self._title(t_out)}（シートは変更していません）",
             f"質問: {ask}",

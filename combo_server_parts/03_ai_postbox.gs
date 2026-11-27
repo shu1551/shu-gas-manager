@@ -11,7 +11,7 @@ function comboStripJsonFence_(text) {
   return m2 ? m2[1] : t;
 }
 
-function comboBuildCompactShelfSummary_(ask, fullLimit) {
+function comboBuildCompactShelfSummary_(ask, fullLimit, optPlanCards) {
   var lines = [];
   var askPlan = '';
   if (typeof ComboPlanner !== 'undefined' && typeof ComboPlanner.ask === 'function') {
@@ -26,11 +26,13 @@ function comboBuildCompactShelfSummary_(ask, fullLimit) {
       return s && s.searchable !== false && (s.kind === 'sheet' || s.shared || !s.kind);
     });
     var prioSet = {
-      seiri: 1, tidy: 1, format: 1, write: 1, replace: 1, total: 1, 'formula.col': 1, sort: 1,
-      'filter.on': 1, 'filter.where': 1, 'filter.off': 1, width: 1, freeze: 1, unfreeze: 1,
-      dedupe: 1, 'banding.add': 1, 'banding.remove': 1, 'chart.new': 1, 'rows.delete': 1, 'rows.insert': 1,
-      'cols.delete': 1, 'sheet.add': 1, 'sheet.rename': 1, 'sheet.copy': 1, 'table.new': 1, 'validation.list': 1
+      seiri: 1, tidy: 1, format: 1, write: 1, replace: 1, total: 1, 'calc.col': 1, sort: 1,
+      'filter.on': 1, 'filter.where': 1, 'filter.delete': 1, 'filter.extract': 1, 'filter.off': 1, 'cf.add': 1,
+      width: 1, freeze: 1, unfreeze: 1, dedupe: 1, 'banding.add': 1, 'banding.remove': 1, 'chart.new': 1,
+      'rows.delete': 1, 'rows.insert': 1, 'cols.delete': 1, 'sheet.add': 1, 'sheet.rename': 1, 'sheet.copy': 1,
+      'table.new': 1, 'validation.list': 1, summary: 1, api: 1
     };
+    (optPlanCards || []).forEach(function (cn) { if (cn) prioSet[cn] = 1; });
     var picked = [];
     var pickedMap = {};
     sheetShelves.forEach(function (s) {
@@ -137,7 +139,7 @@ function comboBuildAiPrompts_(ask, ssName, sheetName, selection, table, sheets, 
         '必ず有効な JSON オブジェクト 1 個だけを返してください（説明文や ``` などの装飾は一切付けない）。',
         '・操作を実行するとき: {"action":"ops","ops":[{"shelf":"棚名","引数":値}],"note":"短い日本語要約"}',
         '・返事や確認だけを返すとき: {"action":"reply","message":"日本語の返事"}',
-        'ルール: 棚名・引数名は利用可能な棚一覧に載っている正確な名前と型を使うこと。'
+        'ルール: 棚名・引数名は利用可能な棚一覧に載っている正確な名前と型を使うこと。表に無い列名や頼みに無い操作を足さないこと。削除や上書きの棚に ok:true を勝手に付けないこと（承認はユーザー側で行う）。曖昧・情報不足なら reply で聞き返すこと。'
       ].join('\n');
 
   var lines = ['【現在の対象状態】', 'ブック: ' + ssName + ' / シート: ' + sheetName];
@@ -151,8 +153,8 @@ function comboBuildAiPrompts_(ask, ssName, sheetName, selection, table, sheets, 
     lines.push('列: ' + (table.columns || []).map(function (c) { return c.col + '=' + c.name + (c.number ? '(数値)' : ''); }).join('、'));
   }
 
+  var sn = (optOpts && optOpts.snippet) || {};
   if (isReadOnly) {
-    var sn = (optOpts && optOpts.snippet) || {};
     if (sn.note) lines.push(sn.note);
     if (sn.text) lines.push('\n【表の中身（行番号・列記号・値・数式）】\n' + sn.text);
     lines.push('\n【ユーザーの質問（読むだけ・シート変更禁止）】\n' + ask);
@@ -160,8 +162,28 @@ function comboBuildAiPrompts_(ask, ssName, sheetName, selection, table, sheets, 
     return { system: sys, user: lines.join('\n') };
   }
 
+  if (sn.text) {
+    var snTxt = String(sn.text);
+    if (snTxt.length > 12000) snTxt = snTxt.slice(0, 12000) + '\n...（文字数上限のため一部省略）...';
+    if (sn.note) lines.push(sn.note);
+    lines.push('\n【表の中身（行番号・列記号・値・数式）】\n' + snTxt);
+  }
+  var planHint = (optOpts && optOpts.plan) || null;
+  var planCardNames = [];
+  if (planHint) {
+    var pHints = [];
+    if (Array.isArray(planHint.reasons) && planHint.reasons.length) pHints.push('止まった理由: ' + planHint.reasons.slice(0, 3).join('／'));
+    if (Array.isArray(planHint.missing) && planHint.missing.length) pHints.push('足りない引数: ' + planHint.missing.slice(0, 5).join('、'));
+    if (Array.isArray(planHint.ops) && planHint.ops.length) pHints.push('組みかけの ops: ' + JSON.stringify(planHint.ops));
+    if (Array.isArray(planHint.cards) && planHint.cards.length) {
+      planCardNames = planHint.cards.map(function (c) { return typeof c === 'string' ? c : (c && c.name); }).filter(Boolean);
+      if (planCardNames.length) pHints.push('候補の棚: ' + planCardNames.slice(0, 6).join('、'));
+    }
+    if (pHints.length) lines.push('\n【棚当ての途中結果】\n' + pHints.join('\n'));
+  }
+
   lines.push('\n【関連する棚候補と全棚カタログ】');
-  lines.push(comboBuildCompactShelfSummary_(ask, 30));
+  lines.push(comboBuildCompactShelfSummary_(ask, 30, planCardNames));
   lines.push('\n【ユーザーの依頼】\n' + ask);
   lines.push('\nJSON 1個だけを返してください。');
   return { system: sys, user: lines.join('\n') };
@@ -664,16 +686,27 @@ function comboRunAsk(req) {
   if (req.forceAiMode === 'api_gemini' || req.forceAiMode === 'api_claude') {
     cfg = Object.assign({}, cfg, { aiMode: req.forceAiMode });
   }
-  var roSnippet = isReadOnlyAsk ? comboReadTableSnippet_(ss, curSheet, table) : null;
+  // aiAuto=true でここまで来たときだけ表の中身（最大100行×26列・値と式）を読む
+  var tblSnippet = comboReadTableSnippet_(ss, curSheet, table);
+  var planHintObj = (typeof plan !== 'undefined' && plan) ? {
+    ops: Array.isArray(plan.ops) ? plan.ops : [],
+    reasons: Array.isArray(plan.reasons) ? plan.reasons : [],
+    missing: Array.isArray(plan.missing) ? plan.missing : [],
+    cards: Array.isArray(plan.cards) ? plan.cards.map(function (c) { return typeof c === 'string' ? c : (c && c.name); }).filter(Boolean) : []
+  } : null;
   var hasApiKey = (cfg.aiMode === 'api_gemini' || cfg.aiMode === 'api_claude') && !!comboResolveApiKey_(cfg);
   if (hasApiKey) {
     try {
-      var aiRes = comboCallAiApi_(cfg, askText, ss, curSheet, selection, table, sheets, isReadOnlyAsk ? { readOnly: true, snippet: roSnippet } : null);
+      var aiRes = comboCallAiApi_(cfg, askText, ss, curSheet, selection, table, sheets, {
+        readOnly: isReadOnlyAsk,
+        snippet: tblSnippet,
+        plan: planHintObj
+      });
       if (isReadOnlyAsk || (aiRes && aiRes.action === 'reply')) {
         // 守り: 読むだけモードでは ops が混入していても絶対に実行せず reply のみ返す
         var repMsg = (aiRes && aiRes.message) ? String(aiRes.message) : '読むだけの質問のためシートは変更しませんでした。';
-        if (roSnippet && roSnippet.truncated && roSnippet.note && repMsg.indexOf('抜粋') < 0) {
-          repMsg += '\n' + roSnippet.note;
+        if (tblSnippet && tblSnippet.truncated && tblSnippet.note && repMsg.indexOf('抜粋') < 0) {
+          repMsg += '\n' + tblSnippet.note;
         }
         return {
           ok: true,
@@ -732,9 +765,13 @@ function comboRunAsk(req) {
     aiModel: cfg.aiModel || 'sonnet',
     table: table,
     sheets: sheets,
-    tableSnippet: roSnippet ? roSnippet.text : '',
-    truncated: roSnippet ? !!roSnippet.truncated : false,
-    totalRows: roSnippet ? (roSnippet.totalRows || 0) : 0
+    tableSnippet: tblSnippet ? tblSnippet.text : '',
+    truncated: tblSnippet ? !!tblSnippet.truncated : false,
+    totalRows: tblSnippet ? (tblSnippet.totalRows || 0) : 0,
+    partialOps: planHintObj ? planHintObj.ops : [],
+    planReasons: planHintObj ? planHintObj.reasons : [],
+    planMissing: planHintObj ? planHintObj.missing : [],
+    planCards: planHintObj ? planHintObj.cards : []
   });
   return {
     ok: true,

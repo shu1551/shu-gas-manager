@@ -361,10 +361,18 @@
           sheets: state.sheets || [],
           aiModel: getCurrentAiModel()
         };
-        if (isReadOnly && sn) {
+        if (sn && sn.text) {
           aiReq.tableSnippet = sn.text || "";
           aiReq.truncated = !!sn.truncated;
           aiReq.totalRows = sn.totalRows || 0;
+        }
+        if (!isReadOnly && planRes) {
+          if (Array.isArray(planRes.ops) && planRes.ops.length) aiReq.partialOps = planRes.ops;
+          if (Array.isArray(planRes.reasons) && planRes.reasons.length) aiReq.planReasons = planRes.reasons;
+          if (Array.isArray(planRes.missing) && planRes.missing.length) aiReq.planMissing = planRes.missing;
+          if (Array.isArray(planRes.cards) && planRes.cards.length) {
+            aiReq.planCards = planRes.cards.map(function(c) { return typeof c === "string" ? c : (c && c.name); }).filter(Boolean);
+          }
         }
         requestDirectAi(aiReq, function(r) {
           setBusy(false);
@@ -405,14 +413,11 @@
           if (ev && ev.message) setBusy(true, "✨ " + String(ev.message));
         });
       };
-      if (isReadOnly) {
-        setBusy(true, "📖 表の中身を取得中…");
-        fetchDirectTableSnippet(state.curSheet || "", state.table, function(sn) {
-          sendDirectPayload(sn);
-        });
-        return;
-      }
-      sendDirectPayload(null);
+      // aiAuto=true で AI に渡すときだけ表の中身（最大100行×26列・値と式）を取得して添える
+      setBusy(true, isReadOnly ? "📖 表の中身を取得中…" : "✨ 表の中身を確認中…");
+      fetchDirectTableSnippet(state.curSheet || "", state.table, function(sn) {
+        sendDirectPayload(sn);
+      });
     };
     if (suggestOps) {
       offerSuggest(txt, suggestOps, aiAuto ? runAiAskDirectOrGas : null);

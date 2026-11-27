@@ -1620,16 +1620,57 @@ class ComboPostboxWatcher:
             )
             return "\n".join(lines)
 
+        snip_txt = str(item.get("tableSnippet") or "").strip()
+        if snip_txt:
+            if len(snip_txt) > 12000:
+                snip_txt = snip_txt[:12000] + "\n...（文字数上限のため一部省略）..."
+            if item.get("truncated") and item.get("totalRows"):
+                lines.append(f"※全 {item['totalRows']} 行のうち抜粋（先頭80行＋末尾20行）です。")
+            lines.append("\n【表の中身（行番号・列記号・値・数式）】\n" + snip_txt)
+
         finder = self._get_finder()
-        priority = (
-            "seiri", "tidy", "format", "write", "replace", "total", "formula.col", "sort",
-            "filter.on", "filter.where", "filter.off", "width", "freeze", "unfreeze",
-            "dedupe", "banding.add", "banding.remove", "chart.new", "rows.delete", "rows.insert",
-            "cols.delete", "sheet.add", "sheet.rename", "sheet.copy", "table.new", "validation.list",
+        partial_ops = item.get("partialOps") if isinstance(item.get("partialOps"), list) else None
+        plan_reasons = item.get("planReasons") if isinstance(item.get("planReasons"), list) else None
+        plan_missing = item.get("planMissing") if isinstance(item.get("planMissing"), list) else None
+        plan_cards = item.get("planCards") if isinstance(item.get("planCards"), list) else None
+        if partial_ops is None and plan_reasons is None and plan_missing is None and plan_cards is None and ask:
+            try:
+                import gas_ws_ask
+                p_hint = gas_ws_ask.plan(ask, finder, "sheet", table, sheets, cur_sheet=sheet)
+                partial_ops = p_hint.ops or []
+                plan_reasons = p_hint.reasons or []
+                plan_missing = p_hint.missing or []
+                plan_cards = [s.get("name") for s in (p_hint.cards or []) if isinstance(s, dict) and s.get("name")]
+            except Exception:
+                partial_ops, plan_reasons, plan_missing, plan_cards = [], [], [], []
+        hint_lines = []
+        if plan_reasons:
+            hint_lines.append("止まった理由: " + "／".join(str(x) for x in plan_reasons[:3]))
+        if plan_missing:
+            hint_lines.append("足りない引数: " + "、".join(str(x) for x in plan_missing[:5]))
+        if partial_ops:
+            hint_lines.append("組みかけの ops: " + json.dumps(partial_ops, ensure_ascii=False, separators=(",", ":")))
+        if plan_cards:
+            hint_lines.append("候補の棚: " + "、".join(str(x) for x in plan_cards[:6]))
+        if hint_lines:
+            lines.append("\n【棚当ての途中結果】\n" + "\n".join(hint_lines))
+
+        base_priority = (
+            "seiri", "tidy", "format", "write", "replace", "total", "calc.col", "sort",
+            "filter.on", "filter.where", "filter.delete", "filter.extract", "filter.off", "cf.add",
+            "width", "freeze", "unfreeze", "dedupe", "banding.add", "banding.remove", "chart.new",
+            "rows.delete", "rows.insert", "cols.delete", "sheet.add", "sheet.rename", "sheet.copy",
+            "table.new", "validation.list", "summary", "api",
         )
+        priority = tuple(dict.fromkeys([str(x) for x in (plan_cards or []) if x] + list(base_priority)))
         lines.append("\n" + gas_ws_find.build_ai_shelf_prompt(finder, ask, kind="sheet", detail_limit=1600, top_args=25, priority_names=priority))
         lines.append(
             f"\n【ユーザーの依頼】\n{ask}\n\n"
+            "厳守ルール:\n"
+            "・表の見出しに存在しない列名を作らないこと。表の中身を見て正しい列・セル・値を選ぶこと。\n"
+            "・頼みに書かれていない余計な操作（勝手な太字・連番・全シート等）を足さないこと。\n"
+            "・削除や上書きの棚に ok:true を勝手に付けないこと（承認はユーザー側で行う）。\n"
+            "・曖昧・情報不足・対象が特定できない・棚と api でも安全にできないときは、無理に ops を作らず reply で聞き返すこと。\n"
             '必ず {"action":"ops","ops":[{"shelf":"...",...}],"note":"短い要約"} '
             'または {"action":"reply","message":"..."} の JSON 1個だけを返してください。'
         )
