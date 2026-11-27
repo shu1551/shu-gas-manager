@@ -248,7 +248,7 @@ SHELF['sheet.split'] = function (ctx, op) {
   var ss = ctx.ss, sh = sheetCtx_(ctx, op), t = needTable_(sh);
   var ci = colIndexOf_(t, op.col);
   var nc = t.lastCol - t.firstCol + 1;
-  var header = t.vals[t.headerRow - 1].slice(t.firstCol - 1, t.lastCol);
+  var header = headerNames_(t);
   var groups = {}, order = [];
   for (var r = t.firstData; r <= t.lastData; r++) {
     var row = t.vals[r - 1].slice(t.firstCol - 1, t.lastCol);

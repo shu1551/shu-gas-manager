@@ -13,7 +13,7 @@
 // 触る: 書式
 SHELF['format'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = null, rg;
-  if (op.header) { t = needTable_(sh); rg = sh.getRange(t.headerRow, t.firstCol, 1, t.lastCol - t.firstCol + 1); }
+  if (op.header) { t = needTable_(sh); rg = sh.getRange(t.headerRow, t.firstCol, t.headerRows || 1, t.lastCol - t.firstCol + 1); }
   else if (op.title) { rg = titleRange_(sh); }
   else if (op.col) { t = needTable_(sh); var ci = colIndexOf_(t, op.col); rg = sh.getRange(t.firstData, ci, (t.totalRow || t.lastData) - t.firstData + 1, 1); }
   else if (op.range) rg = sh.getRange(op.range);
@@ -74,7 +74,7 @@ SHELF['format'] = function (ctx, op) {
 // 触る: 書式
 SHELF['bg.clear'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = null, rg;
-  if (op.header) { t = needTable_(sh); rg = sh.getRange(t.headerRow, t.firstCol, 1, t.lastCol - t.firstCol + 1); }
+  if (op.header) { t = needTable_(sh); rg = sh.getRange(t.headerRow, t.firstCol, t.headerRows || 1, t.lastCol - t.firstCol + 1); }
   else if (op.title) { rg = titleRange_(sh); }
   else if (op.col) { t = needTable_(sh); var ci = colIndexOf_(t, op.col); rg = sh.getRange(t.firstData, ci, (t.totalRow || t.lastData) - t.firstData + 1, 1); }
   else if (op.range) rg = sh.getRange(op.range);

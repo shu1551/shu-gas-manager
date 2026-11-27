@@ -144,36 +144,142 @@ function findTable_(sh) {
   if (_TBL_CACHE && _TBL_CACHE[sid] !== undefined) {
     var c0 = _TBL_CACHE[sid];
     if (_TBL_CACHE._once) _TBL_CACHE = null;
-    return c0 ? { sheet: sh, headerRow: c0.headerRow, firstCol: c0.firstCol, lastCol: c0.lastCol, firstData: c0.firstData, lastData: c0.lastData, totalRow: c0.totalRow, vals: c0.vals } : null;
+    return c0 ? { sheet: sh, headerRow: c0.headerRow, headerRows: c0.headerRows || 1, headerNames: c0.headerNames ? c0.headerNames.slice() : null, firstCol: c0.firstCol, lastCol: c0.lastCol, firstData: c0.firstData, lastData: c0.lastData, totalRow: c0.totalRow, vals: c0.vals } : null;
   }
   if (_TBL_CACHE && _TBL_CACHE._once) _TBL_CACHE = null;
   var vals = sh.getDataRange().getValues();   // 行数・列数を別に聞かず、値と一緒に 1 回で読む（速さのため）
   var lr = vals.length, lc = vals[0] ? vals[0].length : 0;
   if (lr < 1 || lc < 1) { if (_TBL_CACHE) _TBL_CACHE[sid] = null; return null; }
   var nonEmpty = function (row) { return row.filter(function (v) { return !isBlank_(v); }).length; };
+  // 先頭 15 行の結合セルを取得（2 段見出しの親・子判定に使用）
+  var merges = [];
+  try {
+    var scanR = Math.min(lr, 15);
+    var topRg = sh.getRange(1, 1, scanR, lc);
+    if (topRg && typeof topRg.getMergedRanges === 'function') {
+      var mrs = topRg.getMergedRanges() || [];
+      for (var mi = 0; mi < mrs.length; mi++) {
+        merges.push({
+          r1: mrs[mi].getRow() - 1,
+          c1: mrs[mi].getColumn() - 1,
+          r2: mrs[mi].getLastRow() - 1,
+          c2: mrs[mi].getLastColumn() - 1
+        });
+      }
+    }
+  } catch (eMrg) { merges = []; }
+  var hasRowMerge = function (r0) {
+    for (var i = 0; i < merges.length; i++) {
+      var m = merges[i];
+      if ((m.r1 === r0 && m.r2 === r0 && m.c2 > m.c1) || (m.r1 === r0 && m.r2 === r0 + 1)) return true;
+    }
+    return false;
+  };
   var h = -1;
   for (var r = 0; r < vals.length; r++) { if (nonEmpty(vals[r]) >= 2) { h = r; break; } }
-  // 見出しの行：2 つ以上埋まった最初の行。ただしすぐ下の行がその倍以上埋まっていれば、その行は表の前の欄（「表示部門 | すべて」等の選ぶ欄）として下へ送る
+  // 見出しの行：2 つ以上埋まった最初の行。ただしすぐ下の行がその倍以上埋まっていれば、その行は表の前の欄（「表示部門 | すべて」等の選ぶ欄）として下へ送る（2 段見出し結合行は送らない）
   for (var hs = 0; h >= 0 && hs < 10; hs++) {
+    if (hasRowMerge(h)) break;
     var nx = h + 1; while (nx < vals.length && nonEmpty(vals[nx]) === 0) nx++;
     if (nx < vals.length && nonEmpty(vals[nx]) >= 2 * nonEmpty(vals[h])) h = nx; else break;
   }
   if (h < 0) { if (_TBL_CACHE) _TBL_CACHE[sid] = null; return null; }
   var hdr = vals[h], fc = -1, lcol = -1;
   for (var c = 0; c < hdr.length; c++) if (!isBlank_(hdr[c])) { if (fc < 0) fc = c; lcol = c; }
-  var last = h;
-  for (var r2 = h + 1; r2 < vals.length; r2++) {
+  // 横結合の右端まで見出し列幅に含める
+  for (var mi2 = 0; mi2 < merges.length; mi2++) {
+    var m2 = merges[mi2];
+    if (m2.r1 === h && m2.r2 === h && m2.c2 > m2.c1 && !isBlank_(vals[h][m2.c1])) {
+      if (fc < 0 || m2.c1 < fc) fc = m2.c1;
+      if (m2.c2 > lcol) lcol = m2.c2;
+    }
+  }
+  // 2 段見出しの検出（結合された上段＋下段、または相補的な 2 行見出し）
+  var headerRows = 1;
+  if (h + 2 < lr) {
+    var subRow = vals[h + 1] || [];
+    var subNonEmpty = 0, subNumCount = 0, subFirst = '';
+    for (var sc = 0; sc < lc; sc++) {
+      var sv = subRow[sc];
+      if (!isBlank_(sv)) {
+        subNonEmpty++;
+        if (!subFirst) subFirst = String(sv).trim();
+        if (typeof sv === 'number' || sv instanceof Date) subNumCount++;
+      }
+    }
+    var subIsTotal = /^(合計|総計|小計|計|total|sum)/i.test(subFirst);
+    if (subNonEmpty > 0 && !subIsTotal) {
+      var horizMatch = false, vertMatch = false;
+      for (var mi3 = 0; mi3 < merges.length; mi3++) {
+        var m3 = merges[mi3];
+        if (m3.r1 === h && m3.r2 === h && m3.c2 > m3.c1 && !isBlank_(vals[h][m3.c1])) {
+          var subUnder = 0;
+          for (var cc3 = m3.c1; cc3 <= m3.c2; cc3++) if (!isBlank_(subRow[cc3])) subUnder++;
+          if (subUnder >= 2) { horizMatch = true; break; }
+        }
+        if (m3.r1 === h && m3.r2 === h + 1 && !isBlank_(vals[h][m3.c1])) vertMatch = true;
+      }
+      var unmergedTwoTier = false;
+      if (!horizMatch && !vertMatch && subNumCount === 0) {
+        var topGapFilled = 0;
+        for (var cc4 = fc; cc4 <= lcol; cc4++) {
+          if (isBlank_(hdr[cc4]) && !isBlank_(subRow[cc4])) topGapFilled++;
+        }
+        if (topGapFilled >= 1) unmergedTwoTier = true;
+      }
+      if (horizMatch || (vertMatch && subNumCount === 0) || unmergedTwoTier) {
+        headerRows = 2;
+        for (var cc5 = 0; cc5 < subRow.length; cc5++) {
+          if (!isBlank_(subRow[cc5])) {
+            if (fc < 0 || cc5 < fc) fc = cc5;
+            if (cc5 > lcol) lcol = cc5;
+          }
+        }
+      }
+    }
+  }
+  var findMergeAt = function (r0, c0) {
+    for (var i = 0; i < merges.length; i++) {
+      var m = merges[i];
+      if (r0 >= m.r1 && r0 <= m.r2 && c0 >= m.c1 && c0 <= m.c2) return m;
+    }
+    return null;
+  };
+  var headerNames = [];
+  if (headerRows === 2) {
+    var lastTop = '';
+    for (var hc = fc; hc <= lcol; hc++) {
+      var mTop = findMergeAt(h, hc);
+      var mSub = findMergeAt(h + 1, hc);
+      var topVal = mTop ? vals[mTop.r1][mTop.c1] : vals[h][hc];
+      var topStr = isBlank_(topVal) ? '' : String(topVal).trim();
+      var sameVert = !!(mTop && mSub && mTop.r1 === mSub.r1 && mTop.c1 === mSub.c1 && mTop.r2 === mSub.r2 && mTop.c2 === mSub.c2);
+      var subVal = sameVert ? '' : vals[h + 1][hc];
+      var subStr = isBlank_(subVal) ? '' : String(subVal).trim();
+      if (topStr) lastTop = topStr;
+      else if (!mTop && subStr && lastTop) topStr = lastTop;
+      if (topStr && subStr && topStr !== subStr) headerNames.push(topStr + '・' + subStr);
+      else headerNames.push(topStr || subStr || '');
+    }
+  } else {
+    for (var hc1 = fc; hc1 <= lcol; hc1++) {
+      headerNames.push(isBlank_(hdr[hc1]) ? '' : String(hdr[hc1]));
+    }
+  }
+  var dataStart0 = h + headerRows;
+  var last = dataStart0 - 1;
+  for (var r2 = dataStart0; r2 < vals.length; r2++) {
     var seg = vals[r2].slice(fc, lcol + 1);
     if (nonEmpty(seg) > 0) last = r2;
   }
-  var t = { sheet: sh, headerRow: h + 1, firstCol: fc + 1, lastCol: lcol + 1, firstData: h + 2, lastData: last + 1, totalRow: 0, vals: vals };
+  var t = { sheet: sh, headerRow: h + 1, headerRows: headerRows, headerNames: headerNames, firstCol: fc + 1, lastCol: lcol + 1, firstData: dataStart0 + 1, lastData: last + 1, totalRow: 0, vals: vals };
   // 合計行：最終行の最初の文字セルが 合計/計 など
-  if (last > h) {
+  if (last >= dataStart0) {
     var first = '';   // 最終行の最初の文字のセル（ラベルは 2 列目より右にあることもある。「合計金額」が D 列、等）
     for (var fcx = fc; fcx <= lcol; fcx++) { var fv = vals[last][fcx]; if (!isBlank_(fv)) { first = String(fv); break; } }
     if (/^(合計|総計|小計|計|total|sum)/i.test(first.trim())) { t.totalRow = last + 1; t.lastData = last; }
   }
-  if (_TBL_CACHE) _TBL_CACHE[sid] = { headerRow: t.headerRow, firstCol: t.firstCol, lastCol: t.lastCol, firstData: t.firstData, lastData: t.lastData, totalRow: t.totalRow, vals: t.vals };
+  if (_TBL_CACHE) _TBL_CACHE[sid] = { headerRow: t.headerRow, headerRows: t.headerRows, headerNames: t.headerNames.slice(), firstCol: t.firstCol, lastCol: t.lastCol, firstData: t.firstData, lastData: t.lastData, totalRow: t.totalRow, vals: t.vals };
   return t;
 }
 function needTable_(sh) {
@@ -202,13 +308,24 @@ function titleRange_(sh) {
   throw new ArgError('シート「' + sh.getName() + '」に見出しの上の行にタイトルが見つかりません（range でセルを指定してください）');
 }
 function dataRange_(t) { return t.sheet.getRange(t.firstData, t.firstCol, Math.max(1, t.lastData - t.firstData + 1), t.lastCol - t.firstCol + 1); }
-function headerNames_(t) { return t.vals[t.headerRow - 1].slice(t.firstCol - 1, t.lastCol).map(String); }
+function headerNames_(t) {
+  if (t && Array.isArray(t.headerNames) && t.headerNames.length) return t.headerNames.slice();
+  return t.vals[t.headerRow - 1].slice(t.firstCol - 1, t.lastCol).map(String);
+}
 function colIndexOf_(t, ref) {
   if (typeof ref === 'number') return ref;
   var s = String(ref).trim();
   var names = headerNames_(t);
   var i = names.indexOf(s);
   if (i >= 0) return t.firstCol + i;
+  // 2 段見出し（例: 上期・4月）の下段名だけで一意に定まれば解決する
+  var subHits = [];
+  for (var k = 0; k < names.length; k++) {
+    var nm = String(names[k] || '');
+    var idxDot = nm.lastIndexOf('・');
+    if (idxDot >= 0 && nm.slice(idxDot + 1) === s) subHits.push(k);
+  }
+  if (subHits.length === 1) return t.firstCol + subHits[0];
   if (/^[A-Za-z]{1,3}$/.test(s)) return colNum_(s);
   throw new ArgError('列「' + s + '」がありません。見出しは: ' + names.join('、'));
 }
@@ -218,7 +335,8 @@ function isNumberCol_(t, ci) {
   return tot > 0 && n / tot > 0.5;
 }
 function isNoCol_(t, ci) {
-  var h = String(t.vals[t.headerRow - 1][ci - 1]).trim();
+  var names = headerNames_(t);
+  var h = String(names[ci - t.firstCol] !== undefined ? names[ci - t.firstCol] : t.vals[t.headerRow - 1][ci - 1]).trim();
   return /^(no\.?|番号|#|№|id)$/i.test(h);
 }
 
@@ -1487,8 +1605,10 @@ function lookSide_(ss, sh) {
 }
 
 function tableOut_(tb) {
-  return { header_row: tb.headerRow, first_col: colLetter_(tb.firstCol), last_col: colLetter_(tb.lastCol), data: tb.firstData + '-' + tb.lastData,
+  var out = { header_row: tb.headerRow, first_col: colLetter_(tb.firstCol), last_col: colLetter_(tb.lastCol), data: tb.firstData + '-' + tb.lastData,
     total_row: tb.totalRow || null, columns: headerNames_(tb).map(function (h, i) { var ci = tb.firstCol + i; return { col: colLetter_(ci), name: h, number: isNumberCol_(tb, ci) }; }) };
+  if (tb.headerRows && tb.headerRows > 1) out.header_rows = tb.headerRows;
+  return out;
 }
 // 頼みの文から引数を組んだ ws_do（ask）用：道具が覚えている表の形と、今の表の形が同じか。違えば書く前に止めて今の形を返す
 function tableOfSheet_(ss, name) {
@@ -1499,7 +1619,7 @@ function tableOfSheet_(ss, name) {
 }
 function sameTable_(a, e) {
   if (!a || a.none || !e) return false;
-  if (a.header_row !== e.header_row || a.data !== e.data || (a.total_row || null) !== (e.total_row || null)) return false;
+  if (a.header_row !== e.header_row || (a.header_rows || 1) !== (e.header_rows || 1) || a.data !== e.data || (a.total_row || null) !== (e.total_row || null)) return false;
   var an = a.columns.map(function (c) { return c.col + '=' + c.name; }).join('|');
   var en = (e.columns || []).map(function (c) { return c.col + '=' + c.name; }).join('|');
   return an === en;

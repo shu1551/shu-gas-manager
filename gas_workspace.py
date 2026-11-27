@@ -1103,7 +1103,10 @@ class WorkspaceManager:
             tb = res.get("table")
             if tb:
                 d = tb["data"].split("-")
-                lines.append(f"表: 見出し {tb['header_row']} 行目・{tb['first_col']}〜{tb['last_col']} 列・明細 {tb['data']} 行目" + (f"・合計行 {tb['total_row']} 行目" if tb.get("total_row") else "・合計行なし"))
+                hr1 = tb["header_row"]
+                hrs = int(tb.get("header_rows") or 1)
+                hr_label = f"{hr1}-{hr1 + hrs - 1}" if hrs > 1 else f"{hr1}"
+                lines.append(f"表: 見出し {hr_label} 行目・{tb['first_col']}〜{tb['last_col']} 列・明細 {tb['data']} 行目" + (f"・合計行 {tb['total_row']} 行目" if tb.get("total_row") else "・合計行なし"))
                 lines.append("列: " + "、".join(f"{c['col']}={c['name']}{'(数値)' if c['number'] else ''}" for c in tb["columns"]))
             else:
                 lines.append("表: 見つかりません（空のシート、または見出しの行がありません）")

@@ -104,3 +104,43 @@ def test_ask_misses_logging_and_dedupe(tmp_path, monkeypatch):
     mgr.do(ask="進捗率が未定未満の行だけフィルタで表示して", target="")
     lines2 = [ln for ln in miss_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert len(lines2) == 1
+
+
+def test_two_tier_header_direct_and_plan():
+    import gas_ws_direct as D
+
+    def _c(v):
+        if v == "":
+            return {}
+        if isinstance(v, (int, float)):
+            return {"formattedValue": str(v), "effectiveValue": {"numberValue": v}}
+        return {"formattedValue": str(v), "effectiveValue": {"stringValue": str(v)}}
+
+    rows = [
+        ["月別売上", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["部門", "上期", "", "", "下期", "", "", "年計"],
+        ["", "4月", "5月", "6月", "10月", "11月", "12月", ""],
+        ["第一営業部", 1200, 1350, 1100, 1500, 1650, 1800, 8600],
+        ["第二営業部", 900, 950, 1020, 980, 1100, 1250, 6200],
+        ["合計", 2100, 2300, 2120, 2480, 2750, 3050, 14800],
+    ]
+    merges = [
+        {"startRowIndex": 2, "endRowIndex": 4, "startColumnIndex": 0, "endColumnIndex": 1},
+        {"startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 1, "endColumnIndex": 4},
+        {"startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 4, "endColumnIndex": 7},
+        {"startRowIndex": 2, "endRowIndex": 4, "startColumnIndex": 7, "endColumnIndex": 8},
+    ]
+    tb = D._find_table_direct([{"values": [_c(x) for x in r]} for r in rows], merges=merges)
+    assert tb["header_row"] == 3 and tb.get("header_rows") == 2 and tb["data"] == "5-6" and tb["total_row"] == 7
+    assert [c["name"] for c in tb["columns"]] == ["部門", "上期・4月", "上期・5月", "上期・6月", "下期・10月", "下期・11月", "下期・12月", "年計"]
+
+    p18 = A.plan("上期と下期の小計の列を足して", FINDER, "sheet", tb, ["月別"], "月別")
+    assert p18.fire and p18.ops == [
+        {"shelf": "calc.col", "name": "上期小計", "expr": "上期・4月+上期・5月+上期・6月"},
+        {"shelf": "calc.col", "name": "下期小計", "expr": "下期・10月+下期・11月+下期・12月"},
+    ]
+    p20 = A.plan("部門ごとの月の推移を折れ線グラフにして", FINDER, "sheet", tb, ["月別"], "月別")
+    assert p20.fire and p20.ops == [{"shelf": "chart.new", "type": "line", "range": "A4:G6", "transpose": True}]
+    pf = A.plan("見出し行を固定して", FINDER, "sheet", tb, ["月別"], "月別")
+    assert pf.fire and pf.ops == [{"shelf": "freeze", "rows": 4}]

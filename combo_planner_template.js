@@ -894,6 +894,34 @@ var ComboPlanner = (function () {
     }
   }
 
+  function _headerGroupsJs(tbl) {
+    if (!tbl || !Array.isArray(tbl.columns) || !tbl.columns.length) return {};
+    var hasNum = false;
+    for (var i = 0; i < tbl.columns.length; i++) {
+      if (tbl.columns[i] && tbl.columns[i].number) { hasNum = true; break; }
+    }
+    var groups = {};
+    for (var j = 0; j < tbl.columns.length; j++) {
+      var c = tbl.columns[j];
+      if (!c) continue;
+      var nm = String(c.name || "").trim();
+      var dot = nm.indexOf("・");
+      if (dot <= 0) continue;
+      if (hasNum && !c.number) continue;
+      var parent = nm.slice(0, dot).trim();
+      if (parent) {
+        if (!groups[parent]) groups[parent] = [];
+        groups[parent].push(nm);
+      }
+    }
+    var out = {};
+    var keys = Object.keys(groups);
+    for (var k = 0; k < keys.length; k++) {
+      if (groups[keys[k]].length >= 2) out[keys[k]] = groups[keys[k]];
+    }
+    return out;
+  }
+
   function _colNames(text, table) {
     if (!table || !table.columns) return [];
     var seenSet = {};
@@ -2072,7 +2100,7 @@ var ComboPlanner = (function () {
     }
 
     if (shelf.name === "freeze" && !_hasOwn(op, "rows") && table && table.header_row && /見出し|ヘッダ/.test(text)) {
-      op.rows = parseInt(table.header_row, 10);
+      op.rows = parseInt(table.header_row, 10) + Math.max(1, parseInt(table.header_rows || 1, 10)) - 1;
     }
     if (shelf.name === "calc.col") {
       var tNfkcAt = nfkc(text);
@@ -2204,6 +2232,15 @@ var ComboPlanner = (function () {
       for (var uci = 0; uci < uChart.length; uci++) {
         if (chartCols.indexOf(uChart[uci]) < 0) chartCols.push(uChart[uci]);
       }
+      var hGroupsCh = _headerGroupsJs(table);
+      var hGroupKeysCh = Object.keys(hGroupsCh);
+      var isTwoTierCh = parseInt(table.header_rows || 1, 10) >= 2 || hGroupKeysCh.length > 0;
+      if (!chartCols.length && isTwoTierCh && /推移|月別|期別|折れ線/.test(text) && Array.isArray(table.columns)) {
+        for (var fli = 0; fli < table.columns.length; fli++) {
+          var flc = table.columns[fli];
+          if (flc && flc.name && !flc.number) { chartCols.push(flc.name); break; }
+        }
+      }
       if (chartCols.length) {
         var hasNumMetaCh = _hasNumberMetaJs(table);
         var labelCols = [], numColsCh = [];
@@ -2211,10 +2248,24 @@ var ComboPlanner = (function () {
           if (hasNumMetaCh && _isNumberColJs(table, chartCols[cci])) numColsCh.push(chartCols[cci]);
           else labelCols.push(chartCols[cci]);
         }
+        var usedGroupSeries = false;
         if (hasNumMetaCh && !numColsCh.length) {
           var resChNums = _resolveUniqueColsJs(scan, table, true, chartCols);
           if (resChNums.length) numColsCh = numColsCh.concat(resChNums);
-          else {
+          else if (isTwoTierCh && hGroupKeysCh.length) {
+            var grpSubCols = [];
+            for (var gki = 0; gki < hGroupKeysCh.length; gki++) {
+              var gList = hGroupsCh[hGroupKeysCh[gki]];
+              for (var gli = 0; gli < gList.length; gli++) {
+                var gcn = gList[gli];
+                if (chartCols.indexOf(gcn) < 0 && !/(?:年計|合計|総計|小計)$/.test(gcn)) grpSubCols.push(gcn);
+              }
+            }
+            if (grpSubCols.length >= 2) {
+              numColsCh = numColsCh.concat(grpSubCols);
+              usedGroupSeries = true;
+            }
+          } else {
             var fbCh = _singleNumericFallbackJs(table, chartCols);
             if (fbCh) numColsCh.push(fbCh);
           }
@@ -2231,7 +2282,7 @@ var ComboPlanner = (function () {
           }
           var spCh = _dataSpan(table);
           if (orderedLs.length && spCh) {
-            var chR1 = parseInt(table.header_row || spCh[0], 10);
+            var chR1 = parseInt(table.header_row || spCh[0], 10) + Math.max(1, parseInt(table.header_rows || 1, 10)) - 1;
             var chR2 = spCh[1];
             if (orderedLs.length === 1) {
               op.range = orderedLs[0] + chR1 + ":" + orderedLs[0] + chR2;
@@ -2247,6 +2298,9 @@ var ComboPlanner = (function () {
                 for (var rpi = 0; rpi < orderedLs.length; rpi++) rParts.push(orderedLs[rpi] + chR1 + ":" + orderedLs[rpi] + chR2);
                 op.range = rParts.join(",");
               }
+            }
+            if (usedGroupSeries && labelCols.length === 1 && numColsCh.length >= 2 && /推移|月別|折れ線|ごと|別/.test(text)) {
+              op.transpose = true;
             }
           }
         }
@@ -2742,6 +2796,23 @@ var ComboPlanner = (function () {
     for (var ci = 0; ci < cl.length; ci++) {
       var cRaw = cl[ci];
       var c = _expandSelectionPronouns(cRaw, lastScope);
+      if (kind !== "doc" && table && /(?:小計|合計)(?:の?列)?を?(?:足|追加|作|入れ)/.test(c) && !/一番下|最後の行|末尾の行|表の下|合計行|別シート/.test(c)) {
+        var hgMapJs = _headerGroupsJs(table);
+        var hgKeys = Object.keys(hgMapJs);
+        if (hgKeys.length) {
+          var cNfkcG = nfkc(c);
+          var hitGrpsJs = hgKeys.filter(function (g) { return cNfkcG.indexOf(nfkc(g)) >= 0; });
+          hitGrpsJs.sort(function (a, b) { return cNfkcG.indexOf(nfkc(a)) - cNfkcG.indexOf(nfkc(b)); });
+          if (hitGrpsJs.length) {
+            var sufG = c.indexOf("小計") >= 0 ? "小計" : "合計";
+            for (var hgi = 0; hgi < hitGrpsJs.length; hgi++) {
+              p.ops.push({ shelf: "calc.col", name: hitGrpsJs[hgi] + sufG, expr: hgMapJs[hitGrpsJs[hgi]].join("+") });
+            }
+            lastIncomplete = null;
+            continue;
+          }
+        }
+      }
       var scored = scoreAll(c, kind);
 
       if (lastIncomplete !== null && (

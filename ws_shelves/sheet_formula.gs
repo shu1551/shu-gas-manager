@@ -1,9 +1,16 @@
 // 式と計算の棚
 
-function copyHeaderStyle_(sh, headerRow, tmplCol, dstCol, name) {
-  var dst = sh.getRange(headerRow, dstCol);
-  sh.getRange(headerRow, tmplCol).copyTo(dst, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
-  dst.setValue(name).setHorizontalAlignment('center');
+function copyHeaderStyle_(sh, headerRow, tmplCol, dstCol, name, optHeaderRows) {
+  var hRows = optHeaderRows && optHeaderRows > 1 ? optHeaderRows : 1;
+  var dst = sh.getRange(headerRow, dstCol, hRows, 1);
+  if (hRows > 1 && typeof dst.breakApart === 'function') {
+    try { dst.breakApart(); } catch (eB) {}
+  }
+  sh.getRange(headerRow, tmplCol, hRows, 1).copyTo(dst, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+  sh.getRange(headerRow, dstCol).setValue(name).setHorizontalAlignment('center');
+  if (hRows > 1 && typeof dst.merge === 'function') {
+    try { dst.merge(); } catch (eM) {}
+  }
 }
 
 // フィルタで非表示の行にも確実に数式を書く（Sheets API 経由。使えない環境では setFormulas へフォールバック）
@@ -93,7 +100,7 @@ SHELF['calc.col'] = function (ctx, op) {
     return f.charAt(0) === '=' ? f : '=' + f;
   };
 
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, op.name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, op.name, t.headerRows || 1);
 
   // データ行の数式を設定
   var numRows = t.lastData - t.firstData + 1;
@@ -130,7 +137,7 @@ SHELF['calc.percent'] = function (ctx, op) {
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
 
   var name = op.name || '構成比';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
 
   var colL = colLetter_(ci);
   var sumRef = t.totalRow ? (colL + '$' + t.totalRow) : ('SUM(' + colL + '$' + t.firstData + ':' + colL + '$' + t.lastData + ')');
@@ -249,7 +256,7 @@ SHELF['lookup.add'] = function (ctx, op) {
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
 
   var name = op.name || String(op.val_col);
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
 
   var srcName = q_(srcSh.getName());
   var keyRange = srcName + '!$' + colLetter_(keyCol) + '$' + srcT.firstData + ':$' + colLetter_(keyCol) + '$' + srcT.lastData;
@@ -286,7 +293,7 @@ SHELF['calc.diff'] = function (ctx, op) {
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var isRate = !!op.rate;
   var name = op.name || (isRate ? '増減率' : '差額');
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var la = colLetter_(ca), lb = colLetter_(cb);
   var numRows = t.lastData - t.firstData + 1;
   if (numRows > 0) {
@@ -319,7 +326,7 @@ SHELF['calc.running'] = function (ctx, op) {
   if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ci) ci++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '累計';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var cl = colLetter_(ci);
   var numRows = t.lastData - t.firstData + 1;
   if (numRows > 0) {
@@ -349,7 +356,7 @@ SHELF['calc.rank'] = function (ctx, op) {
   if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ci) ci++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '順位';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var cl = colLetter_(ci), order = op.desc === false ? 1 : 0;
   var numRows = t.lastData - t.firstData + 1;
   if (numRows > 0) {
@@ -614,7 +621,7 @@ SHELF['date.parts'] = function (ctx, op) {
   var part = String(op.part).toLowerCase();
   var nameMap = { year: '年', month: '月', day: '日', weekday: '曜日', quarter: '四半期', fiscal: '年度' };
   var name = op.name || nameMap[part] || '日付要素';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var cl = colLetter_(ci);
   var numRows = t.lastData - t.firstData + 1;
   if (numRows > 0) {
@@ -651,7 +658,7 @@ SHELF['text.join'] = function (ctx, op) {
   if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); colList = colList.map(function (c) { return atCol <= c ? c + 1 : c; }); if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '結合';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var sep = op.sep !== undefined ? String(op.sep) : ' ';
   var sepEsc = sep.replace(/"/g, '""');
   var numRows = t.lastData - t.firstData + 1;
@@ -778,7 +785,7 @@ SHELF['calc.if'] = function (ctx, op) {
   if (op.at && atCol <= t.lastCol) { sh.insertColumnsBefore(atCol, 1); if (atCol <= ci) ci++; if (_TBL_CACHE) _TBL_CACHE = null; t = needTable_(sh); }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '判定';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var when = String(op.when || 'ge').toLowerCase();
   var valRaw = op.value !== undefined ? String(op.value) : '';
   var valNumStr = valRaw.replace(/,/g, '').trim();
@@ -838,7 +845,7 @@ SHELF['date.diff'] = function (ctx, op) {
   var unit = String(op.unit || 'days').toLowerCase();
   var defNames = { days: '日数', months: '月数', years: '年数', workdays: '営業日数' };
   var name = op.name || defNames[unit] || '日数';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var sl = colLetter_(sCi), el = eCi ? colLetter_(eCi) : '';
   var numRows = t.lastData - t.firstData + 1;
   if (numRows > 0) {
@@ -1049,7 +1056,7 @@ SHELF['date.age'] = function (ctx, op) {
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var defName = code === 'M' ? '経過月数' : (code === 'D' ? '経過日数' : '年齢');
   var name = op.name || defName;
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var cl = colLetter_(ci);
   var numRows = t.lastData - t.firstData + 1;
   if (numRows > 0) {
@@ -1094,7 +1101,7 @@ SHELF['calc.tax'] = function (ctx, op) {
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var defName = mode === 'out' ? '税抜' : (mode === 'tax' ? '消費税' : '税込');
   var name = op.name || defName;
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var cl = colLetter_(ci);
   var numRows = t.lastData - t.firstData + 1;
   if (numRows > 0) {
@@ -1137,7 +1144,7 @@ SHELF['col.compare'] = function (ctx, op) {
   }
   if (atCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), atCol - sh.getMaxColumns());
   var name = op.name || '比較結果';
-  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name);
+  copyHeaderStyle_(sh, t.headerRow, t.firstCol, atCol, name, t.headerRows || 1);
   var escQ = function (s) { return '"' + String(s).replace(/"/g, '""') + '"'; };
   var mTxt = escQ(op.match_val !== undefined ? op.match_val : '一致');
   var dTxt = escQ(op.diff_val !== undefined ? op.diff_val : '不一致');

@@ -788,6 +788,24 @@ def _single_numeric_fallback(table, exclude=()):
     return nums[0] if len(nums) == 1 else None
 
 
+def _header_groups(table):
+    """2段見出し（親・子）の親グループごとの子列リスト（2列以上ある親のみ）を返す。"""
+    if not table or not table.get("columns"):
+        return {}
+    has_num = _has_number_meta(table)
+    groups = {}
+    for c in table["columns"]:
+        nm = str(c.get("name") or "").strip()
+        if "・" not in nm:
+            continue
+        if has_num and not c.get("number"):
+            continue
+        parent = nm.split("・", 1)[0].strip()
+        if parent:
+            groups.setdefault(parent, []).append(nm)
+    return {k: v for k, v in groups.items() if len(v) >= 2}
+
+
 def _clean_filter_equals(op, text, table, quoted_vals):
     """フィルタの equals に列名や助詞「が」「は」が残っていれば剥がす。外せなければ削除して止める。"""
     eq = op.get("equals")
@@ -1364,7 +1382,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 op["col"] = num_cols[0]
                 named = True
     if shelf["name"] == "freeze" and "rows" not in op and table and table.get("header_row") and re.search(r"見出し|ヘッダ", text):
-        op["rows"] = int(table["header_row"])
+        op["rows"] = int(table["header_row"]) + max(1, int(table.get("header_rows") or 1)) - 1
     if shelf["name"] == "calc.col":
         t_nfkc = nfkc(text)
         tbl_cols_sorted = sorted(
@@ -1473,6 +1491,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         for uc in _resolve_unique_cols(scan, table, number_only=False, exclude=chart_cols):
             if uc not in chart_cols:
                 chart_cols.append(uc)
+        h_groups_ch = _header_groups(table)
+        is_two_tier_ch = int(table.get("header_rows") or 1) >= 2 or bool(h_groups_ch)
+        if not chart_cols and is_two_tier_ch and re.search(r"推移|月別|期別|折れ線", text):
+            first_lbl = next((c["name"] for c in table.get("columns") or [] if c.get("name") and not c.get("number")), None)
+            if first_lbl:
+                chart_cols.append(first_lbl)
         if chart_cols:
             has_num_meta = _has_number_meta(table)
             label_cols, num_cols = [], []
@@ -1481,10 +1505,19 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                     num_cols.append(cc)
                 else:
                     label_cols.append(cc)
+            used_group_series = False
             if has_num_meta and not num_cols:
                 res_nums = _resolve_unique_cols(scan, table, number_only=True, exclude=chart_cols)
                 if res_nums:
                     num_cols.extend(res_nums)
+                elif is_two_tier_ch and h_groups_ch:
+                    grp_sub_cols = [
+                        cn for g_list in h_groups_ch.values() for cn in g_list
+                        if cn not in chart_cols and not re.search(r"(?:年計|合計|総計|小計)$", cn)
+                    ]
+                    if len(grp_sub_cols) >= 2:
+                        num_cols.extend(grp_sub_cols)
+                        used_group_series = True
                 else:
                     fb_c = _single_numeric_fallback(table, exclude=chart_cols)
                     if fb_c:
@@ -1501,7 +1534,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         ordered_ls.append(ol)
                 sp_ch = _data_span(table)
                 if ordered_ls and sp_ch:
-                    ch_r1 = int(table.get("header_row") or sp_ch[0])
+                    ch_r1 = int(table.get("header_row") or sp_ch[0]) + max(1, int(table.get("header_rows") or 1)) - 1
                     ch_r2 = sp_ch[1]
                     if len(ordered_ls) == 1:
                         op["range"] = f"{ordered_ls[0]}{ch_r1}:{ordered_ls[0]}{ch_r2}"
@@ -1512,6 +1545,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                             op["range"] = f"{ordered_ls[0]}{ch_r1}:{ordered_ls[-1]}{ch_r2}"
                         else:
                             op["range"] = ",".join(f"{x}{ch_r1}:{x}{ch_r2}" for x in ordered_ls)
+                    if used_group_series and len(label_cols) == 1 and len(num_cols) >= 2 and re.search(r"推移|月別|折れ線|ごと|別", text):
+                        op["transpose"] = True
     if shelf["name"] in ("filter.where", "filter.delete", "filter.extract"):
         if shelf["name"] == "filter.extract" and op.get("into") == "別":
             op.pop("into", None)
@@ -1780,6 +1815,18 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
     last_incomplete = None
     for c_raw in cl:
         c = _expand_selection_pronouns(c_raw, last_scope)
+        # 2 段見出しの親グループ小計・合計列（「上期と下期の小計の列を足して」等）
+        if kind != "doc" and table and re.search(r"(?:小計|合計)(?:の?列)?を?(?:足|追加|作|入れ)", c) and not re.search(r"一番下|最後の行|末尾の行|表の下|合計行|別シート", c):
+            hg_map = _header_groups(table)
+            if hg_map:
+                c_nfkc_g = nfkc(c)
+                hit_grps = sorted([g for g in hg_map if nfkc(g) in c_nfkc_g], key=lambda g: c_nfkc_g.find(nfkc(g)))
+                if hit_grps:
+                    suf_g = "小計" if "小計" in c else "合計"
+                    for g_nm in hit_grps:
+                        p.ops.append({"shelf": "calc.col", "name": g_nm + suf_g, "expr": "+".join(hg_map[g_nm])})
+                    last_incomplete = None
+                    continue
         scored = finder.score_all(c, kind)
         # 前の節が不足ありで、この節単体では別の棚に強く当たらない場合は前の文と合流して補完を試みる
         if last_incomplete is not None and (
@@ -2149,7 +2196,10 @@ def render_unfired(p, finder):
 def table_line(table):
     if not table or table.get("none"):
         return ""
-    s = f"表: {table.get('first_col')}〜{table.get('last_col')} 列・見出し {table.get('header_row')} 行目・明細 {table.get('data')} 行目"
+    hr1 = table.get("header_row")
+    hrs = int(table.get("header_rows") or 1)
+    hr_s = f"{hr1}-{hr1 + hrs - 1}" if (hr1 and hrs > 1) else f"{hr1}"
+    s = f"表: {table.get('first_col')}〜{table.get('last_col')} 列・見出し {hr_s} 行目・明細 {table.get('data')} 行目"
     s += f"・合計行 {table['total_row']} 行目" if table.get("total_row") else "・合計行なし"
     return s
 

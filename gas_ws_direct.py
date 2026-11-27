@@ -275,7 +275,8 @@ class DirectRunner:
         if op.get("header"):
             if not tb:
                 raise Skip("表が無い")
-            return (tb["header_row"], col_num(tb["first_col"]), tb["header_row"], col_num(tb["last_col"]))
+            h_end = tb["header_row"] + max(1, int(tb.get("header_rows") or 1)) - 1
+            return (tb["header_row"], col_num(tb["first_col"]), h_end, col_num(tb["last_col"]))
         if op.get("title"):
             return "title"
         if op.get("col"):
@@ -1076,7 +1077,7 @@ class DirectRunner:
                 raise Skip("範囲が上限超え")
 
             detail_fields = (
-                "sheets(properties(sheetId,title),"
+                "sheets(properties(sheetId,title),merges,"
                 "data(startRow,startColumn,rowMetadata(hiddenByUser),columnMetadata(hiddenByUser),"
                 "rowData(values(formattedValue,effectiveValue,userEnteredValue,"
                 "effectiveFormat(numberFormat(type)),dataValidation))))"
@@ -1143,7 +1144,7 @@ class DirectRunner:
                 "sheets": sheets_out,
                 "direct": True,
             }
-            tb = _find_table_direct(row_data)
+            tb = _find_table_direct(row_data, merges=d_sh.get("merges") or [])
             if tb:
                 out["table"] = tb
             side = _build_side_direct(meta_resp, sh_meta, grid_data)
@@ -1289,7 +1290,7 @@ def _measure_row_data(row_data):
     return last_r, last_c
 
 
-def _find_table_direct(row_data):
+def _find_table_direct(row_data, merges=None):
     if not row_data:
         return None
     grid_rows = [(r or {}).get("values") or [] for r in row_data]
@@ -1304,13 +1305,34 @@ def _find_table_direct(row_data):
         row = grid_rows[r0] if r0 < len(grid_rows) else []
         return row[c0] if c0 < len(row) else {}
 
+    norm_merges = []
+    for m in (merges or []):
+        r1 = m.get("startRowIndex", 0)
+        c1 = m.get("startColumnIndex", 0)
+        r2 = m.get("endRowIndex", r1 + 1) - 1
+        c2 = m.get("endColumnIndex", c1 + 1) - 1
+        if r2 >= r1 and c2 >= c1:
+            norm_merges.append((r1, c1, r2, c2))
+
+    def _has_row_merge(r0):
+        for r1, c1, r2, c2 in norm_merges:
+            if (r1 == r0 and r2 == r0 and c2 > c1) or (r1 == r0 and r2 == r0 + 1):
+                return True
+        return False
+
+    def _find_merge_at(r0, c0):
+        for m in norm_merges:
+            if m[0] <= r0 <= m[2] and m[1] <= c0 <= m[3]:
+                return m
+        return None
+
     h = -1
     for r in range(lr):
         if _non_empty_count(grid_rows[r]) >= 2:
             h = r
             break
     for _ in range(10):
-        if h < 0:
+        if h < 0 or _has_row_merge(h):
             break
         nx = h + 1
         while nx < lr and _non_empty_count(grid_rows[nx]) == 0:
@@ -1329,23 +1351,94 @@ def _find_table_direct(row_data):
             if fc < 0:
                 fc = c
             lcol = c
+    for r1, c1, r2, c2 in norm_merges:
+        if r1 == h and r2 == h and c2 > c1 and not _cell_is_blank(_cell_at(h, c1)):
+            if fc < 0 or c1 < fc:
+                fc = c1
+            if c2 > lcol:
+                lcol = c2
     if fc < 0:
         return None
 
-    last = h
-    for r2 in range(h + 1, lr):
-        row = grid_rows[r2]
+    # 2 段見出しの検出（結合された上段＋下段、または相補的な 2 行見出し）
+    header_rows = 1
+    if h + 2 < lr:
+        sub_non_empty, sub_num_cnt, sub_first = 0, 0, ""
+        for sc in range(lc):
+            c_obj = _cell_at(h + 1, sc)
+            if not _cell_is_blank(c_obj):
+                sub_non_empty += 1
+                if not sub_first:
+                    sub_first = _cell_text(c_obj).strip()
+                ev = (c_obj or {}).get("effectiveValue") or {}
+                if ev.get("numberValue") is not None:
+                    sub_num_cnt += 1
+        sub_is_total = bool(re.match(r"^(合計|総計|小計|計|total|sum)", sub_first, re.I))
+        if sub_non_empty > 0 and not sub_is_total:
+            horiz_match, vert_match = False, False
+            for r1, c1, r2, c2 in norm_merges:
+                if r1 == h and r2 == h and c2 > c1 and not _cell_is_blank(_cell_at(h, c1)):
+                    sub_under = sum(1 for cc3 in range(c1, c2 + 1) if not _cell_is_blank(_cell_at(h + 1, cc3)))
+                    if sub_under >= 2:
+                        horiz_match = True
+                        break
+                if r1 == h and r2 == h + 1 and not _cell_is_blank(_cell_at(h, c1)):
+                    vert_match = True
+            unmerged_two_tier = False
+            if not horiz_match and not vert_match and sub_num_cnt == 0:
+                top_gap_filled = sum(
+                    1 for cc4 in range(fc, lcol + 1)
+                    if _cell_is_blank(_cell_at(h, cc4)) and not _cell_is_blank(_cell_at(h + 1, cc4))
+                )
+                if top_gap_filled >= 1:
+                    unmerged_two_tier = True
+            if horiz_match or (vert_match and sub_num_cnt == 0) or unmerged_two_tier:
+                header_rows = 2
+                for cc5 in range(lc):
+                    if not _cell_is_blank(_cell_at(h + 1, cc5)):
+                        if fc < 0 or cc5 < fc:
+                            fc = cc5
+                        if cc5 > lcol:
+                            lcol = cc5
+
+    header_names = []
+    if header_rows == 2:
+        last_top = ""
+        for hc in range(fc, lcol + 1):
+            m_top = _find_merge_at(h, hc)
+            m_sub = _find_merge_at(h + 1, hc)
+            top_cell = _cell_at(m_top[0], m_top[1]) if m_top else _cell_at(h, hc)
+            top_str = "" if _cell_is_blank(top_cell) else _cell_text(top_cell).strip()
+            same_vert = bool(m_top and m_sub and m_top == m_sub)
+            sub_cell = {} if same_vert else _cell_at(h + 1, hc)
+            sub_str = "" if _cell_is_blank(sub_cell) else _cell_text(sub_cell).strip()
+            if top_str:
+                last_top = top_str
+            elif not m_top and sub_str and last_top:
+                top_str = last_top
+            if top_str and sub_str and top_str != sub_str:
+                header_names.append(f"{top_str}・{sub_str}")
+            else:
+                header_names.append(top_str or sub_str or "")
+    else:
+        for hc in range(fc, lcol + 1):
+            c_obj = _cell_at(h, hc)
+            header_names.append("" if _cell_is_blank(c_obj) else _cell_text(c_obj))
+
+    data_start0 = h + header_rows
+    last = data_start0 - 1
+    for r2 in range(data_start0, lr):
         if any(not _cell_is_blank(_cell_at(r2, cc)) for cc in range(fc, lcol + 1)):
             last = r2
 
     header_row = h + 1
     first_col = fc + 1
     last_col = lcol + 1
-    first_data = h + 2
+    first_data = data_start0 + 1
     last_data = last + 1
     total_row = None
 
-    if last > h:
+    if last >= data_start0:
         first_txt = ""
         for fcx in range(fc, lcol + 1):
             c_obj = _cell_at(last, fcx)
@@ -1357,8 +1450,8 @@ def _find_table_direct(row_data):
             last_data = last
 
     columns = []
-    for ci in range(first_col, last_col + 1):
-        name = _cell_text(_cell_at(h, ci - 1))
+    for idx, ci in enumerate(range(first_col, last_col + 1)):
+        name = header_names[idx]
         n_num, tot = 0, 0
         for rr in range(first_data, last_data + 1):
             c_obj = _cell_at(rr - 1, ci - 1)
@@ -1373,7 +1466,7 @@ def _find_table_direct(row_data):
             "number": (tot > 0 and n_num / tot > 0.5),
         })
 
-    return {
+    out = {
         "header_row": header_row,
         "first_col": col_letter(first_col),
         "last_col": col_letter(last_col),
@@ -1381,6 +1474,9 @@ def _find_table_direct(row_data):
         "total_row": total_row,
         "columns": columns,
     }
+    if header_rows > 1:
+        out["header_rows"] = header_rows
+    return out
 
 
 def _build_side_direct(meta_resp, sh_meta, grid_data):

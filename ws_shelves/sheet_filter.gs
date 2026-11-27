@@ -82,19 +82,20 @@ function tidyRange_(ctx, sh, rangeA1) {
     var reqs = [
       { updateBorders: { range: grid(t.headerRow, last, t.firstCol, t.lastCol), top: bd, bottom: bd, left: bd, right: bd, innerHorizontal: bd, innerVertical: bd } },
       { repeatCell: { range: grid(t.headerRow, last, t.firstCol, t.lastCol), cell: { userEnteredFormat: { verticalAlignment: 'MIDDLE' } }, fields: 'userEnteredFormat.verticalAlignment' } },
-      { repeatCell: { range: grid(t.headerRow, t.headerRow, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.headBg), textFormat: { bold: true, foregroundColor: hexColor_(STYLE.headFg) }, horizontalAlignment: 'CENTER', wrapStrategy: 'WRAP' } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor),horizontalAlignment,wrapStrategy)' } }
+      { repeatCell: { range: grid(t.headerRow, t.headerRow + (t.headerRows || 1) - 1, t.firstCol, t.lastCol), cell: { userEnteredFormat: { backgroundColor: hexColor_(STYLE.headBg), textFormat: { bold: true, foregroundColor: hexColor_(STYLE.headFg) }, horizontalAlignment: 'CENTER', wrapStrategy: 'WRAP' } }, fields: 'userEnteredFormat(backgroundColor,textFormat(bold,foregroundColor),horizontalAlignment,wrapStrategy)' } }
     ];
     var colFmt = {}, hasWrapCol = false;   // 列ごとの書式（幅の見積もり・行高さ判定に使う）
     if (t.lastData - t.firstData + 1 >= 1) {
       var rows = (t.totalRow ? t.totalRow : t.lastData) - t.firstData + 1;
       var existFmts = sh.getRange(t.firstData, t.firstCol, t.lastData - t.firstData + 1, nc).getNumberFormats();
+      var hNamesT = headerNames_(t);
       for (var ci = t.firstCol; ci <= t.lastCol; ci++) {
         var kCol = ci - t.firstCol, vals = [], fCol = [];
         for (var rr = t.firstData; rr <= t.lastData; rr++) {
           vals.push(t.vals[rr - 1][ci - 1]);
           fCol.push(existFmts[rr - t.firstData] ? existFmts[rr - t.firstData][kCol] : '');
         }
-        var headNm = t.vals[t.headerRow - 1] ? t.vals[t.headerRow - 1][ci - 1] : '';
+        var headNm = hNamesT[kCol] !== undefined ? hNamesT[kCol] : (t.vals[t.headerRow - 1] ? t.vals[t.headerRow - 1][ci - 1] : '');
         var spec = tidyColSpec_(headNm, vals, fCol, isNoCol_(t, ci));
         colFmt[ci] = spec.kind;
         if (spec.wrap) hasWrapCol = true;
@@ -420,7 +421,8 @@ SHELF['sort'] = function (ctx, op) {
     chg_(ctx, sh, rng.getA1Notation(), op.col + ' で' + (op.desc ? '降順' : '昇順') + 'に並べ替え');
   }
   if (op.filter || op.where) {
-    var full = sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1);
+    var fHead = t.headerRow + (t.headerRows || 1) - 1;
+    var full = sh.getRange(fHead, t.firstCol, t.lastData - fHead + 1, t.lastCol - t.firstCol + 1);
     var f = sh.getFilter(); if (f) f.remove();
     f = full.createFilter();
     if (op.where) {
@@ -487,7 +489,9 @@ SHELF['filter.on'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op);
   var full = op.range ? sh.getRange(op.range) : (function () {
     var t = findTable_(sh);
-    return t ? sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1) : sh.getDataRange();
+    if (!t) return sh.getDataRange();
+    var fHead = t.headerRow + (t.headerRows || 1) - 1;
+    return sh.getRange(fHead, t.firstCol, t.lastData - fHead + 1, t.lastCol - t.firstCol + 1);
   })();
   var f = sh.getFilter(); if (f) f.remove();
   full.createFilter();
@@ -701,7 +705,7 @@ SHELF['filter.extract'] = function (ctx, op) {
   var when = op.when ? String(op.when).toLowerCase() : 'eq';
   var target = op.value !== undefined ? op.value : op.equals;
   var nc = t.lastCol - t.firstCol + 1;
-  var header = t.vals[t.headerRow - 1].slice(t.firstCol - 1, t.lastCol);
+  var header = headerNames_(t);
   var rowsOut = [];
   for (var r = t.firstData; r <= t.lastData; r++) {
     if (matchRowCond_(t.vals[r - 1][ci - 1], when, target)) {
@@ -810,7 +814,7 @@ SHELF['top.n'] = function (ctx, op) {
   var ci = colIndexOf_(t, op.col);
   var cnt = Math.max(1, parseInt(op.count, 10) || 5);
   var nc = t.lastCol - t.firstCol + 1;
-  var header = t.vals[t.headerRow - 1].slice(t.firstCol - 1, t.lastCol);
+  var header = headerNames_(t);
   var items = [];
   for (var r = t.firstData; r <= t.lastData; r++) {
     var raw = t.vals[r - 1][ci - 1];
