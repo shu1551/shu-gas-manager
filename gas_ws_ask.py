@@ -1722,7 +1722,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 pass
             elif explicit_range:
                 v = explicit_range
-            elif wanted and shelf["name"] in ("clear.all", "cf.dup") and table and not (shelf["name"] == "cf.dup" and col_pool):   # 列の名指しがある重複はその列だけ
+            elif wanted and shelf["name"] in ("clear.all", "cf.dup") and table and table.get("first_col") and table.get("last_col") and not (shelf["name"] == "cf.dup" and col_pool):   # 列の名指しがある重複はその列だけ
                 first_r = table["data"].split("-")[0] if table.get("data") else str(table.get("header_row", 1) + 1)
                 last_r = table["data"].split("-")[-1] if table.get("data") else str(table.get("header_row", 1) + 1)
                 v = f"{table['first_col']}{first_r}:{table['last_col']}{last_r}"

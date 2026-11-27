@@ -2044,7 +2044,7 @@ var ComboPlanner = (function () {
           // 既に範囲または「どれか」が埋まっている場合はスキップ
         } else if (explicitRange) {
           av = explicitRange;
-        } else if (wanted && (shelf.name === "clear.all" || shelf.name === "cf.dup") && table && !(shelf.name === "cf.dup" && colPool.length)) {   // 列の名指しがある重複はその列だけ
+        } else if (wanted && (shelf.name === "clear.all" || shelf.name === "cf.dup") && table && table.first_col && table.last_col && !(shelf.name === "cf.dup" && colPool.length)) {   // 列の名指しがある重複はその列だけ
           var firstR = table.data ? String(table.data).split("-")[0] : String((table.header_row || 1) + 1);
           var lastR = table.data ? String(table.data).split("-").slice(-1)[0] : String((table.header_row || 1) + 1);
           av = table.first_col + firstR + ":" + table.last_col + lastR;
