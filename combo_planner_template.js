@@ -656,6 +656,11 @@ var ComboPlanner = (function () {
     url_col: /url|リンク先|アドレス/i
   };
 
+  // cols.delete の型ガード（列そのものが消す対象のときだけ許可し、「列の〈中身〉を消して」は列削除にしない）
+  var _COL_CONTENT_DEL_RE_JS = /中身|値だけ|値を|データだけ|データを|クリア|空白|スペース|改行|重複|ダブ|エラー|記号|ハイフン|文字|数字|数値|数式|式だけ|式を|ゼロ|0を|色|背景|書式|罫線|太字|メモ|コメント|リンク|プルダウン|入力規則|フィルタ|フィルター|条件付き書式|前後|余分な|ゴミ|不可視|非表示|隠|振り直|付け直|連番|行を|の行|行目/;
+  var _COL_PROP_OBJ_RE_JS = /(?:列|カラム)の(?!削除|消去|除去|一番|右|左|先頭|末尾|最後|最初)[^\s、。のをにはが]{1,16}を/;
+  var _COL_DIRECT_DEL_RE_JS = /(?:列|カラム)(?:を|ごと|丸ごと|まるごと|まるっと|の(?:削除|消去|除去)|(?:は|が)?(?:いらない|要らない|不要|削除|消))/;
+
   // 日付比較の 1 か所定義（西暦・和暦・年なし月日）
   var _DATE_TOK_PAT_JS =
     "(?<![0-9A-Za-z/])(" +
@@ -2080,6 +2085,18 @@ var ComboPlanner = (function () {
           addMiss("頼みに無い操作（borders）が混入しています");
         }
       }
+      if (shN === "cols.delete") {
+        if (_COL_CONTENT_DEL_RE_JS.test(scanN) || _COL_PROP_OBJ_RE_JS.test(scanN)) {
+          addMiss("列そのものではなく列の中身の語が含まれているため列削除しません");
+        } else if (/(?:列|カラム)/.test(scanN) && !_COL_DIRECT_DEL_RE_JS.test(scanN)) {
+          addMiss("列そのものが削除対象ではないため列削除しません");
+        }
+      }
+      if (shN === "rows.delete") {
+        if (/(?:行目|行)の(?!削除|消去|除去)[^\s、。のをにはが]{1,12}を|中身|値だけ|値を|空白|スペース|改行|色|背景|書式|罫線|メモ|コメント|リンク/.test(scanN)) {
+          addMiss("行そのものではなく中身の語が含まれているため行削除しません");
+        }
+      }
     }
 
     if (_CMP_VALUE_SHELVES_JS[shelf.name] && op.when !== "formula") {
@@ -3258,9 +3275,11 @@ var ComboPlanner = (function () {
           !/重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則/.test(c) &&
           _rowsOf(c).length === 0;
         var mColDel = /([^\s、。のをにはが]{2,16}?)の?(?:列|カラム)/.exec(c);
-        var hasColsDelCue = /(?:列|カラム)/.test(c) &&
-          /消|削除|取り除|捨て/.test(c) &&
-          !/中身|値だけ|値を|データだけ|クリア|スペース|余分な空白|色|背景|書式|罫線|太字|メモ|コメント|リンク|プルダウン|入力規則|フィルタ|フィルター|条件付き書式|重複|ダブ|数式|式だけ|非表示|隠|振り直|付け直|連番|行を|の行|行目/.test(c) &&
+        var cNfkcCd = nfkc(c);
+        var hasColsDelCue = _COL_DIRECT_DEL_RE_JS.test(cNfkcCd) &&
+          /消|削除|取り除|捨て/.test(cNfkcCd) &&
+          !_COL_CONTENT_DEL_RE_JS.test(cNfkcCd) &&
+          !_COL_PROP_OBJ_RE_JS.test(cNfkcCd) &&
           (_colNames(c, table).length > 0 || _colLetters(c).length > 0 || !!(mColDel && _resolveColRefJs(mColDel[1], table)));
         var hasSummaryCue = /(?:別(?:に|で|の)|ごと(?:に|の))/.test(c) &&
           /集計|合計|平均|件数/.test(c) &&

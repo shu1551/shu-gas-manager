@@ -494,6 +494,20 @@ _OPT_COL_CUES = {
     "url_col": re.compile(r"url|リンク先|アドレス", re.IGNORECASE),
 }
 
+# cols.delete の型ガード（列そのものが消す対象のときだけ許可し、「列の〈中身〉を消して」は列削除にしない）
+_COL_CONTENT_DEL_RE = re.compile(
+    r"中身|値だけ|値を|データだけ|データを|クリア|空白|スペース|改行|重複|ダブ|エラー|記号|ハイフン|"
+    r"文字|数字|数値|数式|式だけ|式を|ゼロ|0を|色|背景|書式|罫線|太字|メモ|コメント|リンク|"
+    r"プルダウン|入力規則|フィルタ|フィルター|条件付き書式|前後|余分な|ゴミ|不可視|非表示|隠|"
+    r"振り直|付け直|連番|行を|の行|行目"
+)
+_COL_PROP_OBJ_RE = re.compile(
+    r"(?:列|カラム)の(?!削除|消去|除去|一番|右|左|先頭|末尾|最後|最初)[^\s、。のをにはが]{1,16}を"
+)
+_COL_DIRECT_DEL_RE = re.compile(
+    r"(?:列|カラム)(?:を|ごと|丸ごと|まるごと|まるっと|の(?:削除|消去|除去)|(?:は|が)?(?:いらない|要らない|不要|削除|消))"
+)
+
 # 日付比較の 1 か所定義（西暦・和暦・年なし月日）
 _DATE_TOK_PAT = (
     r"(?<![0-9A-Za-z/])("
@@ -1215,6 +1229,14 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
             _add_miss("頼みに無い操作（merge）が混入しています")
         if op.get("borders") not in (None, False, "none", "なし") and not re.search(r"罫線|枠線|外枠|格子", t_full_n):
             _add_miss("頼みに無い操作（borders）が混入しています")
+    if sh_name == "cols.delete":
+        if _COL_CONTENT_DEL_RE.search(scan_n) or _COL_PROP_OBJ_RE.search(scan_n):
+            _add_miss("列そのものではなく列の中身の語が含まれているため列削除しません")
+        elif re.search(r"列|カラム", scan_n) and not _COL_DIRECT_DEL_RE.search(scan_n):
+            _add_miss("列そのものが削除対象ではないため列削除しません")
+    if sh_name == "rows.delete":
+        if re.search(r"(?:行目|行)の(?!削除|消去|除去)[^\s、。のをにはが]{1,12}を|中身|値だけ|値を|空白|スペース|改行|色|背景|書式|罫線|メモ|コメント|リンク", scan_n):
+            _add_miss("行そのものではなく中身の語が含まれているため行削除しません")
 
 
 # ------------------------------------------------------------------ 1 節 → 1 op
@@ -2259,10 +2281,12 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and not _rows_of(c)
             )
             _m_col_del = re.search(r"([^\s、。のをにはが]{2,16}?)の?(?:列|カラム)", c)
+            _c_nfkc_cd = nfkc(c)
             has_cols_del_cue = bool(
-                re.search(r"(?:列|カラム)", c)
-                and re.search(r"消|削除|取り除|捨て", c)
-                and not re.search(r"中身|値だけ|値を|データだけ|クリア|スペース|余分な空白|色|背景|書式|罫線|太字|メモ|コメント|リンク|プルダウン|入力規則|フィルタ|フィルター|条件付き書式|重複|ダブ|数式|式だけ|非表示|隠|振り直|付け直|連番|行を|の行|行目", c)
+                _COL_DIRECT_DEL_RE.search(_c_nfkc_cd)
+                and re.search(r"消|削除|取り除|捨て", _c_nfkc_cd)
+                and not _COL_CONTENT_DEL_RE.search(_c_nfkc_cd)
+                and not _COL_PROP_OBJ_RE.search(_c_nfkc_cd)
                 and bool(_col_names(c, table) or _col_letters(c) or (_m_col_del and _resolve_col_ref(_m_col_del.group(1), table)))
             )
             has_summary_cue = bool(
