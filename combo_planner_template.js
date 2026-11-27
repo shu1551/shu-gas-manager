@@ -1736,9 +1736,43 @@ var ComboPlanner = (function () {
             else if (hasPctVal) pctGrounded = true;
           }
         }
-        if (pctGrounded === null) pctGrounded = /(?:率|割合|構成比|%|％)/.test(String(cmpCol));
-        if (pctGrounded && Math.abs(Number(cmpNumStr)) > 1.0) {
-          addMiss("%列「" + cmpCol + "」を1を超える値（" + cmpNumStr + "）で比較しているため確認が必要");
+        var pctGroundedName = (pctGrounded === null) ? /(?:率|割合|構成比|%|％)/.test(String(cmpCol)) : pctGrounded;
+        var cmpNumVal = Number(cmpNumStr);
+        if (Math.abs(cmpNumVal) > 1.0) {
+          if (shN === "cf.add" && (pctGrounded === true || pctGroundedName)) {
+            var spP = _dataSpan(tbl);
+            var r1P = spP ? spP[0] : ((tbl && tbl.header_row ? tbl.header_row : 1) + 1);
+            var r2P = spP ? spP[1] : r1P;
+            var pctColL = tbl ? _letterOf(tbl, cmpCol) : null;
+            if (pctColL) {
+              var decVal = String(Number((cmpNumVal / 100.0).toPrecision(10)));
+              var rawValS = String(Number(cmpNumVal.toPrecision(10)));
+              if (opObj.when === "formula" && typeof opObj.value === "string") {
+                var mFm2 = /^(.*?)(>=|<=|<>|>|<|=)\s*-?[0-9]+(?:\.[0-9]+)?(.*)$/.exec(opObj.value);
+                if (mFm2) {
+                  var lhsF = mFm2[1], opF = mFm2[2], rhsF = mFm2[3];
+                  if (pctGrounded === true) {
+                    opObj.value = lhsF + opF + decVal + rhsF;
+                  } else {
+                    var bodyDec = lhsF.replace(/^=/, "") + opF + decVal + rhsF;
+                    var bodyRaw = lhsF.replace(/^=/, "") + opF + rawValS + rhsF;
+                    opObj.value = "=IF(MAX($" + pctColL + "$" + r1P + ":$" + pctColL + "$" + r2P + ")<=1," + bodyDec + "," + bodyRaw + ")";
+                  }
+                }
+              } else if (opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "eq" || opObj.when === "ne") {
+                var opSymP = { gt: ">", ge: ">=", lt: "<", le: "<=", eq: "=", ne: "<>" }[opObj.when];
+                var cellP = pctColL + r1P;
+                opObj.when = "formula";
+                if (pctGrounded === true) {
+                  opObj.value = "=" + cellP + opSymP + decVal;
+                } else {
+                  opObj.value = "=IF(MAX($" + pctColL + "$" + r1P + ":$" + pctColL + "$" + r2P + ")<=1," + cellP + opSymP + decVal + "," + cellP + opSymP + rawValS + ")";
+                }
+              }
+            }
+          } else if (pctGroundedName) {
+            addMiss("%列「" + cmpCol + "」を1を超える値（" + cmpNumStr + "）で比較しているため確認が必要");
+          }
         }
       }
       if (shN === "filter.delete" && tbl && Array.isArray(tbl.rows) && tbl.rows.length && opObj.col) {
@@ -2511,6 +2545,9 @@ var ComboPlanner = (function () {
       while ((sm = sortReG.exec(nfkcTxt)) !== null) {
         var rawColS = sm[1].trim();
         var mappedColS = _resolveColRefJs(rawColS, table);
+        if (!mappedColS && rawColS.indexOf("の") >= 0) {
+          mappedColS = _resolveColRefJs(rawColS.split("の")[0].trim(), table);
+        }
         if (!mappedColS) {
           extraMissing.push("表に無い列名（" + rawColS + "）");
           continue;
@@ -2525,9 +2562,22 @@ var ComboPlanner = (function () {
         delete op.col;
         delete op.desc;
         named = true;
-      } else if (!_hasOwn(op, "desc")) {
-        if (new RegExp(descPatJs).test(nfkcTxt)) op.desc = true;
-        else if (new RegExp(ascPatJs).test(nfkcTxt)) op.desc = false;
+      } else {
+        if (typeof op.col === "string" && !_resolveColRefJs(op.col, table) && table) {
+          var escOpCol = nfkc(op.col).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          var mAlS = new RegExp("([^\\s、,のがは]{1,16})の" + escOpCol).exec(nfkcTxt);
+          if (mAlS) {
+            var resAl = _resolveColRefJs(mAlS[1].trim(), table);
+            if (resAl) { op.col = resAl; extraMissing = []; }
+          } else if (names.length === 1) {
+            op.col = names[0];
+            extraMissing = [];
+          }
+        }
+        if (!_hasOwn(op, "desc")) {
+          if (new RegExp(descPatJs).test(nfkcTxt)) op.desc = true;
+          else if (new RegExp(ascPatJs).test(nfkcTxt)) op.desc = false;
+        }
       }
     }
     if (shelf.name === "sheet.diff") {
@@ -2867,6 +2917,24 @@ var ComboPlanner = (function () {
       for (var cli2 = 0; cli2 < letters.length; cli2++) {
         if (!nameLetters[letters[cli2]] && chartCols.indexOf(letters[cli2]) < 0) chartCols.push(letters[cli2]);
       }
+      var cSpanRe = /([^\s、,。をにからの]{1,16})から([^\s、,。をにまでの]{1,16})(?:まで|の)/g;
+      var mCspan;
+      while ((mCspan = cSpanRe.exec(nfkc(text))) !== null) {
+        var caCh = _resolveColRefJs(mCspan[1].trim(), table);
+        var cbCh = _resolveColRefJs(mCspan[2].trim(), table);
+        if (caCh && cbCh && Array.isArray(table.columns)) {
+          var tblCnames = [];
+          for (var tci3 = 0; tci3 < table.columns.length; tci3++) {
+            if (table.columns[tci3] && table.columns[tci3].name) tblCnames.push(String(table.columns[tci3].name));
+          }
+          var iaCh = tblCnames.indexOf(caCh), ibCh = tblCnames.indexOf(cbCh);
+          if (iaCh >= 0 && ibCh > iaCh) {
+            for (var miCh = iaCh; miCh <= ibCh; miCh++) {
+              if (chartCols.indexOf(tblCnames[miCh]) < 0) chartCols.push(tblCnames[miCh]);
+            }
+          }
+        }
+      }
       var uChart = _resolveUniqueColsJs(scan, table, false, chartCols);
       for (var uci = 0; uci < uChart.length; uci++) {
         if (chartCols.indexOf(uChart[uci]) < 0) chartCols.push(uChart[uci]);
@@ -2915,6 +2983,13 @@ var ComboPlanner = (function () {
             extraMissing.push("グラフにする数値の列");
           }
         } else {
+          if (numColsCh.length >= 2) {
+            numColsCh.sort(function (a, b) {
+              var la = _letterOf(table, a) || (/^[A-Z]{1,3}$/.test(String(a)) ? String(a) : "ZZZ");
+              var lb = _letterOf(table, b) || (/^[A-Z]{1,3}$/.test(String(b)) ? String(b) : "ZZZ");
+              return _colNum(la) - _colNum(lb);
+            });
+          }
           var orderedCols = hasNumMetaCh ? labelCols.concat(numColsCh) : chartCols;
           var orderedLs = [];
           for (var oci = 0; oci < orderedCols.length; oci++) {
@@ -2935,9 +3010,18 @@ var ComboPlanner = (function () {
               if (contigAsc) {
                 op.range = orderedLs[0] + chR1 + ":" + orderedLs[orderedLs.length - 1] + chR2;
               } else {
-                var rParts = [];
-                for (var rpi = 0; rpi < orderedLs.length; rpi++) rParts.push(orderedLs[rpi] + chR1 + ":" + orderedLs[rpi] + chR2);
-                op.range = rParts.join(",");
+                var runsCh = [];
+                var stL = orderedLs[0], prevL = orderedLs[0];
+                for (var riCh = 1; riCh < orderedLs.length; riCh++) {
+                  if (_colNum(orderedLs[riCh]) === _colNum(prevL) + 1) {
+                    prevL = orderedLs[riCh];
+                  } else {
+                    runsCh.push(stL + chR1 + ":" + prevL + chR2);
+                    stL = prevL = orderedLs[riCh];
+                  }
+                }
+                runsCh.push(stL + chR1 + ":" + prevL + chR2);
+                op.range = runsCh.join(",");
               }
             }
             if (usedGroupSeries && labelCols.length === 1 && numColsCh.length >= 2 && /推移|月別|折れ線|ごと|別/.test(text)) {
@@ -3493,6 +3577,13 @@ var ComboPlanner = (function () {
     if (_allExplicitRanges(clause).length) return null;
     var cN = nfkc(clause);
     if (!/(?:ごと(?:に|の)|別(?:に|で|の))/.test(cN)) return null;
+    if (!/集計|合計|平均|件数|人数|回数|の数(?![量値字列])|回答数|カウント/.test(cN)) {
+      var wsRe = /([^\s、,。をにからの]{1,16})から([^\s、,。をにまでの]{1,16})(?:まで|の)/g;
+      var mWs;
+      while ((mWs = wsRe.exec(cN)) !== null) {
+        if (_resolveColRefJs(mWs[1].trim(), table) && _resolveColRefJs(mWs[2].trim(), table)) return null;
+      }
+    }
     var byCol = null;
     var mBy = /([^\s・、をにのはが]{1,16}?)(?:ごと(?:に|の)|別(?:に|で|の))/.exec(cN);
     if (mBy) byCol = _resolveColRefJs(mBy[1].trim(), table);
@@ -3509,7 +3600,7 @@ var ComboPlanner = (function () {
       }
       return false;
     };
-    var func = /件数|人数|回数|の数|回答数|カウント/.test(cN) ? "count" : (cN.indexOf("平均") >= 0 ? "avg" : null);
+    var func = /件数|人数|回数|の数(?![量値字列])|回答数|カウント/.test(cN) ? "count" : (cN.indexOf("平均") >= 0 ? "avg" : null);
     var valCols = [];
     if (func === "count") {
       valCols = [byCol];

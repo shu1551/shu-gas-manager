@@ -1510,14 +1510,42 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
                     elif has_pct_val:
                         pct_grounded = True
             if pct_grounded is None:
-                pct_grounded = bool(re.search(r"(?:率|割合|構成比|%|％)", str(cmp_col)))
-            if pct_grounded:
-                try:
-                    cmp_num = float(cmp_num_str)
-                    if abs(cmp_num) > 1.0:
-                        _add_miss(f"%列「{cmp_col}」を1を超える値（{cmp_num_str}）で比較しているため確認が必要")
-                except Exception:
-                    pass
+                pct_grounded_name = bool(re.search(r"(?:率|割合|構成比|%|％)", str(cmp_col)))
+            else:
+                pct_grounded_name = pct_grounded
+            try:
+                cmp_num = float(cmp_num_str)
+            except Exception:
+                cmp_num = None
+            if cmp_num is not None and abs(cmp_num) > 1.0:
+                if sh_name == "cf.add" and (pct_grounded is True or pct_grounded_name):
+                    sp_p = _data_span(table) if table else None
+                    r1_p = sp_p[0] if sp_p else ((table.get("header_row") or 1) + 1 if table else 2)
+                    r2_p = sp_p[1] if sp_p else r1_p
+                    pct_col_l = _letter_of(table, cmp_col) if table else None
+                    if pct_col_l:
+                        dec_val = f"{cmp_num / 100.0:.10g}"
+                        raw_val_s = f"{cmp_num:.10g}"
+                        if op.get("when") == "formula" and isinstance(op.get("value"), str):
+                            m_fm2 = re.search(r"^(.*?)(>=|<=|<>|>|<|=)\s*-?[0-9]+(?:\.[0-9]+)?(.*)$", op["value"])
+                            if m_fm2:
+                                lhs_f, op_f, rhs_f = m_fm2.group(1), m_fm2.group(2), m_fm2.group(3)
+                                if pct_grounded is True:
+                                    op["value"] = f"{lhs_f}{op_f}{dec_val}{rhs_f}"
+                                else:
+                                    body_dec = f"{lhs_f.lstrip('=')}{op_f}{dec_val}{rhs_f}"
+                                    body_raw = f"{lhs_f.lstrip('=')}{op_f}{raw_val_s}{rhs_f}"
+                                    op["value"] = f"=IF(MAX(${pct_col_l}${r1_p}:${pct_col_l}${r2_p})<=1,{body_dec},{body_raw})"
+                        elif op.get("when") in ("gt", "ge", "lt", "le", "eq", "ne"):
+                            op_sym_p = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "=", "ne": "<>"}[op["when"]]
+                            cell_p = f"{pct_col_l}{r1_p}"
+                            op["when"] = "formula"
+                            if pct_grounded is True:
+                                op["value"] = f"={cell_p}{op_sym_p}{dec_val}"
+                            else:
+                                op["value"] = f"=IF(MAX(${pct_col_l}${r1_p}:${pct_col_l}${r2_p})<=1,{cell_p}{op_sym_p}{dec_val},{cell_p}{op_sym_p}{raw_val_s})"
+                elif pct_grounded_name:
+                    _add_miss(f"%列「{cmp_col}」を1を超える値（{cmp_num_str}）で比較しているため確認が必要")
         if sh_name == "filter.delete" and table and isinstance(table.get("rows"), list) and table["rows"] and op.get("col"):
             cols_l = table.get("columns") or []
             col_idx = next((idx for idx, c_inf in enumerate(cols_l) if c_inf.get("name") == op["col"] or c_inf.get("col") == op["col"]), -1)
@@ -2080,6 +2108,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         ):
             raw_c = sm.group(1).strip()
             col_c = _resolve_col_ref(raw_c, table)
+            if not col_c and "の" in raw_c:
+                col_c = _resolve_col_ref(raw_c.split("の", 1)[0].strip(), table)
             if not col_c:
                 extra_missing.append(f"表に無い列名（{raw_c}）")
                 continue
@@ -2092,11 +2122,22 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op.pop("col", None)
             op.pop("desc", None)
             named = True
-        elif "desc" not in op:
-            if re.search(_desc_pat, nfkc_t):
-                op["desc"] = True
-            elif re.search(_asc_pat, nfkc_t):
-                op["desc"] = False
+        else:
+            if isinstance(op.get("col"), str) and not _resolve_col_ref(op["col"], table) and table:
+                m_al_s = re.search(r"([^\s、,のがは]{1,16})の" + re.escape(nfkc(op["col"])), nfkc_t)
+                if m_al_s:
+                    res_al = _resolve_col_ref(m_al_s.group(1).strip(), table)
+                    if res_al:
+                        op["col"] = res_al
+                        extra_missing = []
+                elif len(names) == 1:
+                    op["col"] = names[0]
+                    extra_missing = []
+            if "desc" not in op:
+                if re.search(_desc_pat, nfkc_t):
+                    op["desc"] = True
+                elif re.search(_asc_pat, nfkc_t):
+                    op["desc"] = False
     if shelf["name"] == "sheet.diff":
         op.pop("sheet", None)
         if sheet_hits and (op.get("from") == op.get("to") or "from" not in op or "to" not in op):
@@ -2268,6 +2309,17 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             op["values"] = [next(iter(group_cols))]
     if shelf["name"] == "chart.new" and not op.get("edit") and not explicit_range and table:
         chart_cols = list(names) + [x for x in letters if x not in [_letter_of(table, n) for n in names]]
+        for m_cspan in re.finditer(r"([^\s、,。をにからの]{1,16})から([^\s、,。をにまでの]{1,16})(?:まで|の)", nfkc(text)):
+            ca = _resolve_col_ref(m_cspan.group(1).strip(), table)
+            cb = _resolve_col_ref(m_cspan.group(2).strip(), table)
+            if ca and cb:
+                tbl_cnames = [str(c.get("name") or "") for c in table.get("columns") or [] if c.get("name")]
+                if ca in tbl_cnames and cb in tbl_cnames:
+                    ia, ib = tbl_cnames.index(ca), tbl_cnames.index(cb)
+                    if ia < ib:
+                        for mid_c in tbl_cnames[ia:ib + 1]:
+                            if mid_c not in chart_cols:
+                                chart_cols.append(mid_c)
         for uc in _resolve_unique_cols(scan, table, number_only=False, exclude=chart_cols):
             if uc not in chart_cols:
                 chart_cols.append(uc)
@@ -2307,6 +2359,8 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 if not (re.search(r"ごと(?:に|の)|別(?:に|で|の)", nfkc(text)) and re.search(r"件数|人数|回数|の数|回答数|カウント", nfkc(text))):
                     extra_missing.append("グラフにする数値の列")
             else:
+                if len(num_cols) >= 2:
+                    num_cols = sorted(num_cols, key=lambda x: _col_num(_letter_of(table, x) or (x if re.fullmatch(r"[A-Z]{1,3}", str(x)) else "ZZZ")))
                 ordered_cols = label_cols + num_cols if has_num_meta else chart_cols
                 ordered_ls = []
                 for oc in ordered_cols:
@@ -2325,7 +2379,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                         if is_contig_asc:
                             op["range"] = f"{ordered_ls[0]}{ch_r1}:{ordered_ls[-1]}{ch_r2}"
                         else:
-                            op["range"] = ",".join(f"{x}{ch_r1}:{x}{ch_r2}" for x in ordered_ls)
+                            runs = []
+                            st_l = prev_l = ordered_ls[0]
+                            for xl in ordered_ls[1:]:
+                                if _col_num(xl) == _col_num(prev_l) + 1:
+                                    prev_l = xl
+                                else:
+                                    runs.append(f"{st_l}{ch_r1}:{prev_l}{ch_r2}")
+                                    st_l = prev_l = xl
+                            runs.append(f"{st_l}{ch_r1}:{prev_l}{ch_r2}")
+                            op["range"] = ",".join(runs)
                     if used_group_series and len(label_cols) == 1 and len(num_cols) >= 2 and re.search(r"推移|月別|折れ線|ごと|別", text):
                         op["transpose"] = True
     if shelf["name"] == "date.parts" and "part" not in op:
@@ -2671,6 +2734,10 @@ def _chart_summary_ops(op, clause, table):
     c_n = nfkc(clause)
     if not re.search(r"(?:ごと(?:に|の)|別(?:に|で|の))", c_n):
         return None
+    if not re.search(r"集計|合計|平均|件数|人数|回数|の数(?![量値字列])|回答数|カウント", c_n):
+        for m_ws in re.finditer(r"([^\s、,。をにからの]{1,16})から([^\s、,。をにまでの]{1,16})(?:まで|の)", c_n):
+            if _resolve_col_ref(m_ws.group(1).strip(), table) and _resolve_col_ref(m_ws.group(2).strip(), table):
+                return None
     # 軸列（by）を解決
     by_col = None
     m_by = re.search(r"([^\s・、をにのはが]{1,16}?)(?:ごと(?:に|の)|別(?:に|で|の))", c_n)
@@ -2679,7 +2746,7 @@ def _chart_summary_ops(op, clause, table):
     if not by_col:
         return None
     # 値列（values）を解決
-    func = "count" if re.search(r"件数|人数|回数|の数|回答数|カウント", c_n) else ("avg" if "平均" in c_n else None)
+    func = "count" if re.search(r"件数|人数|回数|の数(?![量値字列])|回答数|カウント", c_n) else ("avg" if "平均" in c_n else None)
     val_cols = []
     if func == "count":
         val_cols = [by_col]
