@@ -402,6 +402,14 @@ def _extract_calc_expr(text, table):
         s = re.sub(r"^[\s、,。をにで]+|[\s、,。をにで]+$", "", str(raw or "").strip())
         if not s:
             return None
+        m_pow = re.fullmatch(r"(.+?)の([0-9]+(?:\.[0-9]+)?)乗", s)
+        if m_pow:
+            base_c = _clean_operand(m_pow.group(1))
+            return f"POWER({base_c},{m_pow.group(2)})" if base_c else None
+        m_sqrt = re.fullmatch(r"(.+?)の平方根|(?:平方根|ルート)\s*(.+)", s)
+        if m_sqrt:
+            base_c = _clean_operand(m_sqrt.group(1) or m_sqrt.group(2))
+            return f"SQRT({base_c})" if base_c else None
         if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", s):
             return s
         res = _resolve_col_ref(s, table)
@@ -427,6 +435,12 @@ def _extract_calc_expr(text, table):
                 b = _clean_operand(m.group(2))
                 if a and b:
                     return f"{a}{sym}{b}"
+    for cand_src in cands:
+        m_solo = re.search(r"([^\s、,。をにで]{1,20}の(?:[0-9]+(?:\.[0-9]+)?乗|平方根))", cand_src)
+        if m_solo:
+            res_s = _clean_operand(m_solo.group(1))
+            if res_s:
+                return res_s
     return None
 
 
@@ -602,7 +616,7 @@ def _cf_blank_today_expr(text, ref_l, r1):
     return ""
 
 
-_CF_NUM_CMP_RE = re.compile(r"(-?[0-9][0-9,\.]*)\s*([万億千]?)\s*(?:円|個|件|人|点|日|%)?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)")
+_CF_NUM_CMP_RE = re.compile(r"(-?[0-9][0-9,\.]*)\s*([万億千]?)\s*(?:(?!(?:以上|以下|未満|より|超|上回|下回))[^\s、。0-9]{0,6})?\s*(以上|以下|未満|より大きい|より小さい|を超え(?:る|た)?|超え?|を下回る|を上回る)")
 _YEAR_CMP_RE = re.compile(r"((?:19|20)[0-9]{2})年(以前|まで|以降|から|より前|より後|より新しい|より古い)")
 
 
@@ -1434,12 +1448,41 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
                         cmp_col = c_inf["name"]
                         break
         if cmp_col and _PCT_COL_RE.search(str(cmp_col)) and cmp_num_str is not None:
-            try:
-                cmp_num = float(cmp_num_str)
-                if abs(cmp_num) > 1.0:
-                    _add_miss(f"%列「{cmp_col}」を1を超える値（{cmp_num_str}）で比較しているため確認が必要")
-            except Exception:
-                pass
+            pct_grounded = None
+            cols_meta = (table or {}).get("columns") or []
+            col_idx_p = next((idx for idx, ci in enumerate(cols_meta) if ci.get("name") == cmp_col or ci.get("col") == cmp_col), -1)
+            if col_idx_p >= 0:
+                c_meta = cols_meta[col_idx_p]
+                fmt_p = str(c_meta.get("number_format") or c_meta.get("numberFormat") or c_meta.get("format") or "")
+                if c_meta.get("percent") is True or "%" in fmt_p or "％" in fmt_p:
+                    pct_grounded = True
+                elif fmt_p:
+                    pct_grounded = False
+                elif isinstance((table or {}).get("rows"), list) and table["rows"]:
+                    has_gt1, has_pct_val = False, False
+                    for r_row in table["rows"]:
+                        if isinstance(r_row, (list, tuple)) and col_idx_p < len(r_row):
+                            rv = r_row[col_idx_p]
+                            if isinstance(rv, str) and ("%" in rv or "％" in rv):
+                                has_pct_val = True
+                            elif isinstance(rv, (int, float)) and not isinstance(rv, bool):
+                                if abs(rv) > 1.0:
+                                    has_gt1 = True
+                                elif 0 < abs(rv) <= 1.0:
+                                    has_pct_val = True
+                    if has_gt1:
+                        pct_grounded = False
+                    elif has_pct_val:
+                        pct_grounded = True
+            if pct_grounded is None:
+                pct_grounded = bool(re.search(r"(?:率|割合|構成比|%|％)", str(cmp_col)))
+            if pct_grounded:
+                try:
+                    cmp_num = float(cmp_num_str)
+                    if abs(cmp_num) > 1.0:
+                        _add_miss(f"%列「{cmp_col}」を1を超える値（{cmp_num_str}）で比較しているため確認が必要")
+                except Exception:
+                    pass
         if sh_name == "filter.delete" and table and isinstance(table.get("rows"), list) and table["rows"] and op.get("col"):
             cols_l = table.get("columns") or []
             col_idx = next((idx for idx, c_inf in enumerate(cols_l) if c_inf.get("name") == op["col"] or c_inf.get("col") == op["col"]), -1)
@@ -2955,7 +2998,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 or re.search(r"IF文|条件分岐|判定列", c, re.IGNORECASE)
             ) and "calc.if" in finder.cat.by_name:
                 _ensure_boost("calc.if")
-            elif re.search(r"経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数", c) and not has_row_cf_cue and not has_row_del_cond and not has_filter_where_cue and len(_col_names(c, table)) <= 1 and "date.age" in finder.cat.by_name:
+            elif re.search(r"経過年数|経過月数|経過日数|勤続年数|勤続月数|在籍年数|満?年齢|築年数", c) and not re.search(r"順|並べ|ソート", c) and not has_row_cf_cue and not has_row_del_cond and not has_filter_where_cue and len(_col_names(c, table)) <= 1 and "date.age" in finder.cat.by_name:
                 _ensure_boost("date.age")
             elif (
                 re.search(r"(?:^|[\s、。]|から)(?:年|月|日|曜日|年度|四半期)の?(?:列|欄)", c)
