@@ -393,7 +393,7 @@ SHELF['date.fix'] = function (ctx, op) {
     var v0 = vals[r0][c0];
     if (v0 instanceof Date && !isNaN(v0.getTime())) { year = v0.getFullYear(); if (!dateFmt && fmts[r0][c0] && fmts[r0][c0] !== '@') dateFmt = fmts[r0][c0]; }
   }
-  var targetFmt = dateFmt || 'yyyy/mm/dd';
+  var targetFmt = op.format ? String(op.format) : 'yyyy/mm/dd';   // 名指しが無ければ西暦の yyyy/mm/dd にそろえる
   var z2h = function (x) {
     return x
       .replace(/[０-９Ａ-Ｚａ-ｚ]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
@@ -406,7 +406,8 @@ SHELF['date.fix'] = function (ctx, op) {
     var v = vals[r][c];
     if (forms[r][c]) continue;
     if (v instanceof Date && !isNaN(v.getTime())) {
-      if (op.format && fmts[r][c] !== targetFmt) { fmts[r][c] = targetFmt; fmtOnly++; }
+      // 本物の日付も、表示の形（2022-04-01・2021/4/1 など）を 1 つにそろえる（値は触らない）
+      if (fmts[r][c] !== targetFmt) { fmts[r][c] = targetFmt; fmtOnly++; }
       continue;
     }
     if (typeof v !== 'string' || !v.trim()) continue;

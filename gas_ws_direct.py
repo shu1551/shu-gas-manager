@@ -524,8 +524,8 @@ class DirectRunner:
                 pass
             else:
                 raise Skip("直接の道に無い棚")
-        if tb:   # 覚えている表の形が今と同じかを確かめる見出しの行
-            ranges.add(f"{q(sheet)}!{tb['first_col']}{tb['header_row']}:{tb['last_col']}{tb['header_row']}")
+        if tb:   # 覚えている表の形が今と同じかを確かめる見出しの行（2 段見出しは 2 段とも）
+            ranges.add(f"{q(sheet)}!{tb['first_col']}{tb['header_row']}:{tb['last_col']}{int(tb['header_row']) + int(tb.get('header_rows') or 1) - 1}")
         return sorted(ranges)
 
     @staticmethod
@@ -1229,8 +1229,18 @@ class DirectRunner:
                 tim.lap("直接:読む")
             if tb:      # 覚えている見出しが今の見出しと同じか（違えばエンジンの道でその場の形を見る）
                 ent = before.sheet(sheet)
-                now = [Snapshot.value_text(ent["cells"].get((tb["header_row"], col_num(c["col"])))) for c in tb.get("columns") or []]
-                if now != [str(c.get("name")) for c in tb.get("columns") or []]:
+                h_n = int(tb.get("header_rows") or 1)
+                if h_n > 1:
+                    # 2 段見出し: 列名は「親・子」。下の段（無ければ上の段＝縦の結合）の文字と、名前の「・」の後ろを比べる
+                    hb = int(tb["header_row"]) + h_n - 1
+                    now = [Snapshot.value_text(ent["cells"].get((hb, col_num(c["col"])))) or Snapshot.value_text(ent["cells"].get((tb["header_row"], col_num(c["col"]))))
+                           for c in tb.get("columns") or []]
+                    want = [str(c.get("name")).split("・")[-1] for c in tb.get("columns") or []]
+                else:
+                    now = [Snapshot.value_text(ent["cells"].get((tb["header_row"], col_num(c["col"])))) for c in tb.get("columns") or []]
+                    want = [str(c.get("name")) for c in tb.get("columns") or []]
+                if now != want:
+                    st["direct_last_skip"] = "見出しが覚えた形と違う"
                     return None
             req, undo, changed, touched = self._build(ops, sheet, tb, before)
             already = getattr(self, "_last_already", []) or []
@@ -2438,8 +2448,7 @@ def lower_ops(ops, light, sheet, sheet_names=None, light_of=None, ok=False):
     if not light or not light.get("table") or not ops:
         return None
     tb = light["table"]
-    if int(tb.get("header_rows") or 1) > 1:
-        return None
+    hrs = int(tb.get("header_rows") or 1)       # 2 段見出しは、新しい列の見出しを 2 段ぶん縦に結合する（エンジンの copyHeaderStyle_ と同じ）
     m = re.fullmatch(r"(\d+)-(\d+)", str(tb.get("data") or ""))
     if not m:
         return None
@@ -2578,6 +2587,21 @@ def lower_ops(ops, light, sheet, sheet_names=None, light_of=None, ok=False):
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return f"{int(v):,}" if float(v).is_integer() else f"{v:,.2f}"
         return str(v if v is not None else "")
+
+    cur_sid = light["snap"].sheet(sheet)["props"]["sheetId"]
+
+    def add_header(at, name):
+        """新しい列の見出し: 左端の列の見出しの書式を写し、上の段に名前・中央寄せ。2 段なら縦に結合（戻しは結合を外す）"""
+        hb = hr + hrs - 1
+        copies.append({"shelf": "fmt.copy", "from": f"{col_letter(first_c)}{hr}:{col_letter(first_c)}{hb}", "to": f"{col_letter(at)}{hr}:{col_letter(at)}{hb}"})
+        put(hr, at, name)
+        reqs = [{"repeatCell": {"range": grid(cur_sid, hr, at, hb, at), "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+                                "fields": "userEnteredFormat.horizontalAlignment"}}]
+        und = []
+        if hrs > 1:
+            reqs.append({"mergeCells": {"range": grid(cur_sid, hr, at, hb, at), "mergeType": "MERGE_ALL"}})
+            und.append({"unmergeCells": {"range": grid(cur_sid, hr, at, hb, at)}})
+        news.append({"shelf": "_raw", "requests": reqs, "undo": und, "touch": [(sheet, hr, at, hb, at)]})
 
     next_col = last_c + 1
     for op in ops:
@@ -2972,8 +2996,7 @@ def lower_ops(ops, light, sheet, sheet_names=None, light_of=None, ok=False):
                 at = next_col
                 next_col += 1
                 name = op.get("name") or {"out": "税抜", "tax": "消費税"}.get(mode, "税込")
-                copies.append({"shelf": "fmt.copy", "from": f"{col_letter(first_c)}{hr}", "to": f"{col_letter(at)}{hr}"})
-                put(hr, at, name)
+                add_header(at, name)
                 L = col_letter(ci)
                 for r in range(r_a, r_b + 1):
                     ref = f"{L}{r}"
@@ -3000,6 +3023,12 @@ def lower_ops(ops, light, sheet, sheet_names=None, light_of=None, ok=False):
                     nf = (((cell(r_a, rc).get("effectiveFormat") or {}).get("numberFormat")) or {}).get("type")
                     if nf in ("DATE", "TIME", "DATE_TIME") or re.search(r"日付|日$|時刻|時間|開始|終了|出勤|退勤|納期|期限", hn):
                         return None
+                if hrs >= 2 and not op.get("at"):
+                    # エンジンは、親・子の 2 段見出しで同じ親の列だけを使う式を、その組の中に差し込む＝列の差し込みはエンジンの道で
+                    ref_names = [h for h in hs if h in expr]
+                    parents = {h.split("・", 1)[0] for h in ref_names if "・" in h}
+                    if len(ref_names) >= 2 and len(parents) == 1 and all("・" in h for h in ref_names):
+                        return None
                 if op.get("at"):
                     if str(op["at"]).strip() != name or name not in name2c:
                         return None   # 差し込みはエンジンの道で
@@ -3007,8 +3036,7 @@ def lower_ops(ops, light, sheet, sheet_names=None, light_of=None, ok=False):
                 else:
                     at = next_col
                     next_col += 1
-                    copies.append({"shelf": "fmt.copy", "from": f"{col_letter(first_c)}{hr}", "to": f"{col_letter(at)}{hr}"})
-                    put(hr, at, name)
+                    add_header(at, name)
 
                 def mk(r, expr=expr, hs=hs):
                     f = expr
