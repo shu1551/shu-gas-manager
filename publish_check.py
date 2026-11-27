@@ -188,7 +188,7 @@ def main():
             print(f"  [NG] .gitignore に '{must_ignore}' が含まれていません")
             bad += 1
 
-    allowed_local = set(PUBLIC_FILES) | {".github", "queue", "combo_ui_parts", "combo_server_parts", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
+    allowed_local = set(PUBLIC_FILES) | {".github", "queue", "combo_ui_parts", "combo_server_parts", ".git", ".backups", ".pytest_cache", "__pycache__", ".cache.json", ".content_cache.json", ".last_run.json", ".gas-sync.json", ".ws_state.json", ".ws_agent_last.jsonl", ".ws_agent_runs.jsonl", ".mocks", "screenshots", "gas_local_extras.py", "aliases.json", "index_restored.html",
                                                   # 公開しない物（試験の道具・試験場の記録・手元の記録）。公開物に入らないことは、ホワイトリストと上の禁止パターンで見る
                                                   "ws_exam", "ws_shelves", "ws_trial", "gas_ws_ai.py", "gas_ws_coverage.py", "gas_ws_exam.py", "gas_ws_judge.py", "gas_ws_props.py", "gas_ws_sealreport.py", "gas_ws_shot.py", "gas_ws_tables.py", "gas_ws_trial.py",
                                                   "test_gas_ws_167.py", "test_gas_ws_ai.py", "test_gas_ws_coverage.py", "test_gas_ws_exam.py", "test_gas_ws_judge_extra.py", "test_gas_ws_lane.py", "test_gas_ws_props.py", "test_gas_ws_shot.py", "test_gas_ws_shot_sealed.py", "test_gas_ws_speed.py", "test_gas_ws_trial.py", "test_gas_ws_undo_side.py",
