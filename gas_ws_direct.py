@@ -33,7 +33,7 @@ DIRECT_SHELVES = {"format", "format.negred", "font.unify", "bg.clear", "freeze",
                   "clear.values", "clear.format", "sort", "rows.insert", "cols.insert", "cf.clear",
                   "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "sheet.gridlines",
                   "filter.on", "filter.off", "rows.hide", "rows.show", "cols.hide", "cols.show",
-                  "note.set", "note.clear"}
+                  "note.set", "note.clear", "fmt.copy"}
 _SHARED_DEFS_FILE = Path(__file__).resolve().parent / "ws_shared_defs.json"
 
 
@@ -455,6 +455,12 @@ class DirectRunner:
                 for k in op["cells"]:
                     parse_a1(k)
                     ranges.add(f"{q(sh)}!{k}")
+            elif s == "fmt.copy":      # 直の道の中だけの手（値を書く棚を組み替えたときの書式の写し）
+                fr1, fc1, fr2, fc2 = parse_a1(op["from"])
+                tr1, tc1, tr2, tc2 = parse_a1(op["to"])
+                if (fr2 - fr1, fc2 - fc1) != (tr2 - tr1, tc2 - tc1):
+                    raise Skip("写しの大きさが違う")
+                ranges.add(f"{q(sh)}!{op['to']}")
             elif s in ("sheet.rename", "sheet.hide", "sheet.color"):
                 if op.get("name"):
                     ranges.add(f"{q(op['name'])}!A1")
@@ -696,6 +702,18 @@ class DirectRunner:
                     raise Skip("幅の指定が無い")
                 area(shn, 0, 0, 0, 0)
                 changed.append(f"{shn}!{'・'.join(did)} 幅・高さを変更")
+            elif s == "fmt.copy":
+                fr1, fc1, fr2, fc2 = parse_a1(op["from"])
+                tr1, tc1, tr2, tc2 = parse_a1(op["to"])
+                rows_u = []
+                for r in range(tr1, tr2 + 1):
+                    rows_u.append({"values": [{"userEnteredFormat": ((ent["cells"].get((r, c)) or {}).get("userEnteredFormat") or {})}
+                                              for c in range(tc1, tc2 + 1)]})
+                undo.insert(0, {"updateCells": {"start": {"sheetId": sid, "rowIndex": tr1 - 1, "columnIndex": tc1 - 1},
+                                                "rows": rows_u, "fields": "userEnteredFormat"}})
+                req.append({"copyPaste": {"source": grid(sid, fr1, fc1, fr2, fc2), "destination": grid(sid, tr1, tc1, tr2, tc2),
+                                          "pasteType": "PASTE_FORMAT", "pasteOrientation": "NORMAL"}})
+                area(shn, tr1, tc1, tr2, tc2)
             elif s == "write":
                 for k, v in op["cells"].items():
                     r1, c1, r2, c2 = parse_a1(k)
@@ -1009,6 +1027,11 @@ class DirectRunner:
         if not ops or any(o.get("shelf") not in DIRECT_SHELVES for o in ops):
             return None
         if any(o.get("shelf") == "write" for o in ops) and len(ops) > 1:
+            # 値を書く棚を組み替えた手（write 1 本＋書式・書式の写し）だけは一緒に撃つ（書式が先・値が後）
+            if not (sum(1 for o in ops if o.get("shelf") == "write") == 1
+                    and all(o.get("shelf") in ("write", "format", "fmt.copy") for o in ops)):
+                return None
+        if any(o.get("shelf") == "fmt.copy" for o in ops) and not any(o.get("shelf") == "write" for o in ops):
             return None
         tc = self.mgr._cached_table(st, tgt) or {}
         sheet = tgt.get("sheet") or tc.get("sheet") or ""
@@ -1071,6 +1094,12 @@ class DirectRunner:
         led = st.setdefault("direct_ledger", [])
         n = (max([x["n"] for x in led], default=0) + 1)
         after_ranges = sorted(set(ranges) | {f"{q(s)}!{a1(r1, c1, r2, c2)}" for s, r1, c1, r2, c2 in touched if r1})
+        if tb and any(o.get("shelf") == "write" for o in ops):
+            # 検算（合計＝明細の和）・前→後は表全体で見る（書いたセルだけ読むと、明細の一部しか足せず食い違いに見える）
+            _f, _l = self._table_rows(tb)
+            _end = max(_l, int(tb.get("total_row") or 0))
+            _lc = max([col_num(tb["last_col"])] + [c2 for s, r1, c1, r2, c2 in touched if r1 and s == sheet])
+            after_ranges = sorted(set(after_ranges) | {f"{q(sheet)}!A1:{col_letter(_lc)}{_end}"})
         writes = any(o.get("shelf") in ("write", "clear.values", "sort", "rows.insert", "cols.insert") for o in ops)
         after, fp = None, None
         if writes:     # 値を書いたときは、新しいエラーを返事に入れるので、ここで読み直す
@@ -1110,6 +1139,11 @@ class DirectRunner:
                 if after:
                     b_map = snapshot_cell_map(before, sheet)
                     a_map = snapshot_cell_map(after, out_t["sheet"])
+                    # 前→後は触ったセルだけで比べる（読み直しは表全体、撃つ前の読みは触るセルだけなので）
+                    _rects = [(r1, c1, r2, c2) for s_, r1, c1, r2, c2 in touched if r1 and s_ in (sheet, out_t["sheet"])]
+                    _in = lambda k: any(r1 <= k[0] <= r2 and c1 <= k[1] <= c2 for r1, c1, r2, c2 in _rects)
+                    a_map = {k: v for k, v in a_map.items() if _in(k)}
+                    b_map = {k: v for k, v in b_map.items() if _in(k)}
                     diff_cells = gas_ws_insights.diff_cell_values(b_map, a_map)
                     v_grid, f_grid, _ = snapshot_to_grids(after, out_t["sheet"], tb)
                     verify = gas_ws_insights.verify_after_do(tb, v_grid, f_grid, ops=ops)
@@ -2037,3 +2071,269 @@ def trace(mgr, st, sid, sheet, cell, depth=3, max_nodes=40):
     if count[0] >= max_nodes:
         lines.append(f"（{max_nodes} か所で打ち切り）")
     return lines
+
+
+# ---------------------------------------------------------------- 値を書く棚の組み替え（直の道に乗せる）
+# エンジン（workspace_engine.gs ＋ ws_shelves）の棚と同じ結果になる「普通の場合」だけを write（値と式）＋ format ＋ fmt.copy に組み替える。
+# 日付・2 段見出し・列の差し込み・人の判断が要る物は組み替えず None を返す（エンジンの道へ）。
+# 棚の振る舞いを変えたら、ここも同じに直す（sheet_filter.gs の seiri・sheet_range.gs の phone.fix・sheet_formula.gs の calc.tax/calc.col・sheet_make.gs の total）
+_LOW_NUM_FMT = "#,##0"
+_LOW_CODE_HEAD = re.compile(r"(?:郵便|〒|電話|携帯|TEL|FAX|社員番号|社員ID|会員番号|会員ID|顧客番号|顧客ID|管理番号|注文番号|伝票番号|口座番号|商品コード|コード|品番|型番)", re.I)
+_LOW_NUM_RE = re.compile(r"^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$")
+_LOW_AUTO_PARSE = re.compile(r"^[=+\-@]|^\s*[-+]?[\d０-９][\d０-９,，.．/／:：\-－年月日%％\s]*$|^(true|false)$", re.I)
+_LOW_NO_SUM_HEAD = re.compile(r"(?:単価|価格|率|％|%|平均|割合|年齢|日付|年月)")
+
+
+def _zen2han(s):
+    return re.sub(r"[！-～]", lambda m: chr(ord(m.group(0)) - 0xFEE0), s).replace("　", " ")
+
+
+def _low_phone(raw):
+    """phone.fix の fmtPhone と同じ"""
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and float(raw).is_integer() and raw > 0:
+        s = str(int(raw))
+        if len(s) in (9, 10):
+            s = "0" + s
+    elif isinstance(raw, str):
+        s = raw.strip()
+    else:
+        return None
+    if not s:
+        return None
+    h = re.sub(r"[０-９]", lambda m: chr(ord(m.group(0)) - 0xFEE0), s)
+    h = re.sub(r"[－ー―‐−]", "-", h).replace("（", "(").replace("）", ")").replace("　", " ")
+    d = re.sub(r"[^\d]", "", h)
+    if len(d) < 10 or len(d) > 11 or d[0] != "0":
+        return None
+    if len(d) == 11:
+        if d.startswith("0800"):
+            return f"{d[:4]}-{d[4:7]}-{d[7:]}"
+        return f"{d[:3]}-{d[3:7]}-{d[7:]}"
+    if d.startswith("0120"):
+        return f"{d[:4]}-{d[4:7]}-{d[7:]}"
+    if re.match(r"^0[36]", d):
+        return f"{d[:2]}-{d[2:6]}-{d[6:]}"
+    grp = [x for x in re.split(r"[\s\-]+", re.sub(r"[()]", " ", h).strip()) if re.fullmatch(r"\d+", x)]
+    if len(grp) == 3 and "".join(grp) == d and 2 <= len(grp[0]) <= 5 and len(grp[2]) == 4:
+        return "-".join(grp)
+    return f"{d[:3]}-{d[3:6]}-{d[6:]}"
+
+
+def lower_ops(ops, light, sheet):
+    """ops を直の道で撃てる形に組み替える。戻り値 (新しい ops, 直した所の文[]) か None（組み替えない）"""
+    if not light or not light.get("table") or not ops:
+        return None
+    tb = light["table"]
+    if int(tb.get("header_rows") or 1) > 1:
+        return None
+    m = re.fullmatch(r"(\d+)-(\d+)", str(tb.get("data") or ""))
+    if not m:
+        return None
+    r_a, r_b = int(m.group(1)), int(m.group(2))
+    hr = int(tb["header_row"])
+    tot = int(tb.get("total_row") or 0)
+    cells = (light["snap"].sheet(sheet).get("cells")) or {}
+    cols = tb.get("columns") or []
+    name2c = {str(c.get("name") or "").strip(): col_num(c["col"]) for c in cols if c.get("col")}
+    first_c, last_c = col_num(tb["first_col"]), col_num(tb["last_col"])
+    writes, fmts, copies, said = {}, [], [], []
+
+    def cell(r, c):
+        return cells.get((r, c)) or {}
+
+    def formula(r, c):
+        return str(((cell(r, c).get("userEnteredValue")) or {}).get("formulaValue") or "")
+
+    def raw(r, c):
+        uv = cell(r, c).get("userEnteredValue") or {}
+        if "stringValue" in uv:
+            return uv["stringValue"]
+        if "numberValue" in uv:
+            return uv["numberValue"]
+        return None
+
+    def col_of(name):
+        k = str(name or "").strip()
+        if k in name2c:
+            return name2c[k]
+        if re.fullmatch(r"[A-Z]{1,3}", k):
+            return col_num(k)
+        return None
+
+    def put(r, c, v):
+        k = f"{col_letter(c)}{r}"
+        if k in writes:
+            raise Skip("同じセルを 2 回書く")
+        writes[k] = v
+
+    next_col = last_c + 1
+    for op in ops:
+        if not isinstance(op, dict) or (op.get("sheet") and op.get("sheet") != sheet):
+            return None
+        s = op.get("shelf")
+        try:
+            if s == "seiri":
+                if not op.get("col") or any(op.get(k) for k in ("blank_rows", "dedupe", "dates", "tidy", "renumber", "trim_inner")):
+                    return None
+                ci = col_of(op["col"])
+                if not ci:
+                    return None
+                hname = next((h for h, cc in name2c.items() if cc == ci), str(op["col"]))
+                keep = bool(_LOW_CODE_HEAD.search(hname)) or any(
+                    isinstance(raw(r, ci), str) and re.match(r"^\s*[+-]?[0０][0-9０-９]", raw(r, ci))
+                    for r in range(r_a, r_b + 1) if not formula(r, ci))
+                got = []
+                for r in range(r_a, r_b + 1):
+                    v = raw(r, ci)
+                    if formula(r, ci) or not isinstance(v, str):
+                        continue
+                    nv = v
+                    if op.get("halfwidth"):
+                        nv = _zen2han(nv)
+                    if op.get("trim"):
+                        nv = re.sub(r"^[\s　]+|[\s　]+$", "", nv)
+                    out = nv
+                    cpat = (((cell(r, ci).get("userEnteredFormat") or {}).get("numberFormat")) or {}).get("pattern")
+                    if op.get("numbers") and not keep and not re.match(r"^[+-]?0\d", nv) and cpat != "@":
+                        nc = re.sub(r"[０-９，．－＋]", lambda mm: chr(ord(mm.group(0)) - 0xFEE0), nv)
+                        nc = re.sub(r"\s*(?:円|個|件|本|枚|台)$", "", re.sub(r"^[¥￥$]\s*", "", nc)).strip()
+                        if _LOW_NUM_RE.fullmatch(nc):
+                            num = float(nc.replace(",", ""))
+                            out = int(num) if num.is_integer() else num
+                    if out == v:
+                        continue
+                    if isinstance(out, str) and _LOW_AUTO_PARSE.search(out):
+                        return None        # 書くと数や日付に化ける文字はエンジンの道で（@ の扱い）
+                    put(r, ci, out)
+                    got.append(f"{col_letter(ci)}{r}")
+                if got:
+                    said.append(f"{sheet}!{'・'.join(got[:4])}{(' ほか' + str(len(got) - 4) + ' 件') if len(got) > 4 else ''} {hname}列の汚れを直した")
+            elif s == "phone.fix":
+                ci = col_of(op.get("col"))
+                if not ci or op.get("range"):
+                    return None
+                got = []
+                for r in range(r_a, r_b + 1):
+                    if formula(r, ci):
+                        continue
+                    v = raw(r, ci)
+                    f = _low_phone(v)
+                    if not f:
+                        continue
+                    pat = (((cell(r, ci).get("userEnteredFormat") or {}).get("numberFormat")) or {}).get("pattern")
+                    if str(v) != f or pat != "@":
+                        fmts.append({"shelf": "format", "range": f"{col_letter(ci)}{r}", "number_format": "@"})
+                        put(r, ci, f)
+                        got.append(f"{col_letter(ci)}{r}")
+                if not got:
+                    return None    # 変更なしの返事はエンジンの言い方に合わせる
+                said.append(f"{sheet}!{'・'.join(got[:4])} 電話番号をハイフン区切りに統一（{len(got)} 件）")
+            elif s == "calc.tax":
+                if op.get("at"):
+                    return None
+                ci = col_of(op.get("col"))
+                if not ci:
+                    return None
+                mode = str(op.get("mode") or "in").lower()
+                rate = float(op["rate"]) if op.get("rate") not in (None, "") else 10.0
+                ratio = rate / 100
+                ratio_s = str(int(ratio)) if float(ratio).is_integer() else repr(ratio)
+                fn = {"round": "ROUND", "ceil": "ROUNDUP"}.get(str(op.get("round") or "floor").lower(), "ROUNDDOWN")
+                at = next_col
+                next_col += 1
+                name = op.get("name") or {"out": "税抜", "tax": "消費税"}.get(mode, "税込")
+                copies.append({"shelf": "fmt.copy", "from": f"{col_letter(first_c)}{hr}", "to": f"{col_letter(at)}{hr}"})
+                put(hr, at, name)
+                L = col_letter(ci)
+                for r in range(r_a, r_b + 1):
+                    ref = f"{L}{r}"
+                    ex = f"{ref}/(1+{ratio_s})" if mode == "out" else (f"{ref}*{ratio_s}" if mode == "tax" else f"{ref}*(1+{ratio_s})")
+                    put(r, at, f'=IF({ref}="","",{fn}({ex},0))')
+                fmts.append({"shelf": "format", "range": f"{col_letter(at)}{r_a}:{col_letter(at)}{r_b}", "number_format": _LOW_NUM_FMT})
+                said.append(f"{sheet}!{col_letter(at)}列 {name}（税率 {rate:g}%）の列を追加")
+            elif s == "calc.col":
+                name, expr = str(op.get("name") or "").strip(), str(op.get("expr") or "").strip()
+                if not name or not expr:
+                    return None
+                expr = expr.replace("×", "*").replace("÷", "/").replace("＋", "+")
+                expr = re.sub(r"[ー−]", "-", expr)
+                hs = sorted([h for h in name2c if h], key=len, reverse=True)
+                rest, refs = expr, []
+                for h in hs:
+                    if h in rest:
+                        refs.append(name2c[h])
+                        rest = rest.replace(h, " ")
+                if not refs or not re.fullmatch(r"[\s\d.+\-*/()]*", rest):
+                    return None     # 関数・列記号・文字のある式はエンジンの道で
+                for rc in refs:     # 日付・時刻の列を使う式はエンジンの道で
+                    hn = next((h for h, c in name2c.items() if c == rc), "")
+                    nf = (((cell(r_a, rc).get("effectiveFormat") or {}).get("numberFormat")) or {}).get("type")
+                    if nf in ("DATE", "TIME", "DATE_TIME") or re.search(r"日付|日$|時刻|時間|開始|終了|出勤|退勤|納期|期限", hn):
+                        return None
+                if op.get("at"):
+                    if str(op["at"]).strip() != name or name not in name2c:
+                        return None   # 差し込みはエンジンの道で
+                    at = name2c[name]
+                else:
+                    at = next_col
+                    next_col += 1
+                    copies.append({"shelf": "fmt.copy", "from": f"{col_letter(first_c)}{hr}", "to": f"{col_letter(at)}{hr}"})
+                    put(hr, at, name)
+
+                def mk(r, expr=expr, hs=hs):
+                    f = expr
+                    for h in hs:
+                        f = f.replace(h, f"{col_letter(name2c[h])}{r}")
+                    return "=" + f
+                tmpl = max(first_c, at - 1)
+                if tmpl != at:
+                    copies.append({"shelf": "fmt.copy", "from": f"{col_letter(tmpl)}{r_a}:{col_letter(tmpl)}{r_b}",
+                                   "to": f"{col_letter(at)}{r_a}:{col_letter(at)}{r_b}"})
+                for r in range(r_a, r_b + 1):
+                    put(r, at, mk(r))
+                pct = bool(re.search(r"率|割合|％|%", name))
+                if pct:
+                    fmts.append({"shelf": "format", "range": f"{col_letter(at)}{r_a}:{col_letter(at)}{r_b}", "number_format": "0.0%"})
+                if tot:
+                    if tmpl != at:
+                        copies.append({"shelf": "fmt.copy", "from": f"{col_letter(tmpl)}{tot}", "to": f"{col_letter(at)}{tot}"})
+                    rate_e = pct or re.search(r"比|単価|平均", name) or re.search(r"/\s*[A-Z]{1,3}(?![0-9.])", mk(r_a))
+                    put(tot, at, mk(tot) if rate_e else f"=SUM({col_letter(at)}{r_a}:{col_letter(at)}{r_b})")
+                    if pct:
+                        fmts.append({"shelf": "format", "range": f"{col_letter(at)}{tot}", "number_format": "0.0%"})
+                said.append(f"{sheet}!{col_letter(at)}列 計算列「{name}」を{'式にそろえた' if op.get('at') else '追加'}")
+            elif s == "total":
+                if not tot or op.get("label"):
+                    return None    # 合計行を新しく作るのはエンジンの道で（書式ごと作る）
+                fixed = []
+                want = [col_of(c) for c in op["cols"]] if op.get("cols") else None
+                for c in range(first_c, last_c + 1):
+                    if want is not None and c not in want:
+                        continue
+                    hn = next((h for h, cc in name2c.items() if cc == c), "")
+                    cur = formula(tot, c).strip()
+                    f = f"=SUM({col_letter(c)}{r_a}:{col_letter(c)}{r_b})"
+                    if want is None:
+                        if not cur or not re.fullmatch(r"=SUM\(\s*\$?[A-Z]{1,3}\$?\d+:\$?[A-Z]{1,3}\$?\d+\s*\)", cur, re.I):
+                            continue
+                        if _LOW_NO_SUM_HEAD.search(hn):
+                            continue
+                    if cur != f:
+                        put(tot, c, f)
+                        fixed.append(col_letter(c))
+                if fixed:
+                    said.append(f"{sheet}!{col_letter(first_c)}{tot}:{col_letter(last_c)}{tot} 合計行の範囲を直した（{'・'.join(fixed)}列）")
+            elif s == "write" and isinstance(op.get("cells"), dict) and op.get("tsv") is None:
+                for k, v in op["cells"].items():
+                    r1, c1, r2, c2 = parse_a1(k)
+                    if (r1, c1) != (r2, c2):
+                        return None
+                    put(r1, c1, v)
+                said.append(f"{sheet}!{'・'.join(list(op['cells'])[:4])} 値・式を書いた")
+            else:
+                return None
+        except Skip:
+            return None
+    if not writes:
+        return None
+    return copies + fmts + [{"shelf": "write", "cells": writes}], said

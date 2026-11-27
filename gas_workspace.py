@@ -1115,11 +1115,13 @@ class WorkspaceManager:
         """先撃ちの頼みの手の前に、汚れを直す seiri の手（列ごと）を足す。戻り値 (ops, 番地つきの一言[])"""
         import gas_ws_direct
         self._light_table = None
+        self._light_full = None
         light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), sheet, "A1:Z60")
         if not light or not light.get("table"):
             return ops, []
         ltb = light["table"]
         self._light_table = ltb
+        self._light_full = (tgt.get("id"), sheet, light)
         dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
         if not dr_m:
             return ops, []
@@ -1400,7 +1402,7 @@ class WorkspaceManager:
         diff_cells = [] if keeps_shape else list(res.get("diff_cells") or [])
         verify = res.get("verify") or {"ok": True, "checks": [], "mismatch": []}
         if not st2.get("direct_off"):
-            need_light = (insights is None) or (not keeps_shape and not res.get("direct"))
+            need_light = (insights is None) or (not keeps_shape and (not res.get("direct") or not diff_cells))
             if need_light:
                 try:
                     import gas_ws_direct, gas_ws_insights
@@ -1572,7 +1574,18 @@ class WorkspaceManager:
             if cur.get("id") == dt.get("id"):
                 for k in ("name", "url"):
                     dt.setdefault(k, cur.get(k))
-            dres = gas_ws_direct.DirectRunner(self).try_do(st, dt, remote_ops, tim)
+            # 値を書く棚（汚れの直し・電話番号・税込み・式の列・合計）は、先撃ちが読んだ今の表から write＋書式に組み替えて直の道に乗せる
+            lowered = None
+            lf = getattr(self, "_light_full", None)
+            self._light_full = None
+            if lf and lf[0] == dt.get("id") and lf[1] == dt.get("sheet"):
+                try:
+                    lowered = gas_ws_direct.lower_ops(remote_ops, lf[2], dt["sheet"])
+                except Exception:
+                    lowered = None
+            dres = gas_ws_direct.DirectRunner(self).try_do(st, dt, lowered[0] if lowered else remote_ops, tim)
+            if dres is not None and lowered and lowered[1]:
+                dres["changed"] = lowered[1]
             if dres is not None:
                 for o in reversed(remote_ops):
                     sc = next(({k: o[k]} for k in ("header", "title", "col", "range") if o.get(k) not in (None, "", [])), None)
