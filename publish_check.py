@@ -111,6 +111,7 @@ PUBLIC_FILES = [
     "test_gas_ws_parity.py",
     "test_gas_ws_direct_extra.py",
     "test_gas_ws_insights.py",
+    "test_gas_date_guard.py",
     "test_gas_ws_doc_combo.py",
     "test_gas_ws_phase4.py",
     "ws_window.py",

@@ -491,7 +491,7 @@ SHELF['fill.date'] = function (ctx, op) {
   for (var r = 0; r < nr; r++) {
     var row = [];
     for (var c = 0; c < nc; c++) {
-      row.push(new Date(cur.getTime()));
+      row.push(formatDateCell_(cur));   // Date のまま書くとエンジンとシートの時刻帯の差で 1 日ずれる＝文字で書いてシートの時刻帯で日付にさせる
       cur = stepFn(cur, unit, stepIdx++);
     }
     vals.push(row);
@@ -1183,7 +1183,7 @@ SHELF['date.today'] = function (ctx, op) {
   var now = new Date(), vals = [];
   for (var r = 0; r < nr; r++) {
     var row = [];
-    for (var c = 0; c < nc; c++) row.push(new Date(now.getTime()));
+    for (var c = 0; c < nc; c++) row.push(new Date(now.getTime()));   // date-ok: 今の瞬間（時刻）はそのままで正しい
     vals.push(row);
   }
   rg.setValues(vals);
