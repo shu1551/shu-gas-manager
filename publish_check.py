@@ -84,6 +84,7 @@ PUBLIC_FILES = [
     # GASコンボ（シートのサイドバー・つなぎコード・ライブラリの元）と Python の操作窓・ブラウザ連動の拡張
     "gas_ws_combo.py",
     "gas_ws_direct.py",
+    "gas_ws_insights.py",
     "gas_ws_browser.py",
     "test_gas_ws_browser.py",
     "test_gas_ws_realworld.py",
@@ -109,6 +110,7 @@ PUBLIC_FILES = [
     "test_gas_ws_combo.py",
     "test_gas_ws_parity.py",
     "test_gas_ws_direct_extra.py",
+    "test_gas_ws_insights.py",
     "test_gas_ws_doc_combo.py",
     "test_gas_ws_phase4.py",
     "ws_window.py",
