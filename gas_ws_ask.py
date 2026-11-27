@@ -1895,6 +1895,18 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         fmt_last_r = table.get("total_row") or (str(table["data"]).split("-")[-1] if table.get("data") else fmt_first_r)
         op["range"] = f"{table['first_col']}{fmt_first_r}:{table['last_col']}{fmt_last_r}"
     if shelf["name"] == "format":
+        if not any(k in op for k in ("range", "col", "header", "title")):
+            m_top_r = re.search(r"(?:上から|先頭|最初(?:の)?)\s*([0-9]+)\s*行", nfkc(text))
+            if m_top_r:
+                n_top_r = max(1, int(m_top_r.group(1)))
+                if table and table.get("first_col") and table.get("last_col"):
+                    sp_top_r = _data_span(table)
+                    tr1 = sp_top_r[0] if sp_top_r else ((table.get("header_row") or 1) + 1)
+                    tr2 = min(sp_top_r[1], tr1 + n_top_r - 1) if sp_top_r else (tr1 + n_top_r - 1)
+                    op["range"] = f"{table['first_col']}{tr1}:{table['last_col']}{tr2}"
+                else:
+                    op["range"] = f"1:{n_top_r}"
+                named = True
         if "col" in op and col_pool and "range" not in op and table:
             first_l = _letter_of(table, op["col"]) or (op["col"] if re.fullmatch(r"[A-Z]{1,3}", str(op["col"])) else "")
             seq_ls = [first_l] if first_l else []

@@ -2191,6 +2191,21 @@ var ComboPlanner = (function () {
     }
     if (shelf.name === "format") {
       // 連続する複数列が列挙された書式設定（例: 予算額・実績額・差異に3桁カンマ）を範囲へ統合
+      if (!_hasOwn(op, "range") && !_hasOwn(op, "col") && !_hasOwn(op, "header") && !_hasOwn(op, "title")) {
+        var mTopR = /(?:上から|先頭|最初(?:の)?)\s*([0-9]+)\s*行/.exec(nfkc(text));
+        if (mTopR) {
+          var nTopR = Math.max(1, parseInt(mTopR[1], 10));
+          if (table && table.first_col && table.last_col) {
+            var spTopR = _dataSpan(table);
+            var tr1 = spTopR ? spTopR[0] : ((table.header_row || 1) + 1);
+            var tr2 = spTopR ? Math.min(spTopR[1], tr1 + nTopR - 1) : (tr1 + nTopR - 1);
+            op.range = table.first_col + tr1 + ":" + table.last_col + tr2;
+          } else {
+            op.range = "1:" + nTopR;
+          }
+          named = true;
+        }
+      }
       if (_hasOwn(op, "col") && colPool.length && !_hasOwn(op, "range") && table) {
         var firstL = _letterOf(table, op.col) || (/^[A-Z]{1,3}$/.test(op.col) ? op.col : "");
         var seqLs = firstL ? [firstL] : [];

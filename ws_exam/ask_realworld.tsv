@@ -192,3 +192,5 @@ R	備考に「VIP」が入っている担当者と部門を一覧で教えて
 1	進捗率が100未満の行を薄い赤にして	[{"shelf":"cf.add","when":"formula","value":"=IF(MAX($H$4:$H$9)<=1,$H4<1,$H4<100)","bg":"薄赤"}]
 1	数量の個数の高い順に並べて	[{"shelf":"sort","col":"数量","desc":true}]
 1	担当者ごとの数量から売上金額の推移を折れ線グラフにして	[{"shelf":"chart.new","type":"line","range":"C3:C9,E3:G9"}]
+# 第19ラウンド: 上からN行の書式range
+1	上から3行を太字で赤文字にして	[{"shelf":"format","range":"A4:I6","bold":true,"color":"赤"}]
