@@ -2716,6 +2716,8 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
 
             if has_remove_act and re.search(r"1行おき|交互|しましま|縞模様|ストライプ", c):
                 _ensure_boost("banding.remove")
+            elif re.search(r"1行おき|交互|しましま|縞模様|ストライプ", c) and not re.search(r"条件|以上|以下|未満", c):
+                _ensure_boost("banding.add")
             elif has_remove_act and re.search(r"条件付き書式|自動でついた色|自動の色", c):
                 _ensure_boost("cf.clear")
             elif has_remove_act and re.search(r"プルダウン|入力規則", c):

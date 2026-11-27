@@ -3534,6 +3534,8 @@ var ComboPlanner = (function () {
 
         if (hasRemoveAct && /1行おき|交互|しましま|縞模様|ストライプ/.test(c)) {
           ensureBoost("banding.remove");
+        } else if (/1行おき|交互|しましま|縞模様|ストライプ/.test(c) && !/条件|以上|以下|未満/.test(c)) {
+          ensureBoost("banding.add");
         } else if (hasRemoveAct && /条件付き書式|自動でついた色|自動の色/.test(c)) {
           ensureBoost("cf.clear");
         } else if (hasRemoveAct && /プルダウン|入力規則/.test(c)) {
