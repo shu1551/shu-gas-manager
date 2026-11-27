@@ -126,7 +126,30 @@ def analyze_table_insights(
                 return str(row[c1 - 1] or "")
         return ""
 
-    insights = []
+    # --- 関連性フィルタ用タグ ---
+    # ws_look (ops 空) なら全型を出す。ws_do ならその手に関わる型だけを残す。
+    if op_shelves:
+        allowed_tags = set()
+        if op_shelves & {"filter", "filter.where", "sort"}:
+            allowed_tags.add("type4")
+        if op_shelves & {"summary", "top.n", "chart.new", "pivot.new"}:
+            allowed_tags.update({"type2", "type6", "type7"})
+        if op_shelves & {"calc.col", "total"}:
+            allowed_tags.add("type2")
+        if op_shelves & {"tidy"}:
+            allowed_tags.update({"type6", "type7"})
+        if op_shelves & {"phone.fix", "date.fix", "text.case", "seiri", "blank.rows.delete", "dedupe"}:
+            allowed_tags.update({"type6", "type7"})
+    else:
+        allowed_tags = {"type1", "type2", "type4", "type6", "type7"}
+
+    tagged_insights = []
+
+    def add_ins(tag, msg):
+        if tag in allowed_tags:
+            tagged_insights.append(msg)
+
+    insights = tagged_insights
 
     # --- 型4: 絞り込み・並べ替えと合計行 =SUM(...) の相性 ---
     total_row = table.get("total_row")
@@ -140,7 +163,8 @@ def analyze_table_insights(
             if f.upper().startswith("=SUM("):
                 sum_cols.append(ci_info["col"])
         if sum_cols:
-            insights.append(
+            add_ins(
+                "type4",
                 f"合計行（{total_row}行目）が =SUM(...) のため、絞り込み中も非表示行を含めて合計されます。"
                 "表示行だけ合計するには =SUBTOTAL(9, ...) が適しています"
             )
@@ -199,7 +223,8 @@ def analyze_table_insights(
                         ("+", lambda a, b: a + b),
                     ):
                         if all(abs(col_nums[tc_key][r] - fn(col_nums[k1][r], col_nums[k2][r])) < 1e-4 for r in valid_rows):
-                            insights.append(
+                            add_ins(
+                                "type1",
                                 f"「{target_c['name']}」列（{tc_key}{first_data}:{tc_key}{last_data}）は"
                                 f"「{c1['name']} {op_sym} {c2['name']}」で計算できますが、数式ではなく値で入っています"
                             )
@@ -216,6 +241,9 @@ def analyze_table_insights(
     price_col = next((c for c in num_cols if re.search(r"単価|price", c["name"], re.I)), None)
 
     for nc in note_cols:
+        discount_hits = []
+        zero_hits = []
+        prog_hits = []
         for r in range(first_data, last_data + 1):
             note_txt = str(get_val(r, nc["ci"]) or "").strip()
             if not note_txt:
@@ -228,35 +256,38 @@ def analyze_table_insights(
                 if qv is not None and pv is not None and av is not None and qv > 0 and pv > 0:
                     if abs(av - qv * pv) < 1e-4:
                         ac = amt_cols[0]
-                        insights.append(
-                            f"{ac['col']}{r}（{ac['name']}）は備考（{nc['col']}{r}「{note_txt}」）に反して、"
-                            f"{qty_col['name']}×{price_col['name']}そのままの金額になっています"
-                        )
-                        break
+                        discount_hits.append((r, ac, note_txt, get_val(r, ac["ci"])))
             # パターンB: 無料・キャンセル なのに 金額 > 0
             if _ZERO_NOTE_RE.search(note_txt) and amt_cols:
                 av = _to_float(get_val(r, amt_cols[0]["ci"]))
                 if av is not None and av > 0:
                     ac = amt_cols[0]
-                    insights.append(
-                        f"{ac['col']}{r}（{ac['name']}）は備考（{nc['col']}{r}「{note_txt}」）と異なり、金額（{get_val(r, ac['ci'])}）が入っています"
-                    )
-                    break
+                    zero_hits.append((r, ac, note_txt, get_val(r, ac["ci"])))
             # パターンC: 完了/未着手 と進捗率の矛盾
             if prog_cols:
                 pc = prog_cols[0]
                 pv = _to_float(get_val(r, pc["ci"]))
                 if pv is not None:
                     if _DONE_NOTE_RE.search(note_txt) and pv < 1.0 - 1e-6:
-                        insights.append(
-                            f"{pc['col']}{r}（{pc['name']}）は {get_val(r, pc['ci'])} ですが、備考（{nc['col']}{r}「{note_txt}」）は「{note_txt}」になっています"
-                        )
-                        break
-                    if _NOT_DONE_NOTE_RE.search(note_txt) and pv >= 1.0 - 1e-6:
-                        insights.append(
-                            f"{pc['col']}{r}（{pc['name']}）は 100% ですが、備考（{nc['col']}{r}「{note_txt}」）は「{note_txt}」になっています"
-                        )
-                        break
+                        prog_hits.append(f"{pc['col']}{r}（{pc['name']}={get_val(r, pc['ci'])}）と{nc['col']}{r}（{nc['name']}「{note_txt}」）に食い違いがあります")
+                    elif _NOT_DONE_NOTE_RE.search(note_txt) and pv >= 1.0 - 1e-6:
+                        prog_hits.append(f"{pc['col']}{r}（{pc['name']}=100%）と{nc['col']}{r}（{nc['name']}「{note_txt}」）に食い違いがあります")
+        if discount_hits:
+            r, ac, note_txt, amt_disp = discount_hits[0]
+            extra_n = f"（ほか {len(discount_hits) - 1} 件）" if len(discount_hits) > 1 else ""
+            add_ins(
+                "type2",
+                f"{nc['col']}{r}（{nc['name']}）に「{note_txt}」とありますが、{ac['col']}{r}（{ac['name']}={amt_disp}）は値引き前の金額のままです{extra_n}"
+            )
+        if zero_hits:
+            r, ac, note_txt, amt_disp = zero_hits[0]
+            extra_n = f"（ほか {len(zero_hits) - 1} 件）" if len(zero_hits) > 1 else ""
+            add_ins(
+                "type2",
+                f"{nc['col']}{r}（{nc['name']}）が「{note_txt}」ですが、{ac['col']}{r}（{ac['name']}={amt_disp}）に金額が残っています{extra_n}"
+            )
+        if prog_hits:
+            add_ins("type2", prog_hits[0])
 
     # --- 型7: 集計の元の偏りや欠け（月の欠け・空行・重複行） ---
     month_hits = []
@@ -270,7 +301,8 @@ def analyze_table_insights(
     if len(month_hits) >= 2 and len(month_hits) < 12:
         if half_labels or len(month_hits) <= 6:
             m_str = "・".join(f"{m}月" for m in month_hits)
-            insights.append(
+            add_ins(
+                "type7",
                 f"月別データは {m_str}（計{len(month_hits)}か月分）のみで、他の月が欠けています"
             )
 
@@ -290,10 +322,10 @@ def analyze_table_insights(
                     seen_rows.add(key)
         if blank_rows:
             r_str = "・".join(str(r) for r in blank_rows[:3])
-            insights.append(f"表内に空行（{r_str}行目）があります")
+            add_ins("type7", f"表内に空行（{r_str}行目）があります")
         if dup_rows:
             r_str = "・".join(str(r) for r in dup_rows[:3])
-            insights.append(f"全列が一致する重複行（{r_str}行目）があります")
+            add_ins("type7", f"全列が一致する重複行（{r_str}行目）があります")
 
     # --- 型6: 頼まれていない列の崩れ（メール・電話・日付・空白/全角） ---
     skip_clean_check = "seiri" in op_shelves
@@ -311,7 +343,7 @@ def analyze_table_insights(
                 if s and not _EMAIL_VALID_RE.match(s):
                     bad.append(f"{c['col']}{r}「{s}」")
             if bad:
-                insights.append(f"「{cname}」列に形式が不完全なメールアドレスがあります（{bad[0]}）")
+                add_ins("type6", f"「{cname}」列に形式が不完全なメールアドレスがあります（{bad[0]}）")
                 continue
         # 電話番号
         if _PHONE_HEAD_RE.search(cname) and "phone.fix" not in op_shelves:
@@ -324,7 +356,7 @@ def analyze_table_insights(
                 if " " in s or "　" in s or _ZEN_NUM_RE.search(s) or len(digits) not in (10, 11) or "-" not in s:
                     bad.append(f"{c['col']}{r}「{s}」")
             if bad:
-                insights.append(f"「{cname}」列に書式が不揃いな番号があります（{bad[0]}）")
+                add_ins("type6", f"「{cname}」列に書式が不揃いな番号があります（{bad[0]}）")
                 continue
         # 日付の和暦・形式揺れ
         if _DATE_HEAD_RE.search(cname) and "date.fix" not in op_shelves and not skip_clean_check:
@@ -345,12 +377,13 @@ def analyze_table_insights(
                     styles.add("hyphen")
             if wareki_ex or len(styles) >= 2:
                 ex = wareki_ex or f"{c['col']}{first_data}"
-                insights.append(f"「{cname}」列に日付表記の揺れがあります（{ex} 等）")
+                add_ins("type6", f"「{cname}」列に日付表記の揺れがあります（{ex} 等）")
                 continue
 
-    # 前後空白・全角数字（seiri 直後でなく、まだ拾えていない場合のみ）
+    # 前後空白・全角数字（seiri 直後でなく、まだ拾えていない場合のみ。実際にある種類だけ正確に言う）
     if len(insights) < max_items and not skip_clean_check:
-        dirty_cells = []
+        trim_cells = []
+        zen_cells = []
         for r in range(first_data, last_data + 1):
             for c in col_infos:
                 if c["col"] in op_cols or c["name"] in op_cols:
@@ -358,14 +391,16 @@ def analyze_table_insights(
                 raw = get_val(r, c["ci"])
                 if not isinstance(raw, str) or not raw:
                     continue
-                if raw != raw.strip(" \t　") or _ZEN_NUM_RE.search(raw):
-                    dirty_cells.append(f"{c['col']}{r}")
-                    if len(dirty_cells) >= 2:
-                        break
-            if len(dirty_cells) >= 2:
+                if raw != raw.strip(" \t　") and len(trim_cells) < 2:
+                    trim_cells.append(f"{c['col']}{r}")
+                if _ZEN_NUM_RE.search(raw) and len(zen_cells) < 2:
+                    zen_cells.append(f"{c['col']}{r}")
+            if len(trim_cells) >= 2 and len(zen_cells) >= 2:
                 break
-        if dirty_cells:
-            insights.append(f"{'・'.join(dirty_cells)} 等に前後の空白や全角数字が含まれています")
+        if trim_cells:
+            add_ins("type6", f"{'・'.join(trim_cells)} 等に前後の空白が含まれています")
+        if zen_cells and len(insights) < max_items:
+            add_ins("type6", f"{'・'.join(zen_cells)} 等に全角数字が含まれています")
 
     # 重複除去して max_items まで返す
     uniq = []

@@ -125,21 +125,58 @@ SHELF['summary'] = function (ctx, op) {
   need_(op, ['by', 'values']);
   var src = sheetOf_(ctx.ss, op.sheet, ctx.sheetName), t = needTable_(src);
   var by = colIndexOf_(t, op.by), vals = (Array.isArray(op.values) ? op.values : [op.values]).map(function (v) { return colIndexOf_(t, v); });
-  var func = (op.func || 'sum').toLowerCase(), into = op.into || '集計';
-  var keys = [], seen = {};
-  for (var r = t.firstData; r <= t.lastData; r++) { var k = t.vals[r - 1][by - 1]; if (isBlank_(k)) continue; k = String(k); if (!seen[k]) { seen[k] = 1; keys.push(k); } }
-  var sq = q_(src.getName()), rng = function (c) { return sq + '!$' + colLetter_(c) + '$' + t.firstData + ':$' + colLetter_(c) + '$' + t.lastData; };
+  var func = (op.func || 'sum').toLowerCase();
   var hNamesSum = headerNames_(t);
+  var byName = String(hNamesSum[by - t.firstCol] || op.by || '項目').trim();
+  var into = op.into;
+  if (!into) {
+    into = '集計';
+    if (ctx.ss.getSheetByName(into)) {
+      var baseInto = '集計_' + byName + '別';
+      into = baseInto;
+      var suf = 2;
+      while (ctx.ss.getSheetByName(into)) { into = baseInto + '_' + suf; suf++; }
+    }
+  }
+  var keys = [], seen = {}, hasSpaceTrim = false;
+  for (var r = t.firstData; r <= t.lastData; r++) {
+    var k = t.vals[r - 1][by - 1];
+    if (isBlank_(k)) continue;
+    var ks = String(k), kt = ks.trim();
+    if (ks !== kt) hasSpaceTrim = true;
+    if (!seen[kt]) { seen[kt] = 1; keys.push(kt); }
+  }
+  var sq = q_(src.getName()), rng = function (c) { return sq + '!$' + colLetter_(c) + '$' + t.firstData + ':$' + colLetter_(c) + '$' + t.lastData; };
   var hdr = [String(hNamesSum[by - t.firstCol] || '')].concat(vals.map(function (c) { return String(hNamesSum[c - t.firstCol] || '') + (func === 'count' ? '(件数)' : func === 'avg' ? '(平均)' : ''); }));
   var grid = [hdr];
   keys.forEach(function (k, i) {
     var row = [k];
     vals.forEach(function (c) {
       var rr = i + 2;
-      row.push(func === 'count' ? '=COUNTIFS(' + rng(by) + ',$A' + rr + ')' : func === 'avg' ? '=IFERROR(AVERAGEIFS(' + rng(c) + ',' + rng(by) + ',$A' + rr + '),0)' : '=SUMIFS(' + rng(c) + ',' + rng(by) + ',$A' + rr + ')');
+      if (hasSpaceTrim) {
+        row.push(
+          func === 'count' ? '=SUMPRODUCT((TRIM(' + rng(by) + ')=$A' + rr + ')*1)' :
+          func === 'avg' ? '=IFERROR(SUMPRODUCT((TRIM(' + rng(by) + ')=$A' + rr + ')*(' + rng(c) + '))/SUMPRODUCT((TRIM(' + rng(by) + ')=$A' + rr + ')*1),0)' :
+          '=SUMPRODUCT((TRIM(' + rng(by) + ')=$A' + rr + ')*(' + rng(c) + '))'
+        );
+      } else {
+        row.push(func === 'count' ? '=COUNTIFS(' + rng(by) + ',$A' + rr + ')' : func === 'avg' ? '=IFERROR(AVERAGEIFS(' + rng(c) + ',' + rng(by) + ',$A' + rr + '),0)' : '=SUMIFS(' + rng(c) + ',' + rng(by) + ',$A' + rr + ')');
+      }
     });
     grid.push(row);
   });
+  var cancelCols = [];
+  for (var ciS = t.firstCol; ciS <= t.lastCol; ciS++) {
+    var cnS = String(hNamesSum[ciS - t.firstCol] || '');
+    if (/(?:状態|ステータス|状況|備考|メモ)/.test(cnS)) {
+      for (var rS = t.firstData; rS <= t.lastData; rS++) {
+        if (/(?:キャンセル|取消|無効)/.test(String(t.vals[rS - 1][ciS - 1] || ''))) {
+          cancelCols.push(cnS);
+          break;
+        }
+      }
+    }
+  }
   if (func !== 'avg') {
     var tot = ['合計']; vals.forEach(function (c, j) { var L = colLetter_(j + 2); tot.push('=SUM(' + L + '2:' + L + (keys.length + 1) + ')'); });
     grid.push(tot);
@@ -160,6 +197,8 @@ SHELF['summary'] = function (ctx, op) {
   dst.getRange(1, 1, grid.length, grid[0].length).setValues(grid);
   ctx.curSheet = src.getName();
   chg_(ctx, dst, a1_(1, 1, grid.length, grid[0].length), 'シート「' + into + '」へ「' + src.getName() + '」の ' + hdr[0] + ' ごとの集計（元の表を直すと追従）');
+  if (hasSpaceTrim) note_(ctx, '「' + byName + '」列の前後の空白を無視してまとめました');
+  if (cancelCols.length) note_(ctx, '※「' + cancelCols[0] + '」列にキャンセル等の行を含んでいます');
   note_(ctx, '別の棚からこの表を参照するときは range:"' + into + '"（または "' + into + '!' + a1_(1, 1, grid.length, grid[0].length) + '"）');
   tidyRange_(ctx, dst, null);
 };

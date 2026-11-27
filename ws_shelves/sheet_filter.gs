@@ -1012,6 +1012,18 @@ SHELF['top.n'] = function (ctx, op) {
   dst.getRange(1, 1, out.length, nc).setValues(out);
   dst.getRange(1, 1, 1, nc).setBackground(STYLE.headBg).setFontColor(STYLE.headFg).setFontWeight('bold');
   ctx.curSheet = intoName;
+  for (var ciT = t.firstCol; ciT <= t.lastCol; ciT++) {
+    var cnT = String(header[ciT - t.firstCol] || '');
+    if (/(?:状態|ステータス|状況|備考|メモ)/.test(cnT)) {
+      var hasCancelT = items.slice(0, cnt).some(function (x) {
+        return /(?:キャンセル|取消|無効)/.test(String(x.row[ciT - t.firstCol] || ''));
+      });
+      if (hasCancelT) {
+        note_(ctx, '※「' + cnT + '」列にキャンセル等の行を含んでいます');
+        break;
+      }
+    }
+  }
   chg_(ctx, dst, a1_(1, 1, out.length, nc), op.col + ' の' + (op.bottom ? '下位' : '上位') + picked.length + '件を抽出');
 };
 

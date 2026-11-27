@@ -1848,7 +1848,7 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                 first_r = table["data"].split("-")[0] if table.get("data") else str(table.get("header_row", 1) + 1)
                 last_r = table["data"].split("-")[-1] if table.get("data") else str(table.get("header_row", 1) + 1)
                 v = f"{table['first_col']}{first_r}:{table['last_col']}{last_r}"
-            elif col_pool and (wanted or not has_col_arg):
+            elif col_pool and (wanted or (not has_col_arg and shelf["name"] != "tidy")):
                 ls = [x for x in ((_letter_of(table, c) or (c if re.fullmatch(r"[A-Z]{1,3}", c) else None)) for c in col_pool) if x]
                 v = _col_range(table, ls)
             if v:
@@ -2808,7 +2808,8 @@ def _ambiguous_tidy_choices(ask, ops, kind=""):
     is_bare_tidy = (
         len(ops) == 1
         and ops[0].get("shelf") in ("tidy", "seiri")
-        and not any(k in ops[0] for k in ("range", "col", "blank_rows", "dedupe", "halfwidth", "trim", "numbers", "dates", "renumber"))
+        and not any(k in ops[0] for k in ("col", "blank_rows", "dedupe", "halfwidth", "trim", "numbers", "dates", "renumber"))
+        and (not ops[0].get("range") or not re.search(r"[A-Za-z]{1,3}列", t))
     )
     if not is_bare_tidy and ops:
         return None

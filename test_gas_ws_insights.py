@@ -124,3 +124,50 @@ def test_format_already_applied():
     assert D.DirectRunner._format_already_applied(ent, 3, 1, 3, 2, op, False) is True
     op_diff = {"shelf": "format", "header": True, "bg": "赤"}
     assert D.DirectRunner._format_already_applied(ent, 3, 1, 3, 2, op_diff, False) is False
+
+
+def test_trim_and_zen_separated_and_ops_filter():
+    tb = {
+        "header_row": 1,
+        "first_col": "A",
+        "last_col": "C",
+        "data": "2-3",
+        "total_row": None,
+        "columns": [
+            {"col": "A", "name": "顧客名", "number": False},
+            {"col": "B", "name": "金額", "number": True},
+            {"col": "C", "name": "状態", "number": False},
+        ],
+    }
+    vals = [
+        ["顧客名", "金額", "状態"],
+        ["青葉物産 ", 90000, "キャンセル"],
+        ["北斗工業", 30000, "確定"],
+    ]
+    # ws_look (opsなし): 空白のみ（全角数字とは言わない）、キャンセルも出る
+    ins_look = I.analyze_table_insights(tb, vals, max_items=5)
+    j = "\n".join(ins_look)
+    assert "前後の空白が含まれています" in j
+    assert "全角数字" not in j
+    assert "キャンセル" in j
+
+    # ws_do (cf.add のみ): 無関係な雑音は出さない
+    ins_cf = I.analyze_table_insights(tb, vals, ops=[{"shelf": "cf.add"}], max_items=5)
+    assert ins_cf == []
+
+
+def test_ambiguous_tidy_with_sheet_name_like_col():
+    import gas_ws_ask as A
+    import gas_ws_find as F
+
+    tb = {
+        "header_row": 1,
+        "first_col": "A",
+        "last_col": "F",
+        "data": "2-9",
+        "columns": [{"col": "A", "name": "顧客コード"}, {"col": "B", "name": "会社名"}],
+    }
+    p = A.plan("顧客の表を整えて", F.Finder(), "sheet", tb)
+    assert not p.fire
+    assert len(p.choices) == 3
+    assert p.choices[0]["ops"] == [{"shelf": "tidy"}]

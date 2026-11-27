@@ -566,13 +566,13 @@ class WorkspaceManager:
                 "Chrome で対象タブを開くか、URL・ID・名前を target に指定してください。" + hint
             )
         if not target:
+            if cur.get("id"):
+                return dict(cur), False
             if self.browser_active_path.exists() or self.browser_detect:
                 bt = self._resolve_browser_target(st, kind=kind, force=False)
                 if bt:
                     return bt, False
-            if not cur.get("id"):
-                raise WorkspaceError("今の相手が決まっていません。target に URL・ID・名前、または \"new:名前\"（新規）を渡してください。")
-            return dict(cur), False
+            raise WorkspaceError("今の相手が決まっていません。target に URL・ID・名前、または \"new:名前\"（新規）を渡してください。")
         if target.lower().startswith("new:"):
             raw = target[4:].strip()
             if not raw:
@@ -637,6 +637,19 @@ class WorkspaceManager:
         return out + ("\n" + format_timing(tim) if self.timing else "")
 
     # ------------------------------------------------------------ ws_do(ask=…)：当てて・組んで・撃つを 1 回で
+    @staticmethod
+    def _filter_new_insights(st, tgt_id, sheet_name, insights):
+        """同じシートで一度伝えた気づき文言を繰り返さないよう絞り込む。"""
+        if not insights or not tgt_id:
+            return list(insights or [])
+        key = f"{tgt_id}:{sheet_name or ''}"
+        seen_map = st.setdefault("seen_insights", {})
+        seen_list = seen_map.get(key) or []
+        fresh = [x for x in insights if x not in seen_list]
+        if fresh:
+            seen_map[key] = (seen_list + fresh)[-20:]
+        return fresh
+
     def _remember_table(self, st, tgt, table, sheets):
         """表の形を覚える（次の頼みの引数を組むのに使う）。sheets は名前のリスト"""
         if not tgt.get("id"):
@@ -789,6 +802,55 @@ class WorkspaceManager:
                                 )
                 except Exception:
                     pass
+            # dedupe(cols=...) でキー列は同じだが他列が異なる行がある場合の確かめ
+            if (
+                not ok
+                and kind == "sheet"
+                and not is_new
+                and any(isinstance(o, dict) and o.get("shelf") == "dedupe" and o.get("cols") for o in p.ops)
+            ):
+                try:
+                    import gas_ws_direct
+                    d_op = next(o for o in p.ops if isinstance(o, dict) and o.get("shelf") == "dedupe" and o.get("cols"))
+                    d_cols = d_op["cols"] if isinstance(d_op["cols"], list) else [d_op["cols"]]
+                    light = gas_ws_direct.fetch_sheet_snapshot_light(self, st, tgt.get("id"), cur_sh, "A1:Z60")
+                    if light and light.get("table"):
+                        ltb = light["table"]
+                        dr_m = re.fullmatch(r"(\d+)-(\d+)", str(ltb.get("data") or ""))
+                        if dr_m:
+                            r_a, r_b = int(dr_m.group(1)), int(dr_m.group(2))
+                            ent_l = light["snap"].sheet(cur_sh)
+                            cells_l = ent_l.get("cells") or {}
+                            key_cis = [gas_ws_direct.DirectRunner._col_of(ltb, c) for c in d_cols]
+                            all_cis = [gas_ws_direct.col_num(c["col"]) for c in (ltb.get("columns") or [])]
+                            other_cis = [c for c in all_cis if c not in key_cis]
+                            seen_k = {}
+                            diff_hits = []
+                            for rr in range(r_a, r_b + 1):
+                                kv = tuple(gas_ws_direct.Snapshot.value_text(cells_l.get((rr, ci))) for ci in key_cis)
+                                if not any(kv):
+                                    continue
+                                ov = tuple(gas_ws_direct.Snapshot.value_text(cells_l.get((rr, ci))) for ci in other_cis)
+                                if kv in seen_k:
+                                    first_r, first_ov = seen_k[kv]
+                                    if ov != first_ov:
+                                        diff_hits.append((rr, first_r, "/".join(kv)))
+                                else:
+                                    seen_k[kv] = (rr, ov)
+                            if diff_hits:
+                                rr_d, fr_d, k_disp = diff_hits[0]
+                                ops_s = json.dumps([dict(d_op, ok=True)], ensure_ascii=False, separators=(",", ":"))
+                                return (
+                                    f"{self._title(tgt)}\n"
+                                    f"確認: キー列（{'・'.join(str(x) for x in d_cols)}＝「{k_disp}」）が同じでも、"
+                                    f"他の列の値が異なる行があります（{fr_d}行目 と {rr_d}行目"
+                                    + (f" ほか{len(diff_hits) - 1}件" if len(diff_hits) > 1 else "")
+                                    + "）。削除してよろしいですか？\n"
+                                    "何も変えていません。\n"
+                                    f"削除する場合 → ws_do(ops='{ops_s}', ok=True)"
+                                )
+                except Exception:
+                    pass
             # 表の形（値・シート構成）を変えない棚だけのときは、撃つ前の形の確かめ（expect）と撃った後の読み直し（want_table）を省く。
             # 形は変わらないので覚えた形をそのまま使える。場所（見出し・列・タイトル）はエンジンがその場で解決する（約 1 秒の短縮）
             keeps_shape = kind == "sheet" and not is_new and all(self._keeps_shape(o) for o in p.ops)
@@ -845,7 +907,11 @@ class WorkspaceManager:
             except Exception:
                 insights = []
         if insights:
-            out_lines.append("気づき: " + " ／ ".join(insights[:3]))
+            sh_for_seen = tgt_out.get("sheet") or cur_sh
+            insights = self._filter_new_insights(st2, tgt_out.get("id"), sh_for_seen, insights)
+            if insights:
+                self._save(st2)
+                out_lines.append("気づき: " + " ／ ".join(insights[:3]))
         out_lines.append(" ／ ".join(tail))
         return "\n".join(out_lines)
 
@@ -1311,6 +1377,7 @@ class WorkspaceManager:
             try:
                 import gas_ws_insights
                 ins = gas_ws_insights.analyze_from_look_res(res)
+                ins = self._filter_new_insights(st, t.get("id"), t.get("sheet"), ins)
                 if ins:
                     res["insights"] = ins
             except Exception:

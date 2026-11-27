@@ -143,11 +143,15 @@ def test_resolve_target_browser_priority_and_override(tmp_path, monkeypatch):
     )
 
     # 1. 初回・記憶なし → 拡張の相手を自動採用
-    st = {"target": {"id": "ss_old", "kind": "sheet", "name": "古い表"}, "target_set_at": now - 60.0}
-    tgt, is_new = mgr.resolve_target("", "sheet", st)
+    tgt, is_new = mgr.resolve_target("", "sheet", {})
     assert is_new is False
     assert tgt["id"] == "ss_browser_1"
     assert tgt["sheet"] == "集計"
+
+    # 1b. 直前に名指し・作業中の記憶あり → ブラウザ連動より記憶を優先する
+    st = {"target": {"id": "ss_old", "kind": "sheet", "name": "古い表"}, "target_set_at": now - 60.0}
+    tgt_kept, _ = mgr.resolve_target("", "sheet", st)
+    assert tgt_kept["id"] == "ss_old"
 
     # 2. 明示指定で別ファイルを記憶した直後（ハートビートのみでは上書きしない）
     st_explicit = {"target": {"id": "ss_manual", "kind": "sheet", "name": "手指定表"}, "target_set_at": now + 10.0}

@@ -2125,7 +2125,7 @@ var ComboPlanner = (function () {
           var firstR = table.data ? String(table.data).split("-")[0] : String((table.header_row || 1) + 1);
           var lastR = table.data ? String(table.data).split("-").slice(-1)[0] : String((table.header_row || 1) + 1);
           av = table.first_col + firstR + ":" + table.last_col + lastR;
-        } else if (colPool.length && (wanted || !hasColArg)) {
+        } else if (colPool.length && (wanted || (!hasColArg && shelf.name !== "tidy"))) {
           var ls = [];
           for (var cpi = 0; cpi < colPool.length; cpi++) {
             var cp = colPool[cpi];
@@ -3675,7 +3675,7 @@ var ComboPlanner = (function () {
     var isBareTidy = (
       ops.length === 1 && ops[0] &&
       (ops[0].shelf === "tidy" || ops[0].shelf === "seiri") &&
-      !ops[0].range && !ops[0].col && !ops[0].blank_rows && !ops[0].dedupe && !ops[0].halfwidth &&
+      (!ops[0].range || !/[A-Za-z]{1,3}列/.test(t)) && !ops[0].col && !ops[0].blank_rows && !ops[0].dedupe && !ops[0].halfwidth &&
       !ops[0].trim && !ops[0].numbers && !ops[0].dates && !ops[0].renumber
     );
     if (!isBareTidy && ops.length) return null;
