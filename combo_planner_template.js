@@ -1812,7 +1812,7 @@ var ComboPlanner = (function () {
       }
     }
     if (shN === "cols.delete") {
-      var maskedDelN = nfkc(_maskColNamesJs(scan, tbl));
+      var maskedDelN = nfkc(_maskColNamesJs(scanTxt, tbl));
       if (_COL_CONTENT_DEL_RE_JS.test(maskedDelN) || _COL_PROP_OBJ_RE_JS.test(maskedDelN)) {
         addMiss("列そのものではなく列の中身の語が含まれているため列削除しません");
       } else if (/(?:列|カラム)/.test(maskedDelN) && !_COL_DIRECT_DEL_RE_JS.test(maskedDelN)) {
