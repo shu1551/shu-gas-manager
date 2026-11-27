@@ -33,7 +33,7 @@ DIRECT_SHELVES = {"format", "format.negred", "font.unify", "bg.clear", "freeze",
                   "clear.values", "clear.format", "sort", "rows.insert", "cols.insert", "cf.clear",
                   "sheet.rename", "sheet.hide", "sheet.show", "sheet.color", "sheet.gridlines",
                   "filter.on", "filter.off", "rows.hide", "rows.show", "cols.hide", "cols.show",
-                  "note.set", "note.clear", "fmt.copy"}
+                  "note.set", "note.clear", "fmt.copy", "cf.add"}
 _SHARED_DEFS_FILE = Path(__file__).resolve().parent / "ws_shared_defs.json"
 
 
@@ -455,6 +455,10 @@ class DirectRunner:
                 for k in op["cells"]:
                     parse_a1(k)
                     ranges.add(f"{q(sh)}!{k}")
+            elif s == "cf.add":
+                if not op.get("range") or not op.get("when"):
+                    raise Skip("range と when が要る")
+                parse_a1(op["range"])
             elif s == "fmt.copy":      # 直の道の中だけの手（値を書く棚を組み替えたときの書式の写し）
                 fr1, fc1, fr2, fc2 = parse_a1(op["from"])
                 tr1, tc1, tr2, tc2 = parse_a1(op["to"])
@@ -564,6 +568,7 @@ class DirectRunner:
 
     def _build(self, ops, sheet, tb, snap):
         req, undo, changed, touched, already = [], [], [], [], []
+        self._cf_added = {}
 
         def area(shname, r1, c1, r2, c2):
             touched.append((shname, r1, c1, r2, c2))
@@ -702,6 +707,56 @@ class DirectRunner:
                     raise Skip("幅の指定が無い")
                 area(shn, 0, 0, 0, 0)
                 changed.append(f"{shn}!{'・'.join(did)} 幅・高さを変更")
+            elif s == "cf.add":
+                if not lower_pin_ok("cf.add"):
+                    raise Skip("エンジンの cf.add が書き換わった（直の道の写しが古い）")
+                r1, c1, r2, c2 = parse_a1(op["range"])
+                w = str(op["when"]).lower()
+                val = "" if op.get("value") is None else str(op["value"])
+                clean = val.replace(",", "").strip()
+                try:
+                    is_num = clean != "" and float(clean) == float(clean)
+                except ValueError:
+                    is_num = False
+                if w == "between" or (not is_num and w in ("gt", "ge", "lt", "le", "eq", "ne") and re.search(r"\d+\s*[/年月\-]|今日|昨日|明日", val)):
+                    raise Skip("日付の比べはエンジンの道で")
+                a1c = f"{col_letter(c1)}{r1}"
+                num = {"gt": "NUMBER_GREATER", "ge": "NUMBER_GREATER_THAN_EQ", "lt": "NUMBER_LESS", "le": "NUMBER_LESS_THAN_EQ"}
+                if w in num:
+                    if not is_num:
+                        raise Skip("数でない比べ")
+                    cond = {"type": num[w], "values": [{"userEnteredValue": clean}]}
+                elif w == "eq":
+                    cond = {"type": "NUMBER_EQ", "values": [{"userEnteredValue": clean}]} if is_num else {"type": "TEXT_EQ", "values": [{"userEnteredValue": val}]}
+                elif w == "ne":
+                    cond = ({"type": "NUMBER_NOT_EQ", "values": [{"userEnteredValue": clean}]} if is_num else
+                            {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": f'={a1c}<>"' + val.replace('"', '""') + '"'}]})
+                elif w == "contains":
+                    cond = {"type": "TEXT_CONTAINS", "values": [{"userEnteredValue": val}]}
+                elif w == "blank":
+                    cond = {"type": "BLANK"}
+                elif w == "notblank":
+                    cond = {"type": "NOT_BLANK"}
+                elif w == "formula":
+                    cond = {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": val}]}
+                else:
+                    raise Skip("知らない when")
+                fmt = {}
+                if op.get("bg"):
+                    fmt["backgroundColor"] = rgb(op["bg"])
+                if op.get("color"):
+                    fmt.setdefault("textFormat", {})["foregroundColor"] = rgb(op["color"])
+                if op.get("bold"):
+                    fmt.setdefault("textFormat", {})["bold"] = True
+                cf_n = getattr(self, "_cf_added", {})
+                idx = len(ent.get("cf_rules") or []) + cf_n.get(shn, 0)
+                cf_n[shn] = cf_n.get(shn, 0) + 1
+                self._cf_added = cf_n
+                req.append({"addConditionalFormatRule": {"rule": {"ranges": [grid(sid, r1, c1, r2, c2)],
+                                                                  "booleanRule": {"condition": cond, "format": fmt}}, "index": idx}})
+                undo.insert(0, {"deleteConditionalFormatRule": {"sheetId": sid, "index": idx}})
+                area(shn, 0, 0, 0, 0)
+                changed.append(f"{shn}!{op['range']} 条件付き書式を付与（when: {op['when']}）")
             elif s == "fmt.copy":
                 fr1, fc1, fr2, fc2 = parse_a1(op["from"])
                 tr1, tc1, tr2, tc2 = parse_a1(op["to"])
@@ -1029,7 +1084,7 @@ class DirectRunner:
         if any(o.get("shelf") == "write" for o in ops) and len(ops) > 1:
             # 値を書く棚を組み替えた手（write 1 本＋書式・書式の写し）だけは一緒に撃つ（書式が先・値が後）
             if not (sum(1 for o in ops if o.get("shelf") == "write") == 1
-                    and all(o.get("shelf") in ("write", "format", "fmt.copy") for o in ops)):
+                    and all(o.get("shelf") in ("write", "format", "fmt.copy", "cf.add") for o in ops)):
                 return None
         if any(o.get("shelf") == "fmt.copy" for o in ops) and not any(o.get("shelf") == "write" for o in ops):
             return None
@@ -1119,7 +1174,7 @@ class DirectRunner:
             notes.append("新しいエラー: " + "・".join(news[:5]) + (f" ほか {len(news) - 5} 件" if len(news) > 5 else ""))
         led.append({"n": n, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "id": tgt["id"], "name": tgt.get("name", ""),
                     "sheet": sheet, "what": " ／ ".join(changed)[:120], "undo": undo, "touched": touched,
-                    "fp": fp, "ranges": ranges, "shape": any(o.get("shelf") in ("write", "clear.values", "sort", "rows.insert", "cols.insert", "sheet.rename") for o in ops)})
+                    "fp": fp, "ranges": after_ranges, "shape": any(o.get("shelf") in ("write", "clear.values", "sort", "rows.insert", "cols.insert", "sheet.rename") for o in ops)})
         del led[:-LEDGER_KEEP]
         if any(o.get("shelf") in ("write", "clear.values", "sort", "rows.insert", "cols.insert", "sheet.rename") for o in ops):
             st.pop("table_cache", None)      # 値やシート名が変わったので、次の頼みで表の形を見直す
@@ -2077,6 +2132,38 @@ def trace(mgr, st, sid, sheet, cell, depth=3, max_nodes=40):
 # エンジン（workspace_engine.gs ＋ ws_shelves）の棚と同じ結果になる「普通の場合」だけを write（値と式）＋ format ＋ fmt.copy に組み替える。
 # 日付・2 段見出し・列の差し込み・人の判断が要る物は組み替えず None を返す（エンジンの道へ）。
 # 棚の振る舞いを変えたら、ここも同じに直す（sheet_filter.gs の seiri・sheet_range.gs の phone.fix・sheet_formula.gs の calc.tax/calc.col・sheet_make.gs の total）
+# 写した時の、エンジンの棚の本体の指紋（sha1 の頭 12 字）。エンジンの棚を書き換えると指紋が変わり、
+# その棚は組み替えず（直の道に乗せず）エンジンの道で撃つ＝2 か所の食い違いで結果が変わることはない。
+# ws-check がずれを知らせる。ここの写しを同じに直したら、gas('ws-check') が出す新しい指紋に書き換える
+LOWER_PINS = {"seiri": "ae95f8b5af9a", "phone.fix": "3c0eeebff844", "calc.tax": "47d88fc63fa5",
+              "calc.col": "2a5fb1eec63c", "total": "8f6db18212fd", "cf.add": "18a2eabb5f69"}
+
+
+def _shelf_pin(name):
+    import hashlib
+    import gas_workspace
+    body = (gas_workspace.CATALOG.by_name.get(name) or {}).get("body") or ""
+    return hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
+
+
+def lower_pin_ok(name):
+    try:
+        return LOWER_PINS.get(name) == _shelf_pin(name)
+    except Exception:
+        return False
+
+
+def lower_pin_problems():
+    """ws-check 用: 直の道の写しが、今のエンジンの棚と違う物"""
+    out = []
+    for n, pin in LOWER_PINS.items():
+        now = _shelf_pin(n)
+        if now != pin:
+            out.append(f"直の道の写し（gas_ws_direct.lower_ops / cf.add）の対の棚「{n}」が書き換わっています（指紋 {pin} → {now}）。"
+                       f"今は {n} をエンジンの道で撃っています。写しを同じに直してから LOWER_PINS を {now} に")
+    return out
+
+
 _LOW_NUM_FMT = "#,##0"
 _LOW_CODE_HEAD = re.compile(r"(?:郵便|〒|電話|携帯|TEL|FAX|社員番号|社員ID|会員番号|会員ID|顧客番号|顧客ID|管理番号|注文番号|伝票番号|口座番号|商品コード|コード|品番|型番)", re.I)
 _LOW_NUM_RE = re.compile(r"^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$")
@@ -2171,8 +2258,13 @@ def lower_ops(ops, light, sheet):
         if not isinstance(op, dict) or (op.get("sheet") and op.get("sheet") != sheet):
             return None
         s = op.get("shelf")
+        if s in LOWER_PINS and not lower_pin_ok(s):
+            return None      # エンジンの棚が書き換わった＝この写しは古い。エンジンの道で撃つ（ws-check が知らせる）
         try:
-            if s == "seiri":
+            if s == "cf.add":
+                fmts.append(dict(op))
+                said.append(f"{sheet}!{op.get('range')} 条件付き書式を付与（when: {op.get('when')}）")
+            elif s == "seiri":
                 if not op.get("col") or any(op.get(k) for k in ("blank_rows", "dedupe", "dates", "tidy", "renumber", "trim_inner")):
                     return None
                 ci = col_of(op["col"])

@@ -2813,6 +2813,11 @@ def _gas_dispatch(command: str) -> str:
         import gas_ws_catalog
         cat = gas_ws_catalog.load()
         problems = gas_ws_catalog.check(cat)
+        try:
+            import gas_ws_direct
+            problems += gas_ws_direct.lower_pin_problems()
+        except Exception as e:
+            problems.append(f"直の道の写しの指紋を確かめられませんでした（{e}）")
         n_sheet = sum(1 for s in cat.shelves if s.get("kind") == "sheet")
         n_doc = sum(1 for s in cat.shelves if s.get("kind") == "doc")
         n_search = sum(1 for s in cat.shelves if s.get("searchable", True))
