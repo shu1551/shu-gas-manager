@@ -647,6 +647,91 @@ var ComboPlanner = (function () {
   var _PCT_COL_RE_JS = /(?:率|割合|構成比|達成|進捗|%|％)/;
   var _CALC_VERB_PREFIX_RE_JS = /^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算)(?:の|で))\s*/;
 
+  // 任意（非必須）の列引数へ無関係な列名が流れ込まないようにするキーワード条件（1 か所管理）
+  var _OPT_COL_CUES_JS = {
+    at: /(?:列|欄)[にへ]|の間に/,
+    renumber: /連番|通し番号|番号を?(?:振|付)|振り直|ふり直|付け直|つけ直|ナンバリング/,
+    number: /連番|通し番号/,
+    total: /合計|総計|小計/,
+    url_col: /url|リンク先|アドレス/i
+  };
+
+  // 日付比較の 1 か所定義（西暦・和暦・年なし月日）
+  var _DATE_TOK_PAT_JS =
+    "(?<![0-9A-Za-z/])(" +
+    "[0-9]{4}\\s*[/\\-.年]\\s*[0-9]{1,2}\\s*[/\\-.月]\\s*[0-9]{1,2}\\s*日?" +
+    "|(?:令和|平成|昭和|大正|明治|[RrHhSsTtMm])\\s*(?:元|[0-9]{1,2})\\s*[/\\-.年]\\s*[0-9]{1,2}\\s*[/\\-.月]\\s*[0-9]{1,2}\\s*日?" +
+    "|[0-9]{1,2}\\s*月\\s*[0-9]{1,2}\\s*日" +
+    "|[0-9]{1,2}/[0-9]{1,2}" +
+    ")(?![0-9/])";
+  var _DATE_RANGE_CMP_RE_JS = new RegExp(_DATE_TOK_PAT_JS + "\\s*(?:から|〜|~|～)\\s*" + _DATE_TOK_PAT_JS + "\\s*(?:まで)?");
+  var _DATE_SINGLE_CMP_RE_JS = new RegExp(
+    _DATE_TOK_PAT_JS + "\\s*(より以前|より前|以前|より以降|より後|以降|の前|の後|から|まで|以上|以下|未満|より大き(?:い|く)?|を超え?|より小さ(?:い|く)?)"
+  );
+  var _DATE_CMP_CUE_RE_JS = new RegExp(
+    "より以前|より前|より以降|より後|以前|以降|" + _DATE_TOK_PAT_JS + "\\s*(?:の前|の後|から|まで)"
+  );
+  var _ERA_BASE_JS = { "令和": 2018, "R": 2018, "平成": 1988, "H": 1988, "昭和": 1925, "S": 1925, "大正": 1911, "T": 1911, "明治": 1867, "M": 1867 };
+
+  function _pad2Js(n) { return n < 10 ? ("0" + n) : String(n); }
+  function _pad4Js(n) { var s = String(n); while (s.length < 4) s = "0" + s; return s; }
+
+  function _parseCmpDateStrJs(raw) {
+    var s = nfkc(String(raw === null || raw === undefined ? "" : raw)).trim();
+    if (!s) return null;
+    var m = /^([0-9]{4})\s*[/\-.年]\s*([0-9]{1,2})\s*[/\-.月]\s*([0-9]{1,2})\s*日?$/.exec(s);
+    if (m) {
+      var y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+      if (y < 1868 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+      var dt = new Date(y, mo - 1, d);
+      if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+      return _pad4Js(y) + "-" + _pad2Js(mo) + "-" + _pad2Js(d);
+    }
+    var mw = /^(令和|平成|昭和|大正|明治|[RrHhSsTtMm])\s*(元|[0-9]{1,2})\s*[/\-.年]\s*([0-9]{1,2})\s*[/\-.月]\s*([0-9]{1,2})\s*日?$/.exec(s);
+    if (mw) {
+      var base = _ERA_BASE_JS[mw[1].toUpperCase()];
+      var ey = mw[2] === "元" ? 1 : parseInt(mw[2], 10);
+      if (!base || ey < 1 || ey > 99) return null;
+      var yw = base + ey, mow = parseInt(mw[3], 10), dw = parseInt(mw[4], 10);
+      if (mow < 1 || mow > 12 || dw < 1 || dw > 31) return null;
+      var dtw = new Date(yw, mow - 1, dw);
+      if (dtw.getFullYear() !== yw || dtw.getMonth() !== mow - 1 || dtw.getDate() !== dw) return null;
+      return _pad4Js(yw) + "-" + _pad2Js(mow) + "-" + _pad2Js(dw);
+    }
+    var md = /^([0-9]{1,2})\s*(?:月|\/)\s*([0-9]{1,2})\s*日?$/.exec(s);
+    if (md) {
+      var mom = parseInt(md[1], 10), dm = parseInt(md[2], 10);
+      if (mom < 1 || mom > 12 || dm < 1 || dm > 31) return null;
+      var dtm = new Date(2024, mom - 1, dm);
+      if (dtm.getMonth() !== mom - 1 || dtm.getDate() !== dm) return null;
+      return _pad2Js(mom) + "/" + _pad2Js(dm);
+    }
+    return null;
+  }
+
+  function _dateCmpToFormulaAtomJs(dStr, table) {
+    var s = String(dStr || "");
+    var mFull = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(s);
+    if (mFull) {
+      return "DATE(" + parseInt(mFull[1], 10) + "," + parseInt(mFull[2], 10) + "," + parseInt(mFull[3], 10) + ")";
+    }
+    var mMd = /^([0-9]{2})\/([0-9]{2})$/.exec(s);
+    if (mMd) {
+      var yHint = null;
+      var rows = (table && Array.isArray(table.rows)) ? table.rows : [];
+      for (var ri = 0; ri < rows.length && !yHint; ri++) {
+        if (!Array.isArray(rows[ri])) continue;
+        for (var ci = 0; ci < rows[ri].length; ci++) {
+          var my = /^\s*([12][0-9]{3})[/\-.年]/.exec(nfkc(String(rows[ri][ci] === null || rows[ri][ci] === undefined ? "" : rows[ri][ci])));
+          if (my) { yHint = parseInt(my[1], 10); break; }
+        }
+      }
+      var yExpr = yHint ? String(yHint) : "YEAR(TODAY())";
+      return "DATE(" + yExpr + "," + parseInt(mMd[1], 10) + "," + parseInt(mMd[2], 10) + ")";
+    }
+    return null;
+  }
+
   function _normFilterNumTopJs(val) {
     if (val === undefined || val === null) return null;
     var s = nfkc(String(val)).replace(/,/g, "").trim();
@@ -663,9 +748,41 @@ var ComboPlanner = (function () {
   }
 
   function _resolveCmpValueJs(opObj, text) {
+    var tN = nfkc(text);
+    // 0. 日付の比べ（より前・より後・以降・以前・から・まで・範囲）を 1 か所で最優先解決
+    var mDr = _DATE_RANGE_CMP_RE_JS.exec(tN);
+    if (mDr) {
+      var d1 = _parseCmpDateStrJs(mDr[1]);
+      var d2 = _parseCmpDateStrJs(mDr[2]);
+      if (d1 && d2) {
+        opObj.when = "between";
+        opObj.value = d1 + ".." + d2;
+        delete opObj.equals;
+        return;
+      }
+    }
+    var mDs = _DATE_SINGLE_CMP_RE_JS.exec(tN);
+    if (mDs) {
+      var dNorm = _parseCmpDateStrJs(mDs[1]);
+      if (dNorm) {
+        var kw = mDs[2];
+        if (kw === "より前" || kw === "より以前" || kw === "の前" || kw === "未満" || kw.indexOf("より小さ") === 0) {
+          opObj.when = "lt";
+        } else if (kw === "以前" || kw === "まで" || kw === "以下") {
+          opObj.when = "le";
+        } else if (kw === "より後" || kw === "より以降" || kw === "の後" || kw.indexOf("より大き") === 0 || kw.indexOf("を超") === 0) {
+          opObj.when = "gt";
+        } else {
+          opObj.when = "ge";
+        }
+        opObj.value = dNorm;
+        delete opObj.equals;
+        return;
+      }
+    }
+
     var w = opObj.when;
     if (w !== "gt" && w !== "ge" && w !== "lt" && w !== "le" && w !== "eq" && w !== "ne") return;
-    var tN = nfkc(text);
     var mNum = /(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)/.exec(tN);
     var raw = opObj.value;
     if (w === "gt" || w === "ge" || w === "lt" || w === "le") {
@@ -707,6 +824,18 @@ var ComboPlanner = (function () {
     return s;
   }
 
+  function _parseDateOrdJs(val, fallbackYear) {
+    var norm = _parseCmpDateStrJs(val);
+    if (!norm) return null;
+    if (norm.indexOf("-") >= 0) {
+      var ps = norm.split("-");
+      return parseInt(ps[0], 10) * 10000 + parseInt(ps[1], 10) * 100 + parseInt(ps[2], 10);
+    }
+    var pm = norm.split("/");
+    var y = fallbackYear || (new Date()).getFullYear();
+    return y * 10000 + parseInt(pm[0], 10) * 100 + parseInt(pm[1], 10);
+  }
+
   function _matchRowCondJs(cellVal, when, target) {
     var w = String(when || "eq").toLowerCase();
     var blank = cellVal === null || cellVal === undefined || String(cellVal).trim() === "";
@@ -714,6 +843,29 @@ var ComboPlanner = (function () {
     if (w === "notblank") return !blank;
     var tgt = (target === null || target === undefined) ? "" : String(target).trim();
     if (w === "contains") return !blank && String(cellVal).indexOf(tgt) >= 0;
+    if (w === "between" && tgt.indexOf("..") >= 0) {
+      var bps = tgt.split("..");
+      var cd0 = _parseDateOrdJs(cellVal);
+      var yFb0 = cd0 ? Math.floor(cd0 / 10000) : null;
+      var d1 = _parseDateOrdJs(bps[0], yFb0), d2 = _parseDateOrdJs(bps[1], yFb0);
+      if (cd0 === null || d1 === null || d2 === null) return false;
+      var lo = d1 <= d2 ? d1 : d2, hi = d1 <= d2 ? d2 : d1;
+      return cd0 >= lo && cd0 <= hi;
+    }
+    if (!/^-?[0-9,]+(?:\.[0-9]+)?$/.test(tgt)) {
+      var cd = _parseDateOrdJs(cellVal);
+      var yFb = cd ? Math.floor(cd / 10000) : null;
+      var td = _parseDateOrdJs(tgt, yFb);
+      if (td !== null) {
+        if (cd === null) return w === "ne";
+        if (w === "gt") return cd > td;
+        if (w === "ge") return cd >= td;
+        if (w === "lt") return cd < td;
+        if (w === "le") return cd <= td;
+        if (w === "ne") return cd !== td;
+        return cd === td;
+      }
+    }
     var cv = Number(String(cellVal).replace(/,/g, "").trim());
     var tv = Number(tgt.replace(/,/g, "").trim());
     if (w === "gt" || w === "ge" || w === "lt" || w === "le") {
@@ -1467,15 +1619,17 @@ var ComboPlanner = (function () {
         }
         if (av) rangeGiven = true;
       } else if (t === "列") {
-        if (k === "at" && !arg.req && !/(?:列|欄)[にへ]|の間に/.test(text)) {
-          // 任意 at に計算入力列等を勝手に入れない
+        if (!arg.req && _OPT_COL_CUES_JS[k] && !_OPT_COL_CUES_JS[k].test(nfkc(text))) {
+          // 頼みに該当動作の語が無い任意列引数（at / renumber / number 等）には流さない
         } else if (shelf.name === "calc.col" && k === "at") {
           // calc.col の at は専用解析で決める
         } else if (colPool.length && !(anyList.indexOf(k) >= 0 && hasAnyFilled())) {
           av = colPool.shift();
         }
       } else if (t === "列[]") {
-        if (colPool.length) {
+        if (!arg.req && _OPT_COL_CUES_JS[k] && !_OPT_COL_CUES_JS[k].test(nfkc(text))) {
+          // 頼みに該当動作の語が無い任意列[]引数（total 等）には流さない
+        } else if (colPool.length) {
           av = colPool.slice();
           colPool = [];
         }
@@ -1690,7 +1844,7 @@ var ComboPlanner = (function () {
           }
         }
         eqS = eqS.replace(/(?:さん|様)$/, "").trim();
-        if (!eqS || colsAll.indexOf(eqS) >= 0 || /(?:が|は)/.test(eqS) || /以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄/.test(eqS)) {
+        if (!eqS || colsAll.indexOf(eqS) >= 0 || /(?:が|は)/.test(eqS) || /以上|以下|未満|より大|より小|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄/.test(eqS) || _DATE_CMP_CUE_RE_JS.test(nfkc(eqS))) {
           delete opObj.equals;
           return;
         }
@@ -1719,7 +1873,8 @@ var ComboPlanner = (function () {
       }
       if (shN === "format") {
         var hasRowCond = /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(scanN) ||
-          /(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN);
+          /(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN) ||
+          (_DATE_CMP_CUE_RE_JS.test(scanN) && /(?:の行|行を|行に|行全体|のセル|セルを)/.test(scanN));
         if (hasRowCond) addMiss("条件付き書式（cf.add）の条件");
         if (/固定|フリーズ/.test(scanN)) addMiss("固定（freeze）の指定");
         if (/並べ替|ソート/.test(scanN)) addMiss("並べ替え（sort）の指定");
@@ -1740,13 +1895,13 @@ var ComboPlanner = (function () {
         addMiss("書式（bg・color・bold）");
       }
       if (shN === "filter.where" || shN === "filter.delete" || shN === "filter.extract") {
-        if (/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) && !opObj.when) {
+        if ((/以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄/.test(scanN) || _DATE_CMP_CUE_RE_JS.test(scanN)) && !opObj.when) {
           addMiss("条件（when）");
         }
         if (!opObj.when && _isEmptyVal(opObj.equals) && _isEmptyVal(opObj.value)) {
           addMiss("絞り込み条件（equals/when）");
         }
-        if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "ne") && _isEmptyVal(opObj.value)) {
+        if ((opObj.when === "gt" || opObj.when === "ge" || opObj.when === "lt" || opObj.when === "le" || opObj.when === "ne" || opObj.when === "between") && _isEmptyVal(opObj.value)) {
           addMiss("value");
         }
       }
@@ -1874,6 +2029,57 @@ var ComboPlanner = (function () {
           }
         }
       }
+      // 8. 守りの逆（頼みに無い手を勝手に足さない）＋ find の疑問文誤爆防止
+      var tFullN = nfkc(txt);
+      if (shN === "find") {
+        var hasQWord = /どんな|何が|何を|何の|何か|なにが|なにを|何が入|何があ|どれ|誰|だれ|いくつ|何件|何人|何行|何列|何個|いくら/.test(tFullN);
+        var hasPoliteQ = /ですか|でしょうか|ますか/.test(tFullN) && !/(?:もらえ|くれ|いただけ|でき|られ)ますか/.test(tFullN);
+        var findTxtN = nfkc(String(opObj.text || ""));
+        if (hasQWord || hasPoliteQ || /どんな|何|なに|どれ|どこ|誰|だれ|いくつ/.test(findTxtN)) {
+          addMiss("疑問の文のため find で検索しません");
+        }
+      }
+      if (shN === "seiri") {
+        if (opObj.renumber && !_OPT_COL_CUES_JS.renumber.test(tFullN)) {
+          addMiss("頼みに無い操作（renumber）が混入しています");
+        }
+        if (opObj.blank_rows === true && !/空行|空白行|空白の行|空いてる行|空いている行|空き行/.test(tFullN)) {
+          addMiss("頼みに無い操作（blank_rows）が混入しています");
+        }
+        if (opObj.dedupe === true && !/重複|ダブ|同じ行/.test(tFullN)) {
+          addMiss("頼みに無い操作（dedupe）が混入しています");
+        }
+      }
+      if (shN === "table.new") {
+        if (opObj.number && !_OPT_COL_CUES_JS.number.test(tFullN)) {
+          addMiss("頼みに無い操作（number）が混入しています");
+        }
+        if (opObj.total && !_OPT_COL_CUES_JS.total.test(tFullN)) {
+          addMiss("頼みに無い操作（total）が混入しています");
+        }
+      }
+      if (shN === "sort") {
+        if ((opObj.filter === true || opObj.where) && !/フィルタ|フィルター|絞り|だけ|のみ/.test(tFullN)) {
+          addMiss("頼みに無い操作（filter/where）が混入しています");
+        }
+      }
+      if (opObj.all_sheets === true && !/全シート|すべてのシート|全てのシート|ブック全体/.test(tFullN)) {
+        addMiss("頼みに無い操作（all_sheets）が混入しています");
+      }
+      if (shN === "format") {
+        if (opObj.bold === true && !/太字|太く|ボールド/i.test(tFullN)) {
+          addMiss("頼みに無い操作（bold）が混入しています");
+        }
+        if (opObj.italic === true && !/斜体|イタリック/i.test(tFullN)) {
+          addMiss("頼みに無い操作（italic）が混入しています");
+        }
+        if (opObj.merge === true && !/結合|マージ/i.test(tFullN)) {
+          addMiss("頼みに無い操作（merge）が混入しています");
+        }
+        if (_hasOwn(opObj, "borders") && opObj.borders !== null && opObj.borders !== false && opObj.borders !== "none" && opObj.borders !== "なし" && !/罫線|枠線|外枠|格子/.test(tFullN)) {
+          addMiss("頼みに無い操作（borders）が混入しています");
+        }
+      }
     }
 
     if (_CMP_VALUE_SHELVES_JS[shelf.name] && op.when !== "formula") {
@@ -1894,7 +2100,15 @@ var ComboPlanner = (function () {
         var normVCf = !_isEmptyVal(rawVCf) ? _normFilterNumJs(rawVCf) : null;
         var numVal = normVCf !== null ? normVCf : ((rawVCf !== undefined && rawVCf !== null) ? String(rawVCf).replace(/,/g, "") : "");
         if (refL) {
-          if (op.when === "ge" && numVal !== "") expr = "=$" + refL + cfR1 + ">=" + numVal;
+          var dCfAtom = (!_isEmptyVal(rawVCf) && normVCf === null) ? _dateCmpToFormulaAtomJs(rawVCf, table) : null;
+          if (op.when === "between" && typeof rawVCf === "string" && rawVCf.indexOf("..") >= 0) {
+            var pCf = rawVCf.split("..");
+            var da1 = _dateCmpToFormulaAtomJs(pCf[0], table), da2 = _dateCmpToFormulaAtomJs(pCf[1], table);
+            if (da1 && da2) expr = "=AND(ISNUMBER($" + refL + cfR1 + "),$" + refL + cfR1 + ">=" + da1 + ",$" + refL + cfR1 + "<=" + da2 + ")";
+          } else if (dCfAtom && (op.when === "gt" || op.when === "ge" || op.when === "lt" || op.when === "le" || op.when === "eq" || op.when === "ne")) {
+            var opSymCf = { gt: ">", ge: ">=", lt: "<", le: "<=", eq: "=", ne: "<>" }[op.when];
+            expr = "=AND(ISNUMBER($" + refL + cfR1 + "),$" + refL + cfR1 + opSymCf + dCfAtom + ")";
+          } else if (op.when === "ge" && numVal !== "") expr = "=$" + refL + cfR1 + ">=" + numVal;
           else if (op.when === "le" && numVal !== "") expr = "=$" + refL + cfR1 + "<=" + numVal;
           else if (op.when === "gt" && numVal !== "") expr = "=$" + refL + cfR1 + ">" + numVal;
           else if (op.when === "lt" && numVal !== "") expr = "=$" + refL + cfR1 + "<" + numVal;
@@ -2324,15 +2538,19 @@ var ComboPlanner = (function () {
       }
     }
 
+    if (shelf.name === "seiri") {
+      if (!_OPT_COL_CUES_JS.renumber.test(nfkc(text))) delete op.renumber;
+    }
+
     if (shelf.name === "filter.where" || shelf.name === "filter.delete" || shelf.name === "filter.extract") {
       if (shelf.name === "filter.extract" && op.into === "別") delete op.into;
       if (_hasOwn(op, "when") && _hasOwn(op, "equals") && typeof op.equals === "string") {
-        if (/以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄/.test(op.equals)) {
+        if (/以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降/.test(op.equals) || _DATE_CMP_CUE_RE_JS.test(nfkc(op.equals))) {
           delete op.equals;
         }
       }
       if (shelf.name === "filter.where") {
-        var hasCmpCue = _hasOwn(op, "when") || /以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄/.test(text);
+        var hasCmpCue = _hasOwn(op, "when") || /以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降/.test(text) || _DATE_CMP_CUE_RE_JS.test(nfkc(text));
         if (!hasCmpCue && !_hasOwn(op, "equals")) {
           var mGen = /(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)/.exec(text.trim());
           if (mGen) {
@@ -2350,9 +2568,15 @@ var ComboPlanner = (function () {
       _resolveCmpValueJs(op, text);
       if (!_hasOwn(op, "col") && table && table.columns) {
         var cols = [];
+        var dateCandsF = [];
         for (var tci = 0; tci < table.columns.length; tci++) {
           cols.push(table.columns[tci].name);
+          if (table.columns[tci].name && !table.columns[tci].number && /(?:日付|日$|date)/i.test(String(table.columns[tci].name))) {
+            dateCandsF.push(table.columns[tci].name);
+          }
         }
+        var valSF = String(op.value || "");
+        var isDateValF = !!(valSF && (valSF.indexOf("..") >= 0 || _parseCmpDateStrJs(valSF)));
         var eq = String(op.equals || "");
         var hasKamoku = cols.indexOf("勘定科目") >= 0 || cols.indexOf("科目") >= 0;
         var isExpense = eq.indexOf("旅費") >= 0 || ["費", "料", "税", "手当"].some(function (x) { return eq.indexOf(x) >= 0; });
@@ -2365,7 +2589,9 @@ var ComboPlanner = (function () {
           }
         }
         var isPerson = eq.indexOf(" ") >= 0 || eq.indexOf("　") >= 0 || ["さん", "様", "氏"].some(function (x) { return text.indexOf(x) >= 0; });
-        if (hasKamoku && isExpense) {
+        if (isDateValF && dateCandsF.length === 1) {
+          op.col = dateCandsF[0];
+        } else if (hasKamoku && isExpense) {
           op.col = cols.indexOf("勘定科目") >= 0 ? "勘定科目" : "科目";
         } else if (foundPersonCol && isPerson) {
           op.col = foundPersonCol;
@@ -2763,7 +2989,7 @@ var ComboPlanner = (function () {
   }
 
   var _READ_ONLY_MUTATE_RE_JS = /並べて|並べ替|ソート|絞り込|フィルタ|抽出|消して|消す|削除|取り除|捨て|外して|外す|解除|塗|色[をに]?付|色[をに]?つ|色[をに]?変|色にして|太字|斜体|罫線|固定|フリーズ|非表示|隠して|再表示|追加|足して|作って|作成|入れて|入力|書[きくい]|書き換|置換|直して|そろえて|揃えて|整えて|変換|グラフ|ピボット|集計表|別シート|コピー|複製|移動|変更|保護|結合|幅を|高さを|広げて|狭めて|大きくして|小さくして|プルダウン|リストを作|ハイライト|目立たせ|だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$/;
-  var _READ_ONLY_QUERY_RE_JS = /[?？]|どこ|どれ|だれ|誰|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|ありますか|あるか|いるか|ですか|でしょうか|どうなって|教えて|知りたい|確認したい|構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ/;
+  var _READ_ONLY_QUERY_RE_JS = /[?？]|どこ|どれ|だれ|誰|どんな|何が|何を|何が入|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|ありますか|あるか|いるか|ですか|ますか|でしょうか|どうなって|教えて|知りたい|確認したい|構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ/;
 
   function _chartSummaryOpsJs(op, clause, table) {
     if (!table || !Array.isArray(table.columns) || !table.columns.length || op.edit || op.transpose) return null;
@@ -3018,13 +3244,15 @@ var ComboPlanner = (function () {
         var hasPaintFmtCue = _colorHits(c).length > 0 && c.indexOf("塗") >= 0 &&
           !/条件|以上|以下|未満|上回|下回|届か|届いてい?ない|以外|じゃない|になって|消|削除|クリア|なし|無し|1行おき|交互|しましま|縞模様|重複|ダブ|固定色|該当行|行全体|の行/.test(c);
         var hasRowCfCond = /(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了)/.test(c) ||
+          _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c);
-        var hasRowCfCue = /(?:行全体|の行|行を|行に|いない行|ない行)/.test(c) &&
+        var hasRowCfCue = (/(?:行全体|の行|行を|行に|いない行|ない行)/.test(c) || (_DATE_CMP_CUE_RE_JS.test(nfkc(c)) && /(?:のセル|セルを|セルに)/.test(c))) &&
           hasRowCfCond &&
           !/消|削除|重複|ダブ|固定色/.test(c) &&
           (_colorHits(c).length > 0 || /色[を]?付|色[を]?つ|目立|ハイライト/.test(c));
         var hasRowDelCond = /(?:の行|行を|行に|行は|いない行|ない行|データ)/.test(c) &&
           (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行)/.test(c) ||
+            _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
             /[^\s、。]+?(?:が|は)[^\s、。の]+?の行/.test(c)) &&
           /消|削除/.test(c) &&
           !/重複|ダブ|空行|空いてる行|空いている行|空白行|空白の行|空き行|色|書式|罫線|フィルタ|フィルター|メモ|コメント|リンク|プルダウン|入力規則/.test(c) &&
@@ -3042,6 +3270,7 @@ var ComboPlanner = (function () {
         var hasChartCue = /(?:グラフ|棒グラフ|折れ線|円グラフ|散布図|面グラフ)/.test(c) &&
           !/消|削除|なく|いらない/.test(c);
         var hasFilterWhereCue = (/(?:以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄)/.test(c) ||
+          _DATE_CMP_CUE_RE_JS.test(nfkc(c)) ||
           /[^\s、。]+?(?:が|は)[^\s、。の]+?の[^\s、。のをにはが]{1,12}/.test(c)) &&
           /(?:だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ)/.test(c) &&
           !/(?:消|削除|別シート|抽出|色|ハイライト|目立|IF|判定|解除|外し|外す)/i.test(c);
@@ -3051,7 +3280,7 @@ var ComboPlanner = (function () {
           !/重複|ダブ|全角|半角|整え|きれい|掃除|トリム|余分な空白|末尾|軽く|下まで|余白/.test(c);
         var hasBorderFmtCue = /罫線|外枠|格子/.test(c) &&
           !/整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線/.test(c);
-        var hasSeiriCleanCue = /(?:前後|余分な?|両端|先頭|末尾)の?(?:空白|スペース).*(?:消|削除|取り除|除去|詰め|トリム)|(?:空白|スペース)を(?:消|削除|取り除|除去|トリム)|全角(?:の?(?:英?数字|文字))?を半角/.test(c) &&
+        var hasSeiriCleanCue = /(?:前後|余分な?|両端|先頭|末尾)の?(?:空白|スペース).*(?:消|削除|取り除|取っ|取る|除去|詰め|トリム)|(?:空白|スペース)を(?:消|削除|取り除|取っ|取る|除去|詰め|トリム)|全角(?:の?(?:英?数字|文字))?を半角/.test(c) &&
           !/空行|空白行|空白の行|空いてる行|空いている行|空き行|改行|不可視文字|ゴミ文字|セル内改行|穴埋め|上の値|以外の|じゃない|の行を消|の行を削除/.test(c);
         var hasDateFixCue = (c.indexOf("和暦") >= 0 ||
           (/(?:日付|入社日|生年月日|登録日|更新日|期限|yyyy\/mm\/dd|yyyy-mm-dd|年月日の?形)/i.test(c) &&

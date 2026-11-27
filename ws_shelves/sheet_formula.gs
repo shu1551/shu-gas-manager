@@ -711,7 +711,29 @@ SHELF['text.case'] = function (ctx, op) {
   rg.setValues(tmp);
   SpreadsheetApp.flush();
   var got = rg.getValues();
-  for (var r2 = 0; r2 < tmp.length; r2++) for (var c2 = 0; c2 < tmp[r2].length; c2++) if (isText[r2][c2]) tmp[r2][c2] = String(got[r2][c2]);
+  var textKeepMap = [], hasKeepFmt = false;
+  for (var r2 = 0; r2 < tmp.length; r2++) {
+    textKeepMap.push([]);
+    for (var c2 = 0; c2 < tmp[r2].length; c2++) {
+      var keepCell = false;
+      if (isText[r2][c2]) {
+        var sVal = String(got[r2][c2]);
+        tmp[r2][c2] = sVal;
+        if (/^[+-]?0\d/.test(sVal) || /^\d{1,4}[-\/]\d{1,4}(?:[-\/]\d{1,4})?$/.test(sVal) || /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(sVal)) {
+          keepCell = true;
+          hasKeepFmt = true;
+        }
+      }
+      textKeepMap[r2].push(keepCell);
+    }
+  }
+  if (hasKeepFmt && typeof rg.getNumberFormats === 'function' && typeof rg.setNumberFormats === 'function') {
+    var fmtsTc = rg.getNumberFormats();
+    for (var r3 = 0; r3 < textKeepMap.length; r3++) for (var c3 = 0; c3 < textKeepMap[r3].length; c3++) {
+      if (textKeepMap[r3][c3]) fmtsTc[r3][c3] = '@';
+    }
+    rg.setNumberFormats(fmtsTc);
+  }
   rg.setValues(tmp);
   chg_(ctx, sh, rg.getA1Notation(), fnName + ' でそろえた');
 };

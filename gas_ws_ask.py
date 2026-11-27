@@ -485,13 +485,127 @@ _CALC_VERB_PREFIX_RE = re.compile(
     r"^.*?(?:(?:差し引い|掛け|かけ|足し|たし|引い|ひい|割っ|わっ|乗算し|加算し|減算し|除算し|計算し)(?:た|て)|(?:掛け算|かけ算|足し算|引き算|割り算)(?:の|で))\s*"
 )
 
+# 任意（非必須）の列引数へ無関係な列名が流れ込まないようにするキーワード条件（1 か所管理）
+_OPT_COL_CUES = {
+    "at": re.compile(r"(?:列|欄)[にへ]|の間に"),
+    "renumber": re.compile(r"連番|通し番号|番号を?(?:振|付)|振り直|ふり直|付け直|つけ直|ナンバリング"),
+    "number": re.compile(r"連番|通し番号"),
+    "total": re.compile(r"合計|総計|小計"),
+    "url_col": re.compile(r"url|リンク先|アドレス", re.IGNORECASE),
+}
+
+# 日付比較の 1 か所定義（西暦・和暦・年なし月日）
+_DATE_TOK_PAT = (
+    r"(?<![0-9A-Za-z/])("
+    r"[0-9]{4}\s*[/\-.年]\s*[0-9]{1,2}\s*[/\-.月]\s*[0-9]{1,2}\s*日?"
+    r"|(?:令和|平成|昭和|大正|明治|[RrHhSsTtMm])\s*(?:元|[0-9]{1,2})\s*[/\-.年]\s*[0-9]{1,2}\s*[/\-.月]\s*[0-9]{1,2}\s*日?"
+    r"|[0-9]{1,2}\s*月\s*[0-9]{1,2}\s*日"
+    r"|[0-9]{1,2}/[0-9]{1,2}"
+    r")(?![0-9/])"
+)
+_DATE_RANGE_CMP_RE = re.compile(_DATE_TOK_PAT + r"\s*(?:から|〜|~|～)\s*" + _DATE_TOK_PAT + r"\s*(?:まで)?")
+_DATE_SINGLE_CMP_RE = re.compile(
+    _DATE_TOK_PAT + r"\s*(より以前|より前|以前|より以降|より後|以降|の前|の後|から|まで|以上|以下|未満|より大き(?:い|く)?|を超え?|より小さ(?:い|く)?)"
+)
+_DATE_CMP_CUE_RE = re.compile(
+    r"より以前|より前|より以降|より後|以前|以降|" + _DATE_TOK_PAT + r"\s*(?:の前|の後|から|まで)"
+)
+_ERA_BASE = {"令和": 2018, "R": 2018, "平成": 1988, "H": 1988, "昭和": 1925, "S": 1925, "大正": 1911, "T": 1911, "明治": 1867, "M": 1867}
+
+
+def _parse_cmp_date_str(raw):
+    """日付トークンを標準比較形式（年あり: YYYY-MM-DD / 年なし: MM/DD）へ正規化。無効なら None。"""
+    s = nfkc(str(raw or "")).strip()
+    if not s:
+        return None
+    m = re.fullmatch(r"([0-9]{4})\s*[/\-.年]\s*([0-9]{1,2})\s*[/\-.月]\s*([0-9]{1,2})\s*日?", s)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1868 <= y <= 2100:
+            try:
+                datetime(y, mo, d)
+                return f"{y:04d}-{mo:02d}-{d:02d}"
+            except ValueError:
+                return None
+        return None
+    mw = re.fullmatch(r"(令和|平成|昭和|大正|明治|[RrHhSsTtMm])\s*(元|[0-9]{1,2})\s*[/\-.年]\s*([0-9]{1,2})\s*[/\-.月]\s*([0-9]{1,2})\s*日?", s)
+    if mw:
+        base = _ERA_BASE.get(mw.group(1).upper())
+        ey = 1 if mw.group(2) == "元" else int(mw.group(2))
+        if base and 1 <= ey <= 99:
+            y, mo, d = base + ey, int(mw.group(3)), int(mw.group(4))
+            try:
+                datetime(y, mo, d)
+                return f"{y:04d}-{mo:02d}-{d:02d}"
+            except ValueError:
+                return None
+        return None
+    md = re.fullmatch(r"([0-9]{1,2})\s*(?:月|/)\s*([0-9]{1,2})\s*日?", s)
+    if md:
+        mo, d = int(md.group(1)), int(md.group(2))
+        try:
+            datetime(2024, mo, d)
+            return f"{mo:02d}/{d:02d}"
+        except ValueError:
+            return None
+    return None
+
+
+def _date_cmp_to_formula_atom(d_str, table=None):
+    """標準日付文字列（YYYY-MM-DD または MM/DD）をスプレッドシート数式 DATE(...) へ変換する。"""
+    m_full = re.fullmatch(r"([0-9]{4})-([0-9]{2})-([0-9]{2})", str(d_str or ""))
+    if m_full:
+        return f"DATE({int(m_full.group(1))},{int(m_full.group(2))},{int(m_full.group(3))})"
+    m_md = re.fullmatch(r"([0-9]{2})/([0-9]{2})", str(d_str or ""))
+    if m_md:
+        y_hint = None
+        for row in (table or {}).get("rows") or []:
+            if isinstance(row, (list, tuple)):
+                for cell in row:
+                    m_y = re.match(r"^\s*([12][0-9]{3})[/\-.年]", nfkc(str(cell or "")))
+                    if m_y:
+                        y_hint = int(m_y.group(1))
+                        break
+            if y_hint:
+                break
+        y_expr = str(y_hint) if y_hint else "YEAR(TODAY())"
+        return f"DATE({y_expr},{int(m_md.group(1))},{int(m_md.group(2))})"
+    return None
+
 
 def _resolve_cmp_value(op, text):
-    """比べる棚すべてで共通: 文中から %・万・億 を落とさず比較数値を抽出・正規化する。"""
+    """比べる棚すべてで共通: 文中から日付比較・%・万・億を落とさず比較演算子と値を抽出・正規化する。"""
+    t_n = nfkc(text)
+    # 0. 日付の比べ（より前・より後・以降・以前・から・まで・範囲）を 1 か所で最優先解決
+    m_dr = _DATE_RANGE_CMP_RE.search(t_n)
+    if m_dr:
+        d1 = _parse_cmp_date_str(m_dr.group(1))
+        d2 = _parse_cmp_date_str(m_dr.group(2))
+        if d1 and d2:
+            op["when"] = "between"
+            op["value"] = f"{d1}..{d2}"
+            op.pop("equals", None)
+            return
+    m_ds = _DATE_SINGLE_CMP_RE.search(t_n)
+    if m_ds:
+        d_norm = _parse_cmp_date_str(m_ds.group(1))
+        if d_norm:
+            kw = m_ds.group(2)
+            if kw in ("より前", "より以前", "の前", "未満") or kw.startswith("より小さ"):
+                op["when"] = "lt"
+            elif kw in ("以前", "まで", "以下"):
+                op["when"] = "le"
+            elif kw in ("より後", "より以降", "の後") or kw.startswith("より大き") or kw.startswith("を超"):
+                op["when"] = "gt"
+            else:
+                op["when"] = "ge"
+            op["value"] = d_norm
+            op.pop("equals", None)
+            return
+
     w = op.get("when")
     if w not in ("gt", "ge", "lt", "le", "eq", "ne"):
         return
-    t_n = nfkc(text)
     m_num = re.search(
         r"(-?[0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?\s*(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない|になっていない|になってない|ではない|でない|じゃない|以外|の行|のセル|なら|判定)",
         t_n,
@@ -549,6 +663,19 @@ def _clean_calc_col_name(raw_name):
     return s
 
 
+def _parse_date_ord_py(val, fallback_year=None):
+    """行条件判定用の日付 ordinal（YYYY*10000 + MM*100 + DD）を返す。"""
+    norm = _parse_cmp_date_str(val)
+    if not norm:
+        return None
+    if "-" in norm:
+        y, mo, d = (int(x) for x in norm.split("-"))
+        return y * 10000 + mo * 100 + d
+    mo, d = (int(x) for x in norm.split("/"))
+    y = fallback_year or datetime.now().year
+    return y * 10000 + mo * 100 + d
+
+
 def _match_row_cond_py(cell_val, when, target):
     """手元の表データに対する行条件一致判定（過半数削除ガード用）。"""
     w = str(when or "eq").lower()
@@ -560,6 +687,33 @@ def _match_row_cond_py(cell_val, when, target):
     tgt = "" if target is None else str(target).strip()
     if w == "contains":
         return not blank and tgt in str(cell_val)
+    if w == "between" and ".." in tgt:
+        p1, p2 = tgt.split("..", 1)
+        cd0 = _parse_date_ord_py(cell_val)
+        y_fb = (cd0 // 10000) if cd0 else None
+        d1, d2 = _parse_date_ord_py(p1, y_fb), _parse_date_ord_py(p2, y_fb)
+        if cd0 is None or d1 is None or d2 is None:
+            return False
+        lo, hi = (d1, d2) if d1 <= d2 else (d2, d1)
+        return lo <= cd0 <= hi
+    if not re.fullmatch(r"-?[0-9,]+(?:\.[0-9]+)?", tgt):
+        cd = _parse_date_ord_py(cell_val)
+        y_fb = (cd // 10000) if cd else None
+        td = _parse_date_ord_py(tgt, y_fb)
+        if td is not None:
+            if cd is None:
+                return w == "ne"
+            if w == "gt":
+                return cd > td
+            if w == "ge":
+                return cd >= td
+            if w == "lt":
+                return cd < td
+            if w == "le":
+                return cd <= td
+            if w == "ne":
+                return cd != td
+            return cd == td
     if w in ("gt", "ge", "lt", "le"):
         try:
             cv = float(str(cell_val).replace(",", "").strip())
@@ -839,7 +993,8 @@ def _clean_filter_equals(op, text, table, quoted_vals):
             not eq_s
             or eq_s in cols_all
             or re.search(r"(?:が|は)", eq_s)
-            or re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄", eq_s)
+            or re.search(r"以上|以下|未満|より大|より小|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄", eq_s)
+            or _DATE_CMP_CUE_RE.search(nfkc(eq_s))
         ):
             op.pop("equals", None)
             return
@@ -877,7 +1032,8 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
     if sh_name == "format":
         has_row_cond = bool(
             re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", scan_n)
-            or re.search(r"(?:以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)", scan_n)
+            or re.search(r"(?:以上|以下|未満|より大き|より小さ|より前|より後|以前|以降|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|空欄|空白|以外|ではない|になってない).{0,8}(?:の行|行を|行に|行全体|のセル|セルを)", scan_n)
+            or (_DATE_CMP_CUE_RE.search(scan_n) and re.search(r"の行|行を|行に|行全体|のセル|セルを", scan_n))
         )
         if has_row_cond:
             _add_miss("条件付き書式（cf.add）の条件")
@@ -912,11 +1068,11 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
 
     # 4. フィルタ系で条件語が落ちている／条件自体が空
     if sh_name in ("filter.where", "filter.delete", "filter.extract"):
-        if re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", scan_n) and not op.get("when"):
+        if (re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|を含|含む|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", scan_n) or _DATE_CMP_CUE_RE.search(scan_n)) and not op.get("when"):
             _add_miss("条件（when）")
         if not op.get("when") and op.get("equals") in (None, "") and op.get("value") in (None, ""):
             _add_miss("絞り込み条件（equals/when）")
-        if op.get("when") in ("gt", "ge", "lt", "le", "ne") and op.get("value") in (None, ""):
+        if op.get("when") in ("gt", "ge", "lt", "le", "ne", "between") and op.get("value") in (None, ""):
             _add_miss("value")
 
     # 5. 式を入れる棚で入れ先の列(at)が式・計算の入力列と同じなら撃たない（自己上書き・循環参照防止）
@@ -1024,6 +1180,41 @@ def _audit_built_op(shelf, op, text, scan, table, color_hits, missing):
                 )
                 if hits_r > 0 and (hits_r == total_r or hits_r * 2 > total_r):
                     _add_miss(f"条件に合う行が過半数（{hits_r}/{total_r}行）のため確認が必要")
+
+    # 8. 守りの逆（頼みに無い手を勝手に足さない）＋ find の疑問文誤爆防止
+    t_full_n = nfkc(text)
+    if sh_name == "find":
+        has_q_word = bool(re.search(r"どんな|何が|何を|何の|何か|なにが|なにを|何が入|何があ|どれ|誰|だれ|いくつ|何件|何人|何行|何列|何個|いくら", t_full_n))
+        has_polite_q = bool(re.search(r"ですか|でしょうか|ますか", t_full_n)) and not bool(re.search(r"(?:もらえ|くれ|いただけ|でき|られ)ますか", t_full_n))
+        find_txt_n = nfkc(str(op.get("text") or ""))
+        if has_q_word or has_polite_q or re.search(r"どんな|何|なに|どれ|どこ|誰|だれ|いくつ", find_txt_n):
+            _add_miss("疑問の文のため find で検索しません")
+    if sh_name == "seiri":
+        if op.get("renumber") and not _OPT_COL_CUES["renumber"].search(t_full_n):
+            _add_miss("頼みに無い操作（renumber）が混入しています")
+        if op.get("blank_rows") is True and not re.search(r"空行|空白行|空白の行|空いてる行|空いている行|空き行", t_full_n):
+            _add_miss("頼みに無い操作（blank_rows）が混入しています")
+        if op.get("dedupe") is True and not re.search(r"重複|ダブ|同じ行", t_full_n):
+            _add_miss("頼みに無い操作（dedupe）が混入しています")
+    if sh_name == "table.new":
+        if op.get("number") and not _OPT_COL_CUES["number"].search(t_full_n):
+            _add_miss("頼みに無い操作（number）が混入しています")
+        if op.get("total") and not _OPT_COL_CUES["total"].search(t_full_n):
+            _add_miss("頼みに無い操作（total）が混入しています")
+    if sh_name == "sort":
+        if (op.get("filter") is True or op.get("where")) and not re.search(r"フィルタ|フィルター|絞り|だけ|のみ", t_full_n):
+            _add_miss("頼みに無い操作（filter/where）が混入しています")
+    if op.get("all_sheets") is True and not re.search(r"全シート|すべてのシート|全てのシート|ブック全体", t_full_n):
+        _add_miss("頼みに無い操作（all_sheets）が混入しています")
+    if sh_name == "format":
+        if op.get("bold") is True and not re.search(r"太字|太く|ボールド", t_full_n, re.IGNORECASE):
+            _add_miss("頼みに無い操作（bold）が混入しています")
+        if op.get("italic") is True and not re.search(r"斜体|イタリック", t_full_n, re.IGNORECASE):
+            _add_miss("頼みに無い操作（italic）が混入しています")
+        if op.get("merge") is True and not re.search(r"結合|マージ", t_full_n, re.IGNORECASE):
+            _add_miss("頼みに無い操作（merge）が混入しています")
+        if op.get("borders") not in (None, False, "none", "なし") and not re.search(r"罫線|枠線|外枠|格子", t_full_n):
+            _add_miss("頼みに無い操作（borders）が混入しています")
 
 
 # ------------------------------------------------------------------ 1 節 → 1 op
@@ -1156,14 +1347,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             if v:
                 range_given = True
         elif t == "列":
-            if k == "at" and not a["req"] and not re.search(r"(?:列|欄)[にへ]|の間に", text):
+            if not a["req"] and k in _OPT_COL_CUES and not _OPT_COL_CUES[k].search(nfkc(text)):
                 pass
             elif shelf["name"] == "calc.col" and k == "at":
                 pass
             elif col_pool and not (k in shelf["any"] and any(op.get(x) not in (None, "", []) for x in shelf["any"])):
                 v = col_pool.pop(0)
         elif t == "列[]":
-            if col_pool:
+            if not a["req"] and k in _OPT_COL_CUES and not _OPT_COL_CUES[k].search(nfkc(text)):
+                pass
+            elif col_pool:
                 v, col_pool = list(col_pool), []
         elif t == "行[]":
             if rows:
@@ -1249,7 +1442,16 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
             num_val = norm_v_cf if norm_v_cf is not None else (str(raw_v_cf).replace(",", "") if raw_v_cf is not None else "")
             if ref_l:
                 w = op.get("when")
-                if w == "ge" and num_val != "":
+                d_cf_atom = _date_cmp_to_formula_atom(raw_v_cf, table) if (raw_v_cf not in (None, "") and norm_v_cf is None) else None
+                if w == "between" and isinstance(raw_v_cf, str) and ".." in raw_v_cf:
+                    p1_cf, p2_cf = raw_v_cf.split("..", 1)
+                    da1, da2 = _date_cmp_to_formula_atom(p1_cf, table), _date_cmp_to_formula_atom(p2_cf, table)
+                    if da1 and da2:
+                        expr = f"=AND(ISNUMBER(${ref_l}{cf_r1}),${ref_l}{cf_r1}>={da1},${ref_l}{cf_r1}<={da2})"
+                elif d_cf_atom and w in ("gt", "ge", "lt", "le", "eq", "ne"):
+                    op_sym_cf = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "=", "ne": "<>"}[w]
+                    expr = f"=AND(ISNUMBER(${ref_l}{cf_r1}),${ref_l}{cf_r1}{op_sym_cf}{d_cf_atom})"
+                elif w == "ge" and num_val != "":
                     expr = f"=${ref_l}{cf_r1}>={num_val}"
                 elif w == "le" and num_val != "":
                     expr = f"=${ref_l}{cf_r1}<={num_val}"
@@ -1553,14 +1755,17 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
                             op["range"] = ",".join(f"{x}{ch_r1}:{x}{ch_r2}" for x in ordered_ls)
                     if used_group_series and len(label_cols) == 1 and len(num_cols) >= 2 and re.search(r"推移|月別|折れ線|ごと|別", text):
                         op["transpose"] = True
+    if shelf["name"] == "seiri":
+        if not _OPT_COL_CUES["renumber"].search(nfkc(text)):
+            op.pop("renumber", None)
     if shelf["name"] in ("filter.where", "filter.delete", "filter.extract"):
         if shelf["name"] == "filter.extract" and op.get("into") == "別":
             op.pop("into", None)
         if "when" in op and "equals" in op and isinstance(op["equals"], str):
-            if re.search(r"以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄", op["equals"]):
+            if re.search(r"以上|以下|未満|より|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降", op["equals"]) or _DATE_CMP_CUE_RE.search(nfkc(op["equals"])):
                 op.pop("equals", None)
         if shelf["name"] == "filter.where":
-            has_cmp_cue = ("when" in op) or bool(re.search(r"以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄", text))
+            has_cmp_cue = ("when" in op) or bool(re.search(r"以上|以下|未満|より|を超?|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|空白|空欄|以前|以降", text)) or bool(_DATE_CMP_CUE_RE.search(nfkc(text)))
             if not has_cmp_cue and "equals" not in op:
                 m_gen = re.search(r"(?:が|は)[『「]?([^』」\sの、。]+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ)", text.strip())
                 if m_gen:
@@ -1577,7 +1782,12 @@ def build_op(shelf, text, table=None, sheets=None, cur_sheet=""):
         if "col" not in op and table:
             cols = [c["name"] for c in table.get("columns", [])]
             eq = op.get("equals", "")
-            if any(k in cols for k in ("勘定科目", "科目")) and (any(x in eq for x in ("費", "料", "税", "手当")) or "旅費" in eq):
+            val_s = str(op.get("value") or "")
+            is_date_val = bool(val_s and (".." in val_s or _parse_cmp_date_str(val_s)))
+            date_cands = [c["name"] for c in table.get("columns", []) if c.get("name") and not c.get("number") and re.search(r"日付|日$|date", str(c["name"]), re.IGNORECASE)]
+            if is_date_val and len(date_cands) == 1:
+                op["col"] = date_cands[0]
+            elif any(k in cols for k in ("勘定科目", "科目")) and (any(x in eq for x in ("費", "料", "税", "手当")) or "旅費" in eq):
                 op["col"] = "勘定科目" if "勘定科目" in cols else "科目"
             elif any(k in cols for k in ("氏名", "名前", "社員名", "担当者", "担当")) and (" " in eq or "　" in eq or any(x in text for x in ("さん", "様", "氏"))):
                 op["col"] = next(k for k in ("氏名", "名前", "社員名", "担当者", "担当") if k in cols)
@@ -1818,8 +2028,8 @@ _READ_ONLY_MUTATE_RE = re.compile(
     r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|にして(?:くれ|もらえ|くださ|いただ)?[?？]?$"
 )
 _READ_ONLY_QUERY_RE = re.compile(
-    r"[?？]|どこ|どれ|だれ|誰|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|"
-    r"ありますか|あるか|いるか|ですか|でしょうか|どうなって|教えて|知りたい|確認したい|"
+    r"[?？]|どこ|どれ|だれ|誰|どんな|何が|何を|何が入|いくつ|何件|何人|何行|何列|何個|何社|何名|いくら|何円|何%|"
+    r"ありますか|あるか|いるか|ですか|ますか|でしょうか|どうなって|教えて|知りたい|確認したい|"
     r"構成を|概要を|中身を|一覧を|おかしな|おかしい|異常|エラー|不備|ミス|間違|崩れ"
 )
 
@@ -2028,10 +2238,11 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             )
             has_row_cf_cond = bool(
                 re.search(r"以上|以下|未満|より大き|より小さ|を超|超え|上回|下回|届か|届いてい?ない|マイナス|負の値|になっていない|になってない|ではない|でない|じゃない|以外|空欄|空白|欠席|完了", c)
+                or _DATE_CMP_CUE_RE.search(nfkc(c))
                 or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
             )
             has_row_cf_cue = bool(
-                re.search(r"行全体|の行|行を|行に|いない行|ない行", c)
+                (re.search(r"行全体|の行|行を|行に|いない行|ない行", c) or (_DATE_CMP_CUE_RE.search(nfkc(c)) and re.search(r"のセル|セルを|セルに", c)))
                 and has_row_cf_cond
                 and not re.search(r"消|削除|重複|ダブ|固定色", c)
                 and (_color_hits(c) or re.search(r"色[を]?付|色[を]?つ|目立|ハイライト", c))
@@ -2040,6 +2251,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 re.search(r"の行|行を|行に|行は|いない行|ない行|データ", c)
                 and (
                     re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|を含|含む|欠席|出席|完了|未完了|済み|空欄|空白|ゼロ|0の行", c)
+                    or _DATE_CMP_CUE_RE.search(nfkc(c))
                     or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の行", c)
                 )
                 and re.search(r"消|削除", c)
@@ -2072,6 +2284,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
             has_filter_where_cue = bool(
                 (
                     re.search(r"以上|以下|未満|より大|より小|を超|超え|上回|下回|届か|届いてい?ない|以外|ではない|でない|じゃない|になっていない|になってない|空白|空欄", c)
+                    or _DATE_CMP_CUE_RE.search(nfkc(c))
                     or re.search(r"[^\s、。]+?(?:が|は)[^\s、。の]+?の[^\s、。のをにはが]{1,12}", c)
                 )
                 and re.search(r"だけ(?:出し|見せ|表示|残し|絞)|のみ(?:出し|見せ|表示)|絞り込|フィルタ", c)
@@ -2090,7 +2303,7 @@ def plan(ask, finder, kind="", table=None, sheets=None, cur_sheet="", last_scope
                 and not re.search(r"整え|見やすく|体裁|きれい|区切り線|変わる行|切り替わる行|グリッド線|目盛り線|シート.*枠線", c)
             )
             has_seiri_clean_cue = bool(
-                re.search(r"(?:前後|余分な?|両端|先頭|末尾)の?(?:空白|スペース).*(?:消|削除|取り除|除去|詰め|トリム)|(?:空白|スペース)を(?:消|削除|取り除|除去|トリム)|全角(?:の?(?:英?数字|文字))?を半角", c)
+                re.search(r"(?:前後|余分な?|両端|先頭|末尾)の?(?:空白|スペース).*(?:消|削除|取り除|取っ|取る|除去|詰め|トリム)|(?:空白|スペース)を(?:消|削除|取り除|取っ|取る|除去|詰め|トリム)|全角(?:の?(?:英?数字|文字))?を半角", c)
                 and not re.search(r"空行|空白行|空白の行|空いてる行|空いている行|空き行|改行|不可視文字|ゴミ文字|セル内改行|穴埋め|上の値|以外の|じゃない|の行を消|の行を削除", c)
             )
             has_date_fix_cue = bool(

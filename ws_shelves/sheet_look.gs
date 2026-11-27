@@ -190,9 +190,9 @@ DYNAMIC['width'] = {
 // 棚: cf.add
 // 題: 条件付き書式を付ける
 // 分類: 見た目
-// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色|未満は黄色|未満なら|以上は|以下は|より大きい|より小さい|行全体|の行を赤|の行を黄|の行を青|の行を緑|の行を薄|の行に色|の行を目立|以上のセル|以下のセル|未満のセル|より大きいセル|より小さいセル
+// 語: 条件付き書式|以上なら|以下なら|未満は|のとき色|入ってい|を目立たせ|自動で色|未満は黄色|未満なら|以上は|以下は|より大きい|より小さい|より前|より後|以前|以降|行全体|の行を赤|の行を黄|の行を青|の行を緑|の行を薄|の行に色|の行を目立|以上のセル|以下のセル|未満のセル|より大きいセル|より小さいセル
 // 違い: いつも同じ色なら format
-// 引数: range*=範囲, when*=選択(gt/ge/lt/le/eq/ne/contains/blank/notblank/formula), value=文字, bg=色, color=色, bold=真偽
+// 引数: range*=範囲, when*=選択(gt/ge/lt/le/eq/ne/between/contains/blank/notblank/formula), value=文字, bg=色, color=色, bold=真偽
 // 頼み: when=ge<以上 ; when=le<以下 ; when=lt<未満|より小さい|より少ない|マイナス|下回る|下回っ|届かない|届いていない|届いてない ; when=gt<より大きい|を超え|超える|より多い|上回る|上回っ ; when=ne<以外|ではない|でない|じゃない|になっていない|になってない ; when=contains<が入っている|を含む|が含まれ ; when=blank<空欄のセル|空白のセル ; value~([0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない) ; value~[『「]([^』」]+)[』」]
 // 例: 「売上が100万以上のセルを赤く」 → {"shelf":"cf.add","range":"F2:F100","when":"ge","value":"1000000","bg":"赤"}
 // 例: 「売上が100万以上の行を目立たせて」 → {"shelf":"cf.add","range":"A2:F100","when":"formula","value":"=$F2>=1000000","bg":"薄赤"}
@@ -203,18 +203,29 @@ SHELF['cf.add'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), rg = sh.getRange(op.range);
   var rule = SpreadsheetApp.newConditionalFormatRule().setRanges([rg]);
   var w = String(op.when).toLowerCase(), val = op.value !== undefined ? String(op.value) : '';
-  if (w === 'gt') rule.whenNumberGreaterThan(Number(val));
+  var cfCellA1 = a1_(rg.getRow(), rg.getColumn());
+  var cfClean = val.replace(/,/g, '').trim();
+  var isNumVal = cfClean !== '' && isFinite(Number(cfClean));
+  var cfYear = (typeof inferColDateYear_ === 'function') ? inferColDateYear_(rg.getValues(), 0) : new Date().getFullYear();
+  var dRange = (w === 'between' && typeof parseCmpDateRange_ === 'function') ? parseCmpDateRange_(val, cfYear) : null;
+  var dSingle = (!isNumVal && (w === 'gt' || w === 'ge' || w === 'lt' || w === 'le' || w === 'eq' || w === 'ne') && typeof parseCmpDate_ === 'function')
+    ? parseCmpDate_(val, cfYear) : null;
+  var dateExpr = function (d) { return 'DATE(' + d.y + ',' + d.m + ',' + d.d + ')'; };
+  if (w === 'between' && dRange) {
+    rule.whenFormulaSatisfied('=AND(ISNUMBER(' + cfCellA1 + '),' + cfCellA1 + '>=' + dateExpr(dRange[0]) + ',' + cfCellA1 + '<=' + dateExpr(dRange[1]) + ')');
+  } else if (dSingle) {
+    var opMapCf = { gt: '>', ge: '>=', lt: '<', le: '<=', eq: '=', ne: '<>' };
+    rule.whenFormulaSatisfied('=AND(ISNUMBER(' + cfCellA1 + '),' + cfCellA1 + opMapCf[w] + dateExpr(dSingle) + ')');
+  } else if (w === 'gt') rule.whenNumberGreaterThan(Number(val));
   else if (w === 'ge') rule.whenNumberGreaterThanOrEqualTo(Number(val));
   else if (w === 'lt') rule.whenNumberLessThan(Number(val));
   else if (w === 'le') rule.whenNumberLessThanOrEqualTo(Number(val));
   else if (w === 'eq') {
-    var eqClean = val.replace(/,/g, '').trim();
-    if (eqClean !== '' && isFinite(Number(eqClean))) rule.whenNumberEqualTo(Number(eqClean));
+    if (isNumVal) rule.whenNumberEqualTo(Number(cfClean));
     else rule.whenTextEqualTo(val);
   } else if (w === 'ne') {
-    var neClean = val.replace(/,/g, '').trim();
-    if (neClean !== '' && isFinite(Number(neClean))) rule.whenNumberNotEqualTo(Number(neClean));
-    else rule.whenFormulaSatisfied('=' + a1_(rg.getRow(), rg.getColumn()) + '<>"' + val.replace(/"/g, '""') + '"');
+    if (isNumVal) rule.whenNumberNotEqualTo(Number(cfClean));
+    else rule.whenFormulaSatisfied('=' + cfCellA1 + '<>"' + val.replace(/"/g, '""') + '"');
   }
   else if (w === 'contains') rule.whenTextContains(val);
   else if (w === 'blank') rule.whenCellEmpty();

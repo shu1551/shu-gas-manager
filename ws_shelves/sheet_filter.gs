@@ -42,6 +42,58 @@ function parseDateText_(s) {
   if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
   return dt;
 }
+// 比較用（filter.where / filter.delete / filter.extract / cf.add）の日付値（年あり・年なしMM/DD両対応）を解釈する
+function parseCmpDate_(val, fallbackYear) {
+  if ((val instanceof Date || Object.prototype.toString.call(val) === '[object Date]') && !isNaN(val.getTime())) {
+    var dy = val.getFullYear(), dm = val.getMonth() + 1, dd = val.getDate();
+    return { y: dy, m: dm, d: dd, ts: new Date(dy, dm - 1, dd).getTime() };
+  }
+  if (typeof val !== 'string') return null;
+  var s = val.trim();
+  if (!s) return null;
+  var dt = parseDateText_(s);
+  if (dt) {
+    return { y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(), ts: new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime() };
+  }
+  var h = s.replace(/[０-９]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+    .replace(/[／]/g, '/');
+  var md = /^(\d{1,2})\s*[\/月]\s*(\d{1,2})\s*日?$/.exec(h);
+  if (!md) return null;
+  var y = fallbackYear || new Date().getFullYear();
+  var mo = parseInt(md[1], 10), d = parseInt(md[2], 10);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  var dt2 = new Date(y, mo - 1, d);
+  if (dt2.getFullYear() !== y || dt2.getMonth() !== mo - 1 || dt2.getDate() !== d) return null;
+  return { y: y, m: mo, d: d, ts: dt2.getTime() };
+}
+function parseCmpDateRange_(val, fallbackYear) {
+  if (typeof val !== 'string' || val.indexOf('..') < 0) return null;
+  var parts = val.split('..');
+  if (parts.length !== 2) return null;
+  var d1 = parseCmpDate_(parts[0], fallbackYear), d2 = parseCmpDate_(parts[1], fallbackYear);
+  if (!d1 || !d2) return null;
+  return d1.ts <= d2.ts ? [d1, d2] : [d2, d1];
+}
+function inferColDateYear_(vals2d, colIdx0) {
+  for (var r = 0; r < vals2d.length; r++) {
+    var v = vals2d[r] && vals2d[r][colIdx0];
+    if ((v instanceof Date || Object.prototype.toString.call(v) === '[object Date]') && !isNaN(v.getTime())) return v.getFullYear();
+    if (typeof v === 'string') {
+      var dt = parseDateText_(v);
+      if (dt) return dt.getFullYear();
+    }
+  }
+  return new Date().getFullYear();
+}
+// setValues で Google Sheets に数値・日付へ誤変換されたくない文字列（先頭0数字・ハイフン付き番号等）かを判定
+function needsPlainTextFmt_(s, isCodeCol) {
+  if (typeof s !== 'string' || !s) return false;
+  if (/^[+-]?0\d/.test(s)) return true;
+  if (/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(s)) return true;
+  if (/^\d{1,4}[-\/]\d{1,4}(?:[-\/]\d{1,4})?$/.test(s)) return true;
+  if (isCodeCol && /^[+\d]/.test(s)) return true;
+  return false;
+}
 // 列ごとの書式・配置・折り返しを、見出し名・値の型・既存書式から自動判定する
 function tidyColSpec_(headName, vals, existingFmts, isNoCol) {
   var h = String(headName || '').trim();
@@ -315,17 +367,42 @@ function deleteRowRuns_(sh, rowNums) {
 SHELF['seiri'] = function (ctx, op) {
   var sh = sheetCtx_(ctx, op), t = needTable_(sh);
   var rg = sh.getRange(t.headerRow, t.firstCol, t.lastData - t.headerRow + 1, t.lastCol - t.firstCol + 1);
-  var vals = rg.getValues(), forms = rg.getFormulas(), fixed = [], nTrim = 0, nHalf = 0, nNum = 0, nDate = 0;
+  var vals = rg.getValues(), forms = rg.getFormulas(), fixed = [], textKeep = {}, nTrim = 0, nHalf = 0, nNum = 0, nDate = 0;
   var doTrim = op.trim !== false, doHalf = op.halfwidth !== false, doNum = op.numbers !== false, doDate = op.dates !== false;
+  var hNamesS = (typeof headerNames_ === 'function') ? headerNames_(t) : [];
+  var codeHeadRe = /(?:郵便|〒|電話|携帯|TEL|FAX|社員番号|社員ID|会員番号|会員ID|顧客番号|顧客ID|管理番号|注文番号|伝票番号|口座番号|商品コード|コード|品番|型番)/i;
+  var keepTextCol = [];
+  for (var c0 = 0; c0 < (vals[0] ? vals[0].length : 0); c0++) {
+    var hLabel = String(hNamesS[c0] !== undefined ? hNamesS[c0] : (vals[0][c0] || '')).trim();
+    var isKeepC = codeHeadRe.test(hLabel);
+    if (!isKeepC) {
+      for (var r0 = 1; r0 < vals.length; r0++) {
+        var cv0 = vals[r0][c0];
+        if (!forms[r0][c0] && typeof cv0 === 'string' && /^\s*[+-]?[0０][0-9０-９]/.test(cv0)) {
+          isKeepC = true;
+          break;
+        }
+      }
+    }
+    keepTextCol.push(isKeepC);
+  }
   for (var r = 0; r < vals.length; r++) for (var c = 0; c < vals[r].length; c++) {
     var v = vals[r][c];
     if (forms[r][c] || typeof v !== 'string') continue;
     var nv = v;
     if (doHalf) { var h = nv.replace(/[！-～]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); }).replace(/　/g, ' '); if (h !== nv) { nv = h; nHalf++; } }
     if (doTrim) { var tr = nv.replace(/^[\s　]+|[\s　]+$/g, ''); if (tr !== nv) { nv = tr; nTrim++; } }
-    if (doNum && r > 0 && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(nv) && !/^-?0\d/.test(nv)) { nv = Number(nv.replace(/,/g, '')); nNum++; }
-    else if (doDate && r > 0 && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
-    if (nv !== v) { vals[r][c] = nv; fixed.push(a1_(t.headerRow + r, t.firstCol + c)); }
+    var isCodeLike = keepTextCol[c] || /^[+-]?0\d/.test(nv);
+    if (doNum && r > 0 && !isCodeLike && /^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(nv)) { nv = Number(nv.replace(/,/g, '')); nNum++; }
+    else if (doDate && r > 0 && !isCodeLike && typeof nv === 'string') { var dt = parseDateText_(nv); if (dt) { nv = dt; nDate++; } }
+    if (nv !== v) {
+      var a1k = a1_(t.headerRow + r, t.firstCol + c);
+      vals[r][c] = nv;
+      fixed.push(a1k);
+      if (r > 0 && typeof nv === 'string' && needsPlainTextFmt_(nv, keepTextCol[c])) {
+        textKeep[a1k] = 1;
+      }
+    }
   }
   if (fixed.length) {
     // 式のセルは触らず、値のセルだけ書く
@@ -336,7 +413,23 @@ SHELF['seiri'] = function (ctx, op) {
       while (r2 < vals.length) {
         if (!changedSet[a1_(t.headerRow + r2, t.firstCol + c2)]) { r2++; continue; }
         var r3 = r2; while (r3 + 1 < vals.length && changedSet[a1_(t.headerRow + r3 + 1, t.firstCol + c2)]) r3++;
-        sh.getRange(t.headerRow + r2, t.firstCol + c2, r3 - r2 + 1, 1).setValues(vals.slice(r2, r3 + 1).map(function (row) { return [row[c2]]; }));
+        var subRg = sh.getRange(t.headerRow + r2, t.firstCol + c2, r3 - r2 + 1, 1);
+        var hasTextInSub = false;
+        for (var rk = r2; rk <= r3; rk++) {
+          if (textKeep[a1_(t.headerRow + rk, t.firstCol + c2)]) { hasTextInSub = true; break; }
+        }
+        if (hasTextInSub) {
+          if (typeof subRg.getNumberFormats === 'function' && typeof subRg.setNumberFormats === 'function') {
+            var subFmts = subRg.getNumberFormats();
+            for (var rk2 = r2; rk2 <= r3; rk2++) {
+              if (textKeep[a1_(t.headerRow + rk2, t.firstCol + c2)]) subFmts[rk2 - r2][0] = '@';
+            }
+            subRg.setNumberFormats(subFmts);
+          } else if (typeof subRg.setNumberFormat === 'function') {
+            subRg.setNumberFormat('@');
+          }
+        }
+        subRg.setValues(vals.slice(r2, r3 + 1).map(function (row) { return [row[c2]]; }));
         r2 = r3 + 1;
       }
     }
@@ -452,15 +545,29 @@ SHELF['sort'] = function (ctx, op) {
       var wvStr = String(wv !== undefined && wv !== null ? wv : '');
       var wvNumStr = wvStr.replace(/,/g, '').trim();
       var isNumWv = wvNumStr !== '' && isFinite(Number(wvNumStr));
+      var colYearW = inferColDateYear_(t.vals.slice(t.firstData - 1, t.lastData), absCi - 1);
+      var dRangeW = wh === 'between' ? parseCmpDateRange_(wvStr, colYearW) : null;
+      var dSingleW = (!isNumWv && (wh === 'gt' || wh === 'ge' || wh === 'lt' || wh === 'le' || wh === 'eq' || wh === 'ne' || (wh === '' && op.where.equals !== undefined)))
+        ? parseCmpDate_(wvStr, colYearW) : null;
+      var dateFnW = function (d) { return 'DATE(' + d.y + ',' + d.m + ',' + d.d + ')'; };
+      var refCellW = colLetter_(absCi) + t.firstData;
       var crit;
       if (wh === 'blank') crit = fb.whenCellEmpty().build();
       else if (wh === 'notblank') crit = fb.whenCellNotEmpty().build();
       else if (wh === 'contains') crit = fb.whenTextContains(wvStr).build();
+      else if (wh === 'between' && dRangeW) {
+        crit = fb.whenFormulaSatisfied('=AND(ISNUMBER(' + refCellW + '),' + refCellW + '>=' + dateFnW(dRangeW[0]) + ',' + refCellW + '<=' + dateFnW(dRangeW[1]) + ')').build();
+      }
+      else if (dSingleW) {
+        var opMapW = { gt: '>', ge: '>=', lt: '<', le: '<=', eq: '=', ne: '<>' };
+        var cmpOpW = opMapW[wh || 'eq'] || '=';
+        crit = fb.whenFormulaSatisfied('=AND(ISNUMBER(' + refCellW + '),' + refCellW + cmpOpW + dateFnW(dSingleW) + ')').build();
+      }
       else if (wh === 'ne') {
         if (wvStr === '') crit = fb.whenCellNotEmpty().build();
         else if (isNumWv && typeof fb.whenNumberNotEqualTo === 'function') crit = fb.whenNumberNotEqualTo(Number(wvNumStr)).build();
-        else if (isNumWv) crit = fb.whenFormulaSatisfied('=' + colLetter_(absCi) + t.firstData + '<>' + Number(wvNumStr)).build();
-        else crit = fb.whenFormulaSatisfied('=' + colLetter_(absCi) + t.firstData + '<>"' + wvStr.replace(/"/g, '""') + '"').build();
+        else if (isNumWv) crit = fb.whenFormulaSatisfied('=' + refCellW + '<>' + Number(wvNumStr)).build();
+        else crit = fb.whenFormulaSatisfied('=' + refCellW + '<>"' + wvStr.replace(/"/g, '""') + '"').build();
       }
       else if (wh === 'gt') crit = fb.whenNumberGreaterThan(Number(wvNumStr)).build();
       else if (wh === 'ge') crit = fb.whenNumberGreaterThanOrEqualTo(Number(wvNumStr)).build();
@@ -481,10 +588,10 @@ SHELF['sort'] = function (ctx, op) {
 // 棚: filter.where
 // 題: 条件に合う行だけ表示
 // 分類: 絞る
-// 語: だけ表示|だけ見せ|だけ出して|ものだけ|だけに絞|行だけ残|絞り込んで|のみ表示|フィルタをかけ|行だけ絞り込|だけ絞り込|以上の行|以下の行|を含む行|空白の行|を超えている|超えてる|下回る|上回る|届かない|届いていない|届いてない|絞り込み|フィルタ 表示
+// 語: だけ表示|だけ見せ|だけ出して|ものだけ|だけに絞|行だけ残|絞り込んで|のみ表示|フィルタをかけ|行だけ絞り込|だけ絞り込|以上の行|以下の行|より前の行|より後の行|以前の行|以降の行|を含む行|空白の行|を超えている|超えてる|下回る|上回る|届かない|届いていない|届いてない|絞り込み|フィルタ 表示
 // 違い: 並べ替えは sort
-// 引数: col*=列, equals=文字, when=選択(eq/ne/contains/gt/ge/lt/le/blank/notblank), value=文字
-// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え|上回る|上回っ ; when=lt<未満|より小|下回る|下回っ|届かない|届いていない|届いてない ; when=ne<以外|ではない|でない|じゃない|になっていない|になってない ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外|入力済み ; value~([0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない) ; equals~(?:が|は)[『「]?((?:(?!以上|以下|未満|より大|より小|を超|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|じゃない|になって|空白|空欄)[^』」\sの])+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ) ; equals~([^\s]+)の行だけ ; col~([^\s]+)(?:が|は)[^\s]+の[^\s、。のをにはが]{1,12}(?:だけ|のみ)
+// 引数: col*=列, equals=文字, when=選択(eq/ne/contains/gt/ge/lt/le/between/blank/notblank), value=文字
+// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え|上回る|上回っ ; when=lt<未満|より小|下回る|下回っ|届かない|届いていない|届いてない ; when=ne<以外|ではない|でない|じゃない|になっていない|になってない ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外|入力済み ; value~([0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|時間|点)?(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない) ; equals~(?:が|は)[『「]?((?:(?!以上|以下|未満|より大|より小|より前|より後|以前|以降|から|まで|を超|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|じゃない|になって|空白|空欄)[^』」\sの])+?)[』」]?の[^\s、。のをにはが]{1,12}(?:だけ|のみ) ; equals~([^\s]+)の行だけ ; col~([^\s]+)(?:が|は)[^\s]+の[^\s、。のをにはが]{1,12}(?:だけ|のみ)
 // 例: 「部署が営業の行だけ見せて」 → {"shelf":"filter.where","col":"部署","equals":"営業"}
 // 例: 「金額が10000以上の行だけ絞り込んで」 → {"shelf":"filter.where","col":"金額","when":"ge","value":"10000"}
 // 触る: 値 フィルタ
@@ -637,7 +744,7 @@ SHELF['filter.off'] = function (ctx, op) {
 };
 
 // 行条件判定の共通ヘルパー（filter.delete / filter.extract で共有）
-function matchRowCond_(cellVal, when, target) {
+function matchRowCond_(cellVal, when, target, fallbackYear) {
   var w = String(when || '').toLowerCase();
   if (w === 'not_blank') w = 'notblank';
   var blank = isBlank_(cellVal);
@@ -646,6 +753,26 @@ function matchRowCond_(cellVal, when, target) {
   var tgtStr = (target !== undefined && target !== null) ? String(target) : '';
   var cellStr = blank ? '' : String(cellVal);
   if (w === 'contains') return cellStr.indexOf(tgtStr) >= 0;
+  if (w === 'between') {
+    var dRng = parseCmpDateRange_(tgtStr, fallbackYear);
+    if (!dRng || blank) return false;
+    var cd0 = parseCmpDate_(cellVal, fallbackYear);
+    return !!(cd0 && cd0.ts >= dRng[0].ts && cd0.ts <= dRng[1].ts);
+  }
+  var tgtNumClean = tgtStr.replace(/,/g, '').trim();
+  var isTgtNum = tgtNumClean !== '' && /^-?\d+(?:\.\d+)?$/.test(tgtNumClean);
+  var td = !isTgtNum ? parseCmpDate_(tgtStr, fallbackYear) : null;
+  if (td) {
+    if (blank) return false;
+    var cd = parseCmpDate_(cellVal, fallbackYear);
+    if (!cd) return w === 'ne';
+    if (w === 'gt') return cd.ts > td.ts;
+    if (w === 'ge') return cd.ts >= td.ts;
+    if (w === 'lt') return cd.ts < td.ts;
+    if (w === 'le') return cd.ts <= td.ts;
+    if (w === 'ne') return cd.ts !== td.ts;
+    return cd.ts === td.ts;
+  }
   if (w === 'ne') {
     if (/^-?[\d,]+(\.\d+)?$/.test(tgtStr.trim()) && typeof cellVal === 'number') {
       return cellVal !== Number(tgtStr.replace(/,/g, ''));
@@ -671,10 +798,10 @@ function matchRowCond_(cellVal, when, target) {
 // 棚: filter.delete
 // 題: 条件に合う行を一括削除する
 // 分類: 絞る
-// 語: 条件に合う行を消|条件に合う行を削除|条件で削除|の行を消|の行を削除|の行を一括削除|じゃない行を消|じゃない行を削除|以外の行を消|以外の行を削除|ない行を消|ない行を削除|条件削除|一致する行を消|一致する行を削除
+// 語: 条件に合う行を消|条件に合う行を削除|条件で削除|の行を消|の行を削除|の行を一括削除|じゃない行を消|じゃない行を削除|以外の行を消|以外の行を削除|ない行を消|ない行を削除|より前の行を消|より後の行を消|以前の行を消|以降の行を消|条件削除|一致する行を消|一致する行を削除
 // 違い: 消さずに絞り込むだけなら filter.where、行番号指定の削除は rows.delete、重複行削除は dedupe
-// 引数: col*=列, equals=文字, when=選択(eq/ne/gt/ge/lt/le/contains/blank/notblank), value=文字
-// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え|上回る|上回っ ; when=lt<未満|より小|下回る|下回っ|届かない|届いていない|届いてない ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外|入力済み ; when=ne<以外|ではない|でない|じゃない|になっていない|になってない ; value~([0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|点)?(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない).*?(?:消|削除) ; value~(?:が|は)[『「]?([^』」\s]+?)[』」]?(?:を含む|含む|以外|ではない|でない|じゃない|になっていない|になってない).*?(?:消|削除) ; equals~(?:が|は)[『「]?((?:(?!以上|以下|未満|より大|より小|を超|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|じゃない|になって|空白|空欄)[^』」\s])+?)[』」]?の(?:行|データ|人)を(?:一括|まとめて)?(?:消|削除) ; col~([^\s、。]+?)(?:が|は)[^\s]+の(?:行|データ|人)を(?:一括|まとめて)?(?:消|削除)
+// 引数: col*=列, equals=文字, when=選択(eq/ne/gt/ge/lt/le/between/contains/blank/notblank), value=文字
+// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え|上回る|上回っ ; when=lt<未満|より小|下回る|下回っ|届かない|届いていない|届いてない ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外|入力済み ; when=ne<以外|ではない|でない|じゃない|になっていない|になってない ; value~([0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|点)?(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない).*?(?:消|削除) ; value~(?:が|は)[『「]?([^』」\s]+?)[』」]?(?:を含む|含む|以外|ではない|でない|じゃない|になっていない|になってない).*?(?:消|削除) ; equals~(?:が|は)[『「]?((?:(?!以上|以下|未満|より大|より小|より前|より後|以前|以降|から|まで|を超|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|じゃない|になって|空白|空欄)[^』」\s])+?)[』」]?の(?:行|データ|人)を(?:一括|まとめて)?(?:消|削除) ; col~([^\s、。]+?)(?:が|は)[^\s]+の(?:行|データ|人)を(?:一括|まとめて)?(?:消|削除)
 // 例: 「ステータスが完了の行を一括削除して」 → {"shelf":"filter.delete","col":"ステータス","equals":"完了"}
 // 例: 「金額が0以下の行を削除して」 → {"shelf":"filter.delete","col":"金額","when":"le","value":"0"}
 // 危ない: 消す
@@ -689,9 +816,10 @@ SHELF['filter.delete'] = function (ctx, op) {
   var ci = colIndexOf_(t, op.col);
   var when = op.when ? String(op.when).toLowerCase() : 'eq';
   var target = op.value !== undefined ? op.value : op.equals;
+  var colYearD = inferColDateYear_(t.vals.slice(t.firstData - 1, t.lastData), ci - 1);
   var hits = [];
   for (var r = t.firstData; r <= t.lastData; r++) {
-    if (matchRowCond_(t.vals[r - 1][ci - 1], when, target)) hits.push(r);
+    if (matchRowCond_(t.vals[r - 1][ci - 1], when, target, colYearD)) hits.push(r);
   }
   if (!hits.length) {
     note_(ctx, '条件に合う行はありませんでした（変更なし）');
@@ -707,8 +835,8 @@ SHELF['filter.delete'] = function (ctx, op) {
 // 分類: 絞る
 // 語: 別シートに抽出|別シートへ抽出|シートに抽出|シートへ抽出|条件で抽出|行を抽出|行だけ抽出|条件に合う行を抽出
 // 違い: 元のシートで絞り込むだけなら filter.where、列の値ごとに全分割なら sheet.split、上位N件なら top.n
-// 引数: col*=列, equals=文字, when=選択(eq/ne/gt/ge/lt/le/contains/blank/notblank), value=文字, into=文字=抽出
-// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え|上回る|上回っ ; when=lt<未満|より小|下回る|下回っ|届かない|届いていない|届いてない ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外|入力済み ; when=ne<以外|ではない|でない|じゃない|になっていない|になってない ; value~([0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|点)?(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない).*?抽出 ; value~(?:が|は)[『「]?([^』」\s]+?)[』」]?(?:を含む|含む|以外|ではない|でない|じゃない|になっていない|になってない).*?抽出 ; into~[『「]([^』」]+)[』」](?:シート)?(?:に|へ)抽出 ; into~(?!別)([^\sにへを「『]+?)シート(?:に|へ)抽出 ; equals~(?:が|は)[『「]?((?:(?!以上|以下|未満|より大|より小|を超|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|じゃない|になって|空白|空欄)[^』」\s])+?)[』」]?の(?:行|データ|人)を(?:別シート|[^\s]+シート)?(?:に|へ)?抽出 ; col~([^\s、。]+?)(?:が|は)[^\s]+の(?:行|データ|人)を.*抽出
+// 引数: col*=列, equals=文字, when=選択(eq/ne/gt/ge/lt/le/between/contains/blank/notblank), value=文字, into=文字=抽出
+// 頼み: when=ge<以上 ; when=le<以下 ; when=gt<より大|超える|超え|上回る|上回っ ; when=lt<未満|より小|下回る|下回っ|届かない|届いていない|届いてない ; when=contains<を含む|含む ; when=blank<空白|空欄 ; when=notblank<空白以外|空欄以外|入力済み ; when=ne<以外|ではない|でない|じゃない|になっていない|になってない ; value~([0-9][0-9,\.]*%?[万億]?)(?:円|個|件|人|点)?(?:以上|以下|未満|より|(?:を)?超|(?:を)?上回|(?:を)?下回|(?:に)?届か|(?:に)?届いてい?ない).*?抽出 ; value~(?:が|は)[『「]?([^』」\s]+?)[』」]?(?:を含む|含む|以外|ではない|でない|じゃない|になっていない|になってない).*?抽出 ; into~[『「]([^』」]+)[』」](?:シート)?(?:に|へ)抽出 ; into~(?!別)([^\sにへを「『]+?)シート(?:に|へ)抽出 ; equals~(?:が|は)[『「]?((?:(?!以上|以下|未満|より大|より小|より前|より後|以前|以降|から|まで|を超|超|上回|下回|届か|届いてい?ない|を含|含む|以外|ではな|でない|じゃない|になって|空白|空欄)[^』」\s])+?)[』」]?の(?:行|データ|人)を(?:別シート|[^\s]+シート)?(?:に|へ)?抽出 ; col~([^\s、。]+?)(?:が|は)[^\s]+の(?:行|データ|人)を.*抽出
 // 例: 「部署が営業の行を別シートに抽出して」 → {"shelf":"filter.extract","col":"部署","equals":"営業","into":"抽出"}
 // 触る: シート構成 値
 // 控え: 先
@@ -721,11 +849,12 @@ SHELF['filter.extract'] = function (ctx, op) {
   var ci = colIndexOf_(t, op.col);
   var when = op.when ? String(op.when).toLowerCase() : 'eq';
   var target = op.value !== undefined ? op.value : op.equals;
+  var colYearE = inferColDateYear_(t.vals.slice(t.firstData - 1, t.lastData), ci - 1);
   var nc = t.lastCol - t.firstCol + 1;
   var header = headerNames_(t);
   var rowsOut = [];
   for (var r = t.firstData; r <= t.lastData; r++) {
-    if (matchRowCond_(t.vals[r - 1][ci - 1], when, target)) {
+    if (matchRowCond_(t.vals[r - 1][ci - 1], when, target, colYearE)) {
       rowsOut.push(t.vals[r - 1].slice(t.firstCol - 1, t.lastCol));
     }
   }
@@ -947,13 +1076,14 @@ SHELF['text.clean'] = function (ctx, op) {
   } else {
     rg = dataRange_(needTable_(sh));
   }
-  var vals = rg.getValues(), forms = rg.getFormulas(), changed = 0;
+  var vals = rg.getValues(), forms = rg.getFormulas(), changed = 0, keepClean = [], hasKeepClean = false;
   var nlRepl = op.newline !== undefined ? String(op.newline) : ' ';
   for (var r = 0; r < vals.length; r++) {
+    keepClean.push([]);
     for (var c = 0; c < vals[r].length; c++) {
-      var f = forms[r][c], v = vals[r][c];
-      if (f) { vals[r][c] = f; continue; }
-      if (typeof v !== 'string') continue;
+      var f = forms[r][c], v = vals[r][c], keepThis = false;
+      if (f) { vals[r][c] = f; keepClean[r].push(false); continue; }
+      if (typeof v !== 'string') { keepClean[r].push(false); continue; }
       var cleaned = v
         .replace(/[\u200B-\u200D\uFEFF\u00AD\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
         .replace(/\r?\n/g, nlRepl)
@@ -962,12 +1092,21 @@ SHELF['text.clean'] = function (ctx, op) {
       if (cleaned !== v) {
         vals[r][c] = cleaned;
         changed++;
+        if (needsPlainTextFmt_(cleaned, false)) { keepThis = true; hasKeepClean = true; }
       }
+      keepClean[r].push(keepThis);
     }
   }
   if (!changed) {
     note_(ctx, '掃除が必要な文字列はありませんでした（' + rg.getA1Notation() + '）');
     return;
+  }
+  if (hasKeepClean && typeof rg.getNumberFormats === 'function' && typeof rg.setNumberFormats === 'function') {
+    var fmtsCl = rg.getNumberFormats();
+    for (var rk = 0; rk < keepClean.length; rk++) for (var ck = 0; ck < keepClean[rk].length; ck++) {
+      if (keepClean[rk][ck]) fmtsCl[rk][ck] = '@';
+    }
+    rg.setNumberFormats(fmtsCl);
   }
   rg.setValues(vals);
   chg_(ctx, sh, rg.getA1Notation(), '改行・連続空白・不可視文字を掃除（' + changed + ' 件）');
