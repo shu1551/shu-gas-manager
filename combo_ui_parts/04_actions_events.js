@@ -228,7 +228,8 @@
         }
         return;
       }
-      if (d.type === "GAS_COMBO_DIRECT_AI_DONE") {
+      // 古い拡張の中継は宛名を「done」で上書きして送ってくる＝それも答えとして受け取る
+      if (d.type === "GAS_COMBO_DIRECT_AI_DONE" || (d.type === "done" && d.inExtension)) {
         finish(d);
       }
     };
