@@ -35,11 +35,11 @@ def _free_port():
 
 
 def test_watcher_health_streaming_and_pid_guard(tmp_path):
-    """ComboPostboxWatcher の /health・/resolve-stream (NDJSON)・PID多重起動ガード・/stop 後片付けを実HTTPで確認。"""
+    """ComboLocalWatcher の /health・/resolve-stream (NDJSON)・PID多重起動ガード・/stop 後片付けを実HTTPで確認。"""
     port = _free_port()
     pid_path = tmp_path / "watch.pid"
     mock_client = MagicMock()
-    w = combo_mod.ComboPostboxWatcher("DUMMY_SID", client=mock_client, model="sonnet", direct_only=True)
+    w = combo_mod.ComboLocalWatcher("DUMMY_SID", client=mock_client, model="sonnet")
     w.resolve_item = lambda item: {
         "action": "reply",
         "message": f"受信: {item.get('ask', '')}",
@@ -47,7 +47,7 @@ def test_watcher_health_streaming_and_pid_guard(tmp_path):
 
     th = threading.Thread(
         target=w.watch,
-        kwargs={"direct_only": True, "port": port, "pid_path": pid_path},
+        kwargs={"port": port, "pid_path": pid_path},
         daemon=True,
     )
     th.start()
@@ -91,7 +91,7 @@ def test_watcher_health_streaming_and_pid_guard(tmp_path):
     assert health2["lastError"] == ""
 
     # 同一ポート＋PID ファイルへの多重起動は即終了すること
-    w2 = combo_mod.ComboPostboxWatcher("DUMMY_SID", client=mock_client, direct_only=True)
+    w2 = combo_mod.ComboLocalWatcher("DUMMY_SID", client=mock_client)
     t_dup0 = time.perf_counter()
     w2.watch(direct_only=True, port=port, pid_path=pid_path)
     assert (time.perf_counter() - t_dup0) < 2.0

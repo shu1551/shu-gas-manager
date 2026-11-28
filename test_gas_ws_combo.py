@@ -5,7 +5,7 @@ test_gas_ws_combo.py - GASコンボ（GASネイティブ版）オフライン単
 以下を検証する（通信なし）:
 1. build_combo_files() による 5 ファイル生成、HTML/JS インライン展開、openTarget_ パッチ、HARDCODE_FILES 不変
 2. Node.js 上での ComboPlanner.plan と Python gas_ws_ask.plan の対等比較（35問以上）
-3. Node.js vm モック環境での ComboServer（comboInit / comboLook / comboFind / comboRunAsk / comboRunOps / comboUndo / 郵便受け）
+3. Node.js vm モック環境での ComboServer（comboInit / comboLook / comboFind / comboRunAsk / comboRunOps / comboUndo）
 4. install_combo / gas.py CLI / gas_mcp_server.gas("combo ...") の統合ルーティング
 """
 
@@ -1462,7 +1462,7 @@ def test_direct_only_watcher_does_not_fail_on_unknown_script_id():
     class C:
         def resolve_script_id(self, target):
             raise ValueError(f"not found: {target}")
-    w = combo_mod.ComboPostboxWatcher("UNKNOWN_ID", client=C(), direct_only=True)
+    w = combo_mod.ComboLocalWatcher("UNKNOWN_ID", client=C())
     assert w.sid == "UNKNOWN_ID"
 
 
@@ -1501,8 +1501,8 @@ def test_direct_watch_server_blocks_external_origin_and_allows_fixed_ext(monkeyp
     monkeypatch.setattr(combo_mod, "COMBO_WATCH_PORT", port)
     class C:
         def resolve_script_id(self, target): return target
-    w = combo_mod.ComboPostboxWatcher("TEST_DIRECT", client=C(), direct_only=True)
-    th = threading.Thread(target=w.watch, kwargs={"direct_only": True}, daemon=True)
+    w = combo_mod.ComboLocalWatcher("TEST_DIRECT", client=C())
+    th = threading.Thread(target=w.watch, kwargs={}, daemon=True)
     th.start()
     try:
         # 起動待ち
@@ -1921,11 +1921,6 @@ console.log(JSON.stringify({
     assert all(res[k] for k in ("addedOk", "gotOk", "savedOk", "stepsOk", "pinsOk", "ordOk", "callOk", "delOk"))
 
 
-def test_combo_server_ai_mymacro_save_and_postbox():
-    """comboQuickAiSave の API直結(構文リトライ＋自動保存＋prevCode)と郵便受け(Deliverリトライ＋needsClientSave)を検証。"""
-    files = combo_mod.build_combo_files(combo_lite=True)
-    by_name = {f["name"]: f["source"] for f in files}
-    node_code = r"""
 const vm = require('vm'), fs = require('fs');
 const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
 
@@ -2219,123 +2214,8 @@ console.log(JSON.stringify({
     assert res["driveUnchanged"]
 
 
-def test_postbox_watcher_mymacro_resolve_and_retry(monkeypatch):
-    """ComboPostboxWatcher が kind=='mymacro' を解釈し、retryable エラー時に previewOnly/existingNames 等を維持して再送すること。"""
-    delivered = []
-    prompts_seen = []
-    poll_kws = []
-
-    class FakeClient:
-        def resolve_script_id(self, sid):
-            return sid
-
-        def run_function(self, sid, fn_name, args=None, **kw):
-            if fn_name == "comboPostboxPoll":
-                poll_kws.append(kw)
-                return {
-                    "ok": True,
-                    "result": {
-                        "ok": True,
-                        "queue": [
-                            {
-                                "reqId": "pb_m1",
-                                "kind": "mymacro",
-                                "mode": "edit",
-                                "previewOnly": True,
-                                "targetName": "テストマクロ",
-                                "existingCode": "function テストマクロ() {}",
-                                "existingNames": ["既存A"],
-                                "ask": "太字にして",
-                                "ssId": "SS_W1",
-                                "ssName": "売上表",
-                                "sheet": "Sheet1",
-                                "selection": "A1:B2",
-                                "aiModel": "sonnet",
-                                "myId": "MY_W1",
-                            }
-                        ],
-                    },
-                }
-            if fn_name == "comboPostboxDeliver":
-                payload = args[0]
-                delivered.append(payload)
-                if len(delivered) == 1:
-                    return {"ok": True, "result": {"ok": False, "retryable": True, "error": "構文エラー"}}
-                return {"ok": True, "result": {"ok": True, "saved": False, "previewOnly": True, "reqId": payload["reqId"]}}
-            raise AssertionError(f"unexpected fn: {fn_name}")
-
-    w = combo_mod.ComboPostboxWatcher("ADDON_W", client=FakeClient(), backend="claude")
-
-    def fake_ask_mymacro(prompt, model=None):
-        prompts_seen.append(prompt)
-        if len(prompts_seen) == 1:
-            return {"action": "mymacro", "code": "function テストマクロ({", "note": "1回目"}
-        return {"action": "mymacro", "code": "function テストマクロ() {\n  SpreadsheetApp.getActiveRange().setFontWeight('bold');\n}", "note": "修正済み"}
-
-    w._ask_mymacro_via_claude = fake_ask_mymacro
-    out = w.poll_once()
-    assert poll_kws and poll_kws[0].get("timeout") == 7
-    assert isinstance(out[0].get("timing"), dict)
-    for k in ("poll_wall_ms", "ai_ms", "deliver_wall_ms", "total_ms"):
-        assert k in out[0]["timing"]
-    assert "200 文字以内" in w._MYMACRO_SYSTEM_PROMPT
-    assert len(prompts_seen) == 2
-    assert "既存のコード" in prompts_seen[0] or "現在のコード" in prompts_seen[0]
-    assert "構文エラー" in prompts_seen[1]
-    assert len(delivered) == 2
-    assert delivered[1]["kind"] == "mymacro" and delivered[1]["mode"] == "edit"
-    assert delivered[1]["previewOnly"] is True and delivered[1]["existingNames"] == ["既存A"]
-    assert delivered[1]["targetName"] == "テストマクロ" and delivered[1]["ask"] == "太字にして"
-    assert out[0]["deliver"]["previewOnly"] is True and out[0]["deliver"]["saved"] is False
-
-    # add モードで下書きコード (existingCode) と history / previewOnly がある場合のプロンプトと reply 正規化も確認
-    draft_prompt = w._build_mymacro_prompt({
-        "mode": "add",
-        "previewOnly": True,
-        "ask": "やっぱり青にして",
-        "existingCode": "function 新規下書き() {}",
-        "existingNames": ["既存A"],
-        "history": [
-            {"role": "user", "text": "どんな色がおすすめ？"},
-            {"role": "ai", "text": "薄青が読みやすいです"},
-        ],
-        "ssName": "売上表",
-        "sheet": "Sheet1",
-    })
-    assert "既存A" in draft_prompt and "現在表示中の下書きコード" in draft_prompt and "function 新規下書き()" in draft_prompt
-    assert "【これまでの会話】" in draft_prompt and "ユーザー: どんな色がおすすめ？" in draft_prompt and "AI: 薄青が読みやすいです" in draft_prompt
-    assert "質問・相談・改修案の提案なら" in draft_prompt
-    norm_reply = w._normalize_mymacro_parsed({
-        "action": "reply",
-        "message": "背景色を揃える案です。例:\n```js\nrange.setBackground('#cfe2ff');\n```\n進めますか？",
-    })
-    assert norm_reply["action"] == "reply" and "背景色を揃える案" in norm_reply["message"]
-
-    # タイムアウト 1 回で runner_installed を消さない＋アイドル HTTP プールを閉じることを確認
-    closed_cnt = [0]
-
-    class _MockAdapter:
-        def close(self):
-            closed_cnt[0] += 1
-
-    class _TimeoutClient:
-        def __init__(self):
-            self._cache_data = {"deployments": {"ADDON_WT": {"runner_installed": True}}}
-            self.session = type("S", (), {"adapters": {"https://": _MockAdapter()}})()
-
-        def resolve_script_id(self, sid):
-            return sid
-
-    wt = combo_mod.ComboPostboxWatcher("ADDON_WT", client=_TimeoutClient(), backend="claude")
-    wt.poll_once = lambda: (_ for _ in ()).throw(TimeoutError("Webアプリの呼び出しがタイムアウトしました (7秒)"))
-    monkeypatch.setattr(combo_mod, "COMBO_WATCH_PORT", 19877)
-    wt.watch(max_loops=1, idle_interval=0.01)
-    assert wt.client._cache_data["deployments"]["ADDON_WT"].get("runner_installed") is True
-    assert closed_cnt[0] == 1
-
-
 def test_postbox_watcher_resolve_direct_and_http(monkeypatch):
-    """ComboPostboxWatcher.resolve_direct の動作と /ping・/resolve・/stop HTTP サーバー応答を確認する。"""
+    """ComboLocalWatcher.resolve_direct の動作と /ping・/resolve・/stop HTTP サーバー応答を確認する。"""
     import socket
     import threading
     import time
@@ -2345,7 +2225,7 @@ def test_postbox_watcher_resolve_direct_and_http(monkeypatch):
         def resolve_script_id(self, sid):
             return sid
 
-    w = combo_mod.ComboPostboxWatcher("ADDON_DIR", client=FakeClient(), backend="claude")
+    w = combo_mod.ComboLocalWatcher("ADDON_DIR", client=FakeClient(), backend="claude")
 
     # 1. kind="mymacro" の reply 返却
     w._ask_mymacro_via_claude = lambda prompt, model=None: {
@@ -2462,75 +2342,6 @@ def test_postbox_watcher_resolve_direct_and_http(monkeypatch):
     assert not srv_thread.is_alive()
 
 
-def test_postbox_watcher_direct_only_skips_gas_poll(monkeypatch):
-    """watch(direct_only=True) が GAS ポーリング (poll_once) を一度も呼ばずに /ping・/resolve・/stop に応じること。"""
-    import socket
-    import threading
-    import time
-    import urllib.request
-
-    class FakeClient:
-        def resolve_script_id(self, sid):
-            return sid
-
-    w = combo_mod.ComboPostboxWatcher("ADDON_DO", client=FakeClient(), backend="claude")
-    w._ask_mymacro_via_claude = lambda prompt, model=None: {
-        "action": "reply",
-        "message": "直結専用テスト応答",
-    }
-    poll_calls = [0]
-
-    def spy_poll():
-        poll_calls[0] += 1
-        raise AssertionError("direct_only=True で poll_once が呼ばれてはいけません")
-
-    w.poll_once = spy_poll
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        free_port = s.getsockname()[1]
-
-    monkeypatch.setattr(combo_mod, "COMBO_WATCH_PORT", free_port)
-    srv_thread = threading.Thread(target=lambda: w.watch(idle_interval=0.05, direct_only=True), daemon=True)
-    srv_thread.start()
-
-    ping_data = None
-    for _ in range(100):
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{free_port}/ping", timeout=1.0) as resp:
-                ping_data = json.loads(resp.read().decode("utf-8"))
-                break
-        except Exception:
-            time.sleep(0.02)
-    assert ping_data and ping_data.get("ok") is True
-    assert ping_data.get("direct") is True and ping_data.get("directOnly") is True
-
-    time.sleep(0.1)
-    req_body = json.dumps({
-        "kind": "mymacro",
-        "mode": "add",
-        "previewOnly": True,
-        "ask": "直結専用テスト",
-        "aiModel": "sonnet",
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{free_port}/resolve",
-        data=req_body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=3.0) as resp:
-        post_data = json.loads(resp.read().decode("utf-8"))
-    assert post_data["ok"] is True and post_data["direct"] is True and post_data["message"] == "直結専用テスト応答"
-
-    with urllib.request.urlopen(f"http://127.0.0.1:{free_port}/stop", timeout=2.0) as resp:
-        stop_data = json.loads(resp.read().decode("utf-8"))
-    assert stop_data.get("ok") is True
-    srv_thread.join(timeout=5.0)
-    assert not srv_thread.is_alive()
-    assert poll_calls[0] == 0
-
-
 def test_ai_prompts_include_all_shelves_without_50_cutoff():
     """AI プロンプト（Python / GAS 両方）が 50 件カットされず全検索対象シート棚を含み、まとめ棚ルールを持つこと。"""
     import gas_ws_find
@@ -2539,7 +2350,7 @@ def test_ai_prompts_include_all_shelves_without_50_cutoff():
         def resolve_script_id(self, sid):
             return sid
 
-    w = combo_mod.ComboPostboxWatcher("ADDON_DIR", client=FakeClient(), backend="claude")
+    w = combo_mod.ComboLocalWatcher("ADDON_DIR", client=FakeClient(), backend="claude")
     py_prompt = w._build_prompt({
         "ask": "見出しを青にして",
         "ssName": "売上表",
@@ -2608,7 +2419,7 @@ def test_postbox_watcher_resolve_direct_ops_validation_and_retry():
         def resolve_script_id(self, sid):
             return sid
 
-    w = combo_mod.ComboPostboxWatcher("ADDON_DIR", client=FakeClient(), backend="claude")
+    w = combo_mod.ComboLocalWatcher("ADDON_DIR", client=FakeClient(), backend="claude")
     prompts = []
 
     def fake_bad_then_ok(prompt, model=None):
@@ -2990,7 +2801,7 @@ def test_postbox_watcher_fetch_recorded_macros_and_http(monkeypatch, tmp_path):
                 ]
             }
 
-    w = combo_mod.ComboPostboxWatcher("ADDON_REC", client=FakeClient(), backend="claude")
+    w = combo_mod.ComboLocalWatcher("ADDON_REC", client=FakeClient(), backend="claude")
     monkeypatch.setattr(combo_mod, "COMBO_ENGINE_STATE_PATH", state_file)
 
     # 1. 未紐付け時は needsEditor=True で案内を返す（別シート紐付けの scriptId も拒否）
@@ -3017,7 +2828,7 @@ def test_postbox_watcher_fetch_recorded_macros_and_http(monkeypatch, tmp_path):
         free_port = s.getsockname()[1]
 
     monkeypatch.setattr(combo_mod, "COMBO_WATCH_PORT", free_port)
-    srv_thread = threading.Thread(target=lambda: w.watch(idle_interval=0.05, direct_only=True), daemon=True)
+    srv_thread = threading.Thread(target=lambda: w.watch(idle_interval=0.05), daemon=True)
     srv_thread.start()
 
     for _ in range(100):
@@ -3898,12 +3709,6 @@ process.stdout.write(JSON.stringify({
     assert res["runAsk"] == "見出しを太字にして"
 
 
-def test_sidebar_postbox_warns_after_15s_without_reply():
-    """郵便受けに入れて15秒以上返事が無いとき、画面に停止中と対処法を出すこと。"""
-    files = combo_mod.build_combo_files(combo_lite=True)
-    sidebar_html = next(f["source"] for f in files if f["name"] == "ComboSidebar")
-    scripts = re.findall(r"<script>([\s\S]*?)</script>", sidebar_html)
-    node_code = r"""
 const fs = require('fs');
 const vm = require('vm');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
