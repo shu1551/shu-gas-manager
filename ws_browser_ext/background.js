@@ -215,7 +215,7 @@ async function resolveViaDirectLocal(payload, _retried) {
     return { reachable: true, data };
   } catch (e) {
     if (e && e.name === "AbortError") {
-      return { reachable: true, ok: false, error: "ローカル AI が時間切れになりました (65秒)" };
+      return { reachable: true, ok: false, error: "AI の返事が 65 秒たっても届きませんでした。もう一度実行してください" };
     }
     if (!_retried) {
       const woken = await ensureLocalWatcherRunning();
@@ -272,6 +272,10 @@ async function streamResolveViaDirectLocal(port, payload) {
     if (disconnected) return;
     try { port.postMessage(m); } catch (_e) { disconnected = true; }
   };
+  // AI を待つ間に裏方（service worker）が 30 秒の居眠りで畳まれないよう、拡張の API を定期的に叩いて起こしておく
+  const keepAlive = setInterval(() => {
+    try { chrome.runtime.getPlatformInfo(() => { void chrome.runtime.lastError; }); } catch (_e) {}
+  }, 10000);
 
   try {
     const res = await fetch(DIRECT_RESOLVE_STREAM_URL, {
@@ -300,7 +304,10 @@ async function streamResolveViaDirectLocal(port, payload) {
           try { ev = JSON.parse(line); } catch (_e) {}
           if (!ev) continue;
           if (ev.type === "done" && ev.result) {
-            doneResult = ev.result;
+            // 答えが来たらその場で渡す（受け手が接続を閉じるのを待たない）
+            post({ type: "done", reachable: true, data: ev.result });
+            try { reader.cancel(); } catch (_e) {}
+            return;
           } else {
             post({ type: "progress", event: ev });
           }
@@ -323,13 +330,14 @@ async function streamResolveViaDirectLocal(port, payload) {
     post(Object.assign({ type: "done" }, fb));
   } catch (e) {
     if (e && e.name === "AbortError" && !disconnected) {
-      post({ type: "done", reachable: true, ok: false, error: "ローカル AI が時間切れになりました (65秒)" });
+      post({ type: "done", reachable: true, ok: false, error: "AI の返事が 65 秒たっても届きませんでした。もう一度実行してください" });
       return;
     }
     const fb = await resolveViaDirectLocal(payload || {});
     post(Object.assign({ type: "done" }, fb));
   } finally {
     clearTimeout(timer);
+    clearInterval(keepAlive);
   }
 }
 

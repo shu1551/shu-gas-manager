@@ -1716,8 +1716,8 @@
         var existingNames = (state.quick && Array.isArray(state.quick.my))
           ? state.quick.my.map(function(f) { return f && f.name; }).filter(Boolean)
           : [];
-        setBusy(true, aiMode === "edit" ? ("✨ ローカル AI が「" + targetNm + "」を検討中…") : "✨ ローカル AI に直接問い合わせ中…");
-        if (els.quickEditStatus) els.quickEditStatus.textContent = "✨ ローカル AI に直接問い合わせています…";
+        setBusy(true, aiMode === "edit" ? ("✨ AI が「" + targetNm + "」を検討中…") : "✨ AI に問い合わせ中…");
+        if (els.quickEditStatus) els.quickEditStatus.textContent = "✨ AI に問い合わせています…";
         requestDirectAi({
           kind: "mymacro",
           stream: true,
@@ -1739,7 +1739,7 @@
         }, function(r) {
           setBusy(false);
           if (r && r.inExtension && !r.reachable) {
-            var connErr = "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください";
+            var connErr = "PC 側の AI 窓口（127.0.0.1:18766）につながりません。PC で受け手が動いているか確かめてください";
             dropPendingQuickChat();
             quickEditState.chatHistory.push({ role: "err", text: "AI エラー: " + connErr, retryApi: makeRetryApiInfo() });
             renderQuickChat();

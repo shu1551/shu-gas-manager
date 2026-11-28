@@ -2073,7 +2073,7 @@ class ComboPostboxWatcher:
                     pass
 
         t0 = time.perf_counter()
-        _emit({"type": "status", "message": "ローカル AI に問い合わせ中…"})
+        _emit({"type": "status", "message": "AI に問い合わせ中…"})
         with self._ai_lock:
             payload = self.resolve_item(item)
         if item.get("kind") != "mymacro" and payload.get("action") == "ops":
@@ -2361,22 +2361,36 @@ class ComboPostboxWatcher:
                         self.send_header("Cache-Control", "no-store")
                         self.end_headers()
 
+                        _wlock = threading.Lock()
+
                         def _emit_ndjson(ev_obj):
                             try:
-                                line = (json.dumps(ev_obj, ensure_ascii=False) + "\n").encode("utf-8")
-                                self.wfile.write(line)
-                                self.wfile.flush()
+                                line = (json.dumps(ev_obj, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+                                with _wlock:
+                                    self.wfile.write(line)
+                                    self.wfile.flush()
                             except Exception:
                                 pass
 
-                        _emit_ndjson({"type": "status", "message": "ローカル AI が考えています…"})
+                        _emit_ndjson({"type": "status", "message": "AI が考えています…"})
+                        # 考えている間も 5 秒ごとに知らせる（画面に経過が出る・画面側の待ち時計が巻き直る）
+                        _beat_stop = threading.Event()
+                        _t_beat = time.perf_counter()
+
+                        def _beat():
+                            while not _beat_stop.wait(5.0):
+                                _emit_ndjson({"type": "status", "message": f"AI が考えています…（{int(time.perf_counter() - _t_beat)} 秒）"})
+
+                        threading.Thread(target=_beat, daemon=True).start()
                         try:
                             res = watcher.resolve_direct(item, on_event=_emit_ndjson)
+                            _beat_stop.set()
                             preview = str(res.get("message") or res.get("text") or res.get("note") or "").strip()
                             if preview:
                                 _emit_ndjson({"type": "delta", "text": preview})
                             _emit_ndjson({"type": "done", "result": res})
                         except Exception as e:
+                            _beat_stop.set()
                             _emit_ndjson({"type": "done", "result": {"ok": False, "direct": True, "action": "error", "error": str(e)}})
                         return
                     try:

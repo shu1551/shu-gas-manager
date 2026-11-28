@@ -213,11 +213,16 @@
         clearTimeout(ackTimer);
         clearTimeout(resTimer);
         resTimer = setTimeout(function() {
-          finish({ reachable: true, ok: false, error: "ローカル AI が時間切れになりました" });
+          finish({ reachable: true, ok: false, error: "AI の返事が 70 秒たっても届きませんでした。もう一度実行してください" });
         }, 70000);
         return;
       }
       if (d.type === "GAS_COMBO_DIRECT_AI_PROGRESS") {
+        // 途中の知らせが来ている間は待ち続ける（時計を巻き直す）
+        clearTimeout(resTimer);
+        resTimer = setTimeout(function() {
+          finish({ reachable: true, ok: false, error: "AI の返事が 70 秒たっても届きませんでした。もう一度実行してください" });
+        }, 70000);
         if (typeof onProgress === "function") {
           try { onProgress(d.event || {}); } catch (_eP) {}
         }
@@ -393,7 +398,7 @@
         return;
       }
       var sendDirectPayload = function(sn) {
-        setBusy(true, isReadOnly ? "📖 シートを読んで確認中…" : "✨ ローカル AI に直接確認中…");
+        setBusy(true, isReadOnly ? "📖 シートを読んで確認中…" : "✨ AI に確認中…");
         var aiReq = {
           kind: isReadOnly ? "read" : "ops",
           readOnly: isReadOnly,
@@ -424,7 +429,7 @@
           setBusy(false);
           if (r && r.inExtension && !r.reachable) {
             switchTab("chat");
-            appendApiRetryLog("⚠ ローカル直結に接続できません: " + txt, "ローカル AI 受け手（127.0.0.1:18766）に接続できません。PC の受け手が起動しているか確認してください");
+            appendApiRetryLog("⚠ PC 側の AI につながりません: " + txt, "PC 側の AI 窓口（127.0.0.1:18766）につながりません。PC で受け手が動いているか確かめてください");
             return;
           }
           if (!r || !r.reachable) {
