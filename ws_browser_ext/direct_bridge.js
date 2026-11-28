@@ -108,7 +108,8 @@
       const replyDone = (obj) => {
         try {
           ev.source.postMessage(
-            Object.assign({ type: "GAS_COMBO_DIRECT_AI_DONE", reqId, inExtension: true }, obj),
+            // obj（裏方の { type: "done", ... }）を先に広げ、宛名の type を後で書く＝答えが「done」の名で捨てられないように
+            Object.assign({}, obj, { type: "GAS_COMBO_DIRECT_AI_DONE", reqId, inExtension: true }),
             targetOrigin
           );
         } catch (_e) {}
