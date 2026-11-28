@@ -283,9 +283,14 @@
     }
   }
 
-  function onRunAsk() {
+  function onRunAsk(runOpts) {
+    // forceAi: AI ボタン＝棚に当てず、そのまま AI に頼む
+    var forceAi = !!(runOpts && runOpts.forceAi);
     var txt = (els.askInput.value || "").trim();
-    if (!txt) return;
+    if (!txt) {
+      if (forceAi) setStatus("AI に頼む文を入力してください", true);
+      return;
+    }
     if (state.busy) {
       state._queuedRunAsk = txt;
       els.askInput.value = "";
@@ -298,10 +303,10 @@
     var activeSheet = syncCurSheetFromUi();
     var liveSelPrompt = !!(els.chkSync.checked && hasSelectionPronoun(txt));
     var planRes = updatePreview();
-    var fireOps = (!liveSelPrompt && planRes && planRes.fire && Array.isArray(planRes.ops) && planRes.ops.length) ? planRes.ops : null;
-    var planChoices = (!fireOps && !liveSelPrompt && planRes && Array.isArray(planRes.choices) && planRes.choices.length) ? planRes.choices : null;
+    var fireOps = (!forceAi && !liveSelPrompt && planRes && planRes.fire && Array.isArray(planRes.ops) && planRes.ops.length) ? planRes.ops : null;
+    var planChoices = (!forceAi && !fireOps && !liveSelPrompt && planRes && Array.isArray(planRes.choices) && planRes.choices.length) ? planRes.choices : null;
     var isReadOnly = !!(planRes && planRes.readOnly && !fireOps && !planChoices);
-    var aiAuto = !!els.chkAiAuto.checked;
+    var aiAuto = forceAi || !!els.chkAiAuto.checked;
 
     els.askInput.value = "";
     updatePreview();
@@ -324,7 +329,7 @@
     }
 
     // 近い候補があれば、AI自動でも先に［はい］を出す（郵便受けの受け手がいなくても止まらない。［いいえ］なら AI へ回す）
-    var suggestOps = (!fireOps && !isReadOnly && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) ? planRes.suggest : null;
+    var suggestOps = (!forceAi && !fireOps && !isReadOnly && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) ? planRes.suggest : null;
 
     var statusText = (!fireOps && aiAuto) ? "AI解釈・実行中…" : "実行中…";
     var payload = {
@@ -509,7 +514,7 @@
             kind: "sheet",
             learned: state.learned
           }) : null;
-          var liveOps = (livePlan && livePlan.fire && Array.isArray(livePlan.ops) && livePlan.ops.length) ? livePlan.ops : null;
+          var liveOps = (!forceAi && livePlan && livePlan.fire && Array.isArray(livePlan.ops) && livePlan.ops.length) ? livePlan.ops : null;
           if (liveOps && tryDirectSheetsApi(liveOps, txt, true, runViaGasAsk)) {
             return;
           }
@@ -1050,7 +1055,11 @@
     els.askInput.focus();
   });
   if (els.btnCopyAi) {
-    els.btnCopyAi.addEventListener("click", onCopyForAi);
+    // AI ボタン＝そのまま AI に頼む。Shift＋クリックは前の「AI 用に写す」
+    els.btnCopyAi.addEventListener("click", function(ev) {
+      if (ev && ev.shiftKey) { onCopyForAi(); return; }
+      onRunAsk({ forceAi: true });
+    });
   }
 
   els.chkAiAuto.addEventListener("change", updatePreview);

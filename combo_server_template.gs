@@ -1726,7 +1726,16 @@ function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets, optOp
       throw new Error('Gemini API エラー (' + gCode + '): ' + gBody.slice(0, 200));
     }
     var gJson = JSON.parse(gBody);
-    rawText = (((((gJson.candidates || [])[0] || {}).content || {}).parts || [])[0] || {}).text || '';
+    var gCand = (gJson.candidates || [])[0] || {};
+    // 考えの塊（thought）は外し、答えの塊をつなぐ
+    rawText = ((gCand.content || {}).parts || []).filter(function (pt) { return pt && !pt.thought && typeof pt.text === 'string'; })
+      .map(function (pt) { return pt.text; }).join('');
+    if (gCand.finishReason === 'MAX_TOKENS') {
+      throw new Error('Gemini API の返事が長すぎて途中で切れました（頼みを小さく分けてください）');
+    }
+    if (!rawText) {
+      throw new Error('Gemini API の返事が空でした（' + (gCand.finishReason || (gJson.promptFeedback && gJson.promptFeedback.blockReason) || '理由不明') + '）');
+    }
   } else if (cfg.aiMode === 'api_claude') {
     var cModel = comboResolveLatestApiModel_('api_claude', cfg.aiModel, apiKey);
     var cResp = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
@@ -1739,7 +1748,7 @@ function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets, optOp
       },
       payload: JSON.stringify({
         model: cModel,
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: prompts.system,
         messages: [{ role: 'user', content: prompts.user }]
       })
@@ -1750,7 +1759,12 @@ function comboCallAiApi_(cfg, ask, ss, curSheet, selection, table, sheets, optOp
       throw new Error('Claude API エラー (' + cCode + '): ' + cBody.slice(0, 200));
     }
     var cJson = JSON.parse(cBody);
-    rawText = (((cJson.content || [])[0] || {}).text) || '';
+    // 返事の塊は text 以外が先に来ることがある＝text の塊をつなぐ
+    rawText = (cJson.content || []).filter(function (b) { return b && b.type === 'text'; })
+      .map(function (b) { return b.text || ''; }).join('');
+    if (cJson.stop_reason === 'max_tokens') {
+      throw new Error('Claude API の返事が長すぎて途中で切れました（頼みを小さく分けてください）');
+    }
   } else {
     throw new Error('未対応の AI モード: ' + cfg.aiMode);
   }

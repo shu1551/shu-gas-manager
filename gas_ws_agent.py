@@ -161,12 +161,13 @@ class Agent:
         return f"（知らない手「{typ}」は撃っていません。type は look / trace / find / do / undo）"
 
     # ------------------------------------------------------------ 輪
-    def run(self, request, target="", sheet=""):
+    def run(self, request, target="", sheet="", selection=""):
         t0 = time.time()
         ai_sec = tool_sec = 0.0
         approved = bool(APPROVAL_RE.search(request or ""))
         log = {"do": 0, "undo": 0, "ok_stripped": 0, "backups": [], "changed": []}
         gates = {"落とし物": 0, "仕上げ検査": 0, "採点": 0}
+        selection = str(selection or "").strip().upper()
 
         tt = time.time()
         # 1手目は先撃ち（ws_do(ask)）から入る。読むだけ・撃っていませんのときは prefire 内に表の中身と健診が入るため、
@@ -177,8 +178,19 @@ class Agent:
             if t0_cur.get("id") == target and t0_cur.get("sheet") != sheet:
                 t0_cur["sheet"] = sheet
                 self.mgr._save(st0)
+        # 頼んだ時点の選択セルを「ここ・選択セル」にする（無いと先撃ちが前に撃った範囲を「ここ」と取り違える）
+        if selection and target:
+            try:
+                import gas_ws_ask
+                sc = gas_ws_ask.parse_selection_scope(selection)
+                if sc:
+                    st1 = self.mgr._load()
+                    st1["last_scope"] = {"id": target, "sheet": sheet or "", "scope": sc, "selection": selection}
+                    self.mgr._save(st1)
+            except Exception:
+                pass
         try:
-            prefire = self.mgr.do(ask=request, target=target, ok=approved)
+            prefire = self.mgr.do(ask=request, target=target, ok=approved, sheet=sheet)
         except Exception as e:
             prefire = f"（先撃ちは撃てませんでした: {e}）"
         st = self.mgr._load()
@@ -204,7 +216,9 @@ class Agent:
         tool_sec += time.time() - tt
 
         sess = _Session(self.model, SYSTEM_PROMPT)
-        prompt = (f"【頼み】\n{request}\n\n【承認の言葉】{'あり（消す・上書きの ok を通す）' if approved else 'なし（消す・上書きは止まる）'}\n\n"
+        sel_line = (f"【選択中のセル】シート「{sheet}」の {selection}（頼みの「ここ・選択セル・選択範囲」はこの範囲）\n\n"
+                    if selection else "")
+        prompt = (f"【頼み】\n{request}\n\n{sel_line}【承認の言葉】{'あり（消す・上書きの ok を通す）' if approved else 'なし（消す・上書きは止まる）'}\n\n"
                   f"【材料（ws_look・シート「{sheet}」）】\n{_cap(material, 6000)}\n\n"
                   f"【先撃ち（道具が棚当てで撃った結果）】\n{_cap(prefire)}\n\n{_cap(cards, 4000)}\n\n"
                   "上の札の例は ws_do の形で書いてあるが、あなたの返事は必ず決まりの形（plan・actions・done・report を持つ JSON 1 個）にする。"

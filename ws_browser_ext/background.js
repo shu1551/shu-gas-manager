@@ -257,9 +257,20 @@ async function pingDirectLocal(_retried) {
   }
 }
 
+const STREAM_CUT_MSG = "AI の返事を待つ途中で切れました。PC 側ではまだ続いているか、もう撃ち終わっているかもしれません。同じ頼みを撃ち直す前に、シートを見て確かめてください";
+
 async function streamResolveViaDirectLocal(port, payload) {
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 65000);
+  // 待ちは「知らせが 30 秒途切れたら」切る（受け手は 5 秒ごとに経過を送る）。全体の上限は 150 秒
+  const IDLE_MS = 30000, HARD_MS = 150000;
+  const tStart = Date.now();
+  let timer = setTimeout(() => ac.abort(), IDLE_MS);
+  const rearm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ac.abort(), Math.max(1000, Math.min(IDLE_MS, HARD_MS - (Date.now() - tStart))));
+  };
+  // 受け手に頼みが届いた（流れが始まった）後は、途中で切れても同じ頼みを送り直さない＝シートに 2 回撃たない
+  let streamStarted = false;
   let disconnected = false;
   try {
     port.onDisconnect.addListener(() => {
@@ -287,6 +298,8 @@ async function streamResolveViaDirectLocal(port, payload) {
     });
     const ct = String((res.headers && res.headers.get("content-type")) || "").toLowerCase();
     if (res.ok && res.body && typeof res.body.getReader === "function" && ct.indexOf("ndjson") >= 0) {
+      streamStarted = true;
+      rearm();
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
@@ -294,6 +307,7 @@ async function streamResolveViaDirectLocal(port, payload) {
       while (true) {
         const chunk = await reader.read();
         if (chunk.done) break;
+        rearm();
         buf += decoder.decode(chunk.value, { stream: true });
         let nl;
         while ((nl = buf.indexOf("\n")) >= 0) {
@@ -324,13 +338,20 @@ async function streamResolveViaDirectLocal(port, payload) {
         post({ type: "done", reachable: true, data: doneResult });
         return;
       }
+      post({ type: "done", reachable: true, ok: false, error: STREAM_CUT_MSG });
+      return;
     }
     // 非対応または旧受け手の場合は通常の /resolve へ自動フォールバック
     const fb = await resolveViaDirectLocal(payload || {});
     post(Object.assign({ type: "done" }, fb));
   } catch (e) {
-    if (e && e.name === "AbortError" && !disconnected) {
-      post({ type: "done", reachable: true, ok: false, error: "AI の返事が 65 秒たっても届きませんでした。もう一度実行してください" });
+    if (disconnected) return;
+    if (e && e.name === "AbortError") {
+      post({ type: "done", reachable: true, ok: false, error: streamStarted ? STREAM_CUT_MSG : "PC 側の AI 窓口から返事がありません。もう一度実行してください" });
+      return;
+    }
+    if (streamStarted) {
+      post({ type: "done", reachable: true, ok: false, error: STREAM_CUT_MSG });
       return;
     }
     const fb = await resolveViaDirectLocal(payload || {});

@@ -1793,7 +1793,8 @@ class ComboPostboxWatcher:
                 mgr = gas_workspace.WorkspaceManager(client=self.client) if getattr(self, "client", None) else gas_workspace.WorkspaceManager()
                 mgr.timing = False
                 ag = gas_ws_agent.Agent(mgr, model=req_model or "sonnet", max_turns=3, grade=True, budget_sec=55)
-                report = ag.run(item.get("ask") or "", target=item.get("ssId"), sheet=item.get("sheet") or "")
+                report = ag.run(item.get("ask") or "", target=item.get("ssId"), sheet=item.get("sheet") or "",
+                                selection=item.get("selection") or "")
                 return {"reqId": req_id, "action": "reply", "ops": [], "note": "", "message": report, "agent": True}
             except Exception as e:
                 print(f"[{self._ts_now()}][agent] 脳で回せませんでした（前の 1 回聞きの道に戻します）: {e}")
