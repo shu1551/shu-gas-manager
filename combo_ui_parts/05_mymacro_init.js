@@ -1650,24 +1650,6 @@
         statusText: aiMode === "edit" ? ("AI が「" + targetNm + "」を検討中…") : "AI が考えています…",
         switchToChat: false,
         onSuccess: function(res) {
-          if (res && res.pendingPostbox) {
-            quickEditState.pendingReqId = res.reqId || "";
-            for (var pi = quickEditState.chatHistory.length - 1; pi >= 0; pi--) {
-              if (quickEditState.chatHistory[pi] && quickEditState.chatHistory[pi].role === "pending") {
-                quickEditState.chatHistory[pi].text = "✨ AI（郵便受け）が考えています…届き次第ここに返答します";
-                break;
-              }
-            }
-            renderQuickChat();
-            setQuickModalTab("chat");
-            if (els.quickEditStatus) {
-              els.quickEditStatus.textContent = "✨ AI（郵便受け）が回答中です…届くまでこのままお待ちください";
-            }
-            if (els.quickNote) {
-              els.quickNote.textContent = res.text || "✨ AI（郵便受け）が検討中…";
-            }
-            return;
-          }
           if (res && res.action === "reply") {
             applyQuickAiReplyResult(res);
             return;
@@ -2670,7 +2652,6 @@
         switchToChat: false,
         silentSuccess: true,
         onSuccess: function(res) {
-          if (res.postboxDone) handlePostboxDone(res.postboxDone);
           if (res && res.quick) applyQuickListRes(res.quick);
           else loadQuickList();
           if (!res || !res.learned) loadLearned();
@@ -2704,14 +2685,12 @@
       quickFiltered: quickFiltered,
       quickRunItem: quickRunItem,
       applyQuickListRes: applyQuickListRes,
-      handlePostboxDone: handlePostboxDone,
       submitQuickAi: submitQuickAi,
       QUICK_MY_TEMPLATES: QUICK_MY_TEMPLATES,
       exportMyMacrosData: exportMyMacrosData,
       parseImportMyMacros: parseImportMyMacros,
       applyServerState: applyServerState,
       applyExtSheet: applyExtSheet,
-      runPollTick: runPollTick,
       onRunAsk: onRunAsk,
       onLook: onLook,
       getSelectedSheet: getSelectedSheet,

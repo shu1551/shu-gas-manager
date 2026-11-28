@@ -42,19 +42,6 @@
         if (opts.onSuccess) opts.onSuccess(res, wallMs);
         applyServerState(res, true, opts.payload && opts.payload.sheet);
 
-        if (res.pendingPostbox) {
-          if (res.reqId) {
-            state.pendingPostboxIds[res.reqId] = { startedAt: Date.now(), label: opts.label || "", warned: false };
-          }
-          els.postboxStatusLabel.textContent = "郵便受け: 待機中 (ID: " + (res.reqId || "-") + ")";
-          var pText = res.text || "郵便受けに依頼を置きました。PC側の watch が処理するまで待機します。";
-          appendLog(els.chatLog, "is-info", "[郵便受け待機] " + opts.label, pText + "\n(" + formatTiming(wallMs, res.gasMs) + ")");
-          appendLog(els.traceLog, "is-info", "[… " + opts.label + "] " + formatTiming(wallMs, res.gasMs), "");
-          kickWatcher();
-          schedulePoll(800);
-          return;
-        }
-
         if (!opts.silentSuccess) {
           recordExecution(true, opts.label, res.text || "完了", wallMs, res.gasMs, switchChat);
         }
@@ -94,7 +81,6 @@
         switchToChat: false,
         silentSuccess: !!silent,
         onSuccess: function(res) {
-          if (res.postboxDone) handlePostboxDone(res.postboxDone);
           if (res && res.quick) applyQuickListRes(res.quick);
           else if (!silent || !hasQuick) loadQuickList();
           if (!res || !res.learned) loadLearned();
@@ -181,8 +167,13 @@
 
   function canUseDirectLocalAi() {
     if (typeof window === "undefined" || !window.top || window.top === window) return false;
-    var mode = (els.cfgAiMode && els.cfgAiMode.value) || (state.config && state.config.aiMode) || "postbox";
-    return mode === "postbox";
+    return currentAiMode() === "local";
+  }
+
+  // AI の方式：local（PC の Claude Code に直結）／api_gemini／api_claude。古い設定の "postbox" は local と読む
+  function currentAiMode() {
+    var mode = (els.cfgAiMode && els.cfgAiMode.value) || (state.config && state.config.aiMode) || "local";
+    return mode === "postbox" ? "local" : mode;
   }
 
   function getCurrentAiModel() {
@@ -328,7 +319,7 @@
       }
     }
 
-    // 近い候補があれば、AI自動でも先に［はい］を出す（郵便受けの受け手がいなくても止まらない。［いいえ］なら AI へ回す）
+    // 近い候補があれば、AI自動でも先に［はい］を出す（［いいえ］なら AI へ回す）
     var suggestOps = (!forceAi && !fireOps && !isReadOnly && !liveSelPrompt && planRes && Array.isArray(planRes.suggest) && planRes.suggest.length) ? planRes.suggest : null;
 
     var statusText = (!fireOps && aiAuto) ? "AI解釈・実行中…" : "実行中…";
@@ -746,8 +737,8 @@
           if (mode === "api_claude") state.config.hasClaudeKey = true;
         }
         applyConfig(res.config || res);
-        var modeLabel = mode === "postbox" ? "ローカル直結 (Claude Code CLI)" : (mode === "api_gemini" ? "Gemini API" : (mode === "api_claude" ? "Claude API" : mode));
-        els.postboxStatusLabel.textContent = "設定を保存しました（方式: " + modeLabel + " / モデル: " + model + "）";
+        var modeLabel = (mode === "local" || mode === "postbox") ? "ローカル直結 (Claude Code CLI)" : (mode === "api_gemini" ? "Gemini API" : (mode === "api_claude" ? "Claude API" : mode));
+        els.aiStatusLabel.textContent = "設定を保存しました（方式: " + modeLabel + " / モデル: " + model + "）";
       }
     });
   }
@@ -801,13 +792,13 @@
   }
 
   function refreshHealthBadge() {
-    var mode = (els.cfgAiMode && els.cfgAiMode.value) || (state.config && state.config.aiMode) || "postbox";
-    if (mode !== "postbox") {
+    var mode = currentAiMode();
+    if (mode !== "local") {
       updateHealthBadge("gray", "● API鍵", "API鍵モード（" + mode + "）。クリックで再確認");
       return;
     }
     if (typeof window === "undefined" || !window.top || window.top === window) {
-      updateHealthBadge("gray", "● 待機", "拡張サイドバー外・API/郵便受け待機中");
+      updateHealthBadge("gray", "● 拡張なし", "Chrome 拡張のサイドパネルの外です。PC の AI は拡張のサイドパネルから、この窓では API 鍵で使えます");
       return;
     }
     updateHealthBadge("gray", "● 確認中", "ローカル直結の状態を確認しています…");
@@ -824,15 +815,15 @@
       } else if (r && r.inExtension) {
         updateHealthBadge("yellow", "● 未接続", "ローカル受け手（127.0.0.1:18766）に接続できません: " + String(r.error || "停止中"));
       } else {
-        updateHealthBadge("gray", "● 郵便受", "Chrome拡張外のため郵便受けまたはAPI鍵で動作（クリックで再確認）");
+        updateHealthBadge("gray", "● 拡張なし", "Chrome 拡張のサイドパネルの外です。PC の AI は拡張のサイドパネルから、この窓では API 鍵で使えます（クリックで再確認）");
       }
     });
   }
 
-  function onCheckPostbox() {
+  function onCheckLocal() {
     if (state.polling) return;
     state.polling = true;
-    els.postboxStatusLabel.textContent = "ローカル直結: 接続確認中…";
+    els.aiStatusLabel.textContent = "ローカル直結: 接続確認中…";
     var t0 = performance.now();
     requestDirectPing(function(r) {
       state.polling = false;
@@ -840,22 +831,19 @@
       if (r && r.reachable && r.data && r.data.ok) {
         var pid = r.data.pid ? ("PID: " + r.data.pid + " / ") : "";
         var ver = r.data.version ? ("v" + r.data.version + " / ") : "";
-        els.postboxStatusLabel.textContent = r.recovered
+        els.aiStatusLabel.textContent = r.recovered
           ? ("✅ ローカル直結 OK（自動起動で復旧 / " + ver + pid + ms + "ms）")
           : ("✅ ローカル直結 OK（稼働中 / " + ver + pid + ms + "ms）");
-        updateHealthBadge("green", "● 直結 " + ms + "ms", els.postboxStatusLabel.textContent);
+        updateHealthBadge("green", "● 直結 " + ms + "ms", els.aiStatusLabel.textContent);
       } else if (r && r.inExtension) {
-        els.postboxStatusLabel.textContent = "⚠ ローカル受け手（127.0.0.1:18766）に接続できません: " + String(r.error || "受け手未起動");
-        updateHealthBadge("yellow", "● 未接続", els.postboxStatusLabel.textContent);
+        els.aiStatusLabel.textContent = "⚠ ローカル受け手（127.0.0.1:18766）に接続できません: " + String(r.error || "受け手未起動");
+        updateHealthBadge("yellow", "● 未接続", els.aiStatusLabel.textContent);
       } else {
-        els.postboxStatusLabel.textContent = "⚠ Chrome 拡張機能（GASコンボ ブラウザ連動）が未読み込みまたは未更新です";
-        updateHealthBadge("gray", "● 拡張なし", els.postboxStatusLabel.textContent);
+        els.aiStatusLabel.textContent = "⚠ Chrome 拡張機能（GASコンボ ブラウザ連動）が未読み込みまたは未更新です";
+        updateHealthBadge("gray", "● 拡張なし", els.aiStatusLabel.textContent);
       }
     });
   }
-
-  // 直結専用モードでは不要な旧郵便受け向けキック処理は送らない（Origin 403 ノイズ防止）
-  function kickWatcher() {}
 
   function copyToClipboard(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -883,93 +871,6 @@
         reject(e);
       }
     });
-  }
-
-  // ---- 郵便受け完了待ちポーリング（常時ポーリングは行わない） ----
-  function schedulePoll(delayMs) {
-    if (state.pollTimer) {
-      clearTimeout(state.pollTimer);
-      state.pollTimer = null;
-    }
-    var hasPending = Object.keys(state.pendingPostboxIds).length > 0;
-    if (!hasPending || !hasGasBridge()) return;
-
-    state.pollTimer = setTimeout(runPollTick, delayMs || 1200);
-  }
-
-  function runPollTick() {
-    state.pollTimer = null;
-    var hasPending = Object.keys(state.pendingPostboxIds).length > 0;
-    if (!hasPending) return;
-    var nowMs = Date.now();
-    var pKeys = Object.keys(state.pendingPostboxIds);
-    for (var pi = 0; pi < pKeys.length; pi++) {
-      var pInfo = state.pendingPostboxIds[pKeys[pi]];
-      if (pInfo && typeof pInfo === "object" && !pInfo.warned && (nowMs - (pInfo.startedAt || nowMs)) >= 15000) {
-        pInfo.warned = true;
-        els.postboxStatusLabel.textContent = "郵便受け: 応答待ち (15秒経過)";
-        appendLog(
-          els.chatLog,
-          "is-err",
-          "⏳ 郵便受けの返事がありません（15秒経過）: " + (pInfo.label || pKeys[pi]),
-          "受け手（combo watch）が --postbox なしで動いているか、停止している可能性があります。\n対処: `py gas.py combo watch <script_id> --postbox` で受け手を起動し直すか、Chrome 拡張のサイドパネルから実行してください。"
-        );
-      }
-    }
-    if (document.hidden || state.busy || state.polling) {
-      schedulePoll(1500);
-      return;
-    }
-    state.polling = true;
-    var pollReq = {
-      targetId: state.target.id || "",
-      sheet: state.curSheet || ""
-    };
-    if (pollReq.targetId) pollReq.postboxOnly = true;
-    callGas(
-      "comboPollSelection",
-      pollReq,
-      function(res) {
-        state.polling = false;
-        if (res && res.ok !== false) {
-          var prevSheet = state.curSheet;
-          var prevSel = state.selection;
-          if (typeof res.sheet === "string" && res.sheet && res.sheet !== prevSheet) {
-            state.curSheet = res.sheet;
-            syncSheetSelects();
-          }
-          if (typeof res.selection === "string") {
-            state.selection = res.selection.toUpperCase();
-          }
-          if (res.scope && typeof res.scope === "object") {
-            state.scope = res.scope;
-          } else if (state.selection && Planner.parseSelectionScope) {
-            state.scope = Planner.parseSelectionScope(state.selection);
-          } else {
-            state.scope = {};
-          }
-          if (typeof res.heading === "string") {
-            state.heading = res.heading;
-          }
-          if (res.postboxDone) {
-            handlePostboxDone(res.postboxDone);
-          }
-          if (state.curSheet !== prevSheet || state.selection !== prevSel) {
-            updateSelectionLabel();
-            updatePreview();
-          }
-        }
-        if (Object.keys(state.pendingPostboxIds).length > 0) {
-          schedulePoll(1800);
-        }
-      },
-      function() {
-        state.polling = false;
-        if (Object.keys(state.pendingPostboxIds).length > 0) {
-          schedulePoll(3000);
-        }
-      }
-    );
   }
 
   // ---- キーボード操作（Enter実行・Shift+Enter改行・上下履歴） ----
@@ -1209,7 +1110,7 @@
   els.cfgAiMode.addEventListener("change", autoSaveAiChoice_);
   els.cfgAiModel.addEventListener("change", autoSaveAiChoice_);
   els.btnSaveConfig.addEventListener("click", onSaveConfig);
-  els.btnCheckPostbox.addEventListener("click", onCheckPostbox);
+  els.btnCheckLocal.addEventListener("click", onCheckLocal);
   if (els.healthBadge) els.healthBadge.addEventListener("click", refreshHealthBadge);
 
   els.btnNewTalk.addEventListener("click", function() {
@@ -1223,9 +1124,4 @@
   els.btnUndo.addEventListener("click", onUndo);
   if (els.btnReload) els.btnReload.addEventListener("click", function() { onInit(true); });
 
-  document.addEventListener("visibilitychange", function() {
-    if (!document.hidden && Object.keys(state.pendingPostboxIds).length > 0) {
-      schedulePoll(300);
-    }
-  });
 

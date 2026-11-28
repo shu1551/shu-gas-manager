@@ -1444,7 +1444,7 @@ function comboSaveAiMyMacroResult_(mode, targetName, code, myId) {
   return out;
 }
 
-/** AI へ自然文を投げてマイマクロを作成・修正し、確認なしで自動保存する（postbox / Gemini / Claude 全対応）。 */
+/** AI へ自然文を投げてマイマクロを作成・修正し、確認なしで自動保存する（Gemini / Claude の API 鍵）。 */
 function comboQuickAiSave(req) {
   var t0 = Date.now();
   req = req || {};
@@ -1498,7 +1498,7 @@ function comboQuickAiSave(req) {
     if (req.forceAiMode === 'api_gemini' || req.forceAiMode === 'api_claude') {
       cfg = Object.assign({}, cfg, { aiMode: req.forceAiMode });
     }
-    var effMode = cfg.aiMode || 'postbox';
+    var effMode = cfg.aiMode || 'local';
     var previewOnly = !!req.previewOnly;
     var history = Array.isArray(req.history)
       ? req.history.slice(-10).map(function (h) {
@@ -1509,41 +1509,8 @@ function comboQuickAiSave(req) {
         }).filter(function (h) { return !!h.text; })
       : [];
 
-    if (effMode === 'postbox') {
-      if (!comboPostboxListening_()) {
-        return { ok: false, error: COMBO_PB_NOT_LISTENING_MSG, text: COMBO_PB_NOT_LISTENING_MSG, gasMs: Date.now() - t0 };
-      }
-      var reqId = comboPostboxEnqueue_({
-        kind: 'mymacro',
-        mode: mode,
-        previewOnly: previewOnly,
-        targetName: targetName,
-        existingCode: existingCode,
-        existingNames: existingNames,
-        history: history,
-        ask: prompt,
-        ssId: ssId,
-        ssName: ssName,
-        sheet: curSheet,
-        selection: selInfo.selection || req.selection || '',
-        table: table,
-        sheets: sheets,
-        aiModel: cfg.aiModel || 'sonnet',
-        myId: effMyId
-      });
-      return {
-        ok: true,
-        pendingPostbox: true,
-        previewOnly: previewOnly,
-        reqId: reqId,
-        kind: 'mymacro',
-        mode: mode,
-        name: targetName,
-        text: previewOnly
-          ? ('✨ AI（郵便受け）にマイマクロの' + (mode === 'edit' ? '修正案・相談' : 'コード作成') + 'を依頼しました…')
-          : ('✨ AI（郵便受け）にマイマクロの' + (mode === 'edit' ? '修正' : '作成') + 'を依頼しました…'),
-        gasMs: Date.now() - t0
-      };
+    if (effMode !== 'api_gemini' && effMode !== 'api_claude') {
+      return { ok: false, error: COMBO_NO_AI_MSG, text: COMBO_NO_AI_MSG, gasMs: Date.now() - t0 };
     }
 
     var prompts = comboBuildAiMyMacroPrompts_(mode, prompt, ssName, curSheet, selInfo.selection || req.selection || '', table, sheets, targetName, existingCode, existingNames, history, previewOnly);

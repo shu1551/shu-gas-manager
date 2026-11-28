@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-gas_ws_combo.py - GASコンボ ビルダー・インストーラー・郵便受けウォッチャー
+gas_ws_combo.py - GASコンボ ビルダー・インストーラー・PC の AI 受け手（Chrome 拡張からの直結）
 
 スプレッドシートのコンテナバインドスクリプトまたはスタンドアロン GAS プロジェクトに
 5 ファイル構成の GASコンボ（Engine / ComboPlanner / ComboServer / ComboSidebar / appsscript）を
-生成・配置し、CLI 操作および郵便受け AI 連携監視を提供する。
+生成・配置し、CLI 操作と、Chrome 拡張から頼みを受けて PC の Claude Code で解く受け手を提供する。
 """
 
 import argparse
@@ -630,8 +630,6 @@ function comboGetConfig() { return {lib_symbol}.comboGetConfig(); }
 function comboSaveConfig(cfg) { return {lib_symbol}.comboSaveConfig(cfg); }
 function comboPollSelection(req) { return {lib_symbol}.comboPollSelection(req); }
 function comboSetTestTarget(ssId) { return {lib_symbol}.comboSetTestTarget(ssId); }
-function comboPostboxPoll() { return {lib_symbol}.comboPostboxPoll(); }
-function comboPostboxDeliver(p) { return {lib_symbol}.comboPostboxDeliver(p); }
 function comboGetLearned(req) { return {lib_symbol}.comboGetLearned(req); }
 function comboLearn(req) { return {lib_symbol}.comboLearn(req); }
 function comboQuickList(req) { return {lib_symbol}.comboQuickList(req); }
@@ -862,14 +860,14 @@ def install_combo_addon(addon_id="", force_engine_update=False, client=None, sta
             pass
     res = {"ok": True, "mode": "addon", "scriptId": sid, "engineLibId": lib_id, "engineVersion": ver, "window": webapp_url,
            "editor": f"https://script.google.com/home/projects/{sid}/edit"}
-    # 郵便受け（AI 連携の PC の受け手）を、ログオンのたびに自分で起きるようにして今も起こす（テスト用の偽クライアント時は本番スタートアップを触らない）
+    # PC の AI 受け手（Chrome 拡張からの直結）を、ログオンのたびに自分で起きるようにして今も起こす（テスト用の偽クライアント時は本番スタートアップを触らない）
     if is_real_client:
         try:
-            res["postbox_watcher"] = install_watch_autostart(sid, restart=True).get("text", "")
+            res["watcher"] = install_watch_autostart(sid, restart=True).get("text", "")
         except Exception as e:
-            res["postbox_watcher"] = f"受け手を起こせませんでした: {e}"
+            res["watcher"] = f"受け手を起こせませんでした: {e}"
     else:
-        res["postbox_watcher"] = "テスト実行のためスキップ"
+        res["watcher"] = "テスト実行のためスキップ"
     if created:
         res["next"] = ("初回だけ、人がアドオンを入れる（AI は install_guide を上から 1 段ずつ読み上げ、"
                        "押せたかを聞いてから次の段へ進む。全部を一度に並べない）")
@@ -1419,8 +1417,8 @@ def _unwrap_run_result(resp, client=None, sid=""):
 
 
 
-class ComboPostboxWatcher:
-    """GAS側の郵便受け（COMBO_POSTBOX_Q）を監視し、ローカル AI で ops / マイマクロを組んで返す。"""
+class ComboLocalWatcher:
+    """Chrome 拡張から 127.0.0.1 で頼みを受け、PC の Claude Code で ops / マイマクロを組んで返す受け手。"""
 
     _MYMACRO_SYSTEM_PROMPT = (
         "あなたは Google スプレッドシート用の Google Apps Script（GAS）マイマクロ作成・修正・相談アシスタントです。\n"
@@ -1436,30 +1434,24 @@ class ComboPostboxWatcher:
         '6. 既存の棚（ws_shelves）でできる処理（表整理・書式・列幅・集計・フィルタ・罫線・並べ替え等）は自前で長く実装せず、shelf([{shelf:"棚名", ...}, ...]) または shelf("棚名", {...}) を呼んで複数の棚を束ねる「まとめ棚」として組み、棚に無い固有処理だけ SpreadsheetApp で補うこと。'
     )
 
-    def __init__(self, project_or_sid, client=None, model=None, poll_interval=2.0, backend="auto", direct_only=False):
+    def __init__(self, project_or_sid, client=None, model=None, backend="auto"):
         if client is None:
             from gas_client import GasClient
             client = GasClient()
         self.client = client
-        if direct_only:
-            # 直結専用モードは GAS 郵便受けポーリングを行わないため、ID 未登録でもサーバー起動を止めない
-            try:
-                self.sid = client.resolve_script_id(project_or_sid) if project_or_sid else ""
-            except Exception:
-                self.sid = str(project_or_sid or "")
-        else:
-            self.sid = client.resolve_script_id(project_or_sid)
+        # 受け手は GAS を呼びに行かない＝ID が未登録でもサーバー起動を止めない
+        try:
+            self.sid = client.resolve_script_id(project_or_sid) if project_or_sid else ""
+        except Exception:
+            self.sid = str(project_or_sid or "")
         self.model = model
-        self.poll_interval = float(poll_interval)
         self.backend = backend
         self._ai_runner = None
         self._mymacro_session = None
         self._finder = None
-        self._last_http_at = 0.0
         self._started_at = time.time()
         self._last_ai_ms = None
         self._last_error = ""
-        self._direct_only = bool(direct_only)
         import threading as _th
         self._ai_lock = _th.Lock()
 
@@ -1470,7 +1462,7 @@ class ComboPostboxWatcher:
             "pid": os.getpid(),
             "startedAt": int(self._started_at),
             "uptimeSec": round(max(0.0, time.time() - self._started_at), 1),
-            "directOnly": bool(self._direct_only),
+            "directOnly": True,
             "backend": str(self.backend or "auto"),
             "model": str(self.model or "auto"),
             "lastAiMs": self._last_ai_ms,
@@ -1482,16 +1474,6 @@ class ComboPostboxWatcher:
     def _ts_now():
         from datetime import datetime
         return datetime.now().strftime("%H:%M:%S.%f")[:-3]
-
-    def _close_idle_http_pool(self):
-        """長時間アイドルで切れた keep-alive ソケットを閉じて次の HTTP 呼び出しでの 30 秒ハングを防ぐ。"""
-        adapters = getattr(getattr(self.client, "session", None), "adapters", None)
-        if isinstance(adapters, dict):
-            for ad in list(adapters.values()):
-                try:
-                    ad.close()
-                except Exception:
-                    pass
 
     def _get_finder(self):
         if self._finder is None:
@@ -1747,7 +1729,7 @@ class ComboPostboxWatcher:
         return self._normalize_mymacro_parsed(parsed, raw_text=raw)
 
     def resolve_item(self, item):
-        """1 件のローカル直結 / 郵便受けリクエストを公式 Claude Code CLI で解釈し、結果を返す。"""
+        """1 件のローカル直結リクエストを公式 Claude Code CLI で解釈し、結果を返す。"""
         req_id = item.get("reqId")
         req_model = str(item.get("aiModel") or self.model or "").strip()
         # ローカル直結は Claude Code だけ＝Claude の名前以外（gemini_hydrogen 等の古い設定）は Sonnet で答える
@@ -1834,7 +1816,7 @@ class ComboPostboxWatcher:
     @staticmethod
     def _validate_mymacro_code_local(mode, code, existing_names=None):
         """直結ルート用: マイマクロコードの関数定義・重複をローカルで検証する。"""
-        clean = ComboPostboxWatcher._strip_code_fence(code).replace("\r\n", "\n").rstrip()
+        clean = ComboLocalWatcher._strip_code_fence(code).replace("\r\n", "\n").rstrip()
         if not clean:
             return {"ok": False, "retryable": True, "error": "AI が空のコードを返しました"}
         fns = [
@@ -1862,7 +1844,7 @@ class ComboPostboxWatcher:
         return {"ok": True, "code": clean, "name": fns[0], "names": fns}
 
     def _validate_ops_local(self, ops, ask=None, table=None):
-        """直結・郵便受け共通: AI が返した ops をカタログ検査＋棚と同じ守り(_audit_built_op)に通す。"""
+        """直結: AI が返した ops をカタログ検査＋棚と同じ守り(_audit_built_op)に通す。"""
         if not isinstance(ops, list) or not ops:
             return {"ok": False, "ops": [], "error": "ops が空または配列ではありません"}
         finder = self._get_finder()
@@ -2150,113 +2132,13 @@ class ComboPostboxWatcher:
         )
         return res
 
-    def poll_once(self):
-        """1 回ポーリングして保留中のリクエストをすべて処理する。"""
-        if self._last_http_at and (time.monotonic() - self._last_http_at) >= 20.0:
-            self._close_idle_http_pool()
-        t_poll = time.perf_counter()
-        poll_resp = self.client.run_function(self.sid, "comboPostboxPoll", [], fast=True, keep_runner=True, force=True, timeout=7)
-        self._last_http_at = time.monotonic()
-        poll_wall_ms = int((time.perf_counter() - t_poll) * 1000)
-        poll_gas_ms = int((poll_resp.get("elapsed_ms") or poll_resp.get("duration_ms") or 0) if isinstance(poll_resp, dict) else 0)
-        data = _unwrap_run_result(poll_resp, client=self.client, sid=self.sid) or {}
-        queue_items = data.get("queue") or []
-        results = []
-        for item in queue_items:
-            t_ai = time.perf_counter()
-            with self._ai_lock:
-                payload = self.resolve_item(item)
-            if item.get("kind") != "mymacro" and payload.get("action") == "ops":
-                val_pb = self._validate_ops_local(payload.get("ops"), ask=item.get("ask"), table=item.get("table"))
-                if val_pb.get("ok"):
-                    payload["ops"] = val_pb.get("ops") or payload.get("ops")
-                else:
-                    retry_pb = dict(
-                        item,
-                        ask=str(item.get("ask") or "")
-                        + "\n（前の答えの ops は守りの検査で止まりました: "
-                        + str(val_pb.get("error") or "")
-                        + "。表にある列名と頼みに合う棚・引数だけで直し、安全にできない・曖昧なら reply で聞き返してください）",
-                    )
-                    with self._ai_lock:
-                        payload = self.resolve_item(retry_pb)
-                    if payload.get("action") == "ops":
-                        val_pb2 = self._validate_ops_local(payload.get("ops"), ask=item.get("ask"), table=item.get("table"))
-                        if val_pb2.get("ok"):
-                            payload["ops"] = val_pb2.get("ops") or payload.get("ops")
-                        else:
-                            payload = {"reqId": item.get("reqId"), "action": "error", "error": val_pb2.get("error") or "ops の検証・監査に失敗しました"}
-            ai_ms = int((time.perf_counter() - t_ai) * 1000)
-            t_deliv = time.perf_counter()
-            deliv_resp = self.client.run_function(
-                self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True, force=True, timeout=15
-            )
-            self._last_http_at = time.monotonic()
-            deliv_wall_ms = int((time.perf_counter() - t_deliv) * 1000)
-            deliv = _unwrap_run_result(deliv_resp, client=self.client, sid=self.sid)
-            deliv_gas_ms = int(
-                ((deliv.get("gasMs") if isinstance(deliv, dict) and deliv.get("gasMs") is not None else None)
-                 or (deliv_resp.get("elapsed_ms") or deliv_resp.get("duration_ms") if isinstance(deliv_resp, dict) else 0)
-                 or 0)
-            )
-            # 棚の引数不足、またはマイマクロ構文/重複エラーなら、その理由を添えて AI に 1 回だけ作り直させる
-            if isinstance(deliv, dict) and deliv.get("ok") is False and (deliv.get("arg") or deliv.get("retryable")):
-                retry_item = dict(
-                    item,
-                    ask=str(item.get("ask") or "")
-                    + "\n（前の答えは失敗しました: "
-                    + str(deliv.get("error") or "")
-                    + "。問題点を直して答え直してください）",
-                )
-                t_ai2 = time.perf_counter()
-                with self._ai_lock:
-                    payload = self.resolve_item(retry_item)
-                ai_ms += int((time.perf_counter() - t_ai2) * 1000)
-                for k in ("ssId", "sheet", "selection", "ok", "backup", "kind", "mode", "previewOnly", "targetName", "existingCode", "existingNames", "myId", "ask"):
-                    if item.get(k) is not None and (k == "ask" or k not in payload):
-                        payload[k] = item.get(k)
-                t_deliv2 = time.perf_counter()
-                deliv_resp2 = self.client.run_function(
-                    self.sid, "comboPostboxDeliver", [payload], fast=True, keep_runner=True, force=True, timeout=15
-                )
-                self._last_http_at = time.monotonic()
-                deliv_wall_ms += int((time.perf_counter() - t_deliv2) * 1000)
-                deliv = _unwrap_run_result(deliv_resp2, client=self.client, sid=self.sid)
-                deliv_gas_ms += int(
-                    ((deliv.get("gasMs") if isinstance(deliv, dict) and deliv.get("gasMs") is not None else None)
-                     or (deliv_resp2.get("elapsed_ms") or deliv_resp2.get("duration_ms") if isinstance(deliv_resp2, dict) else 0)
-                     or 0)
-                )
-            if isinstance(deliv, dict) and deliv.get("ok") is True and payload.get("action") == "ops" and payload.get("ops"):
-                try:
-                    import gas_ws_ask
-                    gas_ws_ask.log_ask_ai_solved(
-                        item.get("ask") or "",
-                        payload.get("ops"),
-                        source="combo_postbox",
-                        note=payload.get("note") or "",
-                    )
-                except Exception:
-                    pass
-            timing = {
-                "poll_wall_ms": poll_wall_ms,
-                "poll_gas_ms": poll_gas_ms,
-                "ai_ms": ai_ms,
-                "deliver_wall_ms": deliv_wall_ms,
-                "deliver_gas_ms": deliv_gas_ms,
-                "total_ms": poll_wall_ms + ai_ms + deliv_wall_ms,
-            }
-            results.append({"reqId": item.get("reqId"), "payload": payload, "deliver": deliv, "timing": timing})
-        return results
-
-    def watch(self, max_loops=None, idle_interval=15.0, direct_only=False, port=None, pid_path=None):
-        """継続監視・直結サーバー。direct_only=True のときは GAS 郵便受けポーリングを行わず /resolve のみ待つ。
+    def watch(self, port=None, pid_path=None):
+        """直結サーバー（127.0.0.1）。Chrome 拡張からの /resolve・/resolve-stream を待つ。
         /stop を受けると安全に終了し、新コードへの再起動に備える。"""
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         listen_port = COMBO_WATCH_PORT if port is None else int(port)
         pid_file = Path(pid_path) if pid_path else WATCH_PID_PATH
-        self._direct_only = bool(direct_only)
         self._started_at = time.time()
         # 窓なし（pythonw）で起きたときは標準出力が無い＝書き先を手元のログにする（無いと途中で黙って止まる）
         if sys.stdout is None or sys.stderr is None or Path(sys.executable).name.lower() == "pythonw.exe":
@@ -2265,7 +2147,7 @@ class ComboPostboxWatcher:
 
         already, active_pid = _is_watch_running(pid_file, listen_port)
         if already:
-            print(f"[{self._ts_now()}][postbox] 受け手は既に稼働中です pid={active_pid} (127.0.0.1:{listen_port})")
+            print(f"[{self._ts_now()}][direct] 受け手は既に稼働中です pid={active_pid} (127.0.0.1:{listen_port})")
             return
 
         kick = threading.Event()
@@ -2321,7 +2203,7 @@ class ComboPostboxWatcher:
                 elif self.path.startswith("/health"):
                     self._reply(watcher.get_health())
                 elif self.path.startswith("/ping"):
-                    self._reply({"ok": True, "pid": os.getpid(), "direct": True, "directOnly": bool(direct_only)})
+                    self._reply({"ok": True, "pid": os.getpid(), "direct": True, "directOnly": True})
                 else:
                     self._reply()
 
@@ -2413,70 +2295,18 @@ class ComboPostboxWatcher:
                 allow_reuse_address = False   # Windows では True だと同じ口に 2 つ目も入れてしまう＝受け手が 2 つ動く
             srv = _Srv(("127.0.0.1", listen_port), _H)
         except OSError:
-            print(f"[{self._ts_now()}][postbox] 受け手はもう動いています（127.0.0.1:{listen_port}）")
+            print(f"[{self._ts_now()}][direct] 受け手はもう動いています（127.0.0.1:{listen_port}）")
             return
         try:
             pid_file.write_text(str(os.getpid()), encoding="utf-8")
         except Exception:
             pass
-        if direct_only:
-            print(f"[{self._ts_now()}][direct] 直結専用サーバー起動 pid={os.getpid()} port={listen_port} (郵便受けポーリング停止)")
-        else:
-            print(f"[{self._ts_now()}][postbox] 監視開始 pid={os.getpid()} port={listen_port} idle={idle_interval}s")
+        print(f"[{self._ts_now()}][direct] 受け手を起動 pid={os.getpid()} port={listen_port}")
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        loops = 0
-        consec_err = 0
         try:
-            if direct_only:
-                while not stop_ev.is_set():
-                    if kick.wait(0.5):
-                        kick.clear()
-                        try:
-                            self.poll_once()
-                        except Exception:
-                            pass
-            else:
-                while (max_loops is None or loops < max_loops) and not stop_ev.is_set():
-                    loops += 1
-                    last_err = False
-                    t_loop = time.perf_counter()
-                    try:
-                        handled = self.poll_once()
-                        consec_err = 0
-                    except Exception as e:
-                        handled = []
-                        last_err = True
-                        consec_err += 1
-                        err_ms = int((time.perf_counter() - t_loop) * 1000)
-                        err_s = str(e)
-                        is_timeout = isinstance(e, TimeoutError) or ("timed out" in err_s.lower()) or ("タイムアウト" in err_s)
-                        print(f"[{self._ts_now()}][postbox] poll失敗 wall={err_ms}ms 連続{consec_err}回 timeout={is_timeout}: {err_s[:200]}")
-                        self._close_idle_http_pool()
-                        if not (is_timeout and consec_err < 3):
-                            try:
-                                from gas_client import GasClient
-                                self.client = GasClient()
-                                self.client._cache_data.get("deployments", {}).get(self.sid, {}).pop("runner_installed", None)
-                            except Exception as e2:
-                                print(f"[{self._ts_now()}][postbox] 作り直しに失敗: {e2}")
-                    for h in handled:
-                        tm = h.get("timing") or {}
-                        print(
-                            f"[{self._ts_now()}][postbox] {h['reqId']} "
-                            f"poll={tm.get('poll_wall_ms', 0)}ms(gas={tm.get('poll_gas_ms', 0)}ms) "
-                            f"ai={tm.get('ai_ms', 0)}ms "
-                            f"deliver={tm.get('deliver_wall_ms', 0)}ms(gas={tm.get('deliver_gas_ms', 0)}ms) "
-                            f"total={tm.get('total_ms', 0)}ms -> {json.dumps(h['deliver'], ensure_ascii=False)}"
-                        )
-                    if (max_loops is not None and loops >= max_loops) or stop_ev.is_set():
-                        break
-                    wait_sec = 0.5 if (last_err and consec_err <= 2) else (2.0 if last_err else idle_interval)
-                    kick.wait(wait_sec)
-                    if stop_ev.is_set():
-                        break
-                    if kick.is_set():
-                        kick.clear()
-                        time.sleep(0.05)
+            while not stop_ev.is_set():
+                if kick.wait(0.5):
+                    kick.clear()
         except KeyboardInterrupt:
             pass
         finally:
@@ -2677,7 +2507,7 @@ def repair_local_bindings_if_stale():
 
 
 def install_watch_autostart(script_id, start_now=True, restart=False):
-    """郵便受けの受け手を、Windows にログオンしたら窓を出さずに自分で起きるようにする（スタートアップに 1 本置く）。
+    """PC の AI 受け手を、Windows にログオンしたら窓を出さずに自分で起きるようにする（スタートアップに 1 本置く）。
     start_now なら今も起こす。restart=True のときは動作中の旧プロセスへ /stop を送って入れ替える。"""
     if os.name != "nt":
         return {"ok": False, "text": "自動で起こすのは Windows だけです。端末で py gas.py combo watch <id> を撃ってください"}
@@ -2737,7 +2567,7 @@ def install_watch_autostart(script_id, start_now=True, restart=False):
         "ok": True,
         "startup": str(vbs),
         "native_host": nh,
-        "text": "郵便受けの受け手を動かしました（ログオン自動起動＋Chrome拡張からの自動復旧を登録済み）",
+        "text": "PC の AI 受け手を動かしました（ログオン自動起動＋Chrome拡張からの自動復旧を登録済み）",
     }
 
 
@@ -2810,13 +2640,10 @@ def _run_cli(argv=None):
     p_undo.add_argument("--ok", action="store_true", help="確認なしで戻す")
     p_undo.add_argument("--to", default="", help="戻す台帳番号")
 
-    p_watch = sub.add_parser("watch", help="郵便受けキューを監視して AI 実行する")
+    p_watch = sub.add_parser("watch", help="PC の AI 受け手を起こす（Chrome 拡張のサイドパネルからの頼みを Claude Code で解く）")
     p_watch.add_argument("script_id", help="対象 GAS スクリプトID")
-    p_watch.add_argument("--interval", type=float, default=2.0, help="ポーリング間隔（秒）")
     p_watch.add_argument("--model", default="", help="AI モデル名")
-    p_watch.add_argument("--once", action="store_true", help="1回だけポーリングして終了")
     p_watch.add_argument("--autostart", action="store_true", help="ログオンのたびに窓を出さずに自分で起きるようにして、今も起こす（Windows）")
-    p_watch.add_argument("--postbox", action="store_true", help="従来の GAS 郵便受けポーリングも併用する（既定は直結専用）")
 
     p_quick = sub.add_parser("quick", help="マイマクロ一覧・実行 (comboQuickList / comboQuickRun)")
     p_quick.add_argument("script_id", help="対象 GAS スクリプトID")
@@ -2942,13 +2769,8 @@ def _run_cli(argv=None):
         if sys.stdout is None or sys.stderr is None or Path(sys.executable).name.lower() == "pythonw.exe":
             _log = _open_watch_log()
             sys.stdout = sys.stderr = _log
-        is_direct_only = (not args.once) and (not args.postbox)
-        watcher = ComboPostboxWatcher(args.script_id, client=client, model=args.model or None, poll_interval=args.interval, direct_only=is_direct_only)
-        if args.once:
-            res = watcher.poll_once()
-            print(json.dumps(res, ensure_ascii=False, indent=2))
-        else:
-            watcher.watch(idle_interval=3.0, direct_only=not args.postbox)
+        watcher = ComboLocalWatcher(args.script_id, client=client, model=args.model or None)
+        watcher.watch()
         return 0
     if args.cmd == "quick":
         if args.quick_action == "list":

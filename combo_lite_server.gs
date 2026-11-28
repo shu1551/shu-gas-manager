@@ -361,7 +361,7 @@ function comboRunAsk(req) {
 
 function comboFind(req) { return { ok: true, text: 'サイドバー内で検索できます', gasMs: 1 }; }
 function comboUndo(req) { return { ok: false, error: 'Ctrl+Z で戻せます', text: 'シート上で Ctrl+Z を押すと直前の変更を戻せます', gasMs: 1 }; }
-function comboGetConfig() { return { aiMode: 'postbox', aiModel: 'haiku', backupDefault: false, hasApiKey: false }; }
+function comboGetConfig() { return { aiMode: 'local', aiModel: 'haiku', backupDefault: false, hasApiKey: false }; }
 function comboSaveConfig(cfg) { return { ok: true, config: cfg }; }
 function comboPollSelection(req) {
   var sh = SpreadsheetApp.getActiveSheet();

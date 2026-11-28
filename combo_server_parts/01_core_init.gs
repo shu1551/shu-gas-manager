@@ -2,7 +2,7 @@
  * combo_server_template.gs - GASコンボ サーバー側実行・サイドバー基盤
  *
  * コンテナバインドスクリプト（サイドバー）およびヘッドレス API（run_function）の両方から
- * 0.2〜0.5秒台の高速実行・即座の選択範囲取得・高速アンドゥ・AI連携（API直結 / 郵便受け）を提供する。
+ * 0.2〜0.5秒台の高速実行・即座の選択範囲取得・高速アンドゥ・AI連携（API 鍵）を提供する。
  * Engine（workspace_engine.gs + Catalog + ApiTypes + ws_shelves/*.gs）および
  * ComboPlanner（combo_planner_template.js）と同居して動作する。
  */
@@ -16,8 +16,6 @@ var COMBO_MINI_SHELVES = null;
 var COMBO_PROP_TARGET = 'COMBO_TARGET_SS_ID';
 var COMBO_PROP_CONFIG = 'COMBO_CONFIG';
 var COMBO_PROP_FAST_UNDO = 'COMBO_FAST_UNDO';
-var COMBO_PROP_PB_QUEUE = 'COMBO_POSTBOX_Q';
-var COMBO_PROP_PB_DONE = 'COMBO_POSTBOX_DONE';
 var COMBO_TBL_CACHE_PREFIX = 'COMBO_TBL_';
 var COMBO_TBL_CACHE_TTL = 21600; // 6時間
 
@@ -374,8 +372,7 @@ function comboInit(req) {
         outline: docOutline,
         selection: '',
         scope: null,
-        config: comboSanitizeConfig_(comboGetRawConfig_(allProps)),
-        postboxPendingCount: comboPostboxPoll().count
+        config: comboSanitizeConfig_(comboGetRawConfig_(allProps))
       };
       if (req.includeQuick) {
         docOut.quick = comboQuickList({
@@ -428,8 +425,7 @@ function comboInit(req) {
       table: table,
       selection: selInfo.selection,
       scope: comboParseScope_(selInfo.selection),
-      config: comboSanitizeConfig_(comboGetRawConfig_(allProps)),
-      postboxPendingCount: comboPostboxPoll().count
+      config: comboSanitizeConfig_(comboGetRawConfig_(allProps))
     };
     var tPost = Date.now();
     if (req.includeQuick) {
@@ -452,7 +448,7 @@ function comboInit(req) {
       openMs: tOpen - t0,
       sheetsMs: tSheets - tOpen,
       tableMs: tTable - tSheets,
-      metaPostboxMs: tPost - tTable,
+      metaMs: tPost - tTable,
       quickMs: tQuick - tPost,
       learnedMs: tEnd - tQuick
     };
@@ -467,20 +463,13 @@ function comboInit(req) {
 }
 
 /**
- * サイドバーからの軽量ポーリング：現在のシート・選択範囲・郵便受け完了結果を返す。
+ * サイドバーからの軽量ポーリング：現在のシート・選択範囲を返す。
  * @param {Object} req
  */
 function comboPollSelection(req) {
   var t0 = Date.now();
   try {
     req = req || {};
-    if (req.postboxOnly && req.targetId) {
-      return {
-        ok: true,
-        postboxDone: comboPopPostboxDone_(String(req.targetId).trim()),
-        gasMs: Date.now() - t0
-      };
-    }
     if (comboIsDocReq_(req)) {
       var docP = comboOpenDoc_(req);
       return {
@@ -490,20 +479,17 @@ function comboPollSelection(req) {
         selection: '',
         scope: null,
         oauthToken: comboGetOAuthToken_(),
-        postboxDone: comboPopPostboxDone_(docP.getId()),
         gasMs: Date.now() - t0
       };
     }
     var ss = comboOpenSs_(req);
     var selInfo = comboGetSelectionInfo_(ss, req);
-    var postboxDone = comboPopPostboxDone_(ss.getId());
     var out = {
       ok: true,
       sheet: selInfo.sheet,
       selection: selInfo.selection,
       scope: comboParseScope_(selInfo.selection),
-      oauthToken: comboGetOAuthToken_(),
-      postboxDone: postboxDone
+      oauthToken: comboGetOAuthToken_()
     };
     var prevSheet = String(req.prevSheet || '').trim();
     if (prevSheet && selInfo.sheet && selInfo.sheet !== prevSheet) {
@@ -529,9 +515,6 @@ function comboPollSelection(req) {
       out.sheets = sheets;
       out.sheetInfos = sheetInfos;
       out.table = table;
-    }
-    if (req.checkPostbox) {
-      out.postboxPending = comboPostboxPoll().count;
     }
     out.gasMs = Date.now() - t0;
     return out;

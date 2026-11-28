@@ -52,7 +52,7 @@
     heading: "",
     scope: {},
     config: {
-      aiMode: "postbox",
+      aiMode: "local",
       aiModel: "sonnet",
       hasApiKey: false,
       hasGeminiKey: false,
@@ -64,9 +64,7 @@
     selectedHistIdx: -1,
     checkedHist: {},
     pendingSteps: [],
-    pollTimer: null,
     polling: false,
-    pendingPostboxIds: {},
     oauthToken: "",
     sheetIdMap: {},
     sheetDimsMap: {},
@@ -154,8 +152,8 @@
     cfgAiModel: document.getElementById("cfgAiModel"),
     cfgApiKey: document.getElementById("cfgApiKey"),
     btnSaveConfig: document.getElementById("btnSaveConfig"),
-    btnCheckPostbox: document.getElementById("btnCheckPostbox"),
-    postboxStatusLabel: document.getElementById("postboxStatusLabel"),
+    btnCheckLocal: document.getElementById("btnCheckLocal"),
+    aiStatusLabel: document.getElementById("aiStatusLabel"),
     btnNewTalk: document.getElementById("btnNewTalk"),
     btnUndo: document.getElementById("btnUndo"),
     btnReload: document.getElementById("btnReload"),
@@ -737,7 +735,7 @@
       els.cfgApiKey.placeholder = "Geminiキー設定済み（変更時のみ入力）";
     } else if (mode === "api_claude" && (state.config.hasClaudeKey || state.config.hasApiKey)) {
       els.cfgApiKey.placeholder = "Claudeキー設定済み（変更時のみ入力）";
-    } else if (mode === "postbox") {
+    } else if (mode === "local") {
       els.cfgApiKey.placeholder = "ローカル直結ではAPIキー不要";
     } else {
       els.cfgApiKey.placeholder = "APIキーを入力";
@@ -2226,97 +2224,4 @@
     return true;
   }
 
-  function handlePostboxDone(doneItems) {
-    if (!doneItems) return;
-    var items = Array.isArray(doneItems) ? doneItems : [doneItems];
-    var handled = 0;
-    for (var i = 0; i < items.length; i++) {
-      var it = items[i];
-      if (!it || typeof it !== "object") continue;
-      handled++;
-      if (it.reqId) delete state.pendingPostboxIds[it.reqId];
-      var ok = it.ok !== false;
-      var label = it.ask || it.label || "郵便受けAI実行";
-      var body = it.text || it.error || "";
-      var gasMs = (typeof it.gasMs === "number") ? it.gasMs : undefined;
-      if (it.kind === "mymacro") {
-        appendLog(
-          els.chatLog,
-          ok ? "is-ok" : "is-err",
-          "[" + (ok ? "✓" : "✗") + " 郵便受け AIマイマクロ] " + label,
-          body + (gasMs !== undefined ? "\n(GAS " + (gasMs / 1000).toFixed(2) + "s)" : "")
-        );
-        if (ok && it.previewOnly && it.action === "reply") {
-          applyQuickAiReplyResult(it);
-          if (els.quickNote) els.quickNote.textContent = "💬 AI からマイマクロの返答が届きました";
-        } else if (ok && it.previewOnly && it.code) {
-          applyQuickAiPreviewResult(it);
-          if (els.quickNote) els.quickNote.textContent = body || "✨ コード案ができました。内容を確認して「決定して保存」を押してください";
-        } else if (ok && it.saved) {
-          var sNm = it.newName || it.name || "";
-          if (it.mode === "edit" && it.prevCode && sNm) quickSavePrevCode(sNm, it.prevCode);
-          if (it.myId) state.quick.myId = it.myId;
-          if (it.myUrl) state.quick.myUrl = it.myUrl;
-          if (it.myStamp) state.quick.myStamp = it.myStamp;
-          quickClearCodeCache();
-          quickRememberLocal();
-          updateSettingsMyMacroUI();
-          if (els.quickNote) els.quickNote.textContent = body || "✨ AI マイマクロを保存しました";
-          loadQuickList(false);
-        } else if (ok && !it.saved && it.code) {
-          (function(item) {
-            var fnNm = (item.mode === "edit" && item.targetName) ? "comboQuickSaveFn" : "comboQuickAddFn";
-            var argObj = (fnNm === "comboQuickSaveFn")
-              ? { name: item.targetName, code: item.code, myId: item.myId || state.quick.myId || "" }
-              : { code: item.code };
-            callGas(fnNm, argObj, function(sRes) {
-              if (!sRes || sRes.ok === false) {
-                if (els.quickNote) els.quickNote.textContent = "⚠ " + ((sRes && sRes.error) || "マイマクロの保存に失敗しました");
-                return;
-              }
-              var savedN = (sRes && (sRes.newName || sRes.name || (sRes.names && sRes.names[0]))) || item.targetName || "";
-              if (item.mode === "edit" && item.prevCode && savedN) quickSavePrevCode(savedN, item.prevCode);
-              if (sRes.myId) state.quick.myId = sRes.myId;
-              if (sRes.myUrl) state.quick.myUrl = sRes.myUrl;
-              if (sRes.myStamp) state.quick.myStamp = sRes.myStamp;
-              quickClearCodeCache();
-              quickRememberLocal();
-              updateSettingsMyMacroUI();
-              if (els.quickNote) els.quickNote.textContent = "✨ " + ((sRes && sRes.text) || "AI マイマクロを自動保存しました");
-              loadQuickList(false);
-            }, function(sErr) {
-              if (els.quickNote) els.quickNote.textContent = "⚠ 自動保存に失敗: " + formatError(sErr);
-            });
-          })(it);
-        } else {
-          var samePending = !!(it.reqId && quickEditState.pendingReqId && quickEditState.pendingReqId === it.reqId);
-          var modalOpen = !!(els.quickEditModal && els.quickEditModal.style.display !== "none");
-          if (samePending || modalOpen) {
-            if (samePending) quickEditState.pendingReqId = "";
-            dropPendingQuickChat();
-            quickEditState.chatHistory.push({ role: "err", text: "⚠ " + (it.error || body || "マイマクロ作成に失敗しました") });
-            renderQuickChat();
-            if (els.btnQuickAiSubmit) els.btnQuickAiSubmit.disabled = false;
-            if (els.quickEditCode) els.quickEditCode.disabled = false;
-            syncQuickSaveBtnState();
-            if (els.quickEditStatus) els.quickEditStatus.textContent = "⚠ " + (it.error || body || "マイマクロ作成に失敗しました");
-          }
-          if (els.quickNote) els.quickNote.textContent = "⚠ " + (it.error || body || "マイマクロ作成に失敗しました");
-        }
-        continue;
-      }
-      appendLog(
-        els.chatLog,
-        ok ? "is-ok" : "is-err",
-        "[" + (ok ? "✓" : "✗") + " 郵便受け] " + label,
-        body + (gasMs !== undefined ? "\n(GAS " + (gasMs / 1000).toFixed(2) + "s)" : "")
-      );
-      if (it.table !== undefined) state.table = it.table;
-    }
-    if (handled > 0) {
-      updateInfoLabel();
-      updatePreview();
-      els.postboxStatusLabel.textContent = "郵便受け: 完了結果 " + handled + "件を受信しました";
-    }
-  }
 

@@ -230,7 +230,7 @@ function onAddonRun(e) {
     if (p && p.fire && p.ops && p.ops.length) {
       res = {lib_symbol}.comboRunAsk({ ops: p.ops, fastUndo: true, kind: tgKind, targetId: tg.id, targetName: tg.title, sheet: curSheet, selection: '', table: init.table, sheets: init.sheets });
     } else {
-      res = {lib_symbol}.comboRunAsk({ ask: ask, fastUndo: true, kind: tgKind, targetId: tg.id, targetName: tg.title, sheet: curSheet });   // 棚に当たらなければいつもの道（AI・郵便受け）
+      res = {lib_symbol}.comboRunAsk({ ask: ask, fastUndo: true, kind: tgKind, targetId: tg.id, targetName: tg.title, sheet: curSheet });   // 棚に当たらなければいつもの道（API 鍵の AI）
     }
     var keepsShape = tgKind !== 'doc' && !!(p && p.fire && p.ops && p.ops.every(function (o) { return COMBO_ADDON_KEEPS_SHAPE.test(String(o.shelf || '')); }));
     if (!keepsShape && tgKind !== 'doc') comboAddonForget_(tg, curSheet);
@@ -453,6 +453,3 @@ function comboQuickSavePins(req) { return {lib_symbol}.comboQuickSavePins(req); 
 function comboQuickSaveSteps(req) { return {lib_symbol}.comboQuickSaveSteps(comboAddonReq_(req)); }
 function comboQuickAiSave(req) { return {lib_symbol}.comboQuickAiSave(comboAddonReq_(req)); }
 function comboCall(name, req) { return {lib_symbol}.comboCall(name, comboAddonReq_(req)); }
-// PC の郵便受けの受け手（py gas.py combo watch）が呼ぶ口
-function comboPostboxPoll() { return {lib_symbol}.comboPostboxPoll(); }
-function comboPostboxDeliver(res) { return {lib_symbol}.comboPostboxDeliver(res); }

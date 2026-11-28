@@ -96,7 +96,7 @@ PUBLIC_FILES = [
     "combo_server_template.gs",
     "combo_server_parts/01_core_init.gs",
     "combo_server_parts/02_ops_exec.gs",
-    "combo_server_parts/03_ai_postbox.gs",
+    "combo_server_parts/03_ai.gs",
     "combo_server_parts/04_mymacro_quick.gs",
     "combo_lite_server.gs",
     "combo_planner_template.js",

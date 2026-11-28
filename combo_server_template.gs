@@ -2,7 +2,7 @@
  * combo_server_template.gs - GASコンボ サーバー側実行・サイドバー基盤
  *
  * コンテナバインドスクリプト（サイドバー）およびヘッドレス API（run_function）の両方から
- * 0.2〜0.5秒台の高速実行・即座の選択範囲取得・高速アンドゥ・AI連携（API直結 / 郵便受け）を提供する。
+ * 0.2〜0.5秒台の高速実行・即座の選択範囲取得・高速アンドゥ・AI連携（API 鍵）を提供する。
  * Engine（workspace_engine.gs + Catalog + ApiTypes + ws_shelves/*.gs）および
  * ComboPlanner（combo_planner_template.js）と同居して動作する。
  */
@@ -16,8 +16,6 @@ var COMBO_MINI_SHELVES = null;
 var COMBO_PROP_TARGET = 'COMBO_TARGET_SS_ID';
 var COMBO_PROP_CONFIG = 'COMBO_CONFIG';
 var COMBO_PROP_FAST_UNDO = 'COMBO_FAST_UNDO';
-var COMBO_PROP_PB_QUEUE = 'COMBO_POSTBOX_Q';
-var COMBO_PROP_PB_DONE = 'COMBO_POSTBOX_DONE';
 var COMBO_TBL_CACHE_PREFIX = 'COMBO_TBL_';
 var COMBO_TBL_CACHE_TTL = 21600; // 6時間
 
@@ -374,8 +372,7 @@ function comboInit(req) {
         outline: docOutline,
         selection: '',
         scope: null,
-        config: comboSanitizeConfig_(comboGetRawConfig_(allProps)),
-        postboxPendingCount: comboPostboxPoll().count
+        config: comboSanitizeConfig_(comboGetRawConfig_(allProps))
       };
       if (req.includeQuick) {
         docOut.quick = comboQuickList({
@@ -428,8 +425,7 @@ function comboInit(req) {
       table: table,
       selection: selInfo.selection,
       scope: comboParseScope_(selInfo.selection),
-      config: comboSanitizeConfig_(comboGetRawConfig_(allProps)),
-      postboxPendingCount: comboPostboxPoll().count
+      config: comboSanitizeConfig_(comboGetRawConfig_(allProps))
     };
     var tPost = Date.now();
     if (req.includeQuick) {
@@ -452,7 +448,7 @@ function comboInit(req) {
       openMs: tOpen - t0,
       sheetsMs: tSheets - tOpen,
       tableMs: tTable - tSheets,
-      metaPostboxMs: tPost - tTable,
+      metaMs: tPost - tTable,
       quickMs: tQuick - tPost,
       learnedMs: tEnd - tQuick
     };
@@ -467,20 +463,13 @@ function comboInit(req) {
 }
 
 /**
- * サイドバーからの軽量ポーリング：現在のシート・選択範囲・郵便受け完了結果を返す。
+ * サイドバーからの軽量ポーリング：現在のシート・選択範囲を返す。
  * @param {Object} req
  */
 function comboPollSelection(req) {
   var t0 = Date.now();
   try {
     req = req || {};
-    if (req.postboxOnly && req.targetId) {
-      return {
-        ok: true,
-        postboxDone: comboPopPostboxDone_(String(req.targetId).trim()),
-        gasMs: Date.now() - t0
-      };
-    }
     if (comboIsDocReq_(req)) {
       var docP = comboOpenDoc_(req);
       return {
@@ -490,20 +479,17 @@ function comboPollSelection(req) {
         selection: '',
         scope: null,
         oauthToken: comboGetOAuthToken_(),
-        postboxDone: comboPopPostboxDone_(docP.getId()),
         gasMs: Date.now() - t0
       };
     }
     var ss = comboOpenSs_(req);
     var selInfo = comboGetSelectionInfo_(ss, req);
-    var postboxDone = comboPopPostboxDone_(ss.getId());
     var out = {
       ok: true,
       sheet: selInfo.sheet,
       selection: selInfo.selection,
       scope: comboParseScope_(selInfo.selection),
-      oauthToken: comboGetOAuthToken_(),
-      postboxDone: postboxDone
+      oauthToken: comboGetOAuthToken_()
     };
     var prevSheet = String(req.prevSheet || '').trim();
     if (prevSheet && selInfo.sheet && selInfo.sheet !== prevSheet) {
@@ -529,9 +515,6 @@ function comboPollSelection(req) {
       out.sheets = sheets;
       out.sheetInfos = sheetInfos;
       out.table = table;
-    }
-    if (req.checkPostbox) {
-      out.postboxPending = comboPostboxPoll().count;
     }
     out.gasMs = Date.now() - t0;
     return out;
@@ -1891,7 +1874,7 @@ function comboMatchMyMacro_(askText, myList) {
 }
 
 /**
- * 自然文または事前解決済み ops を受け取り、棚ヒット即実行または AI 解釈・郵便受け投入を行う。
+ * 自然文または事前解決済み ops を受け取り、棚ヒット即実行または AI（API 鍵）で解釈して実行する。
  * @param {Object} req { ask, ops, ok, backup, aiAuto, sheet, selection, table }
  */
 function comboRunAsk(req) {
@@ -2209,38 +2192,8 @@ function comboRunAsk(req) {
     }
   }
 
-  // 郵便受けモード（PC常駐ウォッチャー連携）
-  if (!comboPostboxListening_()) {
-    return { ok: false, error: COMBO_PB_NOT_LISTENING_MSG, text: COMBO_PB_NOT_LISTENING_MSG, gasMs: Date.now() - t0 };
-  }
-  var reqId = comboPostboxEnqueue_({
-    kind: isReadOnlyAsk ? 'read' : 'ops',
-    readOnly: isReadOnlyAsk,
-    ssId: ss.getId(),
-    ssName: ss.getName(),
-    sheet: curSheet,
-    selection: selection,
-    ask: askText,
-    ok: !!req.ok,
-    backup: !!req.backup,
-    aiModel: cfg.aiModel || 'sonnet',
-    table: table,
-    sheets: sheets,
-    tableSnippet: tblSnippet ? tblSnippet.text : '',
-    truncated: tblSnippet ? !!tblSnippet.truncated : false,
-    totalRows: tblSnippet ? (tblSnippet.totalRows || 0) : 0,
-    partialOps: planHintObj ? planHintObj.ops : [],
-    planReasons: planHintObj ? planHintObj.reasons : [],
-    planMissing: planHintObj ? planHintObj.missing : [],
-    planCards: planHintObj ? planHintObj.cards : []
-  });
-  return {
-    ok: true,
-    pendingPostbox: true,
-    reqId: reqId,
-    text: '[郵便受け] 依頼を送信しました（ID: ' + reqId + '）。\nPC側の待機プロセス (gas_ws_combo.py watch) が自動実行します。',
-    gasMs: Date.now() - t0
-  };
+  // 鍵が無いとき：この窓からは AI を呼べない（PC の Claude Code は Chrome 拡張のサイドパネルから直結で使う）
+  return { ok: false, error: COMBO_NO_AI_MSG, text: COMBO_NO_AI_MSG, gasMs: Date.now() - t0 };
 }
 
 // ---------------------------------------------------------------- 棚検索・アンドゥ・設定
@@ -2351,7 +2304,7 @@ function comboUndo(req) {
 
 function comboGetRawConfig_(optAllProps) {
   var def = {
-    aiMode: 'postbox',
+    aiMode: 'local',
     aiModel: 'sonnet',
     apiKey: '',
     geminiKey: '',
@@ -2375,7 +2328,7 @@ function comboGetRawConfig_(optAllProps) {
 
 function comboSanitizeConfig_(raw) {
   return {
-    aiMode: raw.aiMode || 'postbox',
+    aiMode: (!raw.aiMode || raw.aiMode === 'postbox') ? 'local' : raw.aiMode,
     aiModel: raw.aiModel || 'sonnet',
     backupDefault: !!raw.backupDefault,
     // 拡張の直結の合い言葉（人ごとの設定にだけ置く。本人の操作窓だけが受け取り、拡張へ頼みと一緒に渡す）
@@ -2408,272 +2361,7 @@ function comboSaveConfig(cfg) {
   return { ok: true, config: comboSanitizeConfig_(cur) };
 }
 
-// ---------------------------------------------------------------- 郵便受け（PC側 watcher 連携）
-// 置き場は人ごと（UserProperties）。ライブラリ全体の置き場だと、同じ大元を使う別の人の頼み（シートの中身）が持ち主の PC の受け手に届いてしまう
-
-function comboPostboxEnqueue_(item) {
-  var p = PropertiesService.getUserProperties();
-  var q = [];
-  try {
-    var raw = p.getProperty(COMBO_PROP_PB_QUEUE);
-    if (raw) q = JSON.parse(raw) || [];
-  } catch (e) { q = []; }
-  var reqId = 'pb_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
-  item.reqId = reqId;
-  item.ts = Date.now();
-  q.push(item);
-  if (q.length > 20) q = q.slice(q.length - 20);
-  p.setProperty(COMBO_PROP_PB_QUEUE, JSON.stringify(q));
-  return reqId;
-}
-
-function comboPushPostboxDone_(doneItem) {
-  var p = PropertiesService.getUserProperties();
-  var list = [];
-  try {
-    var raw = p.getProperty(COMBO_PROP_PB_DONE);
-    if (raw) list = JSON.parse(raw) || [];
-  } catch (e) { list = []; }
-  list.push(doneItem);
-  if (list.length > 20) list = list.slice(list.length - 20);
-  p.setProperty(COMBO_PROP_PB_DONE, JSON.stringify(list));
-}
-
-function comboPopPostboxDone_(ssId) {
-  var p = PropertiesService.getUserProperties();
-  var raw = p.getProperty(COMBO_PROP_PB_DONE);
-  if (!raw) return [];
-  var list = [];
-  try { list = JSON.parse(raw) || []; } catch (e) { return []; }
-  if (!list.length) return [];
-  var hit = [], keep = [];
-  list.forEach(function (it) {
-    if (!ssId || !it.ssId || it.ssId === ssId) hit.push(it);
-    else keep.push(it);
-  });
-  if (hit.length) {
-    if (keep.length) p.setProperty(COMBO_PROP_PB_DONE, JSON.stringify(keep));
-    else p.deleteProperty(COMBO_PROP_PB_DONE);
-  }
-  return hit;
-}
-
-/**
- * PC側ウォッチャー用：未処理の郵便受けキューを取得する。
- */
-function comboPostboxPoll() {
-  var p = PropertiesService.getUserProperties();
-  var q = [];
-  try {
-    var raw = p.getProperty(COMBO_PROP_PB_QUEUE);
-    if (raw) q = JSON.parse(raw) || [];
-  } catch (e) { q = []; }
-  // 古い頼み（5 分より前）は撃たずに捨てる＝受け手が止まっていた間に溜まった頼みを、あとでまとめてシートに撃たない
-  var now = Date.now(), fresh = q.filter(function (it) { return it && it.ts && now - it.ts < 5 * 60 * 1000; });
-  if (fresh.length !== q.length) {
-    if (fresh.length) p.setProperty(COMBO_PROP_PB_QUEUE, JSON.stringify(fresh));
-    else p.deleteProperty(COMBO_PROP_PB_QUEUE);
-  }
-  try { p.setProperty(COMBO_PROP_PB_LAST_POLL, String(now)); } catch (eLp) {}
-  return { ok: true, queue: fresh, count: fresh.length, dropped: q.length - fresh.length };
-}
-
-// 郵便受けを取りに来る受け手（combo watch --postbox）が 1 分以内に来ていなければ、頼みを置いても誰も受け取らない
-var COMBO_PROP_PB_LAST_POLL = 'COMBO_PB_LAST_POLL';
-function comboPostboxListening_() {
-  try {
-    var t = Number(PropertiesService.getUserProperties().getProperty(COMBO_PROP_PB_LAST_POLL) || 0);
-    return t > 0 && Date.now() - t < 60 * 1000;
-  } catch (e) { return false; }
-}
-var COMBO_PB_NOT_LISTENING_MSG = 'ローカル直結（Claude Code）は、Chrome 拡張「GASコンボ ブラウザ連動」のサイドパネルから使えます。この窓から AI を使うときは、設定タブで Gemini API か Claude API の鍵を入れてください（棚で済む頼みは今のまま動きます）。';
-
-/**
- * PC側ウォッチャー用：AI が解決した ops / 返答を受け取り、スプレッドシート上で実行して結果を保存する。
- * @param {Object} resPayload { reqId, action, ops, note, message, error }
- */
-function comboPostboxDeliver(resPayload) {
-  var t0 = Date.now();
-  resPayload = resPayload || {};
-  var reqId = String(resPayload.reqId || '').trim();
-  if (!reqId) return { ok: false, error: 'reqId がありません' };
-
-  var p = PropertiesService.getUserProperties();
-  var q = [];
-  try {
-    var raw = p.getProperty(COMBO_PROP_PB_QUEUE);
-    if (raw) q = JSON.parse(raw) || [];
-  } catch (e) { q = []; }
-
-  var orig = null;
-  var rest = [];
-  q.forEach(function (it) {
-    if (it && it.reqId === reqId && !orig) orig = it;
-    else rest.push(it);
-  });
-  p.setProperty(COMBO_PROP_PB_QUEUE, JSON.stringify(rest));
-
-  var action = resPayload.action || (Array.isArray(resPayload.ops) ? 'ops' : (resPayload.code ? 'mymacro' : 'reply'));
-  var isMyMacro = (orig && orig.kind === 'mymacro') || resPayload.kind === 'mymacro' || action === 'mymacro';
-  if (isMyMacro) {
-    var mMode = (orig && orig.mode) || resPayload.mode || 'add';
-    var mTarget = (orig && orig.targetName) || resPayload.targetName || '';
-    var mPrev = (orig && orig.existingCode) || resPayload.existingCode || '';
-    var mMyId = (orig && orig.myId) || resPayload.myId || '';
-    var mSsId = (orig && orig.ssId) || resPayload.ssId || '';
-    var mAsk = (orig && orig.ask) || resPayload.ask || '';
-    var mPreview = !!((orig && orig.previewOnly) || resPayload.previewOnly);
-    var mExistingNames = (orig && orig.existingNames) || resPayload.existingNames || [];
-    if (action === 'error') {
-      var errTxt = '[AIエラー(郵便受け)] ' + (resPayload.error || 'マイマクロ生成に失敗しました');
-      comboPushPostboxDone_({
-        reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-        name: mTarget, ok: false, error: resPayload.error || '失敗', text: errTxt, gasMs: Date.now() - t0
-      });
-      return { ok: true, delivered: true, reqId: reqId, kind: 'mymacro', text: errTxt, gasMs: Date.now() - t0 };
-    }
-    var mExtracted = resPayload.code
-      ? { action: 'mymacro', code: String(resPayload.code), note: String(resPayload.note || '') }
-      : comboExtractMyMacroCode_(resPayload.message || '');
-    if (mExtracted.action === 'reply' || !mExtracted.code) {
-      if (mPreview && mExtracted.action === 'reply') {
-        var rawRep = String(mExtracted.message || resPayload.message || '').trim() || 'ご希望の編集内容を教えてください。';
-        comboPushPostboxDone_({
-          reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-          action: 'reply', ok: true, saved: false, previewOnly: true,
-          name: mTarget, targetName: mTarget, message: rawRep, text: rawRep, gasMs: Date.now() - t0
-        });
-        return {
-          ok: true, delivered: true, action: 'reply', saved: false, previewOnly: true,
-          reqId: reqId, kind: 'mymacro', message: rawRep, text: rawRep, gasMs: Date.now() - t0
-        };
-      }
-      var rMsg = '[AI返答(郵便受け)]\n' + (mExtracted.message || resPayload.message || 'コードを生成できませんでした');
-      comboPushPostboxDone_({
-        reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-        name: mTarget, ok: false, error: rMsg, text: rMsg, gasMs: Date.now() - t0
-      });
-      return { ok: true, delivered: true, reqId: reqId, kind: 'mymacro', text: rMsg, gasMs: Date.now() - t0 };
-    }
-    if (mPreview) {
-      var valRes = comboValidateAiMyMacroCode_(mMode, mExtracted.code, mExistingNames);
-      if (!valRes.ok && valRes.retryable) {
-        return { ok: false, retryable: true, error: valRes.error, gasMs: Date.now() - t0 };
-      }
-      if (!valRes.ok) {
-        var failPvTxt = '[AIマイマクロ検証失敗] ' + (valRes.error || 'コードを検証できませんでした');
-        comboPushPostboxDone_({
-          reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-          name: mTarget, ok: false, error: valRes.error || failPvTxt, text: failPvTxt, gasMs: Date.now() - t0
-        });
-        return { ok: false, reqId: reqId, kind: 'mymacro', error: valRes.error, text: failPvTxt, gasMs: Date.now() - t0 };
-      }
-      var pvName = valRes.name || mTarget || 'マイマクロ';
-      var pvText = '✨ コード案ができました（' + pvName + '）。「決定して保存」で登録されます' + (mExtracted.note ? '（' + mExtracted.note + '）' : '');
-      comboPushPostboxDone_({
-        reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-        action: 'mymacro', ok: true, saved: false, previewOnly: true,
-        name: pvName, newName: pvName, targetName: mTarget,
-        code: valRes.code, prevCode: mPrev, myId: mMyId,
-        note: mExtracted.note || '', text: pvText, gasMs: Date.now() - t0
-      });
-      return {
-        ok: true, delivered: true, action: 'mymacro', saved: false, previewOnly: true,
-        reqId: reqId, kind: 'mymacro', name: pvName, code: valRes.code, text: pvText, gasMs: Date.now() - t0
-      };
-    }
-    var saveRes = comboSaveAiMyMacroResult_(mMode, mTarget, mExtracted.code, mMyId);
-    if (!saveRes.ok && saveRes.retryable) {
-      return { ok: false, retryable: true, error: saveRes.error, gasMs: Date.now() - t0 };
-    }
-    if (!saveRes.ok && saveRes.needsClientSave) {
-      var pendTxt = 'AI でコードを作成しました（拡張側で保存を完了します）';
-      comboPushPostboxDone_({
-        reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-        ok: true, saved: false, code: saveRes.code, targetName: mTarget,
-        prevCode: mPrev, myId: mMyId, note: mExtracted.note || '', text: pendTxt, gasMs: Date.now() - t0
-      });
-      return { ok: true, delivered: true, saved: false, needsClientSave: true, reqId: reqId, kind: 'mymacro', text: pendTxt, gasMs: Date.now() - t0 };
-    }
-    if (!saveRes.ok) {
-      var failTxt = '[AIマイマクロ保存失敗] ' + (saveRes.error || '保存できませんでした');
-      comboPushPostboxDone_({
-        reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-        name: mTarget, ok: false, error: saveRes.error || failTxt, text: failTxt, gasMs: Date.now() - t0
-      });
-      return { ok: false, reqId: reqId, kind: 'mymacro', error: saveRes.error, text: failTxt, gasMs: Date.now() - t0 };
-    }
-    var savedNm = saveRes.newName || saveRes.name || (saveRes.names && saveRes.names[0]) || mTarget || 'マイマクロ';
-    var okText = '✨ AI でマイマクロ「' + savedNm + '」を' + (mMode === 'edit' ? '修正' : '作成') + 'して自動保存しました' + (mExtracted.note ? '（' + mExtracted.note + '）' : '');
-    comboPushPostboxDone_({
-      reqId: reqId, ssId: mSsId, ask: mAsk, kind: 'mymacro', mode: mMode,
-      ok: true, saved: true, name: savedNm, newName: savedNm,
-      prevCode: mPrev, myId: saveRes.myId || mMyId, myUrl: saveRes.myUrl || '', myStamp: saveRes.myStamp || '',
-      note: mExtracted.note || '', text: okText, gasMs: Date.now() - t0
-    });
-    return {
-      ok: true, delivered: true, saved: true, reqId: reqId, kind: 'mymacro',
-      name: savedNm, myId: saveRes.myId || mMyId, myStamp: saveRes.myStamp || '', text: okText, gasMs: Date.now() - t0
-    };
-  }
-
-  var isReadOnlyDeliver = !!((orig && (orig.kind === 'read' || orig.readOnly)) || resPayload.readOnly);
-  if (!isReadOnlyDeliver && action === 'ops' && Array.isArray(resPayload.ops) && resPayload.ops.length) {
-    var audPb = comboSanitizeAndAuditAiOps_(resPayload.ops, orig ? orig.ask : '', orig ? orig.table : null);
-    if (!audPb.ok) {
-      var audPbMsg = '[AI監査停止(郵便受け)] ' + audPb.issues.join(' ／ ');
-      comboPushPostboxDone_({
-        reqId: reqId,
-        ssId: orig ? orig.ssId : '',
-        ask: orig ? orig.ask : '',
-        ok: false,
-        error: audPbMsg,
-        text: audPbMsg,
-        gasMs: Date.now() - t0
-      });
-      return { ok: false, delivered: true, reqId: reqId, error: audPbMsg, text: audPbMsg, gasMs: Date.now() - t0 };
-    }
-    var execRes = comboRunOps({
-      ops: audPb.ops,
-      ok: orig ? !!orig.ok : !!resPayload.ok,
-      backup: orig ? !!orig.backup : !!resPayload.backup,
-      sheet: orig ? orig.sheet : (resPayload.sheet || ''),
-      selection: orig ? orig.selection : (resPayload.selection || ''),
-      table: orig ? orig.table : undefined,
-      targetId: orig ? orig.ssId : (resPayload.ssId || '')
-    });
-    var noteHead = '[AI解釈(郵便受け)]' + (resPayload.note ? ' ' + resPayload.note : '');
-    execRes.text = noteHead + '\n' + execRes.text;
-    execRes.reqId = reqId;
-    comboPushPostboxDone_({
-      reqId: reqId,
-      ssId: orig ? orig.ssId : '',
-      ask: orig ? orig.ask : '',
-      ok: execRes.ok,
-      ops: resPayload.ops,
-      note: resPayload.note || '',
-      text: execRes.text,
-      target: execRes.target,
-      table: execRes.table,
-      sheets: execRes.sheets,
-      gasMs: execRes.gasMs || (Date.now() - t0)
-    });
-    return execRes;
-  }
-
-  var msgText = action === 'error'
-    ? ('[AIエラー(郵便受け)] ' + (resPayload.error || '失敗'))
-    : ('[AI返答(郵便受け)]\n' + (resPayload.message || '(返答なし)'));
-  comboPushPostboxDone_({
-    reqId: reqId,
-    ssId: orig ? orig.ssId : '',
-    ask: orig ? orig.ask : '',
-    ok: action !== 'error',
-    text: msgText,
-    gasMs: Date.now() - t0
-  });
-  return { ok: true, delivered: true, reqId: reqId, text: msgText, gasMs: Date.now() - t0 };
-}
+var COMBO_NO_AI_MSG = 'ローカル直結（Claude Code）は、Chrome 拡張「GASコンボ ブラウザ連動」のサイドパネルから使えます。この窓から AI を使うときは、設定タブで Gemini API か Claude API の鍵を入れてください（棚で済む頼みは今のまま動きます）。';
 
 /**
  * 軽量ピン（V8 Isolate 起動時間＋通信往復時間の計測用）。
@@ -4128,7 +3816,7 @@ function comboSaveAiMyMacroResult_(mode, targetName, code, myId) {
   return out;
 }
 
-/** AI へ自然文を投げてマイマクロを作成・修正し、確認なしで自動保存する（postbox / Gemini / Claude 全対応）。 */
+/** AI へ自然文を投げてマイマクロを作成・修正し、確認なしで自動保存する（Gemini / Claude の API 鍵）。 */
 function comboQuickAiSave(req) {
   var t0 = Date.now();
   req = req || {};
@@ -4182,7 +3870,7 @@ function comboQuickAiSave(req) {
     if (req.forceAiMode === 'api_gemini' || req.forceAiMode === 'api_claude') {
       cfg = Object.assign({}, cfg, { aiMode: req.forceAiMode });
     }
-    var effMode = cfg.aiMode || 'postbox';
+    var effMode = cfg.aiMode || 'local';
     var previewOnly = !!req.previewOnly;
     var history = Array.isArray(req.history)
       ? req.history.slice(-10).map(function (h) {
@@ -4193,41 +3881,8 @@ function comboQuickAiSave(req) {
         }).filter(function (h) { return !!h.text; })
       : [];
 
-    if (effMode === 'postbox') {
-      if (!comboPostboxListening_()) {
-        return { ok: false, error: COMBO_PB_NOT_LISTENING_MSG, text: COMBO_PB_NOT_LISTENING_MSG, gasMs: Date.now() - t0 };
-      }
-      var reqId = comboPostboxEnqueue_({
-        kind: 'mymacro',
-        mode: mode,
-        previewOnly: previewOnly,
-        targetName: targetName,
-        existingCode: existingCode,
-        existingNames: existingNames,
-        history: history,
-        ask: prompt,
-        ssId: ssId,
-        ssName: ssName,
-        sheet: curSheet,
-        selection: selInfo.selection || req.selection || '',
-        table: table,
-        sheets: sheets,
-        aiModel: cfg.aiModel || 'sonnet',
-        myId: effMyId
-      });
-      return {
-        ok: true,
-        pendingPostbox: true,
-        previewOnly: previewOnly,
-        reqId: reqId,
-        kind: 'mymacro',
-        mode: mode,
-        name: targetName,
-        text: previewOnly
-          ? ('✨ AI（郵便受け）にマイマクロの' + (mode === 'edit' ? '修正案・相談' : 'コード作成') + 'を依頼しました…')
-          : ('✨ AI（郵便受け）にマイマクロの' + (mode === 'edit' ? '修正' : '作成') + 'を依頼しました…'),
-        gasMs: Date.now() - t0
-      };
+    if (effMode !== 'api_gemini' && effMode !== 'api_claude') {
+      return { ok: false, error: COMBO_NO_AI_MSG, text: COMBO_NO_AI_MSG, gasMs: Date.now() - t0 };
     }
 
     var prompts = comboBuildAiMyMacroPrompts_(mode, prompt, ssName, curSheet, selInfo.selection || req.selection || '', table, sheets, targetName, existingCode, existingNames, history, previewOnly);

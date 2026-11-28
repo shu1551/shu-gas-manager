@@ -186,7 +186,7 @@
         <div class="conf-group">
           <label class="conf-label" for="cfgAiMode">AI連携方式</label>
           <select id="cfgAiMode" class="conf-control">
-            <option value="postbox">ローカル直結 (Claude Code CLI)</option>
+            <option value="local">ローカル直結 (Claude Code CLI)</option>
             <option value="api_gemini">Gemini API (鍵)</option>
             <option value="api_claude">Claude API (鍵)</option>
           </select>
@@ -207,9 +207,9 @@
         </div>
         <div class="conf-actions">
           <button id="btnSaveConfig" class="btn btn-primary" type="button">設定を保存</button>
-          <button id="btnCheckPostbox" class="btn" type="button">ローカル接続確認</button>
+          <button id="btnCheckLocal" class="btn" type="button">ローカル接続確認</button>
         </div>
-        <div id="postboxStatusLabel" class="conf-note" style="margin-top:6px;">ローカル直結: 未確認</div>
+        <div id="aiStatusLabel" class="conf-note" style="margin-top:6px;">ローカル直結: 未確認</div>
       </div>
     </div>
   </div>

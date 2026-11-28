@@ -26,7 +26,7 @@ SERVER_TARGET = HERE / "combo_server_template.gs"
 SERVER_PARTS = [
     "01_core_init.gs",
     "02_ops_exec.gs",
-    "03_ai_postbox.gs",
+    "03_ai.gs",
     "04_mymacro_quick.gs",
 ]
 
