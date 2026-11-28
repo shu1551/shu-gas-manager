@@ -885,27 +885,6 @@
     });
   }
 
-  function onCopyForAi() {
-    var txt = (els.askInput.value || "").trim();
-    var url = (state.target && state.target.url) || "";
-    var sh = state.curSheet || "";
-    var selPart = state.selection ? ("・選択: " + state.selection) : "";
-    var msg = url ? ("対象: " + url + "（シート: " + sh + selPart + "）\n依頼: " + txt) : txt;
-    if (!msg) {
-      appendLog(els.chatLog, "is-info", "[コピー]", "コピーする対象情報や入力文がありません。");
-      return;
-    }
-    copyToClipboard(msg).then(function() {
-      appendLog(els.chatLog, "is-ok", "[AIへコピー完了]", msg);
-      if (els.btnCopyAi) {
-        els.btnCopyAi.textContent = "済";
-        setTimeout(function() { els.btnCopyAi.textContent = "AI"; }, 1200);
-      }
-    }).catch(function(err) {
-      appendLog(els.chatLog, "is-err", "[コピー失敗]", formatError(err));
-    });
-  }
-
   // ---- 郵便受け完了待ちポーリング（常時ポーリングは行わない） ----
   function schedulePoll(delayMs) {
     if (state.pollTimer) {
@@ -1055,11 +1034,8 @@
     els.askInput.focus();
   });
   if (els.btnCopyAi) {
-    // AI ボタン＝そのまま AI に頼む。Shift＋クリックは前の「AI 用に写す」
-    els.btnCopyAi.addEventListener("click", function(ev) {
-      if (ev && ev.shiftKey) { onCopyForAi(); return; }
-      onRunAsk({ forceAi: true });
-    });
+    // AI ボタン＝入力した頼みを AI に渡してシートを直させる
+    els.btnCopyAi.addEventListener("click", function() { onRunAsk({ forceAi: true }); });
   }
 
   els.chkAiAuto.addEventListener("change", updatePreview);
